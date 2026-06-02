@@ -5,12 +5,12 @@
   - Export only local Python APIs from the package; do not add HTTP or RPC routes.
   - _Requirements: FR-1 AC1, FR-1 AC2, FR-1 AC3_
 
-- [ ] 1.1 Implement core storage data models
+- [x] 1.1 Implement core storage data models
   - Create `StorageObject`, `StorageObjectSummary`, `StoragePage`, `StorageAck`, and internal `StorageWrite` models.
   - Add model tests for payload bytes, content type, metadata, acknowledgement fields, and paged result shape.
   - _Requirements: FR-1 AC5, FR-1 AC7, FR-2 AC1, FR-2 AC12, NFR-1 AC5, NFR-1 AC6_
 
-- [ ] 1.2 Implement storage error types
+- [x] 1.2 Implement storage error types
   - Create the shared storage error hierarchy from the design document.
   - Add tests that verify each concrete storage error is catchable as `StorageError`.
   - _Requirements: NFR-2 AC1, NFR-2 AC3, NFR-2 AC5_
@@ -21,22 +21,22 @@
   - Add settings tests for defaults, invalid routes, and missing required adapter configuration.
   - _Requirements: FR-3 AC1, FR-3 AC2, FR-3 AC3, FR-3 AC4, FR-5 AC1, FR-5 AC3, FR-5 AC4, NFR-2 AC2, NFR-4 AC3, NFR-4 AC5_
 
-- [ ] 2. Implement validation and serialization helpers
+- [x] 2. Implement validation and serialization helpers
   - Build the reusable validation module used by the facade and adapters.
   - Keep validators independent from concrete backend clients.
   - _Requirements: FR-1 AC4, FR-1 AC5, NFR-4 AC1, NFR-4 AC2, NFR-4 AC3, NFR-4 AC4_
 
-- [ ] 2.1 Implement namespace and key validation
+- [x] 2.1 Implement namespace and key validation
   - Enforce namespace and key rules from the design document.
   - Add tests for valid names, path traversal, separators, control characters, empty keys, and length limits.
   - _Requirements: FR-1 AC4, NFR-4 AC1, NFR-4 AC2_
 
-- [ ] 2.2 Implement content type, metadata, payload, TTL, and page-size validation
+- [x] 2.2 Implement content type, metadata, payload, TTL, and page-size validation
   - Enforce MIME-style content type, metadata key/value limits, reserved `tzap-` prefix, payload size limit, positive-second TTL, and page-size bounds.
   - Add tests for invalid content types, metadata violations, oversized payloads, invalid TTLs, and page-size normalization.
   - _Requirements: FR-1 AC5, FR-2 AC12, FR-4 AC7, NFR-4 AC3, NFR-4 AC4_
 
-- [ ] 2.3 Implement binary envelope codec
+- [x] 2.3 Implement binary envelope codec
   - Implement the `TZSTOR1` binary envelope encoder/decoder for Redis and NAS resources.
   - Add tests for byte-for-byte payload round trips, metadata preservation, corrupt envelope rejection, and content type preservation.
   - _Requirements: NFR-1 AC5, NFR-1 AC6, NFR-5 AC4_
@@ -46,7 +46,7 @@
   - Implement startup and shutdown orchestration for configured adapters.
   - _Requirements: FR-3 AC1, FR-3 AC5, FR-4 AC1, FR-5 AC1, FR-5 AC2, FR-5 AC5_
 
-- [ ] 3.1 Implement namespace route resolver
+- [x] 3.1 Implement namespace route resolver
   - Resolve explicit namespace routes, default adapter fallback, unknown namespace errors, and routes referencing missing adapters.
   - Add unit tests for each routing branch.
   - _Requirements: FR-3 AC1, FR-3 AC2, FR-3 AC3, FR-3 AC4, FR-5 AC4_
