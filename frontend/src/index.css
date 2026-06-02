@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-app-bg text-ink antialiased;
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-feature-settings: "cv11", "ss01";
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    @apply bg-line rounded;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    @apply bg-line-strong;
+  }
+  .dark-scroll::-webkit-scrollbar-thumb {
+    @apply bg-sidebar-border;
+  }
+  .dark-scroll::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-500;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg bg-app-card shadow-card;
+  }
+  .panel-bordered {
+    @apply rounded-lg bg-app-card shadow-card border border-line;
+  }
+  .input-soft {
+    @apply w-full rounded-lg bg-app-soft border border-line px-3 py-2 text-sm placeholder:text-ink-subtle
+           focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-lg px-3 h-8 text-sm font-medium;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 h-9 text-sm font-semibold transition-colors
+           focus:outline-none focus:ring-2 focus:ring-accent-ring;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover;
+  }
+  .btn-ghost {
+    @apply btn text-ink hover:bg-app-soft;
+  }
+  .btn-outline {
+    @apply btn border border-line bg-white text-ink hover:bg-app-soft;
+  }
+  .btn-outline-dark {
+    @apply btn border border-line bg-white text-ink hover:bg-app-soft;
+  }
+  .btn-danger-outline {
+    @apply btn border border-danger-ring bg-white text-danger hover:bg-danger-soft;
+  }
+}
