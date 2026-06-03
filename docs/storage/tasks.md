@@ -41,7 +41,7 @@
   - Add tests for byte-for-byte payload round trips, metadata preservation, corrupt envelope rejection, and content type preservation.
   - _Requirements: NFR-1 AC5, NFR-1 AC6, NFR-5 AC4_
 
-- [ ] 3. Implement adapter protocol, routing, and facade lifecycle
+- [x] 3. Implement adapter protocol, routing, and facade lifecycle
   - Create the shared async adapter protocol and route resolver.
   - Implement startup and shutdown orchestration for configured adapters.
   - _Requirements: FR-3 AC1, FR-3 AC5, FR-4 AC1, FR-5 AC1, FR-5 AC2, FR-5 AC5_
@@ -51,7 +51,7 @@
   - Add unit tests for each routing branch.
   - _Requirements: FR-3 AC1, FR-3 AC2, FR-3 AC3, FR-3 AC4, FR-5 AC4_
 
-- [ ] 3.2 Implement adapter lifecycle manager
+- [x] 3.2 Implement adapter lifecycle manager
   - Initialize configured local clients, connection pools, and filesystem paths.
   - Close owned resources on shutdown and track adapter availability for facade calls.
   - Add tests with fake adapters for startup, shutdown, misconfiguration, and unavailable adapter behavior.

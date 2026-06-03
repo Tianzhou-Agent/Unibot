@@ -15,6 +15,7 @@ from .errors import (
     UnknownNamespaceError,
     UnsupportedOperationError,
 )
+from .lifecycle import ManagedAdapter, StorageLifecycleManager
 from .models import StorageAck, StorageObject, StorageObjectSummary, StoragePage
 from .routing import RouteResolution, StorageRouteResolver
 from .settings import (
@@ -44,6 +45,7 @@ __all__ = [
     "InvalidContentTypeError",
     "InvalidKeyError",
     "InvalidNamespaceError",
+    "ManagedAdapter",
     "MySQLAdapterSettings",
     "NASAdapterSettings",
     "NotFoundError",
@@ -56,6 +58,7 @@ __all__ = [
     "StorageBackendError",
     "StorageConfigurationError",
     "StorageError",
+    "StorageLifecycleManager",
     "StorageObject",
     "StorageObjectSummary",
     "StoragePage",
