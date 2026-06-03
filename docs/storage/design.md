@@ -41,15 +41,15 @@ Dependency alignment with `backend/pyproject.toml`:
 The storage layer has one public facade, a namespace route resolver, a shared adapter protocol, and four concrete adapters. Caller layers never instantiate backend-specific clients.
 
 ```mermaid
-flowchart LR
-    A["Caller layers<br/>API / Core / AINA / Jobs"] --> B["Storage facade<br/>async local functions"]
-    B --> C["Validation<br/>namespace, key, payload size"]
-    C --> D["Route resolver<br/>namespace -> adapter"]
+graph LR
+    A["Caller layers"] --> B["Storage facade"]
+    B --> C["Validation"]
+    C --> D["Route resolver"]
     D --> E["Adapter protocol"]
-    E --> F["MySQL adapter<br/>SQLAlchemy Core + aiomysql"]
-    E --> G["Redis adapter<br/>redis.asyncio"]
-    E --> H["S3 adapter<br/>boto3 via asyncio.to_thread"]
-    E --> I["NAS adapter<br/>aiofiles + os.replace"]
+    E --> F["MySQL adapter"]
+    E --> G["Redis adapter"]
+    E --> H["S3 adapter"]
+    E --> I["NAS adapter"]
 ```
 
 Storage operation flow:
