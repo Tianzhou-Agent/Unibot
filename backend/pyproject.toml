@@ -6,7 +6,9 @@ authors = [
     { name = "SkarnerV", email = "skarner.han@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic-settings>=2.14.1",
+]
 
 [project.scripts]
 tianzhou-agent-platform = "tianzhou_agent_platform:main"

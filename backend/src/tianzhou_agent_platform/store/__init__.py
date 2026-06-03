@@ -17,6 +17,14 @@ from .errors import (
 )
 from .models import StorageAck, StorageObject, StorageObjectSummary, StoragePage
 from .routing import RouteResolution, StorageRouteResolver
+from .settings import (
+    AdapterSettings,
+    MySQLAdapterSettings,
+    NASAdapterSettings,
+    RedisAdapterSettings,
+    S3AdapterSettings,
+    StorageSettings,
+)
 from .validation import (
     normalize_page_size,
     validate_content_type,
@@ -31,13 +39,18 @@ from .validation import (
 __all__ = [
     "AdapterUnavailableError",
     "AlreadyExistsError",
+    "AdapterSettings",
     "ENVELOPE_MAGIC",
     "InvalidContentTypeError",
     "InvalidKeyError",
     "InvalidNamespaceError",
+    "MySQLAdapterSettings",
+    "NASAdapterSettings",
     "NotFoundError",
     "PayloadTooLargeError",
+    "RedisAdapterSettings",
     "RouteResolution",
+    "S3AdapterSettings",
     "StorageAck",
     "StorageAdapter",
     "StorageBackendError",
@@ -47,6 +60,7 @@ __all__ = [
     "StorageObjectSummary",
     "StoragePage",
     "StorageRouteResolver",
+    "StorageSettings",
     "StorageTimeoutError",
     "UnknownNamespaceError",
     "UnsupportedOperationError",

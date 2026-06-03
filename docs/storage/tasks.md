@@ -15,7 +15,7 @@
   - Add tests that verify each concrete storage error is catchable as `StorageError`.
   - _Requirements: NFR-2 AC1, NFR-2 AC3, NFR-2 AC5_
 
-- [ ] 1.3 Implement storage settings models
+- [x] 1.3 Implement storage settings models
   - Create `StorageSettings` and adapter-specific settings using `pydantic-settings`.
   - Include adapters, routes, default adapter, timeout, payload limit, default page size, max page size, and backend encryption-related client settings.
   - Add settings tests for defaults, invalid routes, and missing required adapter configuration.
