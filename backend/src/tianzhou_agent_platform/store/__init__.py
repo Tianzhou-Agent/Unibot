@@ -15,6 +15,18 @@ from .errors import (
     UnknownNamespaceError,
     UnsupportedOperationError,
 )
+from .facade import (
+    StorageFacade,
+    StorageMetricsHook,
+    configure_storage,
+    create,
+    delete,
+    exists,
+    get,
+    get_storage_facade,
+    list,
+    put,
+)
 from .lifecycle import ManagedAdapter, StorageLifecycleManager
 from .models import StorageAck, StorageObject, StorageObjectSummary, StoragePage
 from .routing import RouteResolution, StorageRouteResolver
@@ -58,7 +70,9 @@ __all__ = [
     "StorageBackendError",
     "StorageConfigurationError",
     "StorageError",
+    "StorageFacade",
     "StorageLifecycleManager",
+    "StorageMetricsHook",
     "StorageObject",
     "StorageObjectSummary",
     "StoragePage",
@@ -67,9 +81,17 @@ __all__ = [
     "StorageTimeoutError",
     "UnknownNamespaceError",
     "UnsupportedOperationError",
+    "configure_storage",
+    "create",
     "decode_envelope",
+    "delete",
     "encode_envelope",
+    "exists",
+    "get",
+    "get_storage_facade",
+    "list",
     "normalize_page_size",
+    "put",
     "validate_content_type",
     "validate_key",
     "validate_metadata",

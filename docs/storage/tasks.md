@@ -57,30 +57,30 @@
   - Add tests with fake adapters for startup, shutdown, misconfiguration, and unavailable adapter behavior.
   - _Requirements: FR-5 AC1, FR-5 AC2, FR-5 AC3, FR-5 AC5, FR-5 AC6_
 
-- [ ] 4. Implement storage facade behavior
+- [x] 4. Implement storage facade behavior
   - Implement the public async storage API around validation, routing, adapter calls, timeout handling, logging, and error normalization.
   - Keep caller code independent from concrete adapter clients.
   - _Requirements: FR-1 AC1, FR-1 AC2, FR-1 AC7, FR-3 AC5, NFR-2 AC1, NFR-3 AC1, NFR-3 AC2_
 
-- [ ] 4.1 Implement `get`, `exists`, `create`, `put`, `delete`, and `list`
+- [x] 4.1 Implement `get`, `exists`, `create`, `put`, `delete`, and `list`
   - Route all operations through the selected adapter after validation.
   - Implement `put` as unconditional full replacement with last-writer-wins semantics.
   - Add facade tests using fake adapters for successful CRUD and listing.
   - _Requirements: FR-2 AC1, FR-2 AC2, FR-2 AC3, FR-2 AC5, FR-2 AC6, FR-2 AC11, FR-4 AC1, NFR-1 AC4_
 
-- [ ] 4.2 Implement `missing_ok` behavior
+- [x] 4.2 Implement `missing_ok` behavior
   - Return `None` for missing `get(..., missing_ok=True)` and successful acknowledgement for missing `delete(..., missing_ok=True)`.
   - Raise not-found errors for missing resources when `missing_ok` is false.
   - Add tests for all missing-resource branches.
   - _Requirements: FR-1 AC6, FR-2 AC7, FR-2 AC8, FR-2 AC9, FR-2 AC10_
 
-- [ ] 4.3 Implement timeout and backend error normalization
+- [x] 4.3 Implement timeout and backend error normalization
   - Wrap adapter operations with the configured timeout.
   - Translate backend, timeout, unsupported-operation, unavailable, already-exists, not-found, and payload-too-large conditions into storage-layer errors.
   - Add tests that ensure raw backend exception messages and secrets are not exposed.
   - _Requirements: FR-4 AC6, FR-4 AC7, NFR-1 AC3, NFR-2 AC1, NFR-2 AC2, NFR-2 AC3, NFR-2 AC4, NFR-2 AC5, NFR-4 AC4_
 
-- [ ] 4.4 Implement structured logging and optional metrics hooks
+- [x] 4.4 Implement structured logging and optional metrics hooks
   - Log operation start and completion with adapter name, operation name, namespace, duration, and error category.
   - Add optional metrics hook support for operation count, latency, failures, and timeouts.
   - Add tests that payload contents are excluded from logs.
