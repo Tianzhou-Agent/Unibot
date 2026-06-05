@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "6f0c7717-2baf-4bb9-b5b4-3b968a4f9a12",
     "name": "Unibot Storage Test Service",
-    "description": "REST API collection for `tianzhou_agent_platform.store.test_service:app`. Start Docker storage infra and the FastAPI test service before sending requests.",
+    "description": "REST API collection for the test-only storage service in `backend/tests/support/storage_test_service.py`. Start Docker storage infra and run `uv run python scripts/run_storage_test_service.py` before sending requests.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [

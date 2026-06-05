@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from tests.support.storage_test_service import create_app
 from tianzhou_agent_platform.store import NasStore
-from tianzhou_agent_platform.store.test_service import create_app
 
 
 def test_nas_write_accepts_raw_bytes(tmp_path) -> None:
