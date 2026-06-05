@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, String, Table
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from tianzhou_agent_platform.store import MySqlStore, NasStore, RedisStore, StoragePath, StoreQuery
+from tianzhou_agent_platform.store import MySqlStore, NasStore, RedisStore, StoragePath, StoreCondition, StoreQuery
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TZ_STORAGE_E2E") != "1",
@@ -33,6 +34,7 @@ async def test_storage_stores_against_docker_services() -> None:
         Column("id", Integer, primary_key=True, autoincrement=True),
         Column("name", String(100), nullable=False),
         Column("status", String(20), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
     )
 
     engine = create_async_engine(mysql_dsn)
@@ -47,9 +49,10 @@ async def test_storage_stores_against_docker_services() -> None:
     unique_name = f"item-{uuid4().hex}"
     cache_key = f"key-{uuid4().hex}"
     file_path = StoragePath(relative_path=f"e2e/{uuid4().hex}.txt")
+    created_at = datetime.now(timezone.utc)
 
     try:
-        created = await mysql_store.create("items", {"name": unique_name, "status": "new"})
+        created = await mysql_store.create("items", {"name": unique_name, "status": "new", "created_at": created_at})
         assert created.values["name"] == unique_name
 
         read = await mysql_store.read("items", created.id)
@@ -61,6 +64,17 @@ async def test_storage_stores_against_docker_services() -> None:
 
         page = await mysql_store.query("items", StoreQuery(filters={"status": "done"}))
         assert [item.id for item in page.items] == [created.id]
+
+        interval_page = await mysql_store.query(
+            "items",
+            StoreQuery(
+                conditions=[
+                    StoreCondition(field="created_at", op="ge", value=created_at - timedelta(seconds=1)),
+                    StoreCondition(field="created_at", op="lt", value=created_at + timedelta(seconds=1)),
+                ]
+            ),
+        )
+        assert [item.id for item in interval_page.items] == [created.id]
 
         await redis_store.delete("e2e", cache_key)
         assert await redis_store.get("e2e", cache_key) is None

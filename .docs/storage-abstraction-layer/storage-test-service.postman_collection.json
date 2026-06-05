@@ -19,8 +19,12 @@
       "value": "postman-item"
     },
     {
-      "key": "mysql_name_contains",
-      "value": "postman"
+      "key": "mysql_condition_created_at_from",
+      "value": "2000-01-01T00:00:00Z"
+    },
+    {
+      "key": "mysql_condition_created_at_to",
+      "value": "2100-01-01T00:00:00Z"
     },
     {
       "key": "redis_namespace",
@@ -187,12 +191,12 @@
           }
         },
         {
-          "name": "Query Items By Name Contains",
+          "name": "Query Items By Conditions",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/mysql/items?name_contains={{mysql_name_contains}}&limit=100&offset=0",
+              "raw": "{{base_url}}/mysql/items?condition_field=created_at&condition_op=ge&condition_value={{mysql_condition_created_at_from}}&condition_field=created_at&condition_op=lt&condition_value={{mysql_condition_created_at_to}}&limit=100&offset=0",
               "host": [
                 "{{base_url}}"
               ],
@@ -202,8 +206,28 @@
               ],
               "query": [
                 {
-                  "key": "name_contains",
-                  "value": "{{mysql_name_contains}}"
+                  "key": "condition_field",
+                  "value": "created_at"
+                },
+                {
+                  "key": "condition_op",
+                  "value": "ge"
+                },
+                {
+                  "key": "condition_value",
+                  "value": "{{mysql_condition_created_at_from}}"
+                },
+                {
+                  "key": "condition_field",
+                  "value": "created_at"
+                },
+                {
+                  "key": "condition_op",
+                  "value": "lt"
+                },
+                {
+                  "key": "condition_value",
+                  "value": "{{mysql_condition_created_at_to}}"
                 },
                 {
                   "key": "limit",

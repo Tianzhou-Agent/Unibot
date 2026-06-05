@@ -1,8 +1,16 @@
-import pytest
-from sqlalchemy.dialects import mysql
-from sqlalchemy import Column, Integer, MetaData, String, Table
+from datetime import datetime, timezone
 
-from tianzhou_agent_platform.store import MySqlStore, StorageUnsupportedCapabilityError, StorageValidationError, StoreQuery
+import pytest
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
+from sqlalchemy.dialects import mysql
+
+from tianzhou_agent_platform.store import (
+    MySqlStore,
+    StorageUnsupportedCapabilityError,
+    StorageValidationError,
+    StoreCondition,
+    StoreQuery,
+)
 
 
 class FakeEngine:
@@ -63,25 +71,44 @@ async def test_mysql_store_rejects_unknown_query_filter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mysql_store_applies_contains_filters_to_string_columns() -> None:
+async def test_mysql_store_applies_conditions() -> None:
     statements: list[object] = []
     metadata = MetaData()
-    table = Table("items", metadata, Column("id", Integer), Column("name", String))
+    table = Table(
+        "items",
+        metadata,
+        Column("id", Integer),
+        Column("status", String),
+        Column("created_at", DateTime(timezone=True)),
+    )
     store = MySqlStore(FakeEngine(), capturing_session_factory(statements), resource_tables={"items": table})
 
-    page = await store.query("items", StoreQuery(contains_filters={"name": "needle"}))
+    page = await store.query(
+        "items",
+        StoreQuery(
+            conditions=[
+                StoreCondition(field="created_at", op="ge", value=datetime(2026, 6, 1, tzinfo=timezone.utc)),
+                StoreCondition(field="created_at", op="lt", value=datetime(2026, 6, 2, tzinfo=timezone.utc)),
+                StoreCondition(field="status", op="ne", value="archived"),
+            ]
+        ),
+    )
 
     assert page.items == []
     compiled = str(statements[0].compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
-    assert "LIKE" in compiled
-    assert "needle" in compiled
+    assert "items.created_at >= '2026-06-01" in compiled
+    assert "items.created_at < '2026-06-02" in compiled
+    assert "items.status != 'archived'" in compiled
 
 
 @pytest.mark.asyncio
-async def test_mysql_store_rejects_contains_filter_on_non_string_column() -> None:
+async def test_mysql_store_rejects_unknown_condition_field() -> None:
     metadata = MetaData()
     table = Table("items", metadata, Column("id", Integer), Column("name", String))
     store = MySqlStore(FakeEngine(), fake_session_factory, resource_tables={"items": table})
 
     with pytest.raises(StorageValidationError):
-        await store.query("items", StoreQuery(contains_filters={"id": "1"}))
+        await store.query(
+            "items",
+            StoreQuery(conditions=[StoreCondition(field="unknown", op="eq", value="value")]),
+        )
