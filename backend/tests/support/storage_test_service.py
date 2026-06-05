@@ -150,16 +150,23 @@ def create_app() -> FastAPI:
     async def query_mysql_items(
         request: Request,
         name: str | None = None,
+        name_contains: str | None = None,
         item_status: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> StorePage:
         filters = {}
+        contains_filters = {}
         if name is not None:
             filters["name"] = name
+        if name_contains is not None:
+            contains_filters["name"] = name_contains
         if item_status is not None:
             filters["status"] = item_status
-        return await _stores(request).mysql.query(TEST_ITEM_RESOURCE, StoreQuery(filters=filters, limit=limit, offset=offset))
+        return await _stores(request).mysql.query(
+            TEST_ITEM_RESOURCE,
+            StoreQuery(filters=filters, contains_filters=contains_filters, limit=limit, offset=offset),
+        )
 
     @app.put("/redis/{namespace}/{key}", response_model=WriteResult)
     async def set_redis_value(request: Request, namespace: str, key: str, body: RedisValueWrite) -> WriteResult:

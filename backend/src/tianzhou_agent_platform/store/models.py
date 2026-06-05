@@ -23,8 +23,22 @@ class StoreRecord(BaseModel):
 
 class StoreQuery(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
+    contains_filters: dict[str, str] = Field(default_factory=dict)
     limit: int = Field(default=100, gt=0, le=1000)
     offset: int = Field(default=0, ge=0)
+
+    @field_validator("contains_filters")
+    @classmethod
+    def validate_contains_filters(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized = {}
+        for field, filter_value in value.items():
+            field_name = field.strip()
+            if not field_name:
+                raise ValueError("Store query contains filter field must not be empty")
+            if not filter_value.strip():
+                raise ValueError("Store query contains filter value must not be empty")
+            normalized[field_name] = filter_value
+        return normalized
 
 
 class StorePage(BaseModel):

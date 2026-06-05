@@ -19,6 +19,10 @@
       "value": "postman-item"
     },
     {
+      "key": "mysql_name_contains",
+      "value": "postman"
+    },
+    {
       "key": "redis_namespace",
       "value": "postman"
     },
@@ -169,6 +173,37 @@
                 {
                   "key": "item_status",
                   "value": "done"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Query Items By Name Contains",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/mysql/items?name_contains={{mysql_name_contains}}&limit=100&offset=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mysql",
+                "items"
+              ],
+              "query": [
+                {
+                  "key": "name_contains",
+                  "value": "{{mysql_name_contains}}"
                 },
                 {
                   "key": "limit",

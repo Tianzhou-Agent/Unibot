@@ -239,6 +239,7 @@ class StoreRecord(BaseModel):
 
 class StoreQuery(BaseModel):
     filters: dict[str, object] = Field(default_factory=dict)
+    contains_filters: dict[str, str] = Field(default_factory=dict)
     limit: int = 100
     offset: int = 0
 
