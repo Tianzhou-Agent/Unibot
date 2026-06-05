@@ -1,0 +1,335 @@
+{
+  "info": {
+    "_postman_id": "6f0c7717-2baf-4bb9-b5b4-3b968a4f9a12",
+    "name": "Unibot Storage Test Service",
+    "description": "REST API collection for `tianzhou_agent_platform.store.test_service:app`. Start Docker storage infra and the FastAPI test service before sending requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:18081"
+    },
+    {
+      "key": "mysql_item_id",
+      "value": ""
+    },
+    {
+      "key": "mysql_item_name",
+      "value": "postman-item"
+    },
+    {
+      "key": "redis_namespace",
+      "value": "postman"
+    },
+    {
+      "key": "redis_key",
+      "value": "key1"
+    },
+    {
+      "key": "nas_relative_path",
+      "value": "postman/hello.txt"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('service is healthy', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql('ok');",
+                  "  pm.expect(body.storage_loaded).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Storage Smoke Test",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/storage/smoke-test"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('all storage backends passed smoke test', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.mysql).to.eql(true);",
+                  "  pm.expect(body.redis).to.eql(true);",
+                  "  pm.expect(body.nas).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MySQL Items",
+      "item": [
+        {
+          "name": "Create Item",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{mysql_item_name}}\",\n  \"status\": \"new\"\n}"
+            },
+            "url": "{{base_url}}/mysql/items"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('item created', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.resource).to.eql('test_items');",
+                  "  pm.expect(body.values.status).to.eql('new');",
+                  "  pm.collectionVariables.set('mysql_item_id', String(body.id));",
+                  "  if (pm.environment) {",
+                  "    pm.environment.set('mysql_item_id', String(body.id));",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read Item",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/mysql/items/{{mysql_item_id}}"
+          }
+        },
+        {
+          "name": "Update Item",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"done\"\n}"
+            },
+            "url": "{{base_url}}/mysql/items/{{mysql_item_id}}"
+          }
+        },
+        {
+          "name": "Query Done Items",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/mysql/items?item_status=done&limit=100&offset=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mysql",
+                "items"
+              ],
+              "query": [
+                {
+                  "key": "item_status",
+                  "value": "done"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Item",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/mysql/items/{{mysql_item_id}}",
+            "description": "Optional cleanup request. Do not run this if you want to keep the MySQL row for inspection."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Redis",
+      "item": [
+        {
+          "name": "Set Value",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": {\n    \"hello\": \"redis\",\n    \"source\": \"postman\"\n  },\n  \"ttl_seconds\": 120\n}"
+            },
+            "url": "{{base_url}}/redis/{{redis_namespace}}/{{redis_key}}"
+          }
+        },
+        {
+          "name": "Get Value",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/redis/{{redis_namespace}}/{{redis_key}}"
+          }
+        },
+        {
+          "name": "Exists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/redis/{{redis_namespace}}/{{redis_key}}/exists"
+          }
+        },
+        {
+          "name": "Expire Value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ttl_seconds\": 120\n}"
+            },
+            "url": "{{base_url}}/redis/{{redis_namespace}}/{{redis_key}}/expire"
+          }
+        },
+        {
+          "name": "Delete Value",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/redis/{{redis_namespace}}/{{redis_key}}",
+            "description": "Optional cleanup request. Do not run this if you want to keep the Redis key for inspection."
+          }
+        }
+      ]
+    },
+    {
+      "name": "NAS",
+      "item": [
+        {
+          "name": "Write File",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/octet-stream"
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": ""
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/nas/files/{{nas_relative_path}}?overwrite=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "nas",
+                "files",
+                "{{nas_relative_path}}"
+              ],
+              "query": [
+                {
+                  "key": "overwrite",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Select a local file in Postman's Body > binary/file picker. The selected file bytes are sent directly as the request body."
+          }
+        },
+        {
+          "name": "Read File",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/nas/files/{{nas_relative_path}}"
+          }
+        },
+        {
+          "name": "File Exists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/nas/files/{{nas_relative_path}}/exists"
+          }
+        },
+        {
+          "name": "File Metadata",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/nas/metadata/{{nas_relative_path}}"
+          }
+        },
+        {
+          "name": "Delete File",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/nas/files/{{nas_relative_path}}",
+            "description": "Optional cleanup request. Do not run this if you want to keep the NAS file for inspection."
+          }
+        }
+      ]
+    }
+  ]
+}
