@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+StoreConditionOperator = Literal["eq", "ne", "gt", "ge", "lt", "le"]
 
 
 class DeleteResult(BaseModel):
@@ -21,24 +23,32 @@ class StoreRecord(BaseModel):
     values: dict[str, Any]
 
 
+class StoreCondition(BaseModel):
+    field: str
+    op: StoreConditionOperator
+    value: Any
+
+    @field_validator("field")
+    @classmethod
+    def validate_field(cls, value: str) -> str:
+        field = value.strip()
+        if not field:
+            raise ValueError("Store condition field must not be empty")
+        return field
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("Store condition value must not be null")
+        return value
+
+
 class StoreQuery(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
-    contains_filters: dict[str, str] = Field(default_factory=dict)
+    conditions: list[StoreCondition] = Field(default_factory=list)
     limit: int = Field(default=100, gt=0, le=1000)
     offset: int = Field(default=0, ge=0)
-
-    @field_validator("contains_filters")
-    @classmethod
-    def validate_contains_filters(cls, value: dict[str, str]) -> dict[str, str]:
-        normalized = {}
-        for field, filter_value in value.items():
-            field_name = field.strip()
-            if not field_name:
-                raise ValueError("Store query contains filter field must not be empty")
-            if not filter_value.strip():
-                raise ValueError("Store query contains filter value must not be empty")
-            normalized[field_name] = filter_value
-        return normalized
 
 
 class StorePage(BaseModel):

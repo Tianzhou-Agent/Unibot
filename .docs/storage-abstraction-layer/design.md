@@ -237,9 +237,16 @@ class StoreRecord(BaseModel):
     id: str | int
     values: dict[str, object]
 
+StoreConditionOperator = Literal["eq", "ne", "gt", "ge", "lt", "le"]
+
+class StoreCondition(BaseModel):
+    field: str
+    op: StoreConditionOperator
+    value: object
+
 class StoreQuery(BaseModel):
     filters: dict[str, object] = Field(default_factory=dict)
-    contains_filters: dict[str, str] = Field(default_factory=dict)
+    conditions: list[StoreCondition] = Field(default_factory=list)
     limit: int = 100
     offset: int = 0
 

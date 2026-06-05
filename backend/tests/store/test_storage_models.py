@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from tianzhou_agent_platform.store.models import StoragePath, StoreQuery
+from tianzhou_agent_platform.store.models import StoragePath, StoreCondition, StoreQuery
 
 
 def test_storage_path_normalizes_separators() -> None:
@@ -21,6 +21,16 @@ def test_store_query_limits_page_size() -> None:
         StoreQuery(limit=1001)
 
 
-def test_store_query_rejects_empty_contains_filter() -> None:
+def test_store_condition_rejects_empty_field() -> None:
     with pytest.raises(ValidationError):
-        StoreQuery(contains_filters={"name": ""})
+        StoreCondition(field=" ", op="eq", value="value")
+
+
+def test_store_condition_rejects_unknown_operator() -> None:
+    with pytest.raises(ValidationError):
+        StoreCondition(field="created_at", op="contains", value="value")
+
+
+def test_store_condition_rejects_null_value() -> None:
+    with pytest.raises(ValidationError):
+        StoreCondition(field="created_at", op="eq", value=None)

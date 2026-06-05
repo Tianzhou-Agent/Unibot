@@ -7,7 +7,6 @@ from sqlalchemy import Table, delete as sa_delete, insert, select, update as sa_
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError, SQLAlchemyError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.schema import MetaData
-from sqlalchemy.sql.sqltypes import String
 
 from tianzhou_agent_platform.store.errors import (
     StorageBackendUnavailableError,
@@ -111,15 +110,24 @@ class MySqlStore:
             if field not in table.c:
                 raise StorageValidationError(f"Unknown filter field '{field}' for MySQL resource '{resource}'")
             statement = statement.where(table.c[field] == value)
-        for field, value in query.contains_filters.items():
-            if field not in table.c:
-                raise StorageValidationError(f"Unknown contains filter field '{field}' for MySQL resource '{resource}'")
-            column = table.c[field]
-            if not isinstance(column.type, String):
+        for condition in query.conditions:
+            if condition.field not in table.c:
                 raise StorageValidationError(
-                    f"Contains filter field '{field}' for MySQL resource '{resource}' must be a string column"
+                    f"Unknown condition field '{condition.field}' for MySQL resource '{resource}'"
                 )
-            statement = statement.where(column.contains(value))
+            column = table.c[condition.field]
+            if condition.op == "eq":
+                statement = statement.where(column == condition.value)
+            elif condition.op == "ne":
+                statement = statement.where(column != condition.value)
+            elif condition.op == "gt":
+                statement = statement.where(column > condition.value)
+            elif condition.op == "ge":
+                statement = statement.where(column >= condition.value)
+            elif condition.op == "lt":
+                statement = statement.where(column < condition.value)
+            elif condition.op == "le":
+                statement = statement.where(column <= condition.value)
 
         try:
             async with self._session_factory() as session:

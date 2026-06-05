@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, cast
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response, status
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import Column, Integer, MetaData, String, Table
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, text
 
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
@@ -16,6 +17,7 @@ from tianzhou_agent_platform.store.models import (
     DeleteResult,
     FileMetadata,
     StoragePath,
+    StoreCondition,
     StorePage,
     StoreQuery,
     StoreRecord,
@@ -39,6 +41,7 @@ test_items_table = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("name", String(100), nullable=False),
     Column("status", String(20), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -85,6 +88,72 @@ def _path(relative_path: str) -> StoragePath:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid NAS path") from exc
 
 
+def _coerce_mysql_item_condition_value(field: str, value: str) -> Any:
+    if field == "id":
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid MySQL id condition value") from exc
+    if field == "created_at":
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid MySQL created_at condition value",
+            ) from exc
+    return value
+
+
+def _conditions_from_query_params(
+    fields: list[str],
+    operators: list[str],
+    values: list[str],
+) -> list[StoreCondition]:
+    if not fields and not operators and not values:
+        return []
+    if len(fields) != len(operators) or len(fields) != len(values):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="condition_field, condition_op, and condition_value must have the same count",
+        )
+    try:
+        return [
+            StoreCondition(
+                field=field,
+                op=operator,
+                value=_coerce_mysql_item_condition_value(field.strip(), value),
+            )
+            for field, operator, value in zip(fields, operators, values, strict=True)
+        ]
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid MySQL query condition") from exc
+
+
+async def _ensure_test_items_created_at_column(stores: StorageStores) -> None:
+    async with stores.mysql._engine.begin() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'storage_test_items'
+                  AND column_name = 'created_at'
+                """
+            )
+        )
+        if result.scalar_one() == 0:
+            await connection.execute(
+                text(
+                    """
+                    ALTER TABLE storage_test_items
+                    ADD COLUMN created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                    """
+                )
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = StorageSettings()  # type: ignore[call-arg]
@@ -98,6 +167,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.storage_stores = stores
 
     await stores.mysql.create_tables(test_service_metadata)
+    await _ensure_test_items_created_at_column(stores)
     await stores.mysql.create_tables(runtime_check_metadata)
 
     try:
@@ -126,7 +196,9 @@ def create_app() -> FastAPI:
 
     @app.post("/mysql/items", response_model=StoreRecord)
     async def create_mysql_item(request: Request, item: MySqlItemCreate) -> StoreRecord:
-        return await _stores(request).mysql.create(TEST_ITEM_RESOURCE, item.model_dump())
+        values = item.model_dump()
+        values["created_at"] = datetime.now(timezone.utc)
+        return await _stores(request).mysql.create(TEST_ITEM_RESOURCE, values)
 
     @app.get("/mysql/items/{item_id}", response_model=StoreRecord)
     async def read_mysql_item(request: Request, item_id: int) -> StoreRecord:
@@ -150,22 +222,26 @@ def create_app() -> FastAPI:
     async def query_mysql_items(
         request: Request,
         name: str | None = None,
-        name_contains: str | None = None,
         item_status: str | None = None,
+        condition_field: list[str] = Query(default_factory=list),
+        condition_op: list[str] = Query(default_factory=list),
+        condition_value: list[str] = Query(default_factory=list),
         limit: int = 100,
         offset: int = 0,
     ) -> StorePage:
         filters = {}
-        contains_filters = {}
         if name is not None:
             filters["name"] = name
-        if name_contains is not None:
-            contains_filters["name"] = name_contains
         if item_status is not None:
             filters["status"] = item_status
         return await _stores(request).mysql.query(
             TEST_ITEM_RESOURCE,
-            StoreQuery(filters=filters, contains_filters=contains_filters, limit=limit, offset=offset),
+            StoreQuery(
+                filters=filters,
+                conditions=_conditions_from_query_params(condition_field, condition_op, condition_value),
+                limit=limit,
+                offset=offset,
+            ),
         )
 
     @app.put("/redis/{namespace}/{key}", response_model=WriteResult)
