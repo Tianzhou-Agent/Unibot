@@ -4,9 +4,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import Table, delete as sa_delete, insert, select, update as sa_update
-from sqlalchemy.schema import MetaData
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError, SQLAlchemyError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.schema import MetaData
+from sqlalchemy.sql.sqltypes import String
 
 from tianzhou_agent_platform.store.errors import (
     StorageBackendUnavailableError,
@@ -110,6 +111,15 @@ class MySqlStore:
             if field not in table.c:
                 raise StorageValidationError(f"Unknown filter field '{field}' for MySQL resource '{resource}'")
             statement = statement.where(table.c[field] == value)
+        for field, value in query.contains_filters.items():
+            if field not in table.c:
+                raise StorageValidationError(f"Unknown contains filter field '{field}' for MySQL resource '{resource}'")
+            column = table.c[field]
+            if not isinstance(column.type, String):
+                raise StorageValidationError(
+                    f"Contains filter field '{field}' for MySQL resource '{resource}' must be a string column"
+                )
+            statement = statement.where(column.contains(value))
 
         try:
             async with self._session_factory() as session:
