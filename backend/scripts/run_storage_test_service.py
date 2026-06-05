@@ -7,8 +7,9 @@ from pathlib import Path
 
 import uvicorn
 
-BACKEND_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = Path(__file__).resolve().parents[1]
 LOG_PATH = BACKEND_DIR / "storage-test-service.log"
+sys.path.insert(0, str(BACKEND_DIR))
 
 os.environ.setdefault(
     "TZ_STORAGE_MYSQL_DSN",
@@ -25,7 +26,7 @@ def main() -> None:
         try:
             print("Starting storage test service on http://127.0.0.1:18081")
             uvicorn.run(
-                "tianzhou_agent_platform.store.test_service:app",
+                "tests.support.storage_test_service:app",
                 host="127.0.0.1",
                 port=18081,
                 log_level="info",
