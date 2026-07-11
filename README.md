@@ -52,7 +52,7 @@ Unibot/
 │               ├── redis/      # Redis 缓存
 │               ├── s3/         # 对象存储
 │               └── nas/        # 文件存储
-├── frontend/                   # 前端（规划中）
+├── frontend/                   # React/Vite MVP 前端
 ├── scripts/                    # 脚本工具
 ├── docs/                       # 文档
 └── LICENSE                     # MIT License
@@ -70,7 +70,7 @@ Unibot/
 
 ```bash
 cd backend
-uv sync
+uv sync --extra dev
 ```
 
 ### 启动服务
@@ -78,6 +78,70 @@ uv sync
 ```bash
 uv run tianzhou-agent-platform
 ```
+
+### 启动前端
+
+另开终端运行：
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+开发服务器默认打开 `http://127.0.0.1:5173`，并将 `/api` 代理到
+`http://127.0.0.1:8000`。如需直连其他后端，可配置 `VITE_API_BASE_URL`。
+
+MVP 前端包含真实流式对话、多轮会话管理、能力选择、高风险确认、Tool/Skill/AINA
+注册管理、AINA 安装授权以及 Trace 运行中心。MSW 原型数据默认关闭，仅在显式设置
+`VITE_ENABLE_MOCKS=true` 时启用。
+
+模型配置可通过标准环境变量 `UNIBOT_LLM_BASE_URL`、`UNIBOT_LLM_API_KEY`、
+`UNIBOT_LLM_MODEL` 提供。开发环境也兼容被 Git 忽略的 `backend/.venv` 文件：
+
+```dotenv
+base_url=https://your-openai-compatible-api.example/v1
+api_key=your-api-key
+model=your-model
+```
+
+### MVP 后端 API
+
+当前后端不依赖前端即可运行，包含：
+
+- `POST /chat`：多轮 Agent Loop；
+- `POST /chat/stream`：SSE 文本与运行事件流；
+- `/conversations`：会话创建、读取、重命名、软删除和恢复；
+- `/tools`、`/skills`：Tool 和基础 Skill 注册管理；
+- `/ainas`、`/installations`：远程 AINA 注册、探测、安装、授权和卸载；
+- `/approvals/{id}/confirm|deny`：高风险调用确认；
+- `/traces`、`/admin/summary`：调用链和基础管理数据。
+
+最小对话请求：
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"你好，请介绍一下自己"}'
+```
+
+### 测试
+
+```bash
+cd backend
+uv run pytest -q
+```
+
+真实 API 冒烟测试会通过 HTTP 覆盖直接对话、多轮上下文、远程 Tool、远程 AINA、
+Trace 和 SSE。先启动后端，再运行：
+
+```bash
+cd backend
+uv run python scripts/real_api_test.py
+```
+
+默认服务地址为 `http://127.0.0.1:8000`，可通过 `UNIBOT_API_URL` 覆盖。脚本会启动
+一个仅监听本机随机端口的临时 Tool/AINA Runtime，并使用后端已配置的真实模型。
 
 ## 技术栈
 

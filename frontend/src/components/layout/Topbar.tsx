@@ -6,15 +6,18 @@ export type RunBadgeTone = "info" | "success" | "warning" | "neutral" | "thinkin
 export function Topbar({
   title,
   badge,
+  actions,
 }: {
   title: string;
   badge?: { label: string; tone: RunBadgeTone };
+  actions?: React.ReactNode;
 }) {
   return (
     <div className="h-16 px-5 flex items-center gap-3 border-b border-line bg-white">
       <h1 className="text-[18px] font-bold text-ink font-display">{title}</h1>
       <div className="flex-1" />
       {badge ? <RunBadge {...badge} /> : null}
+      {actions}
     </div>
   );
 }
