@@ -2,6 +2,9 @@ node_modules/
 dist/
 dist-ssr/
 .vite/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 *.local
 .env
 .env.local
