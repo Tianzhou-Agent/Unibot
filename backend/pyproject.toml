@@ -25,6 +25,9 @@ dependencies = [
     "pyyaml>=6.0.2",
 ]
 
+[project.scripts]
+tianzhou-agent-platform = "tianzhou_agent_platform.main:run"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",

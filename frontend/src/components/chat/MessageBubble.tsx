@@ -2,6 +2,7 @@ import { Copy, Share2, Trash2, Paperclip, ArrowUp, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { classNames } from "@/lib/utils";
 import type { ChatMessage, FileChip, MessageBlock } from "@/types";
+import { MarkdownContent } from "./MarkdownContent";
 import { SurfaceRenderer } from "./SurfaceRenderer";
 
 export function UserMessage({ content, files }: { content: string; files?: FileChip[] }) {
@@ -33,7 +34,7 @@ export function AssistantMessage({
   return (
     <div className="rounded-lg border border-line bg-app-soft p-3 space-y-2">
       {message.content ? (
-        <p className="text-ink text-[13px] leading-[1.5]">{message.content}</p>
+        <MarkdownContent content={message.content} />
       ) : null}
       {message.blocks?.map((b, i) => (
         <BlockRenderer key={i} block={b} />
@@ -66,7 +67,7 @@ export function ThinkingBubble() {
 
 function BlockRenderer({ block }: { block: MessageBlock }) {
   if (block.kind === "text") {
-    return <p className="text-ink text-[13px] leading-[1.5]">{block.text}</p>;
+    return <MarkdownContent content={block.text} />;
   }
   if (block.kind === "result") {
     return (

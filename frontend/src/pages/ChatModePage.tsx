@@ -1,76 +1,784 @@
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { CHAT_THREAD_CHAT_MODE } from "@/mocks/seed";
-import type { ChatMessage, ChatThread } from "@/types";
-import { AssistantMessage, Composer, ThinkingBubble, UserMessage } from "@/components/chat/MessageBubble";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  AlertTriangle,
+  ArrowUp,
+  Bot,
+  Check,
+  ChevronDown,
+  Pencil,
+  RotateCcw,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  Wrench,
+  X,
+} from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
+import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
+import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
+import { CONVERSATION_CATEGORIES } from "@/lib/conversationCategories";
+import { useDebugMode } from "@/lib/debugMode";
+import { classNames, uid } from "@/lib/utils";
+import type {
+  AinaInstallation,
+  AinaCanvasResponse,
+  AinaRecord,
+  ApprovalRecord,
+  BackendMessage,
+  CapabilityOption,
+  ChatResponse,
+  ConversationRecord,
+  ToolRecord,
+} from "@/types";
+
+const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 
 export default function ChatModePage() {
-  const [thread, setThread] = useState<ChatThread>(CHAT_THREAD_CHAT_MODE);
-  const [thinking, setThinking] = useState(false);
-  const [, setLoading] = useState(true);
+  const { conversationId } = useParams<{ conversationId: string }>();
+  const navigate = useNavigate();
+  const { debugMode } = useDebugMode();
+  const [conversation, setConversation] = useState<ConversationRecord | null>(null);
+  const [loading, setLoading] = useState(Boolean(conversationId));
+  const [sending, setSending] = useState(false);
+  const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
+  const [streamText, setStreamText] = useState("");
+  const [activity, setActivity] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [approval, setApproval] = useState<ApprovalRecord | null>(null);
+  const [capabilities, setCapabilities] = useState<CapabilityOption[]>([]);
+  const [selectedCapability, setSelectedCapability] = useState("");
+  const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const localRunRef = useRef(false);
 
-  useEffect(() => {
-    api
-      .get<ChatThread>("/sessions/sess_canvas_app/thread")
-      .then((t) => {
-        setThread(t);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+  const loadConversation = useCallback(async (id: string, silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const [record, pendingApprovals] = await Promise.all([
+        api.get<ConversationRecord>(`/conversations/${id}`),
+        api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
+      ]);
+      setConversation(record);
+      setApproval(pendingApprovals[0] ?? null);
+      setTitleDraft(record.title);
+      setDeleted(false);
+      if (!localRunRef.current) {
+        setSending(record.run_status === "running");
+        setActivity(record.run_status === "running" ? "正在处理，请稍候…" : null);
+      }
+      setError(record.run_error ?? null);
+    } catch (loadError) {
+      setError(apiErrorMessage(loadError));
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }, []);
 
-  async function handleSend(text: string) {
-    const userMsg: ChatMessage = {
-      id: `local_${Date.now()}`,
+  useEffect(() => {
+    if (conversationId) {
+      void loadConversation(conversationId);
+    } else {
+      setConversation(null);
+      setApproval(null);
+      setLastRun(null);
+      setError(null);
+      setDeleted(false);
+      setLoading(false);
+    }
+  }, [conversationId, loadConversation]);
+
+  useEffect(() => {
+    if (!conversationId || conversation?.run_status !== "running") return;
+    const timer = window.setInterval(() => {
+      void loadConversation(conversationId, true).then(notifyConversationsChanged);
+    }, 600);
+    return () => window.clearInterval(timer);
+  }, [conversation?.run_status, conversationId, loadConversation]);
+
+  useEffect(() => {
+    const reset = () => {
+      setConversation(null);
+      setApproval(null);
+      setLastRun(null);
+      setError(null);
+      setDeleted(false);
+    };
+    window.addEventListener("unibot:new-conversation", reset);
+    return () => window.removeEventListener("unibot:new-conversation", reset);
+  }, []);
+
+  useEffect(() => {
+    async function loadCapabilities() {
+      try {
+        const [tools, ainas, installations] = await Promise.all([
+          api.get<ToolRecord[]>("/tools"),
+          api.get<AinaRecord[]>("/ainas"),
+          api.get<AinaInstallation[]>("/installations?user_id=anonymous&tenant_id=default"),
+        ]);
+        const installedIds = new Set(
+          installations.filter((item) => item.status === "active").map((item) => item.aina_id),
+        );
+        setCapabilities([
+          ...tools
+            .filter((tool) => tool.status === "published")
+            .map((tool) => ({
+              value: `tool:${tool.tool_id}`,
+              label: tool.name,
+              kind: "tool" as const,
+            })),
+          ...ainas
+            .filter((aina) => (
+              aina.status === "registered"
+              && (
+                installedIds.has(aina.manifest.aina.id)
+                || aina.manifest.aina.id === "unibot-memory"
+              )
+            ))
+            .map((aina) => ({
+              value: `aina:${aina.manifest.aina.id}`,
+              label: aina.manifest.aina.name,
+                kind: "aina" as const,
+              })),
+          { value: "builtin:list_app", label: "列出应用", kind: "builtin" as const },
+          { value: "builtin:open_aina", label: "打开 AINA", kind: "builtin" as const },
+        ]);
+      } catch {
+        setCapabilities([]);
+      }
+    }
+    void loadCapabilities();
+  }, [conversationId]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
+  }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending]);
+
+  async function sendMessage(text: string) {
+    if (sending || deleted) return;
+    const localMessage: BackendMessage = {
+      id: uid("local"),
       role: "user",
       content: text,
-      createdAt: new Date().toISOString(),
+      content_type: "text",
+      widgets: [],
+      created_at: new Date().toISOString(),
     };
-    setThread((prev) => ({
-      ...prev,
-      messages: [...prev.messages, userMsg],
-    }));
-    setThinking(true);
+    setOptimisticUser(localMessage);
+    setStreamText("");
+    setActivity(debugMode ? "正在连接模型…" : "正在处理，请稍候…");
+    setError(null);
+    setApproval(null);
+    setSending(true);
+    localRunRef.current = true;
+    let completion: ChatResponse | null = null;
+    let streamFailure: string | null = null;
     try {
-      const { message } = await api.post<{ message: ChatMessage }>(
-        "/sessions/sess_canvas_app/messages",
-        { content: text },
+      let targetConversation = conversation;
+      if (!targetConversation) {
+        targetConversation = await api.post<ConversationRecord>("/conversations", {
+          ...ACTOR,
+          title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
+          category: "general",
+        });
+        setConversation(targetConversation);
+        setTitleDraft(targetConversation.title);
+        notifyConversationsChanged();
+        navigate(`/chat/${targetConversation.id}`, { replace: true });
+      }
+      await streamChat(
+        {
+          message: text,
+          conversation_id: targetConversation.id,
+          ...ACTOR,
+          capability: selectedCapability || undefined,
+        },
+        (event: StreamEvent) => {
+          if (event.type === "message.delta") setStreamText((current) => current + event.delta);
+          if (event.type === "tool.requested") {
+            if (debugMode) {
+              const kindLabel = event.kind === "aina" ? "AINA" : event.kind === "builtin" ? "内置工具" : "Tool";
+              setActivity(`正在调用 ${kindLabel}：${event.id}`);
+            } else {
+              setActivity("正在处理，请稍候…");
+            }
+          }
+          if (event.type === "tool.completed") {
+            setActivity(debugMode ? `${event.id} 已完成，正在整理结果…` : "正在整理结果…");
+          }
+          if (event.type === "approval.required") setActivity("等待你的授权确认");
+          if (event.type === "error") {
+            streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
+            setError(streamFailure);
+          }
+          if (event.type === "message.completed") completion = event.response;
+        },
       );
-      setThread((prev) => ({ ...prev, messages: [...prev.messages, message] }));
+      if (!completion) throw new Error(streamFailure ?? "Agent 流结束前没有返回完成事件。");
+      const completed = completion as ChatResponse;
+      setLastRun(completed);
+      setApproval(completed.approval ?? null);
+      if (targetConversation.title === "New conversation") {
+        await api.patch(`/conversations/${completed.conversation_id}`, {
+          title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
+        });
+      }
+      notifyConversationsChanged();
+      if (conversationId !== completed.conversation_id) {
+        navigate(`/chat/${completed.conversation_id}`, { replace: true });
+      } else {
+        await loadConversation(completed.conversation_id);
+      }
+    } catch (sendError) {
+      setError(apiErrorMessage(sendError));
     } finally {
-      setThinking(false);
+      localRunRef.current = false;
+      setOptimisticUser(null);
+      setStreamText("");
+      setActivity(null);
+      setSending(false);
     }
   }
 
-  function handleChoice(choiceId: string) {
-    handleSend(`已选择：${choiceId}`);
+  async function resolveApproval(action: "confirm" | "deny") {
+    if (!approval) return;
+    setSending(true);
+    setError(null);
+    setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
+    try {
+      if (action === "confirm") {
+        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, ACTOR);
+        setLastRun(response);
+      } else {
+        await api.post(`/approvals/${approval.id}/deny`, ACTOR);
+      }
+      setApproval(null);
+      await loadConversation(approval.conversation_id);
+      notifyConversationsChanged();
+    } catch (approvalError) {
+      setError(apiErrorMessage(approvalError));
+    } finally {
+      setSending(false);
+      setActivity(null);
+    }
   }
+
+  async function saveTitle() {
+    if (!conversation || !titleDraft.trim()) return;
+    try {
+      const updated = await api.patch<ConversationRecord>(`/conversations/${conversation.id}`, {
+        title: titleDraft.trim(),
+      });
+      setConversation(updated);
+      setRenaming(false);
+      notifyConversationsChanged();
+    } catch (renameError) {
+      setError(apiErrorMessage(renameError));
+    }
+  }
+
+  async function saveCategory(category: string) {
+    if (!conversation) return;
+    try {
+      const updated = await api.patch<ConversationRecord>(`/conversations/${conversation.id}`, { category });
+      setConversation(updated);
+      notifyConversationsChanged();
+    } catch (categoryError) {
+      setError(apiErrorMessage(categoryError));
+    }
+  }
+
+  async function deleteConversation() {
+    if (!conversation) return;
+    try {
+      await api.delete(`/conversations/${conversation.id}`);
+      setConfirmDelete(false);
+      setDeleted(true);
+      notifyConversationsChanged();
+    } catch (deleteError) {
+      setError(apiErrorMessage(deleteError));
+    }
+  }
+
+  async function restoreConversation() {
+    if (!conversation) return;
+    try {
+      const restored = await api.post<ConversationRecord>(`/conversations/${conversation.id}/restore`);
+      setConversation(restored);
+      setDeleted(false);
+      notifyConversationsChanged();
+    } catch (restoreError) {
+      setError(apiErrorMessage(restoreError));
+    }
+  }
+
+  async function openAina(ainaId: string) {
+    setError(null);
+    try {
+      const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
+        ...ACTOR,
+        conversation_id: conversation?.id,
+      });
+      navigate(canvas.route, { state: { canvas } });
+    } catch (openError) {
+      setError(apiErrorMessage(openError));
+    }
+  }
+
+  const messages = useMemo(
+    () => [...(conversation?.messages ?? []), ...(optimisticUser ? [optimisticUser] : [])],
+    [conversation?.messages, optimisticUser],
+  );
+
+  const title = conversation?.title ?? "新对话";
+  const badge = deleted
+    ? ({ label: "已删除", tone: "warning" } as const)
+    : sending
+      ? ({ label: "运行中", tone: "thinking" } as const)
+      : ({ label: "已就绪", tone: "success" } as const);
 
   return (
     <div className="h-full flex flex-col bg-app-bg">
-      <Topbar title={thread.title} badge={{ label: "正在运行", tone: "info" }} />
-      <div className="flex-1 min-h-0">
-        <div className="h-full rounded-lg border border-line bg-white flex flex-col overflow-hidden">
-          <div className="flex-1 min-h-0 overflow-y-auto px-1.5 py-2">
-            <div className="max-w-[1648px] mx-auto space-y-2">
-              {thread.messages.map((m) =>
-                m.role === "user" ? (
-                  <UserMessage key={m.id} content={m.content} files={m.files} />
-                ) : (
-                  <AssistantMessage key={m.id} message={m} onChoice={handleChoice} />
-                ),
-              )}
-              {thinking ? <ThinkingBubble /> : null}
+      <Topbar
+        title={title}
+        badge={badge}
+        actions={
+          conversation && !deleted ? (
+            <div className="flex items-center gap-1.5">
+              <select
+                value={conversation.category}
+                onChange={(event) => void saveCategory(event.target.value)}
+                disabled={sending}
+                aria-label="会话分类"
+                className="h-8 rounded-lg border border-line bg-white px-2.5 text-[11.5px] font-semibold text-ink outline-none focus:border-accent"
+              >
+                {CONVERSATION_CATEGORIES.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setRenaming(true);
+                  setTitleDraft(conversation.title);
+                }}
+                className="btn-outline h-8 text-[12px]"
+                aria-label="重命名对话"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                重命名
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="btn-danger-outline h-8 text-[12px]"
+                aria-label="删除对话"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                删除
+              </button>
+            </div>
+          ) : null
+        }
+      />
+
+      {renaming ? (
+        <div className="border-b border-line bg-white px-5 py-2.5 flex items-center gap-2">
+          <input
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            className="input-soft max-w-md h-9"
+            aria-label="对话标题"
+            autoFocus
+          />
+          <button type="button" onClick={() => void saveTitle()} className="btn-primary h-9">
+            <Check className="w-4 h-4" />保存
+          </button>
+          <button type="button" onClick={() => setRenaming(false)} className="btn-ghost h-9">
+            <X className="w-4 h-4" />取消
+          </button>
+        </div>
+      ) : null}
+
+      {confirmDelete ? (
+        <div className="border-b border-danger-ring bg-danger-soft px-5 py-3 flex items-center gap-3">
+          <AlertTriangle className="w-4 h-4 text-danger" />
+          <span className="text-[13px] text-danger-deep">删除后会从列表隐藏，你可以立即恢复。</span>
+          <span className="flex-1" />
+          <button type="button" onClick={() => setConfirmDelete(false)} className="btn-outline h-8">
+            取消
+          </button>
+          <button type="button" onClick={() => void deleteConversation()} className="btn-danger-outline h-8">
+            确认删除
+          </button>
+        </div>
+      ) : null}
+
+      <div className="flex-1 min-h-0 p-3">
+        <div className="h-full rounded-xl border border-line bg-white flex flex-col overflow-hidden shadow-card">
+          <div className="flex-1 min-h-0 overflow-y-auto bg-app-bg px-5 py-5" aria-live="polite">
+            <div className="max-w-4xl mx-auto space-y-3">
+              {loading ? <ChatSkeleton /> : null}
+              {!loading && deleted ? (
+                <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
+              ) : null}
+              {!loading && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
+              {!deleted
+                ? messages.map((message) => (
+                    <ConversationMessage
+                      key={message.id}
+                      message={message}
+                      onOpenAina={(ainaId) => void openAina(ainaId)}
+                      onPrompt={sendMessage}
+                      debugMode={debugMode}
+                    />
+                  ))
+                : null}
+              {streamText ? (
+                <AssistantMessage
+                  message={{
+                    id: "streaming",
+                    role: "assistant",
+                    content: streamText,
+                    createdAt: new Date().toISOString(),
+                    runState: "running",
+                  }}
+                />
+              ) : null}
+              {activity ? <ActivityBubble text={activity} /> : null}
+              {approval && !deleted ? (
+                <ApprovalCard
+                  approval={approval}
+                  disabled={sending}
+                  debugMode={debugMode}
+                  onConfirm={() => void resolveApproval("confirm")}
+                  onDeny={() => void resolveApproval("deny")}
+                />
+              ) : null}
+              {error ? <ErrorNotice message={error} onDismiss={() => setError(null)} /> : null}
+              {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
+              <div ref={endRef} />
             </div>
           </div>
-          <div className="border-t border-line bg-white px-4 py-3">
-            <div className="max-w-[1648px] mx-auto">
-              <Composer onSend={handleSend} />
-            </div>
-          </div>
+          {!deleted ? (
+            <ChatComposer
+              disabled={sending || loading}
+              capabilities={capabilities}
+              selectedCapability={selectedCapability}
+              onCapabilityChange={setSelectedCapability}
+              onSend={sendMessage}
+            />
+          ) : null}
         </div>
       </div>
     </div>
   );
+}
+
+function ConversationMessage({
+  message,
+  onOpenAina,
+  onPrompt,
+  debugMode,
+}: {
+  message: BackendMessage;
+  onOpenAina: (ainaId: string) => void;
+  onPrompt: (prompt: string) => void;
+  debugMode: boolean;
+}) {
+  if (message.role === "system") return null;
+  if (message.role === "user") return <UserMessage content={message.content} />;
+  if (message.role === "tool") return debugMode ? <ToolResultMessage message={message} /> : null;
+  const hasToolCalls = Boolean(message.tool_calls?.length);
+  return (
+    <div className="space-y-2">
+      {debugMode && hasToolCalls ? <ToolCallMessage message={message} /> : null}
+      {message.content && (!hasToolCalls || debugMode) ? (
+        <AssistantMessage
+          message={{
+            id: message.id,
+            role: "assistant",
+            content: message.content,
+            createdAt: message.created_at,
+            runState: "done",
+          }}
+        />
+      ) : null}
+      {message.widgets?.map((widget) => (
+        <WidgetRenderer
+          key={widget.id}
+          widget={widget}
+          onOpenAina={onOpenAina}
+          onPrompt={onPrompt}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ToolCallMessage({ message }: { message: BackendMessage }) {
+  return (
+    <div className="rounded-lg border border-accent-ring bg-accent-soft px-3.5 py-3">
+      <div className="flex items-center gap-2 text-[12.5px] font-bold text-accent-hover">
+        <Wrench className="w-4 h-4" />
+        Agent 请求能力调用
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {message.tool_calls?.map((call) => (
+          <div key={call.id} className="rounded-md border border-accent-ring/70 bg-white px-2.5 py-2">
+            <div className="font-mono text-[11.5px] text-ink">{call.function.name}</div>
+            <div className="mt-1 font-mono text-[10.5px] text-ink-muted break-all">
+              {call.function.arguments}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolResultMessage({ message }: { message: BackendMessage }) {
+  const isError = message.content.includes('"error"');
+  return (
+    <details className="rounded-lg border border-line bg-white px-3.5 py-2.5">
+      <summary className="cursor-pointer text-[12px] font-bold text-ink-muted">
+        {isError ? "能力调用失败" : "能力调用结果"} · {message.name}
+      </summary>
+      <pre className="mt-2 whitespace-pre-wrap break-all text-[10.5px] leading-relaxed text-ink-muted">
+        {formatJson(message.content)}
+      </pre>
+    </details>
+  );
+}
+
+function ActivityBubble({ text }: { text: string }) {
+  return (
+    <div className="rounded-lg border border-accent-ring bg-accent-soft h-11 px-3.5 flex items-center gap-2.5">
+      <span className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+      <span className="text-accent-hover text-[12.5px] font-semibold">{text}</span>
+    </div>
+  );
+}
+
+function ApprovalCard({
+  approval,
+  disabled,
+  debugMode,
+  onConfirm,
+  onDeny,
+}: {
+  approval: ApprovalRecord;
+  disabled: boolean;
+  debugMode: boolean;
+  onConfirm: () => void;
+  onDeny: () => void;
+}) {
+  return (
+    <section className="rounded-xl border border-warning-ring bg-warning-soft p-4" aria-label="授权确认">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg bg-warning/15 text-warning flex items-center justify-center">
+          <ShieldAlert className="w-5 h-5" />
+        </div>
+        <div className="flex-1">
+          <h2 className="text-[14px] font-extrabold text-warning-deep">高风险操作需要确认</h2>
+          <p className="mt-1 text-[12.5px] text-warning-deep/80">
+            Agent 准备运行：{approval.capability_names.join("、")}。请核对参数后决定是否继续。
+          </p>
+          {debugMode ? (
+            <div className="mt-3 space-y-2">
+              {approval.tool_calls.map((call) => (
+                <pre
+                  key={call.id}
+                  className="rounded-lg border border-warning-ring bg-white p-2.5 text-[10.5px] text-ink whitespace-pre-wrap break-all"
+                >
+                  {call.function.name}\n{formatJson(call.function.arguments)}
+                </pre>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-3 flex items-center gap-2">
+            <button type="button" disabled={disabled} onClick={onConfirm} className="btn-primary">
+              确认并执行
+            </button>
+            <button type="button" disabled={disabled} onClick={onDeny} className="btn-outline">
+              拒绝
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RunSummary({ response }: { response: ChatResponse }) {
+  return (
+    <div className="flex items-center justify-end gap-2 text-[10.5px] text-ink-muted">
+      <span>{response.iterations} 次模型迭代</span>
+      <span>·</span>
+      <span>{response.usage.input_tokens + response.usage.output_tokens} tokens</span>
+      <span>·</span>
+      <Link to={`/settings?trace=${response.trace_id}`} className="text-accent hover:underline">
+        查看 Trace
+      </Link>
+    </div>
+  );
+}
+
+function ErrorNotice({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 flex items-center gap-2.5">
+      <AlertTriangle className="w-4 h-4 text-danger" />
+      <span className="flex-1 text-[12.5px] text-danger-deep">{message}</span>
+      <button type="button" onClick={onDismiss} aria-label="关闭错误">
+        <X className="w-4 h-4 text-danger" />
+      </button>
+    </div>
+  );
+}
+
+function ChatComposer({
+  disabled,
+  capabilities,
+  selectedCapability,
+  onCapabilityChange,
+  onSend,
+}: {
+  disabled: boolean;
+  capabilities: CapabilityOption[];
+  selectedCapability: string;
+  onCapabilityChange: (value: string) => void;
+  onSend: (text: string) => void;
+}) {
+  const [text, setText] = useState("");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const value = text.trim();
+    if (!value || disabled) return;
+    onSend(value);
+    setText("");
+  }
+
+  return (
+    <form onSubmit={submit} className="border-t border-line bg-white px-5 py-3">
+      <div className="max-w-4xl mx-auto rounded-xl border border-line-strong bg-white p-2.5 shadow-soft focus-within:border-accent">
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              submit(event);
+            }
+          }}
+          disabled={disabled}
+          rows={2}
+          placeholder="给 Unibot 发消息；Enter 发送，Shift+Enter 换行"
+          aria-label="消息"
+          className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
+        />
+        <div className="mt-2 flex items-center gap-2">
+          <label className="relative inline-flex items-center">
+            <Sparkles className="pointer-events-none absolute left-2.5 w-3.5 h-3.5 text-accent" />
+            <select
+              value={selectedCapability}
+              onChange={(event) => onCapabilityChange(event.target.value)}
+              disabled={disabled}
+              aria-label="能力路由"
+              className="h-8 max-w-[260px] appearance-none rounded-lg border border-line bg-app-soft pl-8 pr-8 text-[11.5px] font-semibold text-ink outline-none focus:border-accent"
+            >
+              <option value="">自动发现能力</option>
+              {capabilities.map((capability) => (
+                <option key={capability.value} value={capability.value}>
+                  {capability.kind === "aina" ? "AINA" : capability.kind === "builtin" ? "内置" : "Tool"} · {capability.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 w-3.5 h-3.5 text-ink-muted" />
+          </label>
+          <span className="ml-auto" />
+          <button
+            type="submit"
+            disabled={disabled || !text.trim()}
+            className={classNames(
+              "w-9 h-9 rounded-lg flex items-center justify-center text-white transition-colors",
+              !disabled && text.trim()
+                ? "bg-accent hover:bg-accent-hover"
+                : "bg-ink-subtle cursor-not-allowed",
+            )}
+            aria-label="发送消息"
+          >
+            <ArrowUp className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+function WelcomePanel() {
+  return (
+    <div className="min-h-[420px] flex items-center justify-center">
+      <div className="max-w-lg text-center">
+        <div className="mx-auto w-14 h-14 rounded-2xl bg-accent-soft text-accent flex items-center justify-center">
+          <Bot className="w-7 h-7" />
+        </div>
+        <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">开始新对话</h2>
+        <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+          Unibot 会保留多轮上下文、自动发现已注册能力，并在高风险调用前暂停等待你的确认。
+        </p>
+        <div className="mt-5 grid grid-cols-3 gap-2 text-left">
+          {[
+            ["多轮上下文", "会话历史自动恢复"],
+            ["能力路由", "Tool 与 AINA"],
+            ["安全确认", "高风险操作可控"],
+          ].map(([label, detail]) => (
+            <div key={label} className="rounded-lg border border-line bg-white p-3">
+              <div className="text-[12px] font-bold text-ink">{label}</div>
+              <div className="mt-1 text-[10.5px] text-ink-muted">{detail}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeletedConversation({ title, onRestore }: { title: string; onRestore: () => void }) {
+  return (
+    <div className="min-h-[420px] flex items-center justify-center">
+      <div className="text-center">
+        <Trash2 className="mx-auto w-10 h-10 text-ink-subtle" />
+        <h2 className="mt-3 text-[17px] font-bold text-ink">“{title}”已删除</h2>
+        <p className="mt-1 text-[12.5px] text-ink-muted">恢复后会重新出现在对话列表中。</p>
+        <button type="button" onClick={onRestore} className="btn-primary mt-4">
+          <RotateCcw className="w-4 h-4" />恢复对话
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChatSkeleton() {
+  return (
+    <div className="space-y-3 py-6">
+      {["w-2/3", "w-1/2", "w-3/4"].map((width) => (
+        <div key={width} className={classNames("h-16 rounded-lg bg-line/60 animate-pulse", width)} />
+      ))}
+    </div>
+  );
+}
+
+function formatJson(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }
