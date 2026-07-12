@@ -1,212 +1,406 @@
-import { useEffect, useState } from "react";
-import { X, Search, Database, Trash2, Filter, ArrowRight } from "lucide-react";
-import { api } from "@/lib/api";
-import { CHAT_THREAD_SYSTEM_INTERACTION } from "@/mocks/seed";
-import type { ChatThread, MemoryItem, MemoryStats } from "@/types";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, ArrowUp, Bot, Loader2, Maximize2, Wrench } from "lucide-react";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { Topbar } from "@/components/layout/Topbar";
-import { AssistantMessage, Composer, UserMessage } from "@/components/chat/MessageBubble";
-import { classNames } from "@/lib/utils";
+import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
+import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
+import { useDebugMode } from "@/lib/debugMode";
+import { classNames, uid } from "@/lib/utils";
+import type { AinaCanvasResponse, BackendMessage, ChatResponse, ConversationRecord } from "@/types";
 
-type Category = "all" | "fact" | "goal" | "pending";
-
-const FILTERS: Array<{ id: Category; label: string }> = [
-  { id: "all", label: "全部" },
-  { id: "fact", label: "事实" },
-  { id: "goal", label: "目标" },
-  { id: "pending", label: "待确认" },
-];
+const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 
 export default function CanvasModePage() {
-  const [thread, setThread] = useState<ChatThread>(CHAT_THREAD_SYSTEM_INTERACTION);
-  const [items, setItems] = useState<MemoryItem[]>([]);
-  const [stats, setStats] = useState<MemoryStats | null>(null);
-  const [category, setCategory] = useState<Category>("all");
+  const { ainaId = "" } = useParams<{ ainaId: string }>();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { debugMode } = useDebugMode();
+  const stateCanvas = (location.state as { canvas?: AinaCanvasResponse } | null)?.canvas;
+  const [canvas, setCanvas] = useState<AinaCanvasResponse | null>(
+    stateCanvas?.aina_id === ainaId ? stateCanvas : null,
+  );
+  const [conversationId, setConversationId] = useState<string | null>(
+    searchParams.get("conversation") ?? stateCanvas?.conversation_id ?? null,
+  );
+  const [messages, setMessages] = useState<BackendMessage[]>([]);
+  const [loading, setLoading] = useState(!canvas);
+  const [sending, setSending] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const [activity, setActivity] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
+  const [recoveringRun, setRecoveringRun] = useState(false);
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const localRunRef = useRef(false);
 
-  useEffect(() => {
-    api
-      .get<ChatThread>("/sessions/sess_canvas_app/thread?kind=system")
-      .then(setThread)
-      .catch(() => {});
-    api.get<{ items: MemoryItem[]; total: number }>("/memories").then((d) => setItems(d.items));
-    api.get<MemoryStats>("/memories/stats").then(setStats).catch(() => {});
+  const loadConversation = useCallback(async (id: string) => {
+    const record = await api.get<ConversationRecord>(`/conversations/${id}`);
+    setMessages(record.messages);
+    if (!localRunRef.current) {
+      const running = record.run_status === "running";
+      setRecoveringRun(running);
+      setSending(running);
+      setActivity(running ? "正在处理，请稍候…" : null);
+    }
+    setError(record.run_error ?? null);
+    return record;
   }, []);
 
-  const filtered = items.filter((m) => category === "all" || m.category === category);
+  useEffect(() => {
+    let cancelled = false;
+    const supplied = stateCanvas?.aina_id === ainaId ? stateCanvas : null;
+    if (supplied) {
+      setCanvas(supplied);
+      setConversationId(searchParams.get("conversation") ?? supplied.conversation_id ?? null);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setLoading(true);
+    setMessages([]);
+    api
+      .post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
+        ...ACTOR,
+        conversation_id: searchParams.get("conversation"),
+      })
+      .then((opened) => {
+        if (!cancelled) {
+          setCanvas(opened);
+          setConversationId(searchParams.get("conversation") ?? opened.conversation_id ?? null);
+          setError(null);
+        }
+      })
+      .catch((openError) => !cancelled && setError(apiErrorMessage(openError)))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [ainaId, searchParams, stateCanvas]);
 
-  return (
-    <div className="h-full flex flex-col bg-app-bg">
-      <Topbar title="Memory 应用模块" badge={{ label: "画布模式", tone: "info" }} />
-      <div className="flex-1 min-h-0">
-        <div className="h-full grid grid-cols-[420px_1fr] gap-3">
-          <NarrowChat thread={thread} />
-          <CanvasPanel
-            items={filtered}
-            category={category}
-            setCategory={setCategory}
-            stats={stats}
-          />
-        </div>
-      </div>
-    </div>
+  useEffect(() => {
+    if (!conversationId) {
+      setMessages([]);
+      return;
+    }
+    void loadConversation(conversationId).catch((loadError) => setError(apiErrorMessage(loadError)));
+  }, [conversationId, loadConversation]);
+
+  useEffect(() => {
+    if (!conversationId || !recoveringRun) return;
+    const timer = window.setInterval(() => {
+      void loadConversation(conversationId);
+    }, 600);
+    return () => window.clearInterval(timer);
+  }, [conversationId, loadConversation, recoveringRun]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
+  }, [messages, streamText, activity, sending]);
+
+  async function sendMessage(text: string) {
+    const prompt = text.trim();
+    if (!prompt || sending) return;
+    const optimistic: BackendMessage = {
+      id: uid("canvas-user"),
+      role: "user",
+      content: prompt,
+      content_type: "text",
+      widgets: [],
+      created_at: new Date().toISOString(),
+    };
+    setMessages((current) => [...current, optimistic]);
+    setSending(true);
+    localRunRef.current = true;
+    setStreamText("");
+    setActivity(debugMode ? "正在连接 AINA…" : "正在处理，请稍候…");
+    setError(null);
+    let completion: ChatResponse | null = null;
+    let streamFailure: string | null = null;
+    try {
+      let targetConversationId = conversationId;
+      if (!targetConversationId) {
+        const created = await api.post<ConversationRecord>("/conversations", {
+          ...ACTOR,
+          title: `${canvas?.name ?? ainaId} 对话`,
+          category: "general",
+        });
+        targetConversationId = created.id;
+        setConversationId(created.id);
+        navigate(`/canvas/${ainaId}?conversation=${created.id}`, {
+          replace: true,
+          state: canvas ? { canvas: { ...canvas, conversation_id: created.id } } : undefined,
+        });
+      }
+      await streamChat(
+        {
+          message: prompt,
+          conversation_id: targetConversationId,
+          ...ACTOR,
+          capability: ainaId === "unibot-assistant" ? undefined : `aina:${ainaId}`,
+        },
+        (event: StreamEvent) => {
+          if (event.type === "message.delta") setStreamText((current) => current + event.delta);
+          if (event.type === "tool.requested") setActivity(debugMode ? `正在调用 ${event.id}…` : "正在处理，请稍候…");
+          if (event.type === "tool.completed") setActivity(debugMode ? "调用完成，正在整理结果…" : "正在整理结果…");
+          if (event.type === "routing.started") setActivity(debugMode ? "正在匹配 AINA…" : "正在处理，请稍候…");
+          if (event.type === "error") {
+            streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
+            setError(streamFailure);
+          }
+          if (event.type === "message.completed") completion = event.response;
+        },
+      );
+      if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
+      const completed = completion as ChatResponse;
+      setLastRun(completed);
+      setConversationId(completed.conversation_id);
+      await loadConversation(completed.conversation_id);
+      navigate(`/canvas/${ainaId}?conversation=${completed.conversation_id}`, {
+        replace: true,
+        state: canvas ? { canvas: { ...canvas, conversation_id: completed.conversation_id } } : undefined,
+      });
+    } catch (sendError) {
+      setMessages((current) => current.filter((message) => message.id !== optimistic.id));
+      setError(apiErrorMessage(sendError));
+    } finally {
+      localRunRef.current = false;
+      setSending(false);
+      setStreamText("");
+      setActivity(null);
+    }
+  }
+
+  async function openAina(targetAinaId: string) {
+    try {
+      const opened = await api.post<AinaCanvasResponse>(`/ainas/${targetAinaId}/open`, {
+        ...ACTOR,
+        conversation_id: conversationId,
+      });
+      navigate(opened.route, { state: { canvas: opened } });
+    } catch (openError) {
+      setError(apiErrorMessage(openError));
+    }
+  }
+
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => message.role !== "system"),
+    [messages],
   );
-}
 
-function NarrowChat({ thread }: { thread: ChatThread }) {
   return (
-    <div className="rounded-lg border border-line bg-white flex flex-col overflow-hidden">
-      <div className="h-[54px] px-4 flex items-center gap-3 border-b border-line bg-white">
-        <span className="text-[16px] font-bold font-display">询问 Canvas 应用详情</span>
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto bg-app-bg p-4 space-y-2.5">
-        {thread.messages.map((m) =>
-          m.role === "user" ? (
-            <UserMessage key={m.id} content={m.content} files={m.files} />
-          ) : (
-            <AssistantMessage key={m.id} message={m} />
-          ),
-        )}
-      </div>
-      <div className="border-t border-line bg-white p-2.5">
-        <Composer onSend={() => {}} />
-      </div>
-    </div>
-  );
-}
-
-function CanvasPanel({
-  items,
-  category,
-  setCategory,
-  stats,
-}: {
-  items: MemoryItem[];
-  category: Category;
-  setCategory: (c: Category) => void;
-  stats: MemoryStats | null;
-}) {
-  return (
-    <div className="rounded-lg border border-line bg-white flex flex-col overflow-hidden">
-      <div className="px-5 pt-4 pb-3 space-y-3 border-b border-line bg-app-soft">
-        <div className="flex items-center gap-3">
+    <div className="flex h-full flex-col bg-app-bg">
+      <Topbar
+        title={canvas?.name ?? "AINA Canvas"}
+        badge={{ label: sending ? "运行中" : "Canvas", tone: sending ? "thinking" : "info" }}
+        actions={
           <button
             type="button"
-            className="shrink-0 h-9 px-2.5 rounded-lg border border-line-strong bg-white inline-flex items-center gap-1.5 text-[13px] font-bold text-ink hover:bg-app-soft whitespace-nowrap"
+            onClick={() => navigate(conversationId ? `/chat/${conversationId}` : "/chat")}
+            className="btn-outline h-8"
           >
-            <X className="w-3.5 h-3.5 text-ink-muted" />
-            退出画布
+            <ArrowLeft className="h-3.5 w-3.5" />退出 Canvas
           </button>
-          <div>
-            <h2 className="text-[24px] font-bold font-display">Memory 应用模块</h2>
-            <p className="text-ink-muted text-[12.5px]">
-              支持筛选、删除确认、新增和文件导入；保留历史，不直接编辑。
-            </p>
+        }
+      />
+
+      <div className="min-h-0 flex-1 p-3">
+        {loading ? <CanvasSkeleton /> : null}
+        {!loading && canvas ? (
+          <div className="grid h-full grid-cols-[minmax(340px,420px)_minmax(0,1fr)] gap-3">
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
+              <header className="flex items-center gap-3 border-b border-line px-4 py-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-soft text-accent">
+                  <Bot className="h-4.5 w-4.5" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="truncate text-[13.5px] font-extrabold text-ink">与 {canvas.name} 对话</h2>
+                  <p className="truncate text-[10.5px] text-ink-muted">描述需求，或在右侧 Widget 直接操作</p>
+                </div>
+              </header>
+
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-app-bg p-3" aria-live="polite">
+                {!visibleMessages.length && !sending ? (
+                  <div className="flex min-h-[260px] items-center justify-center text-center">
+                    <div>
+                      <Bot className="mx-auto h-8 w-8 text-ink-subtle" />
+                      <p className="mt-2 text-[12px] font-semibold text-ink-muted">开始描述你要完成的任务</p>
+                    </div>
+                  </div>
+                ) : null}
+                {visibleMessages.map((message) => (
+                  <CanvasMessage
+                    key={message.id}
+                    message={message}
+                    onOpenAina={(id) => void openAina(id)}
+                    onPrompt={(prompt) => void sendMessage(prompt)}
+                    debugMode={debugMode}
+                  />
+                ))}
+                {streamText ? (
+                  <AssistantMessage
+                    message={{
+                      id: "canvas-stream",
+                      role: "assistant",
+                      content: streamText,
+                      createdAt: new Date().toISOString(),
+                      runState: "running",
+                    }}
+                  />
+                ) : null}
+                {activity ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-accent-ring bg-accent-soft px-3 py-2.5 text-[11.5px] font-semibold text-accent-hover">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />{activity}
+                  </div>
+                ) : null}
+                {error ? <p className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">{error}</p> : null}
+                <div ref={endRef} />
+              </div>
+              <CanvasComposer disabled={sending} onSend={(text) => void sendMessage(text)} />
+            </section>
+
+            <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
+              <header className="flex items-start gap-3 border-b border-line bg-white px-5 py-4">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white">
+                  <Maximize2 className="h-4.5 w-4.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h1 className="truncate text-[18px] font-extrabold font-display text-ink">{canvas.name}</h1>
+                    <span className="rounded-md bg-app-soft px-2 py-1 font-mono text-[9.5px] text-ink-muted">v{canvas.version}</span>
+                  </div>
+                  <p className="mt-1 max-w-3xl text-[12px] leading-relaxed text-ink-muted">{canvas.description}</p>
+                </div>
+              </header>
+              <div className="min-h-0 flex-1 overflow-y-auto bg-app-bg p-5">
+                <div className="mx-auto max-w-4xl">
+                  <WidgetRenderer
+                    widget={canvas.main_widget}
+                    disabled={sending}
+                    onOpenAina={(id) => void openAina(id)}
+                    onPrompt={(prompt) => void sendMessage(prompt)}
+                  />
+                  {debugMode && lastRun ? (
+                    <p className="mt-3 text-right text-[10px] text-ink-subtle">
+                      {lastRun.iterations} 次模型迭代 · {lastRun.usage.input_tokens + lastRun.usage.output_tokens} tokens
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </section>
           </div>
-          <div className="flex-1" />
-          <label className="h-9 w-[280px] rounded-lg border border-line-strong bg-white px-3 flex items-center gap-2 focus-within:border-accent">
-            <Search className="w-3.5 h-3.5 text-ink-muted" />
-            <input
-              type="text"
-              placeholder="搜索记忆"
-              className="flex-1 bg-transparent text-[12.5px] placeholder:text-ink-subtle outline-none"
-            />
-          </label>
-        </div>
-        <div className="flex items-center gap-2">
-          {FILTERS.map((f) => (
-            <FilterChip
-              key={f.id}
-              active={category === f.id}
-              onClick={() => setCategory(f.id)}
-            >
-              {f.label}
-            </FilterChip>
-          ))}
-          <span className="flex-1" />
-          {stats ? (
-            <span className="text-ink-muted text-[12.5px]">
-              共 {stats.total} 条 · 事实 {stats.fact} · 目标 {stats.goal} · 待确认 {stats.pending}
-            </span>
-          ) : null}
-        </div>
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2.5">
-        {items.slice(0, 3).map((m) => (
-          <CanvasMemoryRow key={m.id} item={m} />
-        ))}
+        ) : null}
       </div>
     </div>
   );
 }
 
-function CanvasMemoryRow({ item }: { item: MemoryItem }) {
-  return (
-    <div
-      className={classNames(
-        "rounded-md p-3 space-y-1.5 bg-white",
-        item.selected ? "border border-accent-ring" : "border border-line",
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <Database className="w-4 h-4 text-accent" />
-        <span className="text-ink text-[14px] font-bold">{item.title}</span>
-        <span className="flex-1" />
-        <button className="text-ink-muted hover:text-ink" aria-label="筛选">
-          <Filter className="w-3.5 h-3.5" />
-        </button>
-      </div>
-      <div
-        className={classNames(
-          "text-[12px]",
-          item.meta.includes("待确认") ? "text-warning-deep" : "text-ink-muted",
-        )}
-      >
-        {item.meta}
-      </div>
-      <div className="flex items-center gap-2">
-        <span
-          className={classNames(
-            "text-[12px]",
-            item.sourceTone === "accent" ? "text-accent" : "text-ink-muted",
-          )}
-        >
-          {item.source}
-        </span>
-        <span className="flex-1" />
-        <span className="text-success-deep text-[12px] font-bold">保留</span>
-        <span className="text-ink-subtle text-[12px]">·</span>
-        <span className="inline-flex items-center gap-1 text-danger text-[12px] font-bold">
-          <Trash2 className="w-3 h-3" />
-          删除
-        </span>
-        <span className="text-ink-subtle text-[12px]">·</span>
-        <span className="inline-flex items-center gap-1 text-accent text-[12px] font-bold">
-          <ArrowRight className="w-3 h-3" />
-          详情
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function FilterChip({
-  active,
-  onClick,
-  children,
+function CanvasMessage({
+  message,
+  onOpenAina,
+  onPrompt,
+  debugMode,
 }: {
-  active?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
+  message: BackendMessage;
+  onOpenAina: (ainaId: string) => void;
+  onPrompt: (prompt: string) => void;
+  debugMode: boolean;
 }) {
+  if (message.role === "user") return <UserMessage content={message.content} />;
+  if (message.role === "tool") {
+    if (!debugMode) return null;
+    return (
+      <details className="rounded-lg border border-line bg-white px-3 py-2 text-[10.5px] text-ink-muted">
+        <summary className="flex cursor-pointer items-center gap-1.5 font-bold">
+          <Wrench className="h-3 w-3" />{message.name ?? "能力调用"}
+        </summary>
+        <pre className="mt-2 whitespace-pre-wrap break-all">{formatJson(message.content)}</pre>
+      </details>
+    );
+  }
+  const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={classNames(
-        "h-8 px-3 rounded-lg text-[13px] font-bold border",
-        active ? "bg-accent text-white border-transparent" : "bg-white text-ink border-line",
-      )}
-    >
-      {children}
-    </button>
+    <div className="space-y-2">
+      {message.content && (!hasToolCalls || debugMode) ? (
+        <AssistantMessage
+          message={{
+            id: message.id,
+            role: "assistant",
+            content: message.content,
+            createdAt: message.created_at,
+            runState: "done",
+          }}
+        />
+      ) : null}
+      {message.widgets?.map((widget) => (
+        <WidgetRenderer key={widget.id} widget={widget} onOpenAina={onOpenAina} onPrompt={onPrompt} />
+      ))}
+    </div>
   );
+}
+
+function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text: string) => void }) {
+  const [text, setText] = useState("");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const value = text.trim();
+    if (!value || disabled) return;
+    onSend(value);
+    setText("");
+  }
+
+  return (
+    <form onSubmit={submit} className="border-t border-line bg-white p-3">
+      <div className="rounded-xl border border-line-strong p-2 focus-within:border-accent">
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              submit(event);
+            }
+          }}
+          disabled={disabled}
+          rows={2}
+          placeholder="向当前 AINA 描述需求"
+          aria-label="Canvas 消息"
+          className="w-full resize-none bg-transparent px-1 text-[12.5px] outline-none placeholder:text-ink-muted"
+        />
+        <div className="mt-1 flex justify-end">
+          <button
+            type="submit"
+            disabled={disabled || !text.trim()}
+            className={classNames(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-white",
+              disabled || !text.trim() ? "cursor-not-allowed bg-ink-subtle" : "bg-accent hover:bg-accent-hover",
+            )}
+            aria-label="发送 Canvas 消息"
+          >
+            <ArrowUp className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+function CanvasSkeleton() {
+  return (
+    <div className="grid h-full grid-cols-[420px_1fr] gap-3">
+      <div className="animate-pulse rounded-xl bg-line/60" />
+      <div className="animate-pulse rounded-xl bg-line/60" />
+    </div>
+  );
+}
+
+function formatJson(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }

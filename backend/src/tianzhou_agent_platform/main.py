@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, cast
 from uuid import uuid4
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 
+from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.router import create_router
@@ -30,8 +32,12 @@ def create_app(
     gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
+        await ensure_unibot_assistant(resolved_repository)
         yield
+        background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         await gateway.aclose()
         close = getattr(resolved_llm, "aclose", None)
         if close is not None:
@@ -52,6 +58,7 @@ def create_app(
         llm=resolved_llm,
         gateway=gateway,
     )
+    app.state.background_tasks = set()
 
     @app.middleware("http")
     async def attach_trace_id(request: Request, call_next):  # type: ignore[no-untyped-def]

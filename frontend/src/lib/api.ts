@@ -38,7 +38,9 @@ export function apiErrorMessage(error: unknown): string {
 
 export type StreamEvent =
   | { type: "message.delta"; delta: string }
-  | { type: "tool.requested" | "tool.completed"; kind: "tool" | "aina"; id: string }
+  | { type: "tool.requested" | "tool.completed"; kind: "tool" | "aina" | "builtin"; id: string }
+  | { type: "routing.started"; candidate_count: number }
+  | { type: "routing.completed"; kind: "aina" | "system"; id?: string | null }
   | { type: "approval.required"; approval_id: string; capabilities: string[] }
   | { type: "message.completed"; response: ChatResponse }
   | { type: "error"; code?: string; source?: string; error?: { message?: string; code?: string } };

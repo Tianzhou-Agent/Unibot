@@ -80,7 +80,11 @@ class OpenAICompatibleClient:
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
     ) -> LLMResult:
-        if event_sink is not None:
+        # Several OpenAI-compatible providers reject named tool_choice when
+        # streaming. A forced tool turn has no user-facing text to stream, so
+        # use the compatible non-streaming path and resume SSE for the model's
+        # answer after the tool result is available.
+        if event_sink is not None and _tool_choice_name(tool_choice) is None:
             return await self._stream_complete(
                 messages=messages,
                 tools=tools,

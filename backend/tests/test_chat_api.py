@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from typing import Any
 
 import httpx
@@ -8,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
+from tianzhou_agent_platform.core.llm import EventSink, LLMResult
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
@@ -57,6 +60,71 @@ def test_stream_chat_returns_sse_deltas_and_completion() -> None:
     assert "event: message.delta" in body
     assert "streamed answer" in body
     assert "event: message.completed" in body
+
+
+def test_conversations_can_be_categorized_filtered_and_deleted() -> None:
+    with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+        created = client.post("/conversations", json={"title": "Roadmap"}).json()
+        categorized = client.patch(f"/conversations/{created['id']}", json={"category": "work"})
+        work = client.get("/conversations", params={"category": "work"})
+        deleted = client.delete(f"/conversations/{created['id']}")
+        remaining = client.get("/conversations")
+
+    assert categorized.status_code == 200
+    assert categorized.json()["category"] == "work"
+    assert [item["id"] for item in work.json()] == [created["id"]]
+    assert deleted.status_code == 204
+    assert remaining.json() == []
+
+
+class BlockingLLM:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def complete(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None = None,
+        event_sink: EventSink | None = None,
+    ) -> LLMResult:
+        del messages, tools, tool_choice
+        self.started.set()
+        while not self.release.is_set():
+            await asyncio.sleep(0.01)
+        if event_sink is not None:
+            await event_sink({"type": "message.delta", "delta": "finished"})
+        return assistant("finished")
+
+
+def test_conversation_exposes_running_state_until_background_work_finishes() -> None:
+    llm = BlockingLLM()
+    result: dict[str, Any] = {}
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        conversation = client.post("/conversations", json={"title": "Recoverable"}).json()
+
+        def run_chat() -> None:
+            result["response"] = client.post(
+                "/chat",
+                json={"message": "wait for release", "conversation_id": conversation["id"]},
+            )
+
+        thread = threading.Thread(target=run_chat)
+        thread.start()
+        assert llm.started.wait(timeout=2)
+        running = client.get(f"/conversations/{conversation['id']}").json()
+        llm.release.set()
+        thread.join(timeout=3)
+        completed = client.get(f"/conversations/{conversation['id']}").json()
+
+    assert running["run_status"] == "running"
+    assert running["active_trace_id"].startswith("trace_")
+    assert result["response"].status_code == 200
+    assert completed["run_status"] == "idle"
+    assert completed["active_trace_id"] is None
+    assert completed["messages"][-1]["content"] == "finished"
 
 
 def test_tool_loop_executes_remote_tool_and_records_trace() -> None:

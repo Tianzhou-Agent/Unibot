@@ -49,6 +49,13 @@ class RemoteCapabilityGateway:
         return headers
 
     async def probe_aina(self, manifest: AinaManifest) -> dict[str, Any]:
+        if manifest.runtime.type != "remote":
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                "Built-in AINA runtimes are managed by the platform",
+                status_code=403,
+                source="aina",
+            )
         endpoint = str(manifest.runtime.endpoint).rstrip("/")
         describe = await self._request_json(
             "GET",
@@ -131,6 +138,13 @@ class RemoteCapabilityGateway:
         trace_id: str,
         available_tools: list[str],
     ) -> tuple[AinaInvokeResponse, float]:
+        if manifest.runtime.type != "remote":
+            raise PlatformError(
+                "INVALID_REQUEST",
+                "A built-in AINA cannot be invoked through the remote gateway",
+                status_code=400,
+                source="aina",
+            )
         missing_permissions = set(manifest.permissions) - set(installation.granted_permissions)
         if missing_permissions:
             raise PlatformError(
