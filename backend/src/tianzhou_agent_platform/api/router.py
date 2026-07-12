@@ -8,6 +8,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS, open_aina
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.errors import PlatformError
@@ -15,6 +16,7 @@ from tianzhou_agent_platform.core.models import (
     AinaInstallation,
     AinaManifest,
     AinaRecord,
+    AinaCanvasResponse,
     ApprovalAction,
     ApprovalRecord,
     ChatRequest,
@@ -23,6 +25,13 @@ from tianzhou_agent_platform.core.models import (
     ConversationCreate,
     ConversationUpdate,
     InstallationRequest,
+    MemoryCategory,
+    MemoryCreate,
+    MemoryListResponse,
+    MemoryRecord,
+    MemoryStats,
+    MemoryUpdate,
+    OpenAinaRequest,
     PermissionUpdate,
     SkillCreate,
     SkillRecord,
@@ -60,6 +69,7 @@ def create_router() -> APIRouter:
     @router.post("/chat/stream")
     async def stream_chat(payload: ChatRequest, request: Request) -> StreamingResponse:
         runtime = _runtime(request)
+        background_tasks = cast(set[asyncio.Task[None]], request.app.state.background_tasks)
 
         async def stream() -> AsyncIterator[str]:
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -83,10 +93,24 @@ def create_router() -> APIRouter:
                             },
                         }
                     )
+                except Exception:
+                    await queue.put(
+                        {
+                            "type": "error",
+                            "error": {
+                                "code": "INTERNAL_ERROR",
+                                "message": "The agent run failed unexpectedly.",
+                                "retryable": True,
+                                "source": "platform",
+                            },
+                        }
+                    )
                 finally:
                     await queue.put(None)
 
             task = asyncio.create_task(produce())
+            background_tasks.add(task)
+            task.add_done_callback(background_tasks.discard)
             try:
                 while True:
                     event = await queue.get()
@@ -95,9 +119,10 @@ def create_router() -> APIRouter:
                     event_type = event.get("type", "message")
                     yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             finally:
-                if not task.done():
-                    task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                # The Agent run intentionally outlives the SSE connection. A refreshed
+                # page recovers progress from Conversation.run_status and polls the
+                # persisted messages until this background task completes.
+                pass
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -110,8 +135,13 @@ def create_router() -> APIRouter:
         request: Request,
         user_id: str | None = None,
         tenant_id: str | None = None,
+        category: str | None = None,
     ) -> list[Conversation]:
-        return await _repository(request).list_conversations(user_id=user_id, tenant_id=tenant_id)
+        return await _repository(request).list_conversations(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            category=category,
+        )
 
     @router.get("/conversations/{conversation_id}", response_model=Conversation)
     async def get_conversation(conversation_id: str, request: Request) -> Conversation:
@@ -133,6 +163,48 @@ def create_router() -> APIRouter:
     @router.post("/conversations/{conversation_id}/restore", response_model=Conversation)
     async def restore_conversation(conversation_id: str, request: Request) -> Conversation:
         return await _repository(request).set_conversation_status(conversation_id, "active")
+
+    @router.post("/memories", response_model=MemoryRecord, status_code=status.HTTP_201_CREATED)
+    async def create_memory(payload: MemoryCreate, request: Request) -> MemoryRecord:
+        return await _repository(request).create_memory(payload)
+
+    @router.get("/memories", response_model=MemoryListResponse)
+    async def list_memories(
+        request: Request,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+        q: str | None = None,
+        category: MemoryCategory | None = None,
+    ) -> MemoryListResponse:
+        items = await _repository(request).list_memories(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            query=q,
+            category=category,
+        )
+        return MemoryListResponse(items=items, total=len(items))
+
+    @router.get("/memories/stats", response_model=MemoryStats)
+    async def memory_stats(
+        request: Request,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+    ) -> MemoryStats:
+        return await _repository(request).memory_stats(user_id=user_id, tenant_id=tenant_id)
+
+    @router.patch("/memories/{memory_id}", response_model=MemoryRecord)
+    async def update_memory(memory_id: str, payload: MemoryUpdate, request: Request) -> MemoryRecord:
+        return await _repository(request).update_memory(memory_id, payload)
+
+    @router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_memory(
+        memory_id: str,
+        request: Request,
+        user_id: str = Query(default="anonymous"),
+        tenant_id: str = Query(default="default"),
+    ) -> Response:
+        await _repository(request).remove_memory(memory_id, user_id=user_id, tenant_id=tenant_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/tools", response_model=ToolRecord, status_code=status.HTTP_201_CREATED)
     async def register_tool(payload: ToolCreate, request: Request) -> ToolRecord:
@@ -179,6 +251,12 @@ def create_router() -> APIRouter:
 
     @router.post("/ainas", response_model=AinaRecord, status_code=status.HTTP_201_CREATED)
     async def register_aina(payload: AinaManifest, request: Request) -> AinaRecord:
+        if payload.runtime.type != "remote":
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                "Built-in AINA runtimes can only be registered by the platform",
+                status_code=403,
+            )
         for capability in [*payload.capabilities.skills, *payload.capabilities.tools]:
             validate_schema(capability.input_schema, label=f"capability {capability.id} input_schema")
         health = await _gateway(request).probe_aina(payload)
@@ -192,8 +270,24 @@ def create_router() -> APIRouter:
     async def get_aina(aina_id: str, request: Request) -> AinaRecord:
         return await _repository(request).get_aina(aina_id)
 
+    @router.post("/ainas/{aina_id}/open", response_model=AinaCanvasResponse)
+    async def open_aina_canvas(
+        aina_id: str,
+        payload: OpenAinaRequest,
+        request: Request,
+    ) -> AinaCanvasResponse:
+        return await open_aina(
+            _repository(request),
+            aina_id,
+            user_id=payload.user_id,
+            tenant_id=payload.tenant_id,
+            conversation_id=payload.conversation_id,
+        )
+
     @router.delete("/ainas/{aina_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_aina(aina_id: str, request: Request) -> Response:
+        if aina_id in BUILTIN_AINA_IDS:
+            raise PlatformError("PERMISSION_DENIED", "The system AINA cannot be deleted", status_code=403)
         await _repository(request).remove_aina(aina_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -203,6 +297,8 @@ def create_router() -> APIRouter:
         payload: InstallationRequest,
         request: Request,
     ) -> AinaInstallation:
+        if aina_id in BUILTIN_AINA_IDS:
+            raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         repository = _repository(request)
         record = await repository.get_aina(aina_id)
         _validate_permission_subset(record, payload.granted_permissions)
@@ -314,6 +410,7 @@ def create_router() -> APIRouter:
             repository.list_installations(),
             repository.list_traces(),
         )
+        memories = await repository.list_memories(user_id="anonymous", tenant_id="default")
         return {
             "conversations": len(conversations),
             "tools": len(tools),
@@ -321,6 +418,7 @@ def create_router() -> APIRouter:
             "ainas": len(ainas),
             "installations": len(installations),
             "traces": len(traces),
+            "memories": len(memories),
         }
 
     return router

@@ -14,10 +14,11 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames } from "@/lib/utils";
-import type { AinaInstallation, AinaRecord, SkillRecord, ToolRecord } from "@/types";
+import type { AinaCanvasResponse, AinaInstallation, AinaRecord, SkillRecord, ToolRecord } from "@/types";
 
 type Tab = "aina" | "tools" | "skills";
 
@@ -77,6 +78,25 @@ const SAMPLE_AINA = {
     ui: [],
     events: [],
   },
+  main_widget: {
+    id: "arithmetic-main",
+    kind: "form",
+    title: "整数乘法",
+    description: "输入两个整数，通过对话调用当前 AINA。",
+    markdown: "### 交互式乘法\n\n你也可以在左侧对话框直接描述计算需求。",
+    fields: [
+      { id: "left", label: "第一个整数", input_type: "number", placeholder: "6", required: true },
+      { id: "right", label: "第二个整数", input_type: "number", placeholder: "7", required: true },
+    ],
+    actions: [
+      {
+        id: "multiply",
+        label: "计算乘积",
+        kind: "prompt",
+        prompt: "请计算 {left} 乘以 {right}，并返回结果。",
+      },
+    ],
+  },
   permissions: [],
   authentication: { type: "none" },
 };
@@ -97,6 +117,7 @@ const SAMPLE_SKILL = {
 };
 
 export default function AllAppsPage() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("aina");
   const [ainas, setAinas] = useState<AinaRecord[]>([]);
   const [installations, setInstallations] = useState<AinaInstallation[]>([]);
@@ -207,6 +228,18 @@ export default function AllAppsPage() {
     }
   }
 
+  async function open(aina: AinaRecord) {
+    try {
+      const canvas = await api.post<AinaCanvasResponse>(`/ainas/${aina.manifest.aina.id}/open`, {
+        user_id: "anonymous",
+        tenant_id: "default",
+      });
+      navigate(canvas.route, { state: { canvas } });
+    } catch (openError) {
+      setNotice({ tone: "error", text: apiErrorMessage(openError) });
+    }
+  }
+
   const total = ainas.length + tools.length + skills.length;
   return (
     <div className="h-full flex flex-col bg-app-bg">
@@ -264,6 +297,7 @@ export default function AllAppsPage() {
               installedIds={installedIds}
               onInstall={(aina) => void install(aina)}
               onUninstall={(aina) => void uninstall(aina)}
+              onOpen={(aina) => void open(aina)}
               onDelete={(id) => void remove("aina", id)}
             />
           ) : null}
@@ -284,12 +318,14 @@ function AinaGrid({
   installedIds,
   onInstall,
   onUninstall,
+  onOpen,
   onDelete,
 }: {
   ainas: AinaRecord[];
   installedIds: Set<string>;
   onInstall: (aina: AinaRecord) => void;
   onUninstall: (aina: AinaRecord) => void;
+  onOpen: (aina: AinaRecord) => void;
   onDelete: (id: string) => void;
 }) {
   if (!ainas.length) return <EmptyState icon={<AppWindow />} title="尚未注册 AINA" detail="从远程 Runtime Manifest 开始。" />;
@@ -297,7 +333,8 @@ function AinaGrid({
     <div className="grid grid-cols-2 gap-3">
       {ainas.map((record) => {
         const manifest = record.manifest;
-        const installed = installedIds.has(manifest.aina.id);
+        const builtin = manifest.runtime.type === "builtin";
+        const installed = builtin || installedIds.has(manifest.aina.id);
         return (
           <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-card">
             <div className="flex items-start gap-3">
@@ -307,7 +344,7 @@ function AinaGrid({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <h2 className="truncate text-[15px] font-extrabold text-ink">{manifest.aina.name}</h2>
-                  {installed ? <StatusChip tone="success">已安装</StatusChip> : <StatusChip>已注册</StatusChip>}
+                  {builtin ? <StatusChip tone="success">系统内置</StatusChip> : installed ? <StatusChip tone="success">已安装</StatusChip> : <StatusChip>已注册</StatusChip>}
                 </div>
                 <p className="mt-0.5 font-mono text-[10.5px] text-ink-muted">{manifest.aina.id} · v{manifest.aina.version}</p>
               </div>
@@ -316,7 +353,9 @@ function AinaGrid({
             <div className="mt-3 rounded-lg bg-app-soft p-2.5 space-y-1.5">
               <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span className="truncate font-mono">{manifest.runtime.endpoint}</span>
+                <span className="truncate font-mono">
+                  {manifest.runtime.type === "remote" ? manifest.runtime.endpoint : "platform://builtin"}
+                </span>
               </div>
               <div className="text-[11px] text-ink-muted">
                 {manifest.capabilities.skills.length} Skills · {manifest.capabilities.tools.length} Tools · {manifest.permissions.length} 权限
@@ -328,19 +367,30 @@ function AinaGrid({
               </div>
             ) : null}
             <div className="mt-4 flex items-center gap-2">
-              {installed ? (
-                <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
-                  <Unplug className="w-4 h-4" />卸载
+              {builtin ? (
+                <button type="button" onClick={() => onOpen(record)} className="btn-primary">
+                  <ExternalLink className="w-4 h-4" />打开 Canvas
                 </button>
+              ) : installed ? (
+                <>
+                  <button type="button" onClick={() => onOpen(record)} className="btn-primary">
+                    <ExternalLink className="w-4 h-4" />打开 Canvas
+                  </button>
+                  <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
+                    <Unplug className="w-4 h-4" />卸载
+                  </button>
+                </>
               ) : (
                 <button type="button" onClick={() => onInstall(record)} className="btn-primary">
                   <Download className="w-4 h-4" />安装并授权
                 </button>
               )}
               <span className="flex-1" />
-              <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={`删除 ${manifest.aina.name}`}>
-                <Trash2 className="w-4 h-4" />
-              </button>
+              {!builtin ? (
+                <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={`删除 ${manifest.aina.name}`}>
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              ) : null}
             </div>
           </article>
         );

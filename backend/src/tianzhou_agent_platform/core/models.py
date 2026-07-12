@@ -14,6 +14,45 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class WidgetField(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=160)
+    input_type: Literal["text", "number", "textarea"] = "text"
+    placeholder: str = ""
+    required: bool = False
+    value: str | None = None
+
+
+class WidgetAction(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=160)
+    kind: Literal["open_aina", "prompt"]
+    aina_id: str | None = None
+    prompt: str | None = None
+    style: Literal["primary", "secondary"] = "primary"
+
+
+class WidgetApp(StrictModel):
+    aina_id: str
+    name: str
+    description: str
+    version: str
+    publisher: str
+    installed: bool = True
+    has_main_widget: bool = False
+
+
+class WidgetDefinition(StrictModel):
+    id: str = Field(min_length=1, max_length=160)
+    kind: Literal["app_list", "form", "markdown", "panel", "navigation", "memory"]
+    title: str
+    description: str = ""
+    markdown: str | None = None
+    fields: list[WidgetField] = Field(default_factory=list)
+    actions: list[WidgetAction] = Field(default_factory=list)
+    apps: list[WidgetApp] = Field(default_factory=list)
+
+
 class Message(StrictModel):
     id: str
     role: Literal["user", "assistant", "system", "tool"]
@@ -22,6 +61,7 @@ class Message(StrictModel):
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    widgets: list[WidgetDefinition] = Field(default_factory=list)
     trace_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -40,12 +80,14 @@ class ConversationCreate(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
     title: str = "New conversation"
+    category: str = Field(default="general", min_length=1, max_length=40)
     config: dict[str, Any] = Field(default_factory=dict)
     enabled_ainas: list[str] = Field(default_factory=list)
 
 
 class ConversationUpdate(StrictModel):
     title: str | None = None
+    category: str | None = Field(default=None, min_length=1, max_length=40)
     config: dict[str, Any] | None = None
     enabled_ainas: list[str] | None = None
 
@@ -55,12 +97,86 @@ class Conversation(StrictModel):
     user_id: str
     tenant_id: str
     title: str
+    category: str = "general"
     status: Literal["active", "archived", "deleted"] = "active"
+    run_status: Literal["idle", "running", "approval_required", "failed"] = "idle"
+    active_trace_id: str | None = None
+    run_error: str | None = None
+    run_started_at: datetime | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     enabled_ainas: list[str] = Field(default_factory=list)
     messages: list[Message] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+MemoryCategory = Literal["fact", "preference", "goal", "instruction"]
+
+
+class MemoryCreate(StrictModel):
+    content: str = Field(min_length=1, max_length=1000)
+    category: MemoryCategory = "fact"
+    user_id: str = "anonymous"
+    tenant_id: str = "default"
+    source_conversation_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        content = " ".join(value.split()).strip()
+        if not content:
+            raise ValueError("Memory content must not be empty")
+        lowered = content.casefold()
+        blocked_markers = (
+            "<memory-context",
+            "</memory-context",
+            "ignore previous instructions",
+            "ignore all previous instructions",
+            "system prompt",
+        )
+        if any(marker in lowered for marker in blocked_markers):
+            raise ValueError("Memory content contains an unsafe instruction marker")
+        return content
+
+
+class MemoryUpdate(StrictModel):
+    content: str | None = Field(default=None, min_length=1, max_length=1000)
+    category: MemoryCategory | None = None
+    user_id: str = "anonymous"
+    tenant_id: str = "default"
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return MemoryCreate.validate_content(value)
+
+
+class MemoryRecord(StrictModel):
+    id: str
+    content: str
+    category: MemoryCategory
+    user_id: str
+    tenant_id: str
+    source_conversation_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class MemoryListResponse(StrictModel):
+    items: list[MemoryRecord]
+    total: int
+
+
+class MemoryStats(StrictModel):
+    total: int = 0
+    fact: int = 0
+    preference: int = 0
+    goal: int = 0
+    instruction: int = 0
 
 
 class Authentication(StrictModel):
@@ -129,25 +245,38 @@ class RemoteRuntimeDefinition(StrictModel):
     async_tasks: bool = False
 
 
+class BuiltinRuntimeDefinition(StrictModel):
+    type: Literal["builtin"] = "builtin"
+
+
 class AinaCapability(StrictModel):
     id: str
     name: str
     description: str
     input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
+    instructions: str | None = None
+
+
+class AinaUiCapability(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    kind: Literal["app_list", "form", "markdown", "panel", "navigation", "memory"]
+    description: str = Field(min_length=1, max_length=2000)
+    instructions: str | None = None
 
 
 class AinaCapabilities(StrictModel):
     skills: list[AinaCapability] = Field(default_factory=list)
     tools: list[AinaCapability] = Field(default_factory=list)
-    ui: list[dict[str, Any]] = Field(default_factory=list)
+    ui: list[AinaUiCapability] = Field(default_factory=list)
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AinaManifest(StrictModel):
     protocol_version: str
     aina: AinaIdentity
-    runtime: RemoteRuntimeDefinition
+    runtime: RemoteRuntimeDefinition | BuiltinRuntimeDefinition
     capabilities: AinaCapabilities = Field(default_factory=AinaCapabilities)
+    main_widget: WidgetDefinition | None = None
     permissions: list[str] = Field(default_factory=list)
     authentication: Authentication = Field(default_factory=Authentication)
     health_check: AnyHttpUrl | None = None
@@ -185,6 +314,22 @@ class PermissionUpdate(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
     granted_permissions: list[str]
+
+
+class OpenAinaRequest(StrictModel):
+    user_id: str = "anonymous"
+    tenant_id: str = "default"
+    conversation_id: str | None = None
+
+
+class AinaCanvasResponse(StrictModel):
+    aina_id: str
+    name: str
+    description: str
+    version: str
+    conversation_id: str | None = None
+    route: str
+    main_widget: WidgetDefinition
 
 
 class ChatRequest(StrictModel):
@@ -230,6 +375,7 @@ class ChatResponse(StrictModel):
     iterations: int
     usage: Usage = Field(default_factory=Usage)
     approval: ApprovalRecord | None = None
+    widgets: list[WidgetDefinition] = Field(default_factory=list)
 
 
 class TraceEvent(StrictModel):

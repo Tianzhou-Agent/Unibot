@@ -3,6 +3,8 @@ import {
   Activity,
   AppWindow,
   Bot,
+  Brain,
+  Bug,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -19,9 +21,11 @@ import { useSearchParams } from "react-router-dom";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
+import { useDebugMode } from "@/lib/debugMode";
 import type { AdminSummary, TraceEvent, TraceRecord } from "@/types";
 
 export default function SettingsPage() {
+  const { debugMode, setDebugMode } = useDebugMode();
   const [searchParams] = useSearchParams();
   const requestedTrace = searchParams.get("trace");
   const [health, setHealth] = useState<"checking" | "ok" | "error">("checking");
@@ -72,9 +76,19 @@ export default function SettingsPage() {
           tone: health === "ok" ? "success" : health === "checking" ? "thinking" : "warning",
         }}
         actions={
-          <button type="button" onClick={() => void load()} disabled={refreshing} className="btn-outline h-8">
-            <RefreshCw className={classNames("w-3.5 h-3.5", refreshing && "animate-spin")} />刷新
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setDebugMode(!debugMode)}
+              aria-pressed={debugMode}
+              className={classNames("h-8 rounded-lg border px-3 text-[11.5px] font-bold", debugMode ? "border-accent bg-accent-soft text-accent" : "border-line bg-white text-ink-muted")}
+            >
+              <Bug className="mr-1.5 inline h-3.5 w-3.5" />Debug {debugMode ? "已开启" : "已关闭"}
+            </button>
+            <button type="button" onClick={() => void load()} disabled={refreshing} className="btn-outline h-8">
+              <RefreshCw className={classNames("w-3.5 h-3.5", refreshing && "animate-spin")} />刷新
+            </button>
+          </div>
         }
       />
       <div className="flex-1 min-h-0 overflow-y-auto p-4">
@@ -85,16 +99,17 @@ export default function SettingsPage() {
             </div>
           ) : null}
 
-          <section className="grid grid-cols-6 gap-3" aria-label="运行统计">
+          <section className={classNames("grid gap-3", debugMode ? "grid-cols-7" : "grid-cols-6")} aria-label="运行统计">
             <SummaryCard icon={<Bot />} label="对话" value={summary?.conversations} tone="blue" />
             <SummaryCard icon={<Wrench />} label="Tools" value={summary?.tools} tone="indigo" />
             <SummaryCard icon={<Code2 />} label="Skills" value={summary?.skills} tone="slate" />
             <SummaryCard icon={<AppWindow />} label="AINA" value={summary?.ainas} tone="green" />
             <SummaryCard icon={<Database />} label="安装" value={summary?.installations} tone="amber" />
-            <SummaryCard icon={<Route />} label="Traces" value={summary?.traces} tone="blue" />
+            <SummaryCard icon={<Brain />} label="记忆" value={summary?.memories} tone="indigo" />
+            {debugMode ? <SummaryCard icon={<Route />} label="Traces" value={summary?.traces} tone="blue" /> : null}
           </section>
 
-          <section className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-4 min-h-[520px]">
+          {debugMode ? <section className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-4 min-h-[520px]">
             <div className="rounded-xl border border-line bg-white shadow-card overflow-hidden">
               <div className="h-13 px-4 py-3 border-b border-line flex items-center gap-2">
                 <Activity className="w-4 h-4 text-accent" />
@@ -120,7 +135,15 @@ export default function SettingsPage() {
             <div className="rounded-xl border border-line bg-white shadow-card overflow-hidden">
               {selected ? <TraceDetail trace={selected} /> : <NoTraceSelected />}
             </div>
-          </section>
+          </section> : (
+            <section className="rounded-xl border border-line bg-white px-6 py-16 text-center shadow-card" aria-label="Debug 模式说明">
+              <Bug className="mx-auto h-8 w-8 text-ink-subtle" />
+              <h2 className="mt-3 text-[15px] font-extrabold text-ink">Debug 模式已关闭</h2>
+              <p className="mx-auto mt-2 max-w-lg text-[12px] leading-relaxed text-ink-muted">
+                普通使用界面不会显示 Tool 调用、模型迭代、Token 或 Trace。需要排查问题时，可在页面右上角临时开启。
+              </p>
+            </section>
+          )}
         </div>
       </div>
     </div>

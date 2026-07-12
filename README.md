@@ -16,7 +16,11 @@ Unibot 由两层能力构成：
 | 特性                | 说明                                               |
 | ------------------- | -------------------------------------------------- |
 | **通用对话**        | 多轮对话、Session 隔离、流式响应                   |
-| **Canvas 画布**     | 三栏布局的可视化工作区，支持 Widget 直调、增量更新 |
+| **Canvas 画布**     | 对话 + AINA `main_widget` 双栏工作区               |
+| **AINA Widget**     | 对话内应用列表、表单、Markdown 与导航 Widget       |
+| **可恢复运行**        | 刷新或离开页面后 Agent 继续运行，返回会话后自动恢复状态 |
+| **宿主 Widget**      | AINA 只声明 UI 类型、schema 和用法，由前端注册表动态渲染 |
+| **分层能力路由**    | AINA 描述优先，其次系统 Skill/Tool，最后普通对话   |
 | **Inline Card**     | 对话流内嵌 HTML 卡片（摘要、选项、消歧选择）       |
 | **异步任务**        | 后台长任务 + 外部事件推送，待办栏独立上下文        |
 | **记忆扩展**        | 跨会话持续认知，异步固化 + 预加载                  |
@@ -92,9 +96,9 @@ npm run dev
 开发服务器默认打开 `http://127.0.0.1:5173`，并将 `/api` 代理到
 `http://127.0.0.1:8000`。如需直连其他后端，可配置 `VITE_API_BASE_URL`。
 
-MVP 前端包含真实流式对话、多轮会话管理、能力选择、高风险确认、Tool/Skill/AINA
-注册管理、AINA 安装授权以及 Trace 运行中心。MSW 原型数据默认关闭，仅在显式设置
-`VITE_ENABLE_MOCKS=true` 时启用。
+MVP 前端包含真实流式对话、多轮会话管理、Markdown 消息、AINA Widget、`main_widget`
+Canvas、能力选择、高风险确认、Tool/Skill/AINA 注册管理、AINA 安装授权以及 Trace
+运行中心。MSW 原型数据默认关闭，仅在显式设置 `VITE_ENABLE_MOCKS=true` 时启用。
 
 模型配置可通过标准环境变量 `UNIBOT_LLM_BASE_URL`、`UNIBOT_LLM_API_KEY`、
 `UNIBOT_LLM_MODEL` 提供。开发环境也兼容被 Git 忽略的 `backend/.venv` 文件：
@@ -112,8 +116,14 @@ model=your-model
 - `POST /chat`：多轮 Agent Loop；
 - `POST /chat/stream`：SSE 文本与运行事件流；
 - `/conversations`：会话创建、读取、重命名、软删除和恢复；
+- 会话支持分类筛选与可恢复的 `run_status`，SSE 断开不会取消后台 Agent 运行；
 - `/tools`、`/skills`：Tool 和基础 Skill 注册管理；
 - `/ainas`、`/installations`：远程 AINA 注册、探测、安装、授权和卸载；
+- `POST /ainas/{id}/open`：执行内置 `open_aina` 并返回 Canvas 路由与 `main_widget`；
+- 内置 `unibot-assistant`：提供 `list_app`、`open_aina` 与分层能力路由；
+- 内置 `request_clarification`：需求模糊时生成宿主 Form Widget，支持模型预填和用户提交；
+- 内置 `unibot-memory`：通过对话或 Memory Widget 管理事实、偏好、目标和指令，并向相关后续对话注入安全围栏内的记忆；
+- `/memories`：记忆新增、搜索、筛选、修改、删除与分类统计；
 - `/approvals/{id}/confirm|deny`：高风险调用确认；
 - `/traces`、`/admin/summary`：调用链和基础管理数据。
 
@@ -132,8 +142,8 @@ cd backend
 uv run pytest -q
 ```
 
-真实 API 冒烟测试会通过 HTTP 覆盖直接对话、多轮上下文、远程 Tool、远程 AINA、
-Trace 和 SSE。先启动后端，再运行：
+真实 API 冒烟测试会通过 HTTP 覆盖直接对话、真实模型驱动的记忆写入/召回、多轮上下文、远程 Tool、自动 AINA
+路由、远程 Widget 输出、`list_app`、`open_aina` Canvas、Trace 和 SSE。先启动后端，再运行：
 
 ```bash
 cd backend
@@ -154,6 +164,7 @@ uv run python scripts/real_api_test.py
 | **缓存**     | Redis                |
 | **对象存储** | S3 兼容              |
 | **协议**     | AINA (AI-Native App) |
+| **前端**     | React 18 + Vite 5    |
 
 #
 
@@ -161,7 +172,8 @@ uv run python scripts/real_api_test.py
 
 | AINA        | 说明                                                                  |
 | ----------- | --------------------------------------------------------------------- |
-| **memory**  | 将对话知识结构化持久化，按需检索注入，使 Agent 具备跨会话持续认知能力 |
+| **unibot-assistant** | 系统调度 AINA，负责应用发现、分层路由和打开 Canvas           |
+| **unibot-memory**  | 管理事实、偏好、目标与指令，按需检索注入，使 Agent 具备进程生命周期内的跨会话认知能力 |
 | **builder** | 提供 AINA 的创建、调试、发布能力，管理员按步骤构建新 AINA             |
 
 ## License

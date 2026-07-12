@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LayoutGrid, MessageSquarePlus, Search, Settings as SettingsIcon } from "lucide-react";
+import { Check, LayoutGrid, MessageSquarePlus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
+import { CONVERSATION_CATEGORIES, conversationCategoryLabel } from "@/lib/conversationCategories";
 import type { ConversationRecord } from "@/types";
 
 export const CONVERSATIONS_CHANGED_EVENT = "unibot:conversations-changed";
@@ -16,6 +17,8 @@ export function Sidebar() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -49,11 +52,38 @@ export function Sidebar() {
     });
   }, [conversations, query]);
 
+  const grouped = useMemo(() => {
+    const groups = new Map<string, ConversationRecord[]>();
+    for (const conversation of filtered) {
+      const values = groups.get(conversation.category) ?? [];
+      values.push(conversation);
+      groups.set(conversation.category, values);
+    }
+    const order = new Map<string, number>(CONVERSATION_CATEGORIES.map((item, index) => [item.value, index]));
+    return [...groups.entries()].sort(([left], [right]) => (
+      (order.get(left) ?? 99) - (order.get(right) ?? 99) || left.localeCompare(right)
+    ));
+  }, [filtered]);
+
   function startConversation() {
     if (location.pathname === "/chat") {
       window.dispatchEvent(new Event("unibot:new-conversation"));
     } else {
       navigate("/chat");
+    }
+  }
+
+  async function deleteConversation(conversationId: string) {
+    setDeleting(true);
+    try {
+      await api.delete(`/conversations/${conversationId}`);
+      setPendingDelete(null);
+      if (location.pathname === `/chat/${conversationId}`) navigate("/chat");
+      await load();
+    } catch (deleteError) {
+      setError(apiErrorMessage(deleteError));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -90,14 +120,14 @@ export function Sidebar() {
 
       <div className="px-4 pb-2 flex items-center gap-2">
         <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
-          最近对话
+          对话
         </span>
         <span className="ml-auto rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-ink-onDarkMuted">
           {conversations.length}
         </span>
       </div>
 
-      <nav className="flex-1 min-h-0 overflow-y-auto px-3 pb-4 space-y-1.5" aria-label="对话列表">
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 pb-4 space-y-4" aria-label="对话列表">
         {loading ? <SkeletonList /> : null}
         {!loading && error ? (
           <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-[11.5px] text-red-200">
@@ -112,8 +142,26 @@ export function Sidebar() {
             {query ? "没有匹配的对话" : "还没有对话"}
           </div>
         ) : null}
-        {filtered.map((conversation) => (
-          <ConversationLink key={conversation.id} conversation={conversation} />
+        {grouped.map(([category, records]) => (
+          <section key={category} aria-label={`${conversationCategoryLabel(category)}会话`}>
+            <div className="mb-1.5 flex items-center gap-2 px-1.5 text-[10px] font-bold text-ink-onDarkMuted">
+              <span>{conversationCategoryLabel(category)}</span>
+              <span className="ml-auto rounded-full bg-white/5 px-1.5 py-0.5">{records.length}</span>
+            </div>
+            <div className="space-y-1.5">
+              {records.map((conversation) => (
+                <ConversationLink
+                  key={conversation.id}
+                  conversation={conversation}
+                  confirmingDelete={pendingDelete === conversation.id}
+                  deleting={deleting}
+                  onRequestDelete={() => setPendingDelete(conversation.id)}
+                  onCancelDelete={() => setPendingDelete(null)}
+                  onConfirmDelete={() => void deleteConversation(conversation.id)}
+                />
+              ))}
+            </div>
+          </section>
         ))}
       </nav>
 
@@ -136,42 +184,60 @@ function Brand() {
   );
 }
 
-function ConversationLink({ conversation }: { conversation: ConversationRecord }) {
+function ConversationLink({
+  conversation,
+  confirmingDelete,
+  deleting,
+  onRequestDelete,
+  onCancelDelete,
+  onConfirmDelete,
+}: {
+  conversation: ConversationRecord;
+  confirmingDelete: boolean;
+  deleting: boolean;
+  onRequestDelete: () => void;
+  onCancelDelete: () => void;
+  onConfirmDelete: () => void;
+}) {
   const preview = conversation.messages.at(-1)?.content || "等待第一条消息";
   return (
-    <NavLink
-      to={`/chat/${conversation.id}`}
-      className={({ isActive }) =>
-        classNames(
-          "block rounded-lg px-3 py-2.5 border transition-colors",
-          isActive
-            ? "bg-sidebar-active border-transparent"
-            : "bg-sidebar-bg border-sidebar-border hover:bg-sidebar-hover",
-        )
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <div className="text-[12.5px] font-semibold text-ink-onDark truncate">
-            {conversation.title}
-          </div>
-          <div
-            className={classNames(
-              "mt-1 text-[10.5px] truncate",
-              isActive ? "text-white/75" : "text-ink-onDarkMuted/70",
-            )}
-          >
-            {preview}
-          </div>
-          <div className="mt-1.5 flex items-center gap-1.5">
-            <span className={classNames("w-1.5 h-1.5 rounded-full", isActive ? "bg-white" : "bg-success")} />
-            <span className={classNames("text-[10px]", isActive ? "text-white/80" : "text-ink-onDarkMuted")}>
-              {timeAgo(conversation.updated_at)}
-            </span>
-          </div>
-        </>
-      )}
-    </NavLink>
+    <div className="relative">
+      <NavLink
+        to={`/chat/${conversation.id}`}
+        className={({ isActive }) => classNames(
+          "block rounded-lg border px-3 py-2.5 pr-9 transition-colors",
+          isActive ? "bg-sidebar-active border-transparent" : "bg-sidebar-bg border-sidebar-border hover:bg-sidebar-hover",
+        )}
+      >
+        {({ isActive }) => (
+          <>
+            <div className="truncate text-[12.5px] font-semibold text-ink-onDark">{conversation.title}</div>
+            <div className={classNames("mt-1 truncate text-[10.5px]", isActive ? "text-white/75" : "text-ink-onDarkMuted/70")}>{preview}</div>
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <span className={classNames("h-1.5 w-1.5 rounded-full", conversation.run_status === "running" ? "animate-pulse bg-warning" : isActive ? "bg-white" : "bg-success")} />
+              <span className={classNames("text-[10px]", isActive ? "text-white/80" : "text-ink-onDarkMuted")}>
+                {conversation.run_status === "running" ? "运行中" : timeAgo(conversation.updated_at)}
+              </span>
+            </div>
+          </>
+        )}
+      </NavLink>
+      <button
+        type="button"
+        onClick={onRequestDelete}
+        aria-label={`删除对话 ${conversation.title}`}
+        className="absolute right-2 top-2 rounded p-1 text-ink-onDarkMuted hover:bg-white/10 hover:text-red-200"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+      {confirmingDelete ? (
+        <div className="mt-1 flex items-center gap-1 rounded-lg border border-danger/30 bg-danger/10 px-2 py-1.5 text-[10px] text-red-100">
+          <span>确认删除？</span><span className="flex-1" />
+          <button type="button" onClick={onCancelDelete} disabled={deleting} aria-label="取消删除"><X className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={onConfirmDelete} disabled={deleting} aria-label={`确认删除 ${conversation.title}`}><Check className="h-3.5 w-3.5" /></button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

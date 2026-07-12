@@ -17,10 +17,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
+import { CONVERSATION_CATEGORIES } from "@/lib/conversationCategories";
+import { useDebugMode } from "@/lib/debugMode";
 import { classNames, uid } from "@/lib/utils";
 import type {
   AinaInstallation,
+  AinaCanvasResponse,
   AinaRecord,
   ApprovalRecord,
   BackendMessage,
@@ -35,6 +39,7 @@ const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 export default function ChatModePage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
+  const { debugMode } = useDebugMode();
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
@@ -51,9 +56,10 @@ export default function ChatModePage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleted, setDeleted] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const localRunRef = useRef(false);
 
-  const loadConversation = useCallback(async (id: string) => {
-    setLoading(true);
+  const loadConversation = useCallback(async (id: string, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [record, pendingApprovals] = await Promise.all([
         api.get<ConversationRecord>(`/conversations/${id}`),
@@ -63,11 +69,15 @@ export default function ChatModePage() {
       setApproval(pendingApprovals[0] ?? null);
       setTitleDraft(record.title);
       setDeleted(false);
-      setError(null);
+      if (!localRunRef.current) {
+        setSending(record.run_status === "running");
+        setActivity(record.run_status === "running" ? "正在处理，请稍候…" : null);
+      }
+      setError(record.run_error ?? null);
     } catch (loadError) {
       setError(apiErrorMessage(loadError));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -83,6 +93,14 @@ export default function ChatModePage() {
       setLoading(false);
     }
   }, [conversationId, loadConversation]);
+
+  useEffect(() => {
+    if (!conversationId || conversation?.run_status !== "running") return;
+    const timer = window.setInterval(() => {
+      void loadConversation(conversationId, true).then(notifyConversationsChanged);
+    }, 600);
+    return () => window.clearInterval(timer);
+  }, [conversation?.run_status, conversationId, loadConversation]);
 
   useEffect(() => {
     const reset = () => {
@@ -116,12 +134,20 @@ export default function ChatModePage() {
               kind: "tool" as const,
             })),
           ...ainas
-            .filter((aina) => aina.status === "registered" && installedIds.has(aina.manifest.aina.id))
+            .filter((aina) => (
+              aina.status === "registered"
+              && (
+                installedIds.has(aina.manifest.aina.id)
+                || aina.manifest.aina.id === "unibot-memory"
+              )
+            ))
             .map((aina) => ({
               value: `aina:${aina.manifest.aina.id}`,
               label: aina.manifest.aina.name,
-              kind: "aina" as const,
-            })),
+                kind: "aina" as const,
+              })),
+          { value: "builtin:list_app", label: "列出应用", kind: "builtin" as const },
+          { value: "builtin:open_aina", label: "打开 AINA", kind: "builtin" as const },
         ]);
       } catch {
         setCapabilities([]);
@@ -141,41 +167,64 @@ export default function ChatModePage() {
       role: "user",
       content: text,
       content_type: "text",
+      widgets: [],
       created_at: new Date().toISOString(),
     };
     setOptimisticUser(localMessage);
     setStreamText("");
-    setActivity("正在连接模型…");
+    setActivity(debugMode ? "正在连接模型…" : "正在处理，请稍候…");
     setError(null);
     setApproval(null);
     setSending(true);
+    localRunRef.current = true;
     let completion: ChatResponse | null = null;
+    let streamFailure: string | null = null;
     try {
+      let targetConversation = conversation;
+      if (!targetConversation) {
+        targetConversation = await api.post<ConversationRecord>("/conversations", {
+          ...ACTOR,
+          title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
+          category: "general",
+        });
+        setConversation(targetConversation);
+        setTitleDraft(targetConversation.title);
+        notifyConversationsChanged();
+        navigate(`/chat/${targetConversation.id}`, { replace: true });
+      }
       await streamChat(
         {
           message: text,
-          conversation_id: conversation?.id,
+          conversation_id: targetConversation.id,
           ...ACTOR,
           capability: selectedCapability || undefined,
         },
         (event: StreamEvent) => {
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
           if (event.type === "tool.requested") {
-            setActivity(`正在调用${event.kind === "aina" ? " AINA" : " Tool"}：${event.id}`);
+            if (debugMode) {
+              const kindLabel = event.kind === "aina" ? "AINA" : event.kind === "builtin" ? "内置工具" : "Tool";
+              setActivity(`正在调用 ${kindLabel}：${event.id}`);
+            } else {
+              setActivity("正在处理，请稍候…");
+            }
           }
-          if (event.type === "tool.completed") setActivity(`${event.id} 已完成，正在整理结果…`);
+          if (event.type === "tool.completed") {
+            setActivity(debugMode ? `${event.id} 已完成，正在整理结果…` : "正在整理结果…");
+          }
           if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
-            setError(event.error?.message ?? event.code ?? "流式调用失败");
+            streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
+            setError(streamFailure);
           }
           if (event.type === "message.completed") completion = event.response;
         },
       );
-      if (!completion) throw new Error("Agent 流结束前没有返回完成事件。");
+      if (!completion) throw new Error(streamFailure ?? "Agent 流结束前没有返回完成事件。");
       const completed = completion as ChatResponse;
       setLastRun(completed);
       setApproval(completed.approval ?? null);
-      if (!conversation || conversation.title === "New conversation") {
+      if (targetConversation.title === "New conversation") {
         await api.patch(`/conversations/${completed.conversation_id}`, {
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
         });
@@ -189,6 +238,7 @@ export default function ChatModePage() {
     } catch (sendError) {
       setError(apiErrorMessage(sendError));
     } finally {
+      localRunRef.current = false;
       setOptimisticUser(null);
       setStreamText("");
       setActivity(null);
@@ -233,6 +283,17 @@ export default function ChatModePage() {
     }
   }
 
+  async function saveCategory(category: string) {
+    if (!conversation) return;
+    try {
+      const updated = await api.patch<ConversationRecord>(`/conversations/${conversation.id}`, { category });
+      setConversation(updated);
+      notifyConversationsChanged();
+    } catch (categoryError) {
+      setError(apiErrorMessage(categoryError));
+    }
+  }
+
   async function deleteConversation() {
     if (!conversation) return;
     try {
@@ -257,6 +318,19 @@ export default function ChatModePage() {
     }
   }
 
+  async function openAina(ainaId: string) {
+    setError(null);
+    try {
+      const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
+        ...ACTOR,
+        conversation_id: conversation?.id,
+      });
+      navigate(canvas.route, { state: { canvas } });
+    } catch (openError) {
+      setError(apiErrorMessage(openError));
+    }
+  }
+
   const messages = useMemo(
     () => [...(conversation?.messages ?? []), ...(optimisticUser ? [optimisticUser] : [])],
     [conversation?.messages, optimisticUser],
@@ -277,6 +351,17 @@ export default function ChatModePage() {
         actions={
           conversation && !deleted ? (
             <div className="flex items-center gap-1.5">
+              <select
+                value={conversation.category}
+                onChange={(event) => void saveCategory(event.target.value)}
+                disabled={sending}
+                aria-label="会话分类"
+                className="h-8 rounded-lg border border-line bg-white px-2.5 text-[11.5px] font-semibold text-ink outline-none focus:border-accent"
+              >
+                {CONVERSATION_CATEGORIES.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
               <button
                 type="button"
                 onClick={() => {
@@ -345,7 +430,15 @@ export default function ChatModePage() {
               ) : null}
               {!loading && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
               {!deleted
-                ? messages.map((message) => <ConversationMessage key={message.id} message={message} />)
+                ? messages.map((message) => (
+                    <ConversationMessage
+                      key={message.id}
+                      message={message}
+                      onOpenAina={(ainaId) => void openAina(ainaId)}
+                      onPrompt={sendMessage}
+                      debugMode={debugMode}
+                    />
+                  ))
                 : null}
               {streamText ? (
                 <AssistantMessage
@@ -363,12 +456,13 @@ export default function ChatModePage() {
                 <ApprovalCard
                   approval={approval}
                   disabled={sending}
+                  debugMode={debugMode}
                   onConfirm={() => void resolveApproval("confirm")}
                   onDeny={() => void resolveApproval("deny")}
                 />
               ) : null}
               {error ? <ErrorNotice message={error} onDismiss={() => setError(null)} /> : null}
-              {lastRun && !sending ? <RunSummary response={lastRun} /> : null}
+              {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
               <div ref={endRef} />
             </div>
           </div>
@@ -387,14 +481,25 @@ export default function ChatModePage() {
   );
 }
 
-function ConversationMessage({ message }: { message: BackendMessage }) {
+function ConversationMessage({
+  message,
+  onOpenAina,
+  onPrompt,
+  debugMode,
+}: {
+  message: BackendMessage;
+  onOpenAina: (ainaId: string) => void;
+  onPrompt: (prompt: string) => void;
+  debugMode: boolean;
+}) {
   if (message.role === "system") return null;
   if (message.role === "user") return <UserMessage content={message.content} />;
-  if (message.role === "tool") return <ToolResultMessage message={message} />;
+  if (message.role === "tool") return debugMode ? <ToolResultMessage message={message} /> : null;
+  const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
     <div className="space-y-2">
-      {message.tool_calls?.length ? <ToolCallMessage message={message} /> : null}
-      {message.content ? (
+      {debugMode && hasToolCalls ? <ToolCallMessage message={message} /> : null}
+      {message.content && (!hasToolCalls || debugMode) ? (
         <AssistantMessage
           message={{
             id: message.id,
@@ -405,6 +510,14 @@ function ConversationMessage({ message }: { message: BackendMessage }) {
           }}
         />
       ) : null}
+      {message.widgets?.map((widget) => (
+        <WidgetRenderer
+          key={widget.id}
+          widget={widget}
+          onOpenAina={onOpenAina}
+          onPrompt={onPrompt}
+        />
+      ))}
     </div>
   );
 }
@@ -456,11 +569,13 @@ function ActivityBubble({ text }: { text: string }) {
 function ApprovalCard({
   approval,
   disabled,
+  debugMode,
   onConfirm,
   onDeny,
 }: {
   approval: ApprovalRecord;
   disabled: boolean;
+  debugMode: boolean;
   onConfirm: () => void;
   onDeny: () => void;
 }) {
@@ -475,16 +590,18 @@ function ApprovalCard({
           <p className="mt-1 text-[12.5px] text-warning-deep/80">
             Agent 准备运行：{approval.capability_names.join("、")}。请核对参数后决定是否继续。
           </p>
-          <div className="mt-3 space-y-2">
-            {approval.tool_calls.map((call) => (
-              <pre
-                key={call.id}
-                className="rounded-lg border border-warning-ring bg-white p-2.5 text-[10.5px] text-ink whitespace-pre-wrap break-all"
-              >
-                {call.function.name}\n{formatJson(call.function.arguments)}
-              </pre>
-            ))}
-          </div>
+          {debugMode ? (
+            <div className="mt-3 space-y-2">
+              {approval.tool_calls.map((call) => (
+                <pre
+                  key={call.id}
+                  className="rounded-lg border border-warning-ring bg-white p-2.5 text-[10.5px] text-ink whitespace-pre-wrap break-all"
+                >
+                  {call.function.name}\n{formatJson(call.function.arguments)}
+                </pre>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-3 flex items-center gap-2">
             <button type="button" disabled={disabled} onClick={onConfirm} className="btn-primary">
               确认并执行
@@ -579,13 +696,13 @@ function ChatComposer({
               <option value="">自动发现能力</option>
               {capabilities.map((capability) => (
                 <option key={capability.value} value={capability.value}>
-                  {capability.kind === "aina" ? "AINA" : "Tool"} · {capability.label}
+                  {capability.kind === "aina" ? "AINA" : capability.kind === "builtin" ? "内置" : "Tool"} · {capability.label}
                 </option>
               ))}
             </select>
             <ChevronDown className="pointer-events-none absolute right-2.5 w-3.5 h-3.5 text-ink-muted" />
           </label>
-          <span className="ml-auto text-[10.5px] text-ink-subtle">真实模型 · SSE</span>
+          <span className="ml-auto" />
           <button
             type="submit"
             disabled={disabled || !text.trim()}
@@ -612,7 +729,7 @@ function WelcomePanel() {
         <div className="mx-auto w-14 h-14 rounded-2xl bg-accent-soft text-accent flex items-center justify-center">
           <Bot className="w-7 h-7" />
         </div>
-        <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">开始一个真实 Agent 会话</h2>
+        <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">开始新对话</h2>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
           Unibot 会保留多轮上下文、自动发现已注册能力，并在高风险调用前暂停等待你的确认。
         </p>

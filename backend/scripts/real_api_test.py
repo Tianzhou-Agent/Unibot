@@ -38,7 +38,18 @@ def create_demo_runtime() -> FastAPI:
         return {
             "request_id": payload["request_id"],
             "status": "completed",
-            "outputs": [{"type": "text", "content": "The deterministic multiplication result is 42."}],
+            "outputs": [
+                {"type": "text", "content": "The deterministic multiplication result is 42."},
+                {
+                    "type": "widget",
+                    "content": {
+                        "id": "smoke-result",
+                        "kind": "markdown",
+                        "title": "Multiplication result",
+                        "markdown": "## Result\n\nThe product is **42**.",
+                    },
+                },
+            ],
             "usage": {"input_tokens": 0, "output_tokens": 0},
             "trace_id": payload["trace"]["trace_id"],
         }
@@ -99,6 +110,68 @@ def main() -> None:
         )
         if "UNIBOT_REAL_API_OK" not in direct["content"]:
             raise AssertionError(f"Unexpected direct model response: {direct['content']!r}")
+
+        memory_token = f"UNIBOT_MEMORY_{suffix}"
+        remembered = assert_ok(
+            client.post(
+                "/chat",
+                json={
+                    "message": (
+                        f"Use the memory app to remember this exact fact: my private test token is {memory_token}."
+                    ),
+                    "capability": "aina:unibot-memory",
+                },
+            )
+        )
+        assert_trace_has(client, remembered["trace_id"], "builtin.completed")
+        stored_memories = assert_ok(client.get("/memories", params={"q": memory_token}))
+        if not any(memory_token in item["content"] for item in stored_memories["items"]):
+            raise AssertionError("The real model did not persist the requested memory")
+
+        profession_marker = f"SOFTWARE_ENGINEER_{suffix}"
+        profession = assert_ok(
+            client.post(
+                "/chat",
+                json={
+                    "message": f"My profession is software engineer. Durable marker: {profession_marker}.",
+                    "conversation_id": remembered["conversation_id"],
+                },
+            )
+        )
+        assert_trace_has(client, profession["trace_id"], "builtin.completed")
+        stored_profession = assert_ok(client.get("/memories", params={"q": profession_marker}))
+        if not any(profession_marker in item["content"] for item in stored_profession["items"]):
+            raise AssertionError("The follow-up durable fact could not reuse the memory capability")
+
+        recalled = assert_ok(
+            client.post(
+                "/chat",
+                json={
+                    "message": "What is my private test token? Return the token exactly.",
+                    "capability": "aina:unibot-memory",
+                },
+            )
+        )
+        if memory_token not in recalled["content"]:
+            raise AssertionError(f"Memory AINA did not recall the stored token: {recalled['content']!r}")
+
+        clarification = assert_ok(
+            client.post(
+                "/chat",
+                json={
+                    "message": (
+                        "The request is ambiguous. Ask me for project name and deadline using the host "
+                        "clarification form. Prefill the project name as Unibot."
+                    ),
+                    "capability": "builtin:request_clarification",
+                },
+            )
+        )
+        forms = [widget for widget in clarification["widgets"] if widget["kind"] == "form"]
+        if not forms or len(forms[0]["fields"]) < 2:
+            raise AssertionError("The real model did not produce a host-rendered clarification form")
+        if not any(field.get("value") == "Unibot" for field in forms[0]["fields"]):
+            raise AssertionError("The clarification form did not preserve the model-provided prefilled value")
 
         tool_id = f"smoke.add.{suffix}"
         assert_ok(
@@ -180,6 +253,36 @@ def main() -> None:
                         "ui": [],
                         "events": [],
                     },
+                    "main_widget": {
+                        "id": "smoke-arithmetic-main",
+                        "kind": "form",
+                        "title": "Multiply integers",
+                        "description": "Enter two integers and send the generated request to this AINA.",
+                        "fields": [
+                            {
+                                "id": "left",
+                                "label": "Left integer",
+                                "input_type": "number",
+                                "placeholder": "6",
+                                "required": True,
+                            },
+                            {
+                                "id": "right",
+                                "label": "Right integer",
+                                "input_type": "number",
+                                "placeholder": "7",
+                                "required": True,
+                            },
+                        ],
+                        "actions": [
+                            {
+                                "id": "multiply",
+                                "label": "Multiply",
+                                "kind": "prompt",
+                                "prompt": "Multiply {left} by {right}.",
+                            }
+                        ],
+                    },
                     "permissions": [],
                     "authentication": {"type": "none"},
                 },
@@ -190,14 +293,39 @@ def main() -> None:
             client.post(
                 "/chat",
                 json={
-                    "message": "Use the selected AINA to multiply 6 by 7 and report its result.",
-                    "capability": f"aina:{aina_id}",
+                    "message": (
+                        "Use the installed Smoke Arithmetic AINA, whose description matches deterministic "
+                        "multiplication, to multiply 6 by 7 and report its result."
+                    ),
                 },
             )
         )
         assert_trace_has(client, aina_chat["trace_id"], "aina.completed")
         if "42" not in aina_chat["content"]:
             raise AssertionError(f"AINA loop did not report 42: {aina_chat['content']!r}")
+        if not aina_chat["widgets"] or aina_chat["widgets"][0]["id"] != "smoke-result":
+            raise AssertionError("AINA widget output was not returned by /chat")
+
+        app_list = assert_ok(client.post("/chat", json={"message": "列出我可以使用的 AINA 应用"}))
+        listed_ids = {
+            app["aina_id"]
+            for widget in app_list["widgets"]
+            if widget["kind"] == "app_list"
+            for app in widget["apps"]
+        }
+        if aina_id not in listed_ids or "unibot-assistant" not in listed_ids:
+            raise AssertionError(f"list_app widget did not include expected AINAs: {sorted(listed_ids)}")
+
+        canvas = assert_ok(
+            client.post(
+                f"/ainas/{aina_id}/open",
+                json={"conversation_id": aina_chat["conversation_id"]},
+            )
+        )
+        if canvas["main_widget"]["id"] != "smoke-arithmetic-main":
+            raise AssertionError("open_aina did not return the declared main_widget")
+        if not canvas["route"].startswith(f"/canvas/{aina_id}"):
+            raise AssertionError(f"open_aina returned an unexpected route: {canvas['route']!r}")
 
         with client.stream("POST", "/chat/stream", json={"message": "Reply with the word streamed."}) as stream:
             stream.raise_for_status()
@@ -206,8 +334,11 @@ def main() -> None:
             raise AssertionError("The SSE endpoint did not emit both delta and completion events")
 
         print(
-            "Real API smoke test passed: direct chat, multi-turn context, remote Tool loop, "
-            "remote AINA loop, trace lookup, and SSE streaming."
+            "Real API smoke test passed: direct chat, Memory AINA remember/recall/follow-up persistence, "
+            "host clarification form, "
+            "multi-turn context, remote Tool loop, "
+            "automatic AINA routing, remote Widget output, list_app, open_aina Canvas, trace lookup, "
+            "and SSE streaming."
         )
 
 

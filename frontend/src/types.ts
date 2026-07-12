@@ -148,6 +148,7 @@ export interface BackendMessage {
   }> | null;
   tool_call_id?: string | null;
   name?: string | null;
+  widgets: WidgetDefinition[];
   trace_id?: string | null;
   created_at: string;
 }
@@ -157,7 +158,12 @@ export interface ConversationRecord {
   user_id: string;
   tenant_id: string;
   title: string;
+  category: string;
   status: ConversationStatus;
+  run_status: "idle" | "running" | "approval_required" | "failed";
+  active_trace_id?: string | null;
+  run_error?: string | null;
+  run_started_at?: string | null;
   config: Record<string, unknown>;
   enabled_ainas: string[];
   messages: BackendMessage[];
@@ -209,6 +215,53 @@ export interface AinaCapabilityDefinition {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  instructions?: string | null;
+}
+
+export interface AinaUiCapabilityDefinition {
+  id: string;
+  kind: WidgetDefinition["kind"];
+  description: string;
+  instructions?: string | null;
+}
+
+export interface WidgetFieldDefinition {
+  id: string;
+  label: string;
+  input_type: "text" | "number" | "textarea";
+  placeholder: string;
+  required: boolean;
+  value?: string | null;
+}
+
+export interface WidgetActionDefinition {
+  id: string;
+  label: string;
+  kind: "open_aina" | "prompt";
+  aina_id?: string | null;
+  prompt?: string | null;
+  style: "primary" | "secondary";
+}
+
+export interface WidgetAppDefinition {
+  aina_id: string;
+  name: string;
+  description: string;
+  version: string;
+  publisher: string;
+  installed: boolean;
+  has_main_widget: boolean;
+}
+
+export interface WidgetDefinition {
+  id: string;
+  kind: "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory";
+  title: string;
+  description: string;
+  markdown?: string | null;
+  fields: WidgetFieldDefinition[];
+  actions: WidgetActionDefinition[];
+  apps: WidgetAppDefinition[];
 }
 
 export interface AinaManifest {
@@ -220,18 +273,21 @@ export interface AinaManifest {
     description: string;
     publisher: { id: string; name: string };
   };
-  runtime: {
-    type: "remote";
-    endpoint: string;
-    streaming: boolean;
-    async_tasks: boolean;
-  };
+  runtime:
+    | {
+        type: "remote";
+        endpoint: string;
+        streaming: boolean;
+        async_tasks: boolean;
+      }
+    | { type: "builtin" };
   capabilities: {
     skills: AinaCapabilityDefinition[];
     tools: AinaCapabilityDefinition[];
-    ui: Array<Record<string, unknown>>;
+    ui: AinaUiCapabilityDefinition[];
     events: Array<Record<string, unknown>>;
   };
+  main_widget?: WidgetDefinition | null;
   permissions: string[];
   authentication: AuthenticationDefinition;
   health_check?: string | null;
@@ -281,6 +337,17 @@ export interface ChatResponse {
   iterations: number;
   usage: { input_tokens: number; output_tokens: number };
   approval?: ApprovalRecord | null;
+  widgets: WidgetDefinition[];
+}
+
+export interface AinaCanvasResponse {
+  aina_id: string;
+  name: string;
+  description: string;
+  version: string;
+  conversation_id?: string | null;
+  route: string;
+  main_widget: WidgetDefinition;
 }
 
 export interface TraceEvent {
@@ -311,10 +378,38 @@ export interface AdminSummary {
   ainas: number;
   installations: number;
   traces: number;
+  memories: number;
+}
+
+export type MemoryCategory = "fact" | "preference" | "goal" | "instruction";
+
+export interface MemoryRecord {
+  id: string;
+  content: string;
+  category: MemoryCategory;
+  user_id: string;
+  tenant_id: string;
+  source_conversation_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryListResponse {
+  items: MemoryRecord[];
+  total: number;
+}
+
+export interface MemoryStatsResponse {
+  total: number;
+  fact: number;
+  preference: number;
+  goal: number;
+  instruction: number;
 }
 
 export interface CapabilityOption {
   value: string;
   label: string;
-  kind: "tool" | "aina";
+  kind: "tool" | "aina" | "builtin";
 }

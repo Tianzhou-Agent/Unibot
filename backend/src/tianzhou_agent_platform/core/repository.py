@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime
 from typing import Any, Iterable
 from uuid import uuid4
@@ -14,6 +15,10 @@ from tianzhou_agent_platform.core.models import (
     ConversationCreate,
     ConversationUpdate,
     Message,
+    MemoryCreate,
+    MemoryRecord,
+    MemoryStats,
+    MemoryUpdate,
     SkillRecord,
     ToolRecord,
     TraceEvent,
@@ -38,6 +43,7 @@ class InMemoryRepository:
         self._installations: dict[tuple[str, str, str], AinaInstallation] = {}
         self._traces: dict[str, TraceRecord] = {}
         self._approvals: dict[str, ApprovalRecord] = {}
+        self._memories: dict[str, MemoryRecord] = {}
 
     @staticmethod
     def _copy[T](value: T) -> T:
@@ -80,6 +86,7 @@ class InMemoryRepository:
         *,
         user_id: str | None = None,
         tenant_id: str | None = None,
+        category: str | None = None,
     ) -> list[Conversation]:
         async with self._lock:
             values = [
@@ -88,6 +95,7 @@ class InMemoryRepository:
                 if item.status != "deleted"
                 and (user_id is None or item.user_id == user_id)
                 and (tenant_id is None or item.tenant_id == tenant_id)
+                and (category is None or item.category == category)
             ]
         return sorted(values, key=lambda item: item.updated_at, reverse=True)
 
@@ -110,6 +118,153 @@ class InMemoryRepository:
             self._conversations[conversation_id] = updated
             return self._copy(updated)
 
+    async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
+        async with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is None or conversation.status == "deleted":
+                raise not_found("Conversation", conversation_id)
+            if conversation.run_status == "running":
+                raise conflict("This conversation already has a running request")
+            updated = conversation.model_copy(
+                update={
+                    "run_status": "running",
+                    "active_trace_id": trace_id,
+                    "run_error": None,
+                    "run_started_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            self._conversations[conversation_id] = updated
+            return self._copy(updated)
+
+    async def finish_conversation_run(
+        self,
+        conversation_id: str,
+        *,
+        status: str = "idle",
+        error: str | None = None,
+    ) -> Conversation:
+        async with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is None:
+                raise not_found("Conversation", conversation_id)
+            updated = conversation.model_copy(
+                update={
+                    "run_status": status,
+                    "active_trace_id": None,
+                    "run_error": error,
+                    "run_started_at": None,
+                    "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            self._conversations[conversation_id] = updated
+            return self._copy(updated)
+
+    async def create_memory(self, data: MemoryCreate) -> MemoryRecord:
+        normalized = data.content.casefold()
+        async with self._lock:
+            for memory in self._memories.values():
+                if (
+                    memory.user_id == data.user_id
+                    and memory.tenant_id == data.tenant_id
+                    and memory.content.casefold() == normalized
+                ):
+                    return self._copy(memory)
+            actor_count = sum(
+                item.user_id == data.user_id and item.tenant_id == data.tenant_id
+                for item in self._memories.values()
+            )
+            if actor_count >= 500:
+                raise conflict("Memory limit reached; remove or consolidate an existing memory")
+            memory = MemoryRecord(id=f"mem_{uuid4().hex}", **data.model_dump())
+            self._memories[memory.id] = memory
+            return self._copy(memory)
+
+    async def get_memory(self, memory_id: str, *, user_id: str, tenant_id: str) -> MemoryRecord:
+        async with self._lock:
+            memory = self._memories.get(memory_id)
+            if memory is None:
+                raise not_found("Memory", memory_id)
+            if memory.user_id != user_id or memory.tenant_id != tenant_id:
+                raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
+            return self._copy(memory)
+
+    async def list_memories(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        query: str | None = None,
+        category: str | None = None,
+    ) -> list[MemoryRecord]:
+        normalized_query = (query or "").strip().casefold()
+        async with self._lock:
+            values = [
+                self._copy(item)
+                for item in self._memories.values()
+                if item.user_id == user_id
+                and item.tenant_id == tenant_id
+                and (category is None or item.category == category)
+                and (not normalized_query or normalized_query in item.content.casefold())
+            ]
+        return sorted(values, key=lambda item: item.updated_at, reverse=True)
+
+    async def search_memories(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        limit: int = 8,
+    ) -> list[MemoryRecord]:
+        candidates = await self.list_memories(user_id=user_id, tenant_id=tenant_id)
+        query_terms = _memory_terms(query)
+        normalized_query = query.casefold().strip()
+        scored: list[tuple[float, MemoryRecord]] = []
+        for memory in candidates:
+            normalized_content = memory.content.casefold()
+            content_terms = _memory_terms(memory.content)
+            overlap = len(query_terms & content_terms)
+            score = overlap / max(len(query_terms), 1)
+            if normalized_query and (
+                normalized_query in normalized_content or normalized_content in normalized_query
+            ):
+                score += 2.0
+            if score > 0:
+                scored.append((score, memory))
+        scored.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
+        return [memory for _score, memory in scored[:limit]]
+
+    async def update_memory(self, memory_id: str, data: MemoryUpdate) -> MemoryRecord:
+        async with self._lock:
+            memory = self._memories.get(memory_id)
+            if memory is None:
+                raise not_found("Memory", memory_id)
+            if memory.user_id != data.user_id or memory.tenant_id != data.tenant_id:
+                raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
+            changes = data.model_dump(exclude_none=True, exclude={"user_id", "tenant_id"})
+            updated = memory.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+            self._memories[memory_id] = updated
+            return self._copy(updated)
+
+    async def remove_memory(self, memory_id: str, *, user_id: str, tenant_id: str) -> None:
+        async with self._lock:
+            memory = self._memories.get(memory_id)
+            if memory is None:
+                raise not_found("Memory", memory_id)
+            if memory.user_id != user_id or memory.tenant_id != tenant_id:
+                raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
+            del self._memories[memory_id]
+
+    async def memory_stats(self, *, user_id: str, tenant_id: str) -> MemoryStats:
+        memories = await self.list_memories(user_id=user_id, tenant_id=tenant_id)
+        counts = {category: 0 for category in ("fact", "preference", "goal", "instruction")}
+        for memory in memories:
+            counts[memory.category] += 1
+        return MemoryStats(total=len(memories), **counts)
+
     async def append_provider_messages(
         self,
         conversation_id: str,
@@ -130,7 +285,10 @@ class InMemoryRepository:
                     tool_calls=raw.get("tool_calls"),
                     tool_call_id=raw.get("tool_call_id"),
                     name=raw.get("name"),
-                    content_type="tool" if raw["role"] == "tool" else "text",
+                    widgets=raw.get("widgets") or [],
+                    content_type=(
+                        "tool" if raw["role"] == "tool" else "widget" if raw.get("widgets") else "text"
+                    ),
                     trace_id=trace_id,
                 )
                 conversation.messages.append(message)
@@ -348,3 +506,12 @@ class InMemoryRepository:
                 if approval.conversation_id == conversation_id and approval.status == "pending":
                     approval.status = "denied"
                     approval.resolved_at = datetime.now(UTC)
+
+
+def _memory_terms(value: str) -> set[str]:
+    normalized = value.casefold()
+    words = set(re.findall(r"[a-z0-9_]+", normalized))
+    cjk = re.findall(r"[\u3400-\u9fff]", normalized)
+    words.update(cjk)
+    words.update("".join(cjk[index : index + 2]) for index in range(len(cjk) - 1))
+    return words
