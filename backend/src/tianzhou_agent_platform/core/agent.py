@@ -22,24 +22,16 @@ from tianzhou_agent_platform.aina.builtin import (
     invoke_builtin,
 )
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
+from tianzhou_agent_platform.aina.memory.models import MemoryRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.base import Usage
+from tianzhou_agent_platform.core.chat import ApprovalRecord, ChatRequest, ChatResponse, TraceEvent, TraceRecord
+from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
-from tianzhou_agent_platform.core.models import (
-    AinaInstallation,
-    AinaRecord,
-    ApprovalRecord,
-    ChatRequest,
-    ChatResponse,
-    Conversation,
-    ConversationCreate,
-    MemoryRecord,
-    ToolRecord,
-    TraceEvent,
-    TraceRecord,
-    Usage,
-    WidgetDefinition,
-)
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 
 _HIGH_RISK_MARKERS = (

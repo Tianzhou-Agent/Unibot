@@ -7,16 +7,16 @@ from uuid import uuid4
 
 import httpx
 
-from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.models import (
+from tianzhou_agent_platform.aina.protocol.models import (
     AinaInstallation,
     AinaInvokeRequest,
     AinaInvokeResponse,
     AinaManifest,
-    Authentication,
-    ToolRecord,
 )
+from tianzhou_agent_platform.aina.security.models import Authentication
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.schema import validate_value
 
 
