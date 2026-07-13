@@ -12,7 +12,9 @@ class FakeRedisClient:
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
 
-    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+        if nx and key in self.values:
+            return False
         self.values[key] = value
         if ex is not None:
             self.expirations[key] = ex
@@ -61,6 +63,17 @@ async def test_redis_store_uses_default_ttl() -> None:
     await store.set("cache", "key", "value")
 
     assert client.expirations["cache:key"] == 10
+
+
+@pytest.mark.asyncio
+async def test_redis_store_set_if_absent_is_atomic() -> None:
+    store = RedisStore(FakeRedisClient())
+
+    first = await store.set_if_absent("lock", "conversation", {"trace_id": "trace_1"}, ttl_seconds=30)
+    second = await store.set_if_absent("lock", "conversation", {"trace_id": "trace_2"}, ttl_seconds=30)
+
+    assert first.written is True
+    assert second.written is False
 
 
 @pytest.mark.asyncio

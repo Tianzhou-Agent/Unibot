@@ -6,7 +6,7 @@ services:
     command: ["--default-authentication-plugin=mysql_native_password"]
     environment:
       MYSQL_ROOT_PASSWORD: unibot_root
-      MYSQL_DATABASE: unibot_storage_e2e
+      MYSQL_DATABASE: unibot
       MYSQL_USER: unibot
       MYSQL_PASSWORD: unibot
     ports:
@@ -33,7 +33,7 @@ services:
     image: alpine:3.20
     command: ["sh", "-c", "mkdir -p /nas && tail -f /dev/null"]
     volumes:
-      - ./.docker/nas:/nas
+      - ../data/nas:/nas
     healthcheck:
       test: ["CMD", "test", "-d", "/nas"]
       interval: 5s

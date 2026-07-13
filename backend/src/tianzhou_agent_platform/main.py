@@ -17,31 +17,60 @@ from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
+from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
+from tianzhou_agent_platform.store.runtime_check import (
+    RUNTIME_CHECK_RESOURCE,
+    run_storage_runtime_check,
+    runtime_check_table,
+)
+from tianzhou_agent_platform.store.settings import StorageSettings
 
 
 def create_app(
     *,
     settings: AgentSettings | None = None,
     repository: InMemoryRepository | None = None,
+    storage_settings: StorageSettings | None = None,
     llm: LLMClient | None = None,
     capability_http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
-    resolved_repository = repository or InMemoryRepository()
+    storage_stores: StorageStores | None = None
+    resolved_repository: InMemoryRepository
+    if repository is None and storage_settings is not None:
+        storage_stores = create_storage_stores(
+            storage_settings,
+            mysql_resource_tables={
+                **repository_tables,
+                RUNTIME_CHECK_RESOURCE: runtime_check_table,
+            },
+        )
+        resolved_repository = PersistentRepository(storage_stores)
+    else:
+        resolved_repository = repository or InMemoryRepository()
     resolved_llm = llm or OpenAICompatibleClient(resolved_settings)
     gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
-        await ensure_unibot_assistant(resolved_repository)
-        yield
-        background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
-        if background_tasks:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-        await gateway.aclose()
-        close = getattr(resolved_llm, "aclose", None)
-        if close is not None:
-            await close()
+        try:
+            if storage_stores is not None and storage_settings is not None:
+                storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
+                await cast(PersistentRepository, resolved_repository).initialize()
+                lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
+            await ensure_unibot_assistant(resolved_repository)
+            yield
+        finally:
+            background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
+            await gateway.aclose()
+            close = getattr(resolved_llm, "aclose", None)
+            if close is not None:
+                await close()
+            if storage_stores is not None:
+                await storage_stores.close()
 
     app = FastAPI(
         title="Tianzhou Agent Platform",
@@ -52,6 +81,8 @@ def create_app(
     app.state.repository = resolved_repository
     app.state.llm = resolved_llm
     app.state.capability_gateway = gateway
+    app.state.storage_stores = storage_stores
+    app.state.storage_status = None
     app.state.agent_runtime = AgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,
@@ -73,7 +104,7 @@ def create_app(
     return app
 
 
-app = create_app()
+app = create_app(storage_settings=StorageSettings())
 
 
 def run() -> None:

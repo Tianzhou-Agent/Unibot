@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 from datetime import UTC, datetime
 from typing import Any, Iterable
@@ -13,6 +15,15 @@ from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
+
+CONVERSATIONS_RESOURCE = "conversations"
+MEMORIES_RESOURCE = "memories"
+TOOLS_RESOURCE = "tools"
+SKILLS_RESOURCE = "skills"
+AINAS_RESOURCE = "ainas"
+INSTALLATIONS_RESOURCE = "installations"
+TRACES_RESOURCE = "traces"
+APPROVALS_RESOURCE = "approvals"
 
 
 class InMemoryRepository:
@@ -34,6 +45,12 @@ class InMemoryRepository:
         self._approvals: dict[str, ApprovalRecord] = {}
         self._memories: dict[str, MemoryRecord] = {}
 
+    async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
+        return None
+
+    async def _delete_record(self, resource: str, record_id: str) -> None:
+        return None
+
     @staticmethod
     def _copy[T](value: T) -> T:
         if hasattr(value, "model_copy"):
@@ -44,6 +61,7 @@ class InMemoryRepository:
         conversation = Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())
         async with self._lock:
             self._conversations[conversation.id] = conversation
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation.id, conversation)
         return self._copy(conversation)
 
     async def get_conversation(self, conversation_id: str, *, include_deleted: bool = False) -> Conversation:
@@ -96,6 +114,7 @@ class InMemoryRepository:
                 raise not_found("Conversation", conversation_id)
             updated = conversation.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
             self._conversations[conversation_id] = updated
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
 
     async def set_conversation_status(self, conversation_id: str, status: str) -> Conversation:
@@ -105,6 +124,7 @@ class InMemoryRepository:
                 raise not_found("Conversation", conversation_id)
             updated = conversation.model_copy(update={"status": status, "updated_at": datetime.now(UTC)}, deep=True)
             self._conversations[conversation_id] = updated
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
@@ -125,6 +145,7 @@ class InMemoryRepository:
                 deep=True,
             )
             self._conversations[conversation_id] = updated
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
 
     async def finish_conversation_run(
@@ -149,6 +170,7 @@ class InMemoryRepository:
                 deep=True,
             )
             self._conversations[conversation_id] = updated
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
 
     async def create_memory(self, data: MemoryCreate) -> MemoryRecord:
@@ -169,6 +191,7 @@ class InMemoryRepository:
                 raise conflict("Memory limit reached; remove or consolidate an existing memory")
             memory = MemoryRecord(id=f"mem_{uuid4().hex}", **data.model_dump())
             self._memories[memory.id] = memory
+            await self._save_record(MEMORIES_RESOURCE, memory.id, memory)
             return self._copy(memory)
 
     async def get_memory(self, memory_id: str, *, user_id: str, tenant_id: str) -> MemoryRecord:
@@ -236,6 +259,7 @@ class InMemoryRepository:
             changes = data.model_dump(exclude_none=True, exclude={"user_id", "tenant_id"})
             updated = memory.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
             self._memories[memory_id] = updated
+            await self._save_record(MEMORIES_RESOURCE, memory_id, updated)
             return self._copy(updated)
 
     async def remove_memory(self, memory_id: str, *, user_id: str, tenant_id: str) -> None:
@@ -246,6 +270,7 @@ class InMemoryRepository:
             if memory.user_id != user_id or memory.tenant_id != tenant_id:
                 raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
             del self._memories[memory_id]
+            await self._delete_record(MEMORIES_RESOURCE, memory_id)
 
     async def memory_stats(self, *, user_id: str, tenant_id: str) -> MemoryStats:
         memories = await self.list_memories(user_id=user_id, tenant_id=tenant_id)
@@ -283,6 +308,7 @@ class InMemoryRepository:
                 conversation.messages.append(message)
                 appended.append(self._copy(message))
             conversation.updated_at = datetime.now(UTC)
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, conversation)
         return appended
 
     async def close_dangling_tool_calls(self, conversation_id: str, *, trace_id: str) -> None:
@@ -309,6 +335,7 @@ class InMemoryRepository:
             if tool.tool_id in self._tools:
                 raise conflict(f"Tool {tool.tool_id!r} is already registered")
             self._tools[tool.tool_id] = tool
+            await self._save_record(TOOLS_RESOURCE, tool.tool_id, tool)
         return self._copy(tool)
 
     async def get_tool(self, tool_id: str) -> ToolRecord:
@@ -326,12 +353,14 @@ class InMemoryRepository:
         async with self._lock:
             if self._tools.pop(tool_id, None) is None:
                 raise not_found("Tool", tool_id)
+            await self._delete_record(TOOLS_RESOURCE, tool_id)
 
     async def register_skill(self, skill: SkillRecord) -> SkillRecord:
         async with self._lock:
             if skill.skill_id in self._skills:
                 raise conflict(f"Skill {skill.skill_id!r} is already registered")
             self._skills[skill.skill_id] = skill
+            await self._save_record(SKILLS_RESOURCE, skill.skill_id, skill)
         return self._copy(skill)
 
     async def get_skill(self, skill_id: str) -> SkillRecord:
@@ -349,6 +378,7 @@ class InMemoryRepository:
         async with self._lock:
             if self._skills.pop(skill_id, None) is None:
                 raise not_found("Skill", skill_id)
+            await self._delete_record(SKILLS_RESOURCE, skill_id)
 
     async def register_aina(self, aina: AinaRecord) -> AinaRecord:
         aina_id = aina.manifest.aina.id
@@ -356,6 +386,7 @@ class InMemoryRepository:
             if aina_id in self._ainas:
                 raise conflict(f"AINA {aina_id!r} is already registered")
             self._ainas[aina_id] = aina
+            await self._save_record(AINAS_RESOURCE, aina_id, aina)
         return self._copy(aina)
 
     async def get_aina(self, aina_id: str) -> AinaRecord:
@@ -373,13 +404,16 @@ class InMemoryRepository:
         async with self._lock:
             if self._ainas.pop(aina_id, None) is None:
                 raise not_found("AINA", aina_id)
+            await self._delete_record(AINAS_RESOURCE, aina_id)
             for key in [key for key in self._installations if key[2] == aina_id]:
                 del self._installations[key]
+                await self._delete_record(INSTALLATIONS_RESOURCE, _installation_record_id(*key))
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation:
         key = (installation.tenant_id, installation.user_id, installation.aina_id)
         async with self._lock:
             self._installations[key] = installation
+            await self._save_record(INSTALLATIONS_RESOURCE, _installation_record_id(*key), installation)
         return self._copy(installation)
 
     async def get_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> AinaInstallation:
@@ -406,10 +440,15 @@ class InMemoryRepository:
         async with self._lock:
             if self._installations.pop((tenant_id, user_id, aina_id), None) is None:
                 raise not_found("AINA installation", aina_id)
+            await self._delete_record(
+                INSTALLATIONS_RESOURCE,
+                _installation_record_id(tenant_id, user_id, aina_id),
+            )
 
     async def create_trace(self, trace: TraceRecord) -> TraceRecord:
         async with self._lock:
             self._traces[trace.trace_id] = trace
+            await self._save_record(TRACES_RESOURCE, trace.trace_id, trace)
         return self._copy(trace)
 
     async def add_trace_event(self, trace_id: str, event: TraceEvent) -> None:
@@ -418,6 +457,7 @@ class InMemoryRepository:
             if trace is None:
                 raise not_found("Trace", trace_id)
             trace.events.append(event)
+            await self._save_record(TRACES_RESOURCE, trace_id, trace)
 
     async def finish_trace(self, trace_id: str, status: str) -> TraceRecord:
         async with self._lock:
@@ -426,6 +466,7 @@ class InMemoryRepository:
                 raise not_found("Trace", trace_id)
             trace.status = status  # type: ignore[assignment]
             trace.completed_at = datetime.now(UTC)
+            await self._save_record(TRACES_RESOURCE, trace_id, trace)
             return self._copy(trace)
 
     async def get_trace(self, trace_id: str) -> TraceRecord:
@@ -452,6 +493,7 @@ class InMemoryRepository:
     async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
         async with self._lock:
             self._approvals[approval.id] = approval
+            await self._save_record(APPROVALS_RESOURCE, approval.id, approval)
         return self._copy(approval)
 
     async def get_approval(self, approval_id: str) -> ApprovalRecord:
@@ -487,6 +529,7 @@ class InMemoryRepository:
                 raise not_found("Approval", approval_id)
             approval.status = status  # type: ignore[assignment]
             approval.resolved_at = datetime.now(UTC)
+            await self._save_record(APPROVALS_RESOURCE, approval_id, approval)
             return self._copy(approval)
 
     async def cancel_pending_approvals(self, conversation_id: str) -> None:
@@ -495,6 +538,12 @@ class InMemoryRepository:
                 if approval.conversation_id == conversation_id and approval.status == "pending":
                     approval.status = "denied"
                     approval.resolved_at = datetime.now(UTC)
+                    await self._save_record(APPROVALS_RESOURCE, approval.id, approval)
+
+
+def _installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
+    raw = json.dumps([tenant_id, user_id, aina_id], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _memory_terms(value: str) -> set[str]:
