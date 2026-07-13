@@ -6,24 +6,13 @@ from datetime import UTC, datetime
 from typing import Any, Iterable
 from uuid import uuid4
 
+from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.skill.models import SkillRecord
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceEvent, TraceRecord
+from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
-from tianzhou_agent_platform.core.models import (
-    AinaInstallation,
-    AinaRecord,
-    ApprovalRecord,
-    Conversation,
-    ConversationCreate,
-    ConversationUpdate,
-    Message,
-    MemoryCreate,
-    MemoryRecord,
-    MemoryStats,
-    MemoryUpdate,
-    SkillRecord,
-    ToolRecord,
-    TraceEvent,
-    TraceRecord,
-)
 
 
 class InMemoryRepository:
