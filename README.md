@@ -67,7 +67,7 @@ Unibot/
 ### 环境要求
 
 - **Python 3.12+**
-- **PostgreSQL** 数据库
+- **Docker Desktop**（本地 MySQL 与 Redis）
 - **uv** 包管理器（推荐）
 
 ### 安装依赖
@@ -80,8 +80,12 @@ uv sync --extra dev
 ### 启动服务
 
 ```bash
+docker compose -f docker-compose.storage.yml up -d
 uv run tianzhou-agent-platform
 ```
+
+后端启动时会自动创建 MySQL 业务表，并对 MySQL、Redis 和 NAS 执行读写探测。MySQL 是业务数据的
+权威存储，Redis 用于缓存和会话运行锁，NAS 默认位于仓库根目录的 `data/nas/`。
 
 ### 启动前端
 
@@ -107,6 +111,10 @@ Canvas、能力选择、高风险确认、Tool/Skill/AINA 注册管理、AINA �
 base_url=https://your-openai-compatible-api.example/v1
 api_key=your-api-key
 model=your-model
+
+TZ_STORAGE_MYSQL_DSN=mysql+aiomysql://unibot:unibot@127.0.0.1:13306/unibot
+TZ_STORAGE_REDIS_DSN=redis://127.0.0.1:16379/0
+TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 ```
 
 ### MVP 后端 API
@@ -160,7 +168,7 @@ uv run python scripts/real_api_test.py
 | **后端框架** | FastAPI              |
 | **语言**     | Python 3.12          |
 | **包管理**   | uv                   |
-| **数据库**   | PostgreSQL           |
+| **数据库**   | MySQL 8              |
 | **缓存**     | Redis                |
 | **对象存储** | S3 兼容              |
 | **协议**     | AINA (AI-Native App) |

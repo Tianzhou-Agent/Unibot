@@ -26,6 +26,7 @@ from tianzhou_agent_platform.store.models import (
 )
 from tianzhou_agent_platform.store.nas import NasStore
 from tianzhou_agent_platform.store.redis import RedisStore
+from tianzhou_agent_platform.store.repository import PersistentRepository, repository_metadata, repository_tables
 from tianzhou_agent_platform.store.runtime_check import (
     RUNTIME_CHECK_RESOURCE,
     StoreRuntimeCheckResult,
@@ -40,6 +41,7 @@ __all__ = [
     "FileMetadata",
     "MySqlStore",
     "NasStore",
+    "PersistentRepository",
     "RedisStore",
     "RUNTIME_CHECK_RESOURCE",
     "StorageBackendUnavailableError",
@@ -64,4 +66,6 @@ __all__ = [
     "create_storage_stores",
     "run_storage_runtime_check",
     "runtime_check_table",
+    "repository_metadata",
+    "repository_tables",
 ]

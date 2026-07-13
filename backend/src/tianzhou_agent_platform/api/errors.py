@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 
 
 def install_exception_handlers(app: FastAPI) -> None:
@@ -21,6 +22,36 @@ def install_exception_handlers(app: FastAPI) -> None:
             retryable=exc.retryable,
             source=exc.source,
             user_message=exc.user_message or exc.message,
+        )
+
+    @app.exception_handler(StorageError)
+    async def storage_error_handler(request: Request, exc: StorageError) -> JSONResponse:
+        status_codes = {
+            StorageErrorCode.NOT_FOUND: 404,
+            StorageErrorCode.VALIDATION_FAILURE: 422,
+            StorageErrorCode.POLICY_VIOLATION: 403,
+            StorageErrorCode.TIMEOUT: 504,
+            StorageErrorCode.BACKEND_UNAVAILABLE: 503,
+            StorageErrorCode.UNSUPPORTED_CAPABILITY: 501,
+            StorageErrorCode.UNKNOWN_BACKEND_FAILURE: 500,
+        }
+        codes = {
+            StorageErrorCode.NOT_FOUND: "RESOURCE_NOT_FOUND",
+            StorageErrorCode.VALIDATION_FAILURE: "INVALID_REQUEST",
+            StorageErrorCode.POLICY_VIOLATION: "PERMISSION_DENIED",
+            StorageErrorCode.TIMEOUT: "TIMEOUT",
+            StorageErrorCode.BACKEND_UNAVAILABLE: "DEPENDENCY_FAILED",
+            StorageErrorCode.UNSUPPORTED_CAPABILITY: "DEPENDENCY_FAILED",
+            StorageErrorCode.UNKNOWN_BACKEND_FAILURE: "INTERNAL_ERROR",
+        }
+        return _error_response(
+            request,
+            status_code=status_codes[exc.code],
+            code=codes[exc.code],
+            message=exc.message,
+            retryable=exc.code in {StorageErrorCode.TIMEOUT, StorageErrorCode.BACKEND_UNAVAILABLE},
+            source="storage",
+            user_message="The storage service is temporarily unavailable.",
         )
 
     @app.exception_handler(RequestValidationError)

@@ -9,7 +9,21 @@ import pytest
 from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from tianzhou_agent_platform.store import MySqlStore, NasStore, RedisStore, StoragePath, StoreCondition, StoreQuery
+from tianzhou_agent_platform.aina.memory.models import MemoryCreate
+from tianzhou_agent_platform.core.conversation import ConversationCreate
+from tianzhou_agent_platform.core.repository import CONVERSATIONS_RESOURCE, MEMORIES_RESOURCE
+from tianzhou_agent_platform.store import (
+    MySqlStore,
+    NasStore,
+    PersistentRepository,
+    RedisStore,
+    StoragePath,
+    StorageSettings,
+    StoreCondition,
+    StoreQuery,
+    create_storage_stores,
+    repository_tables,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TZ_STORAGE_E2E") != "1",
@@ -21,10 +35,10 @@ pytestmark = pytest.mark.skipif(
 async def test_storage_stores_against_docker_services() -> None:
     mysql_dsn = os.getenv(
         "TZ_STORAGE_E2E_MYSQL_DSN",
-        "mysql+aiomysql://unibot:unibot@127.0.0.1:13306/unibot_storage_e2e",
+        "mysql+aiomysql://unibot:unibot@127.0.0.1:13306/unibot",
     )
     redis_url = os.getenv("TZ_STORAGE_E2E_REDIS_URL", "redis://127.0.0.1:16379/0")
-    nas_root = Path(os.getenv("TZ_STORAGE_E2E_NAS_ROOT", str(Path(__file__).parents[2] / ".docker" / "nas")))
+    nas_root = Path(os.getenv("TZ_STORAGE_E2E_NAS_ROOT", str(Path(__file__).parents[3] / "data" / "nas")))
     nas_root.mkdir(parents=True, exist_ok=True)
 
     metadata = MetaData()
@@ -96,3 +110,56 @@ async def test_storage_stores_against_docker_services() -> None:
     finally:
         await redis_store.close()
         await mysql_store.close()
+
+
+@pytest.mark.asyncio
+async def test_persistent_repository_restores_records_after_recreation() -> None:
+    settings = StorageSettings(
+        mysql_dsn=os.getenv(
+            "TZ_STORAGE_E2E_MYSQL_DSN",
+            "mysql+aiomysql://unibot:unibot@127.0.0.1:13306/unibot",
+        ),
+        redis_dsn=os.getenv("TZ_STORAGE_E2E_REDIS_URL", "redis://127.0.0.1:16379/0"),
+        nas_root_path=Path(
+            os.getenv("TZ_STORAGE_E2E_NAS_ROOT", str(Path(__file__).parents[3] / "data" / "nas"))
+        ),
+    )
+    settings.nas_root_path.mkdir(parents=True, exist_ok=True)
+    first_stores = create_storage_stores(settings, mysql_resource_tables=repository_tables)
+    first_repository = PersistentRepository(first_stores)
+    conversation_id = ""
+    memory_id = ""
+
+    try:
+        await first_repository.initialize()
+        suffix = uuid4().hex
+        conversation = await first_repository.create_conversation(
+            ConversationCreate(title=f"Persistent conversation {suffix}")
+        )
+        memory = await first_repository.create_memory(MemoryCreate(content=f"Persistent memory {suffix}"))
+        conversation_id = conversation.id
+        memory_id = memory.id
+    finally:
+        await first_stores.close()
+
+    second_stores = create_storage_stores(settings, mysql_resource_tables=repository_tables)
+    second_repository = PersistentRepository(second_stores)
+    try:
+        await second_repository.initialize()
+        restored_conversation = await second_repository.get_conversation(conversation_id)
+        restored_memory = await second_repository.get_memory(
+            memory_id,
+            user_id="anonymous",
+            tenant_id="default",
+        )
+
+        assert restored_conversation.id == conversation_id
+        assert restored_memory.id == memory_id
+    finally:
+        if conversation_id:
+            await second_stores.mysql.delete(CONVERSATIONS_RESOURCE, conversation_id)
+            await second_stores.redis.delete(f"repository:{CONVERSATIONS_RESOURCE}", conversation_id)
+        if memory_id:
+            await second_stores.mysql.delete(MEMORIES_RESOURCE, memory_id)
+            await second_stores.redis.delete(f"repository:{MEMORIES_RESOURCE}", memory_id)
+        await second_stores.close()

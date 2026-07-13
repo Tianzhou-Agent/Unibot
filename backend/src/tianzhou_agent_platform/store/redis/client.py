@@ -59,6 +59,21 @@ class RedisStore:
             raise self._map_redis_error(exc) from exc
         return WriteResult(written=bool(written))
 
+    async def set_if_absent(
+        self,
+        namespace: str,
+        key: str,
+        value: Any,
+        ttl_seconds: int | None = None,
+    ) -> WriteResult:
+        redis_key = self._redis_key(namespace, key)
+        ttl = self._ttl(ttl_seconds)
+        try:
+            written = await self._client.set(redis_key, self._encode(value), ex=ttl, nx=True)
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        return WriteResult(written=bool(written))
+
     async def delete(self, namespace: str, key: str) -> DeleteResult:
         redis_key = self._redis_key(namespace, key)
         try:
