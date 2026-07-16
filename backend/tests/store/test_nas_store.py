@@ -25,6 +25,18 @@ async def test_nas_store_write_read_metadata_delete(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_nas_store_lists_files_below_prefix(tmp_path) -> None:
+    store = NasStore(tmp_path)
+    await store.write(StoragePath(relative_path="documents/a.md"), b"a")
+    await store.write(StoragePath(relative_path="documents/nested/b.md"), b"b")
+    await store.write(StoragePath(relative_path="other/c.md"), b"c")
+
+    items = await store.list_files(StoragePath(relative_path="documents"))
+
+    assert [item.path.relative_path for item in items] == ["documents/a.md", "documents/nested/b.md"]
+
+
+@pytest.mark.asyncio
 async def test_nas_store_rejects_write_without_overwrite(tmp_path) -> None:
     store = NasStore(tmp_path)
     path = StoragePath(relative_path="docs/item.txt")

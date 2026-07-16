@@ -10,6 +10,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant
+from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.router import create_router
@@ -34,6 +35,7 @@ def create_app(
     storage_settings: StorageSettings | None = None,
     llm: LLMClient | None = None,
     capability_http_client: httpx.AsyncClient | None = None,
+    document_service: DocumentService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
     storage_stores: StorageStores | None = None
@@ -49,6 +51,9 @@ def create_app(
         resolved_repository = PersistentRepository(storage_stores)
     else:
         resolved_repository = repository or InMemoryRepository()
+    resolved_document_service = document_service or (
+        DocumentService(storage_stores.nas) if storage_stores is not None else None
+    )
     resolved_llm = llm or OpenAICompatibleClient(resolved_settings)
     gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
 
@@ -59,7 +64,10 @@ def create_app(
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
-            await ensure_unibot_assistant(resolved_repository)
+            await ensure_unibot_assistant(
+                resolved_repository,
+                document_enabled=resolved_document_service is not None,
+            )
             yield
         finally:
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
@@ -81,6 +89,7 @@ def create_app(
     app.state.repository = resolved_repository
     app.state.llm = resolved_llm
     app.state.capability_gateway = gateway
+    app.state.document_service = resolved_document_service
     app.state.storage_stores = storage_stores
     app.state.storage_status = None
     app.state.agent_runtime = AgentRuntime(
@@ -88,6 +97,7 @@ def create_app(
         repository=resolved_repository,
         llm=resolved_llm,
         gateway=gateway,
+        document_service=resolved_document_service,
     )
     app.state.background_tasks = set()
 

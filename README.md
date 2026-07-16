@@ -132,6 +132,8 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - 内置 `request_clarification`：需求模糊时生成宿主 Form Widget，支持模型预填和用户提交；
 - 内置 `unibot-memory`：通过对话或 Memory Widget 管理事实、偏好、目标和指令，并向相关后续对话注入安全围栏内的记忆；
 - `/memories`：记忆新增、搜索、筛选、修改、删除与分类统计；
+- 内置 `unibot-documents`：通过对话创建、读取、编辑、追加、重命名和删除 Markdown 文档，删除操作需要确认；
+- `/documents`：Markdown 文档列表与 CRUD，文件按租户和用户隔离并持久化到 `data/nas/documents/`；
 - `/approvals/{id}/confirm|deny`：高风险调用确认；
 - `/traces`、`/admin/summary`：调用链和基础管理数据。
 
@@ -200,6 +202,7 @@ uv run --extra dev deepeval test run tests/evals -v
 | ----------- | --------------------------------------------------------------------- |
 | **unibot-assistant** | 系统调度 AINA，负责应用发现、分层路由和打开 Canvas           |
 | **unibot-memory**  | 管理事实、偏好、目标与指令，按需检索注入，使 Agent 具备进程生命周期内的跨会话认知能力 |
+| **unibot-documents** | NAS 持久化 Markdown 文档编辑器，支持对话工具与 Canvas 在线编辑、预览和文件管理 |
 | **builder** | 提供 AINA 的创建、调试、发布能力，管理员按步骤构建新 AINA             |
 
 ## License

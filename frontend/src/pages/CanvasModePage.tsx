@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowUp, Bot, Loader2, Maximize2, Wrench } from "lucide-react";
+import { ArrowLeft, ArrowUp, Bot, Loader2, Maximize2, MessageSquareText, PanelRightOpen, Wrench } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { Topbar } from "@/components/layout/Topbar";
@@ -32,6 +32,7 @@ export default function CanvasModePage() {
   const [error, setError] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [recoveringRun, setRecoveringRun] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const endRef = useRef<HTMLDivElement | null>(null);
   const localRunRef = useRef(false);
 
@@ -196,21 +197,50 @@ export default function CanvasModePage() {
         title={canvas?.name ?? "AINA Canvas"}
         badge={{ label: sending ? "运行中" : "Canvas", tone: sending ? "thinking" : "info" }}
         actions={
-          <button
-            type="button"
-            onClick={() => navigate(conversationId ? `/chat/${conversationId}` : "/chat")}
-            className="btn-outline h-8"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />退出 Canvas
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label="Canvas 移动端视图">
+              <button
+                type="button"
+                onClick={() => setMobilePane("chat")}
+                className={classNames(
+                  "flex h-6 items-center gap-1 rounded px-2 text-[10px] font-bold",
+                  mobilePane === "chat" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+                )}
+                aria-label="显示对话"
+              >
+                <MessageSquareText className="h-3.5 w-3.5" />对话
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobilePane("app")}
+                className={classNames(
+                  "flex h-6 items-center gap-1 rounded px-2 text-[10px] font-bold",
+                  mobilePane === "app" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+                )}
+                aria-label="显示编辑器"
+              >
+                <PanelRightOpen className="h-3.5 w-3.5" />编辑器
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate(conversationId ? `/chat/${conversationId}` : "/chat")}
+              className="btn-outline h-8"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />退出 Canvas
+            </button>
+          </div>
         }
       />
 
       <div className="min-h-0 flex-1 p-3">
         {loading ? <CanvasSkeleton /> : null}
         {!loading && canvas ? (
-          <div className="grid h-full grid-cols-[minmax(340px,420px)_minmax(0,1fr)] gap-3">
-            <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
+          <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,420px)_minmax(0,1fr)]">
+            <section className={classNames(
+              "min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card lg:flex",
+              mobilePane === "chat" ? "flex" : "hidden",
+            )}>
               <header className="flex items-center gap-3 border-b border-line px-4 py-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-soft text-accent">
                   <Bot className="h-4.5 w-4.5" />
@@ -261,7 +291,10 @@ export default function CanvasModePage() {
               <CanvasComposer disabled={sending} onSend={(text) => void sendMessage(text)} />
             </section>
 
-            <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
+            <section className={classNames(
+              "min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card lg:flex",
+              mobilePane === "app" ? "flex" : "hidden",
+            )}>
               <header className="flex items-start gap-3 border-b border-line bg-white px-5 py-4">
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white">
                   <Maximize2 className="h-4.5 w-4.5" />
@@ -275,8 +308,9 @@ export default function CanvasModePage() {
                 </div>
               </header>
               <div className="min-h-0 flex-1 overflow-y-auto bg-app-bg p-5">
-                <div className="mx-auto max-w-4xl">
+                <div className={canvas.main_widget.kind === "document" ? "h-full" : "mx-auto max-w-4xl"}>
                   <WidgetRenderer
+                    key={`${canvas.main_widget.id}:${lastRun?.trace_id ?? "initial"}`}
                     widget={canvas.main_widget}
                     disabled={sending}
                     onOpenAina={(id) => void openAina(id)}
@@ -390,7 +424,7 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
 
 function CanvasSkeleton() {
   return (
-    <div className="grid h-full grid-cols-[420px_1fr] gap-3">
+    <div className="grid h-full grid-cols-1 gap-3 lg:grid-cols-[420px_1fr]">
       <div className="animate-pulse rounded-xl bg-line/60" />
       <div className="animate-pulse rounded-xl bg-line/60" />
     </div>

@@ -21,6 +21,12 @@ from tianzhou_agent_platform.aina.builtin import (
     UNIBOT_MEMORY_ID,
     invoke_builtin,
 )
+from tianzhou_agent_platform.aina.document.builtin import (
+    DELETE_DOCUMENT_TOOL_ID,
+    UNIBOT_DOCUMENTS_ID,
+    document_tool_capabilities,
+)
+from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
@@ -117,11 +123,13 @@ class AgentRuntime:
         repository: InMemoryRepository,
         llm: LLMClient,
         gateway: RemoteCapabilityGateway,
+        document_service: DocumentService | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.llm = llm
         self.gateway = gateway
+        self.document_service = document_service
         graph = StateGraph(AgentState)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
@@ -417,6 +425,7 @@ class AgentRuntime:
                         user_id=state["user_id"],
                         tenant_id=state["tenant_id"],
                         conversation_id=state["conversation_id"],
+                        document_service=self.document_service,
                     )
                     widgets.extend(produced_widgets)
                     duration_ms = (perf_counter() - call_started) * 1000
@@ -613,9 +622,7 @@ class AgentRuntime:
             if selected.kind == "aina":
                 capabilities, aina = await self._aina_scope(conversation, selected)
                 prompt = await self._system_prompt(aina, memory_context=memory_context)
-                resolved_forced_capability = (
-                    None if aina.manifest.aina.id == UNIBOT_MEMORY_ID else forced_capability
-                )
+                resolved_forced_capability = None if aina.manifest.runtime.type == "builtin" else forced_capability
             else:
                 capabilities = {selected.function_name: selected}
                 prompt = await self._system_prompt(memory_context=memory_context)
@@ -639,7 +646,7 @@ class AgentRuntime:
             )
             if route.capability is not None and route.assistant_message is not None:
                 capabilities, aina = await self._aina_scope(conversation, route.capability)
-                if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
+                if aina.manifest.runtime.type == "builtin":
                     return await self._run(
                         conversation=conversation,
                         trace_id=trace_id,
@@ -1258,6 +1265,7 @@ class AgentRuntime:
                 value=(aina, installation),
                 owner_aina_id=installation.aina_id,
             )
+        capabilities.update(await self._document_aina_capability(conversation))
         return capabilities
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
@@ -1269,7 +1277,61 @@ class AgentRuntime:
 
     async def _fallback_capabilities(self) -> dict[str, Capability]:
         """Keep stable built-ins resolvable when their calls remain in conversation history."""
-        return {**await self._system_capabilities(), **self._memory_capabilities()}
+        return {
+            **await self._system_capabilities(),
+            **self._memory_capabilities(),
+            **self._document_capabilities(),
+        }
+
+    async def _document_aina_capability(self, conversation: Conversation) -> dict[str, Capability]:
+        if self.document_service is None:
+            return {}
+        try:
+            document_aina = await self.repository.get_aina(UNIBOT_DOCUMENTS_ID)
+        except PlatformError:
+            return {}
+        if document_aina.status != "registered":
+            return {}
+        installation = AinaInstallation(
+            user_id=conversation.user_id,
+            tenant_id=conversation.tenant_id,
+            aina_id=UNIBOT_DOCUMENTS_ID,
+            installed_version=document_aina.manifest.aina.version,
+        )
+        function_name = _function_name("aina", UNIBOT_DOCUMENTS_ID)
+        capability_descriptions = [
+            item.description
+            for item in [
+                *document_aina.manifest.capabilities.skills,
+                *document_aina.manifest.capabilities.tools,
+            ]
+        ]
+        return {
+            function_name: Capability(
+                kind="aina",
+                capability_id=UNIBOT_DOCUMENTS_ID,
+                function_name=function_name,
+                display_name=document_aina.manifest.aina.name,
+                description=(
+                    f"{document_aina.manifest.aina.description}. "
+                    f"Capabilities: {'; '.join(capability_descriptions)}"
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "The user's Markdown document request.",
+                        }
+                    },
+                    "required": ["input"],
+                    "additionalProperties": False,
+                },
+                requires_confirmation=False,
+                value=(document_aina, installation),
+                owner_aina_id=UNIBOT_DOCUMENTS_ID,
+            )
+        }
 
     async def _memory_aina_capability(self, conversation: Conversation) -> dict[str, Capability]:
         try:
@@ -1329,6 +1391,8 @@ class AgentRuntime:
         aina, _installation = cast(tuple[AinaRecord, AinaInstallation], selected.value)
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
             return self._memory_capabilities(), aina
+        if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
+            return self._document_capabilities(), aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected}
         if declared_tool_ids:
@@ -1406,6 +1470,25 @@ class AgentRuntime:
                 owner_aina_id=UNIBOT_MEMORY_ID,
             ),
         }
+
+    def _document_capabilities(self) -> dict[str, Capability]:
+        if self.document_service is None:
+            return {}
+        capabilities: dict[str, Capability] = {}
+        for tool in document_tool_capabilities():
+            function_name = _function_name("builtin", tool.id)
+            capabilities[function_name] = Capability(
+                kind="builtin",
+                capability_id=tool.id,
+                function_name=function_name,
+                display_name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+                requires_confirmation=tool.id == DELETE_DOCUMENT_TOOL_ID,
+                value=tool.id,
+                owner_aina_id=UNIBOT_DOCUMENTS_ID,
+            )
+        return capabilities
 
     @staticmethod
     def _resolve_forced_capability(
