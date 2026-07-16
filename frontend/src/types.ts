@@ -255,7 +255,7 @@ export interface WidgetAppDefinition {
 
 export interface WidgetDefinition {
   id: string;
-  kind: "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory";
+  kind: "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document";
   title: string;
   description: string;
   markdown?: string | null;
@@ -348,6 +348,21 @@ export interface AinaCanvasResponse {
   conversation_id?: string | null;
   route: string;
   main_widget: WidgetDefinition;
+}
+
+export interface DocumentSummary {
+  name: string;
+  size_bytes: number;
+  modified_at?: string | null;
+}
+
+export interface DocumentRecord extends DocumentSummary {
+  content: string;
+}
+
+export interface DocumentListResponse {
+  items: DocumentSummary[];
+  total: number;
 }
 
 export interface TraceEvent {

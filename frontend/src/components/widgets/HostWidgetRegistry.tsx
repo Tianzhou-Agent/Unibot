@@ -2,6 +2,7 @@ import { AppWindow, ArrowRight } from "lucide-react";
 import type { ComponentType, Dispatch, SetStateAction } from "react";
 import type { WidgetDefinition } from "@/types";
 import { MemoryWidget } from "./MemoryWidget";
+import { DocumentWidget } from "./DocumentWidget";
 
 export interface HostWidgetProps {
   widget: WidgetDefinition;
@@ -85,6 +86,10 @@ function MemoryHostWidget({ disabled, onPrompt }: HostWidgetProps) {
   return <MemoryWidget disabled={disabled} onPrompt={onPrompt} />;
 }
 
+function DocumentHostWidget({ disabled }: HostWidgetProps) {
+  return <DocumentWidget disabled={disabled} />;
+}
+
 export const HOST_WIDGET_REGISTRY: Record<WidgetDefinition["kind"], ComponentType<HostWidgetProps>> = {
   app_list: AppListWidget,
   form: DeclarativeWidget,
@@ -92,6 +97,7 @@ export const HOST_WIDGET_REGISTRY: Record<WidgetDefinition["kind"], ComponentTyp
   panel: DeclarativeWidget,
   navigation: DeclarativeWidget,
   memory: MemoryHostWidget,
+  document: DocumentHostWidget,
 };
 
 export function HostWidgetBody(props: HostWidgetProps) {

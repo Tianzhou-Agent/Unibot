@@ -93,9 +93,10 @@ async def list_app_widget(
     user_id: str,
     tenant_id: str,
 ) -> WidgetDefinition:
+    from tianzhou_agent_platform.aina.document.builtin import UNIBOT_DOCUMENTS_ID
     from tianzhou_agent_platform.aina.memory.builtin import UNIBOT_MEMORY_ID
 
-    builtin_aina_ids = {UNIBOT_ASSISTANT_ID, UNIBOT_MEMORY_ID}
+    builtin_aina_ids = {UNIBOT_ASSISTANT_ID, UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID}
     installations = {
         item.aina_id: item
         for item in await repository.list_installations(tenant_id=tenant_id, user_id=user_id)

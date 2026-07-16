@@ -74,6 +74,15 @@ class NasStore:
         modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
         return FileMetadata(path=path, size_bytes=stat.st_size, modified_at=modified_at, content_type=content_type)
 
+    async def list_files(self, prefix: StoragePath) -> list[FileMetadata]:
+        target = self._resolve(prefix)
+        try:
+            return await asyncio.to_thread(self._list_metadata, target)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise StorageUnknownBackendError("NAS list operation failed") from exc
+
     def _resolve(self, path: StoragePath) -> Path:
         if not self._root_path.exists():
             raise StorageBackendUnavailableError("NAS root path is unavailable")
@@ -91,3 +100,28 @@ class NasStore:
     def _read_bytes(target: Path) -> bytes:
         with target.open("rb") as file:
             return file.read()
+
+    def _list_metadata(self, target: Path) -> list[FileMetadata]:
+        if not target.exists():
+            return []
+        if not target.is_dir():
+            raise StorageValidationError("NAS list prefix must be a directory")
+        items: list[FileMetadata] = []
+        for file in target.rglob("*"):
+            if not file.is_file():
+                continue
+            resolved = file.resolve(strict=False)
+            if not resolved.is_relative_to(self._root_path):
+                continue
+            stat = resolved.stat()
+            relative_path = resolved.relative_to(self._root_path).as_posix()
+            content_type, _ = mimetypes.guess_type(resolved.name)
+            items.append(
+                FileMetadata(
+                    path=StoragePath(relative_path=relative_path),
+                    size_bytes=stat.st_size,
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                    content_type=content_type,
+                )
+            )
+        return sorted(items, key=lambda item: item.path.relative_path.casefold())

@@ -35,7 +35,7 @@ class WidgetApp(StrictModel):
 
 class WidgetDefinition(StrictModel):
     id: str = Field(min_length=1, max_length=160)
-    kind: Literal["app_list", "form", "markdown", "panel", "navigation", "memory"]
+    kind: Literal["app_list", "form", "markdown", "panel", "navigation", "memory", "document"]
     title: str
     description: str = ""
     markdown: str | None = None

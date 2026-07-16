@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AppWindow, Boxes, Play, Send } from "lucide-react";
+import { AppWindow, Boxes, FileText, Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
 import type { WidgetActionDefinition, WidgetDefinition } from "@/types";
@@ -38,10 +38,16 @@ export function WidgetRenderer({
   }
 
   return (
-    <section className="overflow-hidden rounded-xl border border-accent-ring bg-white shadow-soft" aria-label={widget.title}>
+    <section
+      className={classNames(
+        "overflow-hidden rounded-xl border border-accent-ring bg-white shadow-soft",
+        widget.kind === "document" && "flex h-full min-h-[600px] flex-col",
+      )}
+      aria-label={widget.title}
+    >
       <header className="flex items-start gap-3 border-b border-line bg-gradient-to-r from-accent-soft to-white px-4 py-3.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white">
-          {widget.kind === "app_list" ? <Boxes className="h-4.5 w-4.5" /> : <AppWindow className="h-4.5 w-4.5" />}
+          {widget.kind === "app_list" ? <Boxes className="h-4.5 w-4.5" /> : widget.kind === "document" ? <FileText className="h-4.5 w-4.5" /> : <AppWindow className="h-4.5 w-4.5" />}
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="text-[14px] font-extrabold text-ink">{widget.title}</h3>
@@ -52,7 +58,7 @@ export function WidgetRenderer({
         </span>
       </header>
 
-      <div className="p-4">
+      <div className={classNames("p-4", widget.kind === "document" && "min-h-0 flex-1")}>
         {widget.markdown ? <MarkdownContent content={widget.markdown} className="mb-4" /> : null}
         <HostWidgetBody
           widget={widget}
