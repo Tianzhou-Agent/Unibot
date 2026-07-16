@@ -57,14 +57,17 @@ export default function ChatModePage() {
   const [deleted, setDeleted] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const localRunRef = useRef(false);
+  const loadRequestRef = useRef(0);
 
   const loadConversation = useCallback(async (id: string, silent = false) => {
+    const requestId = ++loadRequestRef.current;
     if (!silent) setLoading(true);
     try {
       const [record, pendingApprovals] = await Promise.all([
         api.get<ConversationRecord>(`/conversations/${id}`),
         api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
       ]);
+      if (requestId !== loadRequestRef.current) return;
       setConversation(record);
       setApproval(pendingApprovals[0] ?? null);
       setTitleDraft(record.title);
@@ -75,9 +78,10 @@ export default function ChatModePage() {
       }
       setError(record.run_error ?? null);
     } catch (loadError) {
+      if (requestId !== loadRequestRef.current) return;
       setError(apiErrorMessage(loadError));
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && requestId === loadRequestRef.current) setLoading(false);
     }
   }, []);
 
@@ -232,9 +236,8 @@ export default function ChatModePage() {
       notifyConversationsChanged();
       if (conversationId !== completed.conversation_id) {
         navigate(`/chat/${completed.conversation_id}`, { replace: true });
-      } else {
-        await loadConversation(completed.conversation_id);
       }
+      await loadConversation(completed.conversation_id);
     } catch (sendError) {
       setError(apiErrorMessage(sendError));
     } finally {

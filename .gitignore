@@ -4,5 +4,6 @@ backend/.e2e-results/
 frontend/e2e-results/
 frontend/playwright-report/
 frontend/test-results/
+frontend/frontend-run.log
 .env
 /data/nas/

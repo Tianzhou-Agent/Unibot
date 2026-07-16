@@ -112,6 +112,39 @@ def test_relevant_memory_is_fenced_into_an_ordinary_conversation() -> None:
     assert response.json()["content"] == "I will answer concisely in Chinese."
 
 
+def test_explicit_recall_uses_memory_tool_and_returns_stored_fact() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_memory_recall_",
+                arguments='{"query":"private test token"}',
+            ),
+            assistant("Your private test token is MEMORY-42."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        client.post(
+            "/memories",
+            json={"content": "The private test token is MEMORY-42", "category": "fact"},
+        )
+        response = client.post(
+            "/chat",
+            json={
+                "message": "What is my private test token?",
+                "capability": "aina:unibot-memory",
+            },
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
+
+    tool_result = next(item for item in llm.calls[1]["messages"] if item["role"] == "tool")
+    assert "MEMORY-42" in tool_result["content"]
+    assert "MEMORY-42" in response.json()["content"]
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "memory.recall"
+        for event in trace.json()["events"]
+    )
+
+
 def test_memory_tool_remains_available_for_follow_up_durable_fact() -> None:
     llm = ScriptedLLM(
         [

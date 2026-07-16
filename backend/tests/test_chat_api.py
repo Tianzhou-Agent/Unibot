@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
@@ -15,10 +17,10 @@ from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
 def _settings(*, max_iterations: int = 8) -> AgentSettings:
-    return AgentSettings(
+    return AgentSettings(  # type: ignore[call-arg]
         _env_file=None,
         llm_base_url="https://model.invalid/v1",
-        llm_api_key="test-key",
+        llm_api_key=SecretStr("test-key"),
         llm_model="test-model",
         max_agent_iterations=max_iterations,
     )
@@ -132,11 +134,11 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
 
     async def remote(request: httpx.Request) -> httpx.Response:
         captured.append(json.loads(request.content))
-        return httpx.Response(200, json={"result": 42})
+        return httpx.Response(200, json={"result": 42, "authorization": "Bearer remote-secret-value"})
 
     llm = ScriptedLLM(
         [
-            call_first_tool(arguments='{"a": 17, "b": 25}'),
+            call_first_tool(arguments='{"a": 17, "b": 25, "api_key": "tool-secret-value"}'),
             assistant("The result is 42."),
         ]
     )
@@ -151,13 +153,20 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
                 "description": "Add two integer values.",
                 "input_schema": {
                     "type": "object",
-                    "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
-                    "required": ["a", "b"],
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                        "api_key": {"type": "string"},
+                    },
+                    "required": ["a", "b", "api_key"],
                     "additionalProperties": False,
                 },
                 "output_schema": {
                     "type": "object",
-                    "properties": {"result": {"type": "integer"}},
+                    "properties": {
+                        "result": {"type": "integer"},
+                        "authorization": {"type": "string"},
+                    },
                     "required": ["result"],
                 },
                 "endpoint": "https://tool.invalid/add",
@@ -165,7 +174,10 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
         )
         response = client.post(
             "/chat",
-            json={"message": "What is 17 + 25?", "capability": "tool:demo.add"},
+            json={
+                "message": "What is 17 + 25? password=customer-secret-value",
+                "capability": "tool:demo.add",
+            },
         )
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
@@ -173,9 +185,51 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
     assert response.status_code == 200
     assert response.json()["content"] == "The result is 42."
     assert response.json()["iterations"] == 2
-    assert captured[0]["arguments"] == {"a": 17, "b": 25}
+    assert captured[0]["arguments"] == {"a": 17, "b": 25, "api_key": "tool-secret-value"}
     assert captured[0]["trace_id"] == response.json()["trace_id"]
-    assert any(event["kind"] == "tool.completed" for event in trace.json()["events"])
+    events = trace.json()["events"]
+    request_event = next(event for event in events if event["kind"] == "user.request")
+    assert request_event["details"]["message_id"].startswith("msg_")
+    assert request_event["details"]["content"] == "What is 17 + 25? password=[REDACTED]"
+    assert request_event["details"]["content_sha256"] == hashlib.sha256(
+        b"What is 17 + 25? password=customer-secret-value"
+    ).hexdigest()
+    discovery = next(event for event in events if event["kind"] == "capability.discovery")["details"]
+    assert discovery["aina_graph"]["available_count"] == 2
+    assert {item["id"] for item in discovery["aina_graph"]["available"]} == {
+        "unibot-assistant",
+        "unibot-memory",
+    }
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 2, "remote_aina": 0}
+    assert discovery["model_scope"]["counts"] == {
+        "remote_tool": 1,
+        "remote_aina": 0,
+        "builtin_capability": 0,
+    }
+    assert discovery["model_scope"]["by_aina"] == []
+    assert discovery["model_scope"]["standalone"] == [
+        {
+            "id": "demo.add",
+            "kind": "tool",
+            "function_name": llm.calls[0]["tool_choice"]["function"]["name"],
+            "display_name": "Add numbers",
+            "requires_confirmation": False,
+            "owner_aina_id": None,
+        }
+    ]
+    requested_event = next(event for event in events if event["kind"] == "tool.requested")
+    assert requested_event["details"]["call_id"] == "call_1"
+    assert requested_event["details"]["arguments"] == {"a": 17, "b": 25, "api_key": "[REDACTED]"}
+    completed_event = next(event for event in events if event["kind"] == "tool.completed")
+    assert completed_event["details"]["result"] == {"result": 42, "authorization": "[REDACTED]"}
+    assert completed_event["details"]["result_size_bytes"] > 0
+    final_event = next(event for event in events if event["kind"] == "final.response")
+    assert final_event["details"]["content"] == "The result is 42."
+    assert final_event["details"]["message_id"] == response.json()["message_id"]
+    serialized_trace = json.dumps(trace.json())
+    assert "customer-secret-value" not in serialized_trace
+    assert "tool-secret-value" not in serialized_trace
+    assert "remote-secret-value" not in serialized_trace
     assert llm.calls[0]["tool_choice"]["function"]["name"].startswith("tool_")
 
 
@@ -260,6 +314,48 @@ def test_high_risk_tool_waits_for_confirmation() -> None:
     assert confirmed.status_code == 200
     assert confirmed.json()["status"] == "completed"
     assert calls == 1
+
+
+def test_high_risk_tool_denial_closes_pending_call_without_execution() -> None:
+    calls = 0
+
+    async def remote(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"sent": True})
+
+    llm = ScriptedLLM([call_first_tool(arguments='{"recipient":"user@example.com"}')])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.denied-send",
+                "name": "Denied send",
+                "description": "Send a message only after approval.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"recipient": {"type": "string"}},
+                    "required": ["recipient"],
+                },
+                "endpoint": "https://tool.invalid/send",
+                "side_effect_level": "high",
+            },
+        )
+        pending = client.post(
+            "/chat",
+            json={"message": "Send the message", "capability": "tool:demo.denied-send"},
+        ).json()
+        denied = client.post(f"/approvals/{pending['approval']['id']}/deny", json={})
+        conversation = client.get(f"/conversations/{pending['conversation_id']}")
+        trace = client.get(f"/traces/{pending['trace_id']}")
+
+    assert denied.status_code == 200
+    assert denied.json()["status"] == "denied"
+    assert calls == 0
+    assert conversation.json()["run_status"] == "idle"
+    assert conversation.json()["messages"][-1]["content"] == "The requested operation was cancelled."
+    assert any(event["kind"] == "approval.denied" for event in trace.json()["events"])
 
 
 def test_iteration_limit_stops_repeated_tool_loop() -> None:

@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 from uuid import uuid4
 
 import httpx
@@ -87,7 +87,7 @@ def demo_server() -> Iterator[str]:
 def assert_ok(response: httpx.Response) -> dict[str, Any]:
     if response.is_error:
         raise AssertionError(f"HTTP {response.status_code}: {response.text}")
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def assert_trace_has(client: httpx.Client, trace_id: str, event_kind: str) -> None:
