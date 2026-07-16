@@ -91,7 +91,7 @@ export default function SettingsPage() {
           </div>
         }
       />
-      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 md:p-4">
         <div className="mx-auto max-w-6xl space-y-4">
           {error ? (
             <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[12.5px] text-danger-deep">
@@ -99,7 +99,7 @@ export default function SettingsPage() {
             </div>
           ) : null}
 
-          <section className={classNames("grid gap-3", debugMode ? "grid-cols-7" : "grid-cols-6")} aria-label="运行统计">
+          <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:gap-3 xl:grid-cols-7" aria-label="运行统计">
             <SummaryCard icon={<Bot />} label="对话" value={summary?.conversations} tone="blue" />
             <SummaryCard icon={<Wrench />} label="Tools" value={summary?.tools} tone="indigo" />
             <SummaryCard icon={<Code2 />} label="Skills" value={summary?.skills} tone="slate" />
@@ -109,14 +109,14 @@ export default function SettingsPage() {
             {debugMode ? <SummaryCard icon={<Route />} label="Traces" value={summary?.traces} tone="blue" /> : null}
           </section>
 
-          {debugMode ? <section className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-4 min-h-[520px]">
+          {debugMode ? <section className="grid grid-cols-1 gap-3 min-h-[520px] xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-4">
             <div className="rounded-xl border border-line bg-white shadow-card overflow-hidden">
               <div className="h-13 px-4 py-3 border-b border-line flex items-center gap-2">
                 <Activity className="w-4 h-4 text-accent" />
                 <h2 className="text-[13px] font-extrabold text-ink">调用 Trace</h2>
                 <span className="ml-auto text-[10.5px] text-ink-muted">最近 {traces.length} 条</span>
               </div>
-              <div className="max-h-[620px] overflow-y-auto divide-y divide-line">
+              <div className="max-h-[280px] xl:max-h-[620px] overflow-y-auto divide-y divide-line">
                 {traces.length === 0 ? (
                   <div className="py-20 text-center text-[12px] text-ink-muted">完成一次对话后，Trace 会显示在这里。</div>
                 ) : (
@@ -227,6 +227,7 @@ function TraceDetail({ trace }: { trace: TraceRecord }) {
 
 function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
   const failed = event.status === "failed";
+  const discovery = event.kind === "capability.discovery" ? parseCapabilityDiscovery(event.details) : null;
   return (
     <div className="grid grid-cols-[20px_1fr] gap-2">
       <div className="flex flex-col items-center">
@@ -240,9 +241,187 @@ function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
           {event.duration_ms != null ? <span className="ml-auto text-[9.5px] text-ink-subtle">{event.duration_ms.toFixed(1)} ms</span> : null}
         </div>
         {event.target_id ? <div className="mt-1 font-mono text-[9.5px] text-ink-muted break-all">{event.target_type}:{event.target_id}</div> : null}
-        {Object.keys(event.details).length ? (
+        {discovery ? (
+          <CapabilityDiscoveryView details={discovery} />
+        ) : Object.keys(event.details).length ? (
           <pre className="mt-1.5 rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all text-[9.5px] leading-relaxed text-ink-muted">{JSON.stringify(event.details, null, 2)}</pre>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+interface DiscoveryCapability {
+  id: string;
+  kind: string;
+  name?: string;
+  display_name?: string;
+  description?: string;
+  model_exposed?: boolean;
+  function_name?: string | null;
+  requires_confirmation?: boolean;
+}
+
+interface DiscoveryAina {
+  id: string;
+  name: string;
+  version: string;
+  runtime: string;
+  availability: string;
+  routing_candidate: boolean;
+  entrypoint?: DiscoveryCapability | null;
+  capabilities: {
+    skills: DiscoveryCapability[];
+    tools: DiscoveryCapability[];
+    ui: DiscoveryCapability[];
+  };
+}
+
+interface CapabilityDiscoveryDetails {
+  aina_graph: {
+    available_count: number;
+    counts?: { builtin_aina: number; remote_aina: number };
+    available: DiscoveryAina[];
+    excluded: Array<{
+      id: string;
+      name: string;
+      runtime: string;
+      reason: string;
+      missing_permissions: string[];
+    }>;
+  };
+  model_scope: {
+    counts: {
+      remote_tool?: number;
+      remote_aina?: number;
+      builtin_capability?: number;
+      tool?: number;
+      aina?: number;
+      builtin?: number;
+    };
+    forced?: string | null;
+    by_aina: Array<{ aina_id: string; capabilities: DiscoveryCapability[] }>;
+    standalone: DiscoveryCapability[];
+  };
+}
+
+function parseCapabilityDiscovery(details: Record<string, unknown>): CapabilityDiscoveryDetails | null {
+  const graph = details.aina_graph;
+  const scope = details.model_scope;
+  if (!graph || typeof graph !== "object" || !scope || typeof scope !== "object") return null;
+  const typedGraph = graph as CapabilityDiscoveryDetails["aina_graph"];
+  const typedScope = scope as CapabilityDiscoveryDetails["model_scope"];
+  if (!Array.isArray(typedGraph.available) || !Array.isArray(typedGraph.excluded) || !Array.isArray(typedScope.by_aina)) {
+    return null;
+  }
+  return { aina_graph: typedGraph, model_scope: typedScope };
+}
+
+function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDetails }) {
+  const { aina_graph: graph, model_scope: scope } = details;
+  const builtinAinaCount = graph.counts?.builtin_aina ?? graph.available.filter((item) => item.runtime === "builtin").length;
+  const remoteAinaCount = graph.counts?.remote_aina ?? graph.available.filter((item) => item.runtime === "remote").length;
+  const remoteToolCount = scope.counts.remote_tool ?? scope.counts.tool ?? 0;
+  const remoteScopeAinaCount = scope.counts.remote_aina ?? scope.counts.aina ?? 0;
+  const builtinCapabilityCount = scope.counts.builtin_capability ?? scope.counts.builtin ?? 0;
+  return (
+    <div className="mt-2 space-y-2 text-[10px] text-ink-muted">
+      <div className="flex items-center gap-2">
+        <AppWindow className="h-3.5 w-3.5 text-accent" />
+        <span className="font-bold text-ink">Available AINAs</span>
+        <span className="rounded bg-app-soft px-1.5 py-0.5 font-bold text-ink-muted">Builtin AINA {builtinAinaCount}</span>
+        <span className="rounded bg-accent-soft px-1.5 py-0.5 font-bold text-accent">Remote AINA {remoteAinaCount}</span>
+      </div>
+
+      <div className="space-y-2">
+        {graph.available.map((aina) => (
+          <section key={aina.id} className="overflow-hidden rounded-md border border-line bg-white">
+            <div className="flex items-start gap-2 border-b border-line bg-app-soft px-2.5 py-2">
+              <AppWindow className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-bold text-ink">{aina.name}</span>
+                  <span className="font-mono text-[9px] text-ink-subtle">{aina.id}</span>
+                </div>
+                <div className="mt-0.5 flex flex-wrap gap-x-2 text-[9px] text-ink-subtle">
+                  <span>{aina.runtime}</span>
+                  <span>v{aina.version}</span>
+                  <span>{aina.availability}</span>
+                  {aina.routing_candidate ? <span>routing candidate</span> : null}
+                </div>
+              </div>
+            </div>
+            <div className="divide-y divide-line px-2.5">
+              <CapabilityGroup icon={<Wrench />} label="Tools" items={aina.capabilities.tools} />
+              <CapabilityGroup icon={<Code2 />} label="Skills" items={aina.capabilities.skills} />
+              <CapabilityGroup icon={<AppWindow />} label="UI" items={aina.capabilities.ui} />
+            </div>
+          </section>
+        ))}
+      </div>
+
+      <section className="rounded-md border border-line bg-app-soft px-2.5 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Bot className="h-3.5 w-3.5 text-ink-muted" />
+          <span className="font-bold text-ink">Model scope</span>
+          <span>Remote Tool {remoteToolCount}</span>
+          <span>Remote AINA {remoteScopeAinaCount}</span>
+          <span>Builtin capability {builtinCapabilityCount}</span>
+          {scope.forced ? <span className="font-mono text-warning-deep">forced: {scope.forced}</span> : null}
+        </div>
+        <div className="mt-1.5 space-y-1">
+          {scope.by_aina.map((group) => (
+            <div key={group.aina_id} className="grid grid-cols-[minmax(110px,0.8fr)_minmax(0,1.2fr)] gap-2">
+              <span className="truncate font-mono text-ink">{group.aina_id}</span>
+              <span className="break-words">{group.capabilities.map((item) => item.id).join(", ") || "none"}</span>
+            </div>
+          ))}
+          {scope.standalone.length ? (
+            <div className="grid grid-cols-[minmax(110px,0.8fr)_minmax(0,1.2fr)] gap-2">
+              <span className="font-mono text-ink">standalone</span>
+              <span className="break-words">{scope.standalone.map((item) => item.id).join(", ")}</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {graph.excluded.length ? (
+        <section className="rounded-md border border-warning-ring bg-warning-soft px-2.5 py-2">
+          <div className="font-bold text-warning-deep">Excluded AINAs</div>
+          {graph.excluded.map((aina) => (
+            <div key={aina.id} className="mt-1 flex flex-wrap gap-x-2">
+              <span className="font-mono text-ink">{aina.id}</span>
+              <span>{aina.reason}</span>
+              {aina.missing_permissions.length ? <span>{aina.missing_permissions.join(", ")}</span> : null}
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      <details>
+        <summary className="cursor-pointer font-semibold text-ink-muted">Raw JSON</summary>
+        <pre className="mt-1.5 rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all text-[9.5px] leading-relaxed text-ink-muted">{JSON.stringify(details, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function CapabilityGroup({ icon, label, items }: { icon: React.ReactNode; label: string; items: DiscoveryCapability[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="grid grid-cols-[72px_1fr] gap-2 py-2">
+      <div className="flex items-center gap-1 font-bold text-ink-muted [&>svg]:h-3 [&>svg]:w-3">
+        {icon}
+        {label}
+      </div>
+      <div className="space-y-1">
+        {items.map((item) => (
+          <div key={`${item.kind}-${item.id}`} className="flex min-w-0 items-start gap-1.5">
+            <span className="min-w-0 flex-1 break-all font-mono text-ink">{item.id}</span>
+            {item.model_exposed ? <span className="shrink-0 rounded bg-success-soft px-1 py-0.5 text-[8.5px] font-bold text-success-deep">model</span> : null}
+            {item.requires_confirmation ? <span className="shrink-0 rounded bg-warning-soft px-1 py-0.5 text-[8.5px] font-bold text-warning-deep">approval</span> : null}
+          </div>
+        ))}
       </div>
     </div>
   );

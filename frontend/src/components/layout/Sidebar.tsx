@@ -88,12 +88,12 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-[248px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
-      <div className="px-4 pt-4 pb-3">
+    <aside className="w-16 md:w-[248px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
+      <div className="px-3 md:px-4 pt-4 pb-3">
         <Brand />
       </div>
 
-      <div className="px-4 pb-2">
+      <div className="hidden px-4 pb-2 md:block">
         <label className="flex items-center gap-2 h-9 rounded-lg px-2.5 bg-sidebar-bg border border-sidebar-border focus-within:border-accent">
           <Search className="w-3.5 h-3.5 text-ink-onDarkMuted" />
           <input
@@ -107,18 +107,18 @@ export function Sidebar() {
         </label>
       </div>
 
-      <div className="px-4 pb-3">
+      <div className="px-3 pb-3 md:px-4">
         <button
           type="button"
           onClick={startConversation}
-          className="w-full flex items-center justify-center gap-1.5 h-9 rounded-lg bg-accent hover:bg-accent-hover text-white text-[13px] font-semibold transition-colors"
+          className="w-full flex items-center justify-center gap-1.5 h-9 rounded-lg bg-accent hover:bg-accent-hover text-white text-[0px] md:text-[13px] font-semibold transition-colors"
         >
           <MessageSquarePlus className="w-4 h-4" />
           新建对话
         </button>
       </div>
 
-      <div className="px-4 pb-2 flex items-center gap-2">
+      <div className="hidden px-4 pb-2 md:flex items-center gap-2">
         <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
           对话
         </span>
@@ -127,7 +127,7 @@ export function Sidebar() {
         </span>
       </div>
 
-      <nav className="flex-1 min-h-0 overflow-y-auto px-3 pb-4 space-y-4" aria-label="对话列表">
+      <nav className="hidden md:block flex-1 min-h-0 overflow-y-auto px-3 pb-4 space-y-4" aria-label="对话列表">
         {loading ? <SkeletonList /> : null}
         {!loading && error ? (
           <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-[11.5px] text-red-200">
@@ -172,11 +172,11 @@ export function Sidebar() {
 
 function Brand() {
   return (
-    <NavLink to="/chat" className="flex items-center gap-2.5" aria-label="Unibot 首页">
+    <NavLink to="/chat" className="flex items-center justify-center gap-2.5 md:justify-start" aria-label="Unibot 首页">
       <div className="w-8 h-8 rounded-lg bg-sidebar-active flex items-center justify-center shadow-soft">
         <Logo className="w-4 h-4 text-white" />
       </div>
-      <div>
+      <div className="hidden md:block">
         <div className="text-ink-inverse text-[15px] font-extrabold tracking-tight">Unibot</div>
         <div className="text-[10px] text-ink-onDarkMuted">Agent Runtime</div>
       </div>
@@ -256,7 +256,7 @@ function SkeletonList() {
 
 function FooterUtility() {
   return (
-    <div className="border-t border-sidebar-border p-3 grid grid-cols-2 gap-2">
+    <div className="border-t border-sidebar-border p-2 md:p-3 grid grid-cols-1 md:grid-cols-2 gap-2">
       <FooterButton to="/apps" label="能力中心" icon={<LayoutGrid className="w-4 h-4" />} />
       <FooterButton to="/settings" label="运行中心" icon={<SettingsIcon className="w-4 h-4" />} />
     </div>
@@ -269,7 +269,7 @@ function FooterButton({ to, label, icon }: { to: string; label: string; icon: Re
       to={to}
       className={({ isActive }) =>
         classNames(
-          "h-10 rounded-lg flex items-center justify-center gap-1.5 text-[11px] font-semibold transition-colors",
+          "h-10 rounded-lg flex items-center justify-center gap-1.5 text-[0px] md:text-[11px] font-semibold transition-colors",
           isActive ? "bg-sidebar-active text-white" : "text-ink-onDark hover:bg-sidebar-hover",
         )
       }

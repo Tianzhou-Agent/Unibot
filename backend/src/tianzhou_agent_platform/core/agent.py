@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
@@ -23,7 +23,7 @@ from tianzhou_agent_platform.aina.builtin import (
 )
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.config import AgentSettings
@@ -33,6 +33,7 @@ from tianzhou_agent_platform.core.conversation import Conversation, Conversation
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
 
 _HIGH_RISK_MARKERS = (
     "send",
@@ -57,6 +58,7 @@ class Capability:
     input_schema: dict[str, Any]
     requires_confirmation: bool
     value: ToolRecord | tuple[AinaRecord, AinaInstallation] | str
+    owner_aina_id: str | None = None
 
     def llm_definition(self) -> dict[str, Any]:
         return {
@@ -158,7 +160,16 @@ class AgentRuntime:
                 status="started",
                 target_type="model",
                 target_id=self.settings.llm_model,
-                details={"iteration": iterations},
+                details={
+                    "iteration": iterations,
+                    "message_count": len(state["messages"]),
+                    "message_roles": [str(message.get("role") or "unknown") for message in state["messages"]],
+                    "capability_ids": sorted(
+                        {capability.capability_id for capability in state["capabilities"].values()}
+                    ),
+                    "forced_function": state.get("forced_function") if iterations == 1 else None,
+                    "streaming": state.get("event_sink") is not None,
+                },
             ),
         )
         tool_choice: dict[str, Any] | str | None = None
@@ -183,7 +194,12 @@ class AgentRuntime:
                     target_type="model",
                     target_id=self.settings.llm_model,
                     duration_ms=(perf_counter() - started) * 1000,
-                    details={"code": exc.code},
+                    details={
+                        "iteration": iterations,
+                        "code": exc.code,
+                        "message": sanitize_trace_data(exc.message),
+                        "retryable": exc.retryable,
+                    },
                 ),
             )
             raise
@@ -207,6 +223,13 @@ class AgentRuntime:
                     "iteration": iterations,
                     "finish_reason": result.finish_reason,
                     "tool_call_count": len(message.get("tool_calls") or []),
+                    "tool_calls": [
+                        _tool_call_trace_details(call, state["capabilities"])
+                        for call in message.get("tool_calls") or []
+                    ],
+                    "content_length": len(str(message.get("content") or "")),
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
                 },
             ),
         )
@@ -257,7 +280,11 @@ class AgentRuntime:
                     kind="approval.required",
                     status="pending",
                     target_type="capability",
-                    details={"approval_id": approval.id, "capabilities": risky_names},
+                    details={
+                        "approval_id": approval.id,
+                        "capabilities": risky_names,
+                        "calls": [_tool_call_trace_details(call, capabilities) for call in risky_calls],
+                    },
                 ),
             )
             await self._emit(
@@ -286,18 +313,6 @@ class AgentRuntime:
             call_id = str(call.get("id") or f"call_{uuid4().hex}")
             arguments_text = function.get("arguments") or "{}"
             capability = capabilities.get(name)
-            signature = hashlib.sha256(f"{name}:{arguments_text}".encode()).hexdigest()
-            call_counts[signature] = call_counts.get(signature, 0) + 1
-            if call_counts[signature] > 2:
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="CONFLICT",
-                    message="The same capability call was repeated too many times.",
-                )
-                continue
             if capability is None:
                 await self._append_tool_error(
                     state,
@@ -323,6 +338,20 @@ class AgentRuntime:
                 )
                 continue
 
+            normalized_arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+            signature = hashlib.sha256(f"{name}:{normalized_arguments}".encode()).hexdigest()
+            call_counts[signature] = call_counts.get(signature, 0) + 1
+            if call_counts[signature] > 1:
+                await self._append_tool_error(
+                    state,
+                    messages,
+                    call_id=call_id,
+                    name=name,
+                    code="CONFLICT",
+                    message="The same capability call already completed in this run.",
+                )
+                continue
+
             await self.repository.add_trace_event(
                 state["trace_id"],
                 TraceEvent(
@@ -330,7 +359,12 @@ class AgentRuntime:
                     status="started",
                     target_type=capability.kind,
                     target_id=capability.capability_id,
-                    details={"argument_fields": sorted(arguments)},
+                    details={
+                        "call_id": call_id,
+                        "function_name": name,
+                        "argument_fields": sorted(arguments),
+                        "arguments": sanitize_trace_data(arguments),
+                    },
                 ),
             )
             await self._emit(
@@ -339,6 +373,7 @@ class AgentRuntime:
             )
             try:
                 call_started = perf_counter()
+                widgets_before = len(widgets)
                 if capability.kind == "tool":
                     tool = cast(ToolRecord, capability.value)
                     result, duration_ms = await self.gateway.invoke_tool(
@@ -386,6 +421,7 @@ class AgentRuntime:
                     widgets.extend(produced_widgets)
                     duration_ms = (perf_counter() - call_started) * 1000
                 content = json.dumps(result_payload, ensure_ascii=False, default=str)
+                result_size_bytes = len(content.encode("utf-8"))
                 if len(content) > 50_000:
                     content = f"{content[:50_000]}\n[tool output truncated]"
                 messages.append(
@@ -404,6 +440,15 @@ class AgentRuntime:
                         target_type=capability.kind,
                         target_id=capability.capability_id,
                         duration_ms=duration_ms,
+                        details={
+                            "call_id": call_id,
+                            "function_name": name,
+                            "result": sanitize_trace_data(result_payload),
+                            "result_size_bytes": result_size_bytes,
+                            "widgets": [
+                                {"id": widget.id, "kind": widget.kind} for widget in widgets[widgets_before:]
+                            ],
+                        },
                     ),
                 )
                 await self._emit(
@@ -466,7 +511,13 @@ class AgentRuntime:
                 status="failed",
                 target_type=capability.kind if capability else "capability",
                 target_id=capability.capability_id if capability else name,
-                details={"code": code},
+                details={
+                    "call_id": call_id,
+                    "function_name": name,
+                    "code": code,
+                    "message": sanitize_trace_data(message),
+                    "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
+                },
             ),
         )
         await self._emit(state, {"type": "error", "code": code, "source": "capability"})
@@ -494,7 +545,7 @@ class AgentRuntime:
                 )
             )
             await self.repository.close_dangling_tool_calls(conversation.id, trace_id=trace_id)
-            await self.repository.append_provider_messages(
+            appended_user = await self.repository.append_provider_messages(
                 conversation.id,
                 [{"role": "user", "content": request.message}],
                 trace_id=trace_id,
@@ -504,7 +555,13 @@ class AgentRuntime:
                 TraceEvent(
                     kind="user.request",
                     status="completed",
-                    details={"content_length": len(request.message)},
+                    details={
+                        "message_id": appended_user[0].id,
+                        "content": sanitize_trace_data(request.message),
+                        "content_length": len(request.message),
+                        "content_sha256": hashlib.sha256(request.message.encode("utf-8")).hexdigest(),
+                        "requested_capability": request.capability,
+                    },
                 ),
             )
             conversation = await self.repository.get_conversation(conversation.id)
@@ -560,7 +617,7 @@ class AgentRuntime:
                     None if aina.manifest.aina.id == UNIBOT_MEMORY_ID else forced_capability
                 )
             else:
-                capabilities = await self._fallback_capabilities()
+                capabilities = {selected.function_name: selected}
                 prompt = await self._system_prompt(memory_context=memory_context)
                 resolved_forced_capability = forced_capability
             return await self._run(
@@ -638,7 +695,10 @@ class AgentRuntime:
                 kind="routing.aina.requested",
                 status="started",
                 target_type="aina",
-                details={"candidate_count": len(candidates)},
+                details={
+                    "candidate_count": len(candidates),
+                    "candidates": [_capability_trace_details(item) for item in candidates.values()],
+                },
             ),
         )
         if event_sink is not None:
@@ -680,7 +740,13 @@ class AgentRuntime:
                 status="completed",
                 target_type="aina",
                 target_id=selected.capability_id if selected else None,
-                details={"matched": selected is not None},
+                details={
+                    "matched": selected is not None,
+                    "selected_function": selected.function_name if selected else None,
+                    "finish_reason": result.finish_reason,
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                },
             ),
         )
         if event_sink is not None:
@@ -782,16 +848,19 @@ class AgentRuntime:
     ) -> ChatResponse:
         capabilities = capabilities or await self._available_capabilities(conversation)
         forced_function = self._resolve_forced_capability(forced_capability, capabilities)
+        aina_graph = await self._trace_aina_graph(conversation, capabilities)
         await self.repository.add_trace_event(
             trace_id,
             TraceEvent(
                 kind="capability.discovery",
                 status="completed",
                 details={
-                    "tool_count": sum(item.kind == "tool" for item in capabilities.values()),
-                    "aina_count": sum(item.kind == "aina" for item in capabilities.values()),
-                    "builtin_count": sum(item.kind == "builtin" for item in capabilities.values()),
-                    "forced": forced_capability,
+                    "aina_graph": aina_graph,
+                    "model_scope": _model_scope_trace_details(
+                        capabilities,
+                        forced_capability=forced_capability,
+                        forced_function=forced_function,
+                    ),
                 },
             ),
         )
@@ -840,16 +909,29 @@ class AgentRuntime:
             trace_id=trace_id,
         )
         status = result.get("final_status", "failed")
+        last_assistant = next((item for item in reversed(appended) if item.role == "assistant"), None)
+        final_content = result.get("final_content", "The agent stopped without a final response.")
         await self.repository.add_trace_event(
             trace_id,
-            TraceEvent(kind="final.response", status=status, details={"iterations": result.get("iterations", 0)}),
+            TraceEvent(
+                kind="final.response",
+                status=status,
+                details={
+                    "iterations": result.get("iterations", 0),
+                    "message_id": last_assistant.id if last_assistant else None,
+                    "content": sanitize_trace_data(final_content),
+                    "content_length": len(final_content),
+                    "input_tokens": result.get("usage_input", 0),
+                    "output_tokens": result.get("usage_output", 0),
+                    "widgets": [{"id": widget.id, "kind": widget.kind} for widget in widgets],
+                },
+            ),
         )
         await self.repository.finish_trace(trace_id, status)
-        last_assistant = next((item for item in reversed(appended) if item.role == "assistant"), None)
         return ChatResponse(
             conversation_id=conversation.id,
             message_id=last_assistant.id if last_assistant else None,
-            content=result.get("final_content", "The agent stopped without a final response."),
+            content=final_content,
             status=status,
             trace_id=trace_id,
             iterations=result.get("iterations", 0),
@@ -860,6 +942,108 @@ class AgentRuntime:
             approval=result.get("approval"),
             widgets=widgets,
         )
+
+    async def _trace_aina_graph(
+        self,
+        conversation: Conversation,
+        model_capabilities: dict[str, Capability],
+    ) -> dict[str, Any]:
+        records = sorted(
+            await self.repository.list_ainas(),
+            key=lambda item: item.manifest.aina.id,
+        )
+        installations = {
+            item.aina_id: item
+            for item in await self.repository.list_installations(
+                tenant_id=conversation.tenant_id,
+                user_id=conversation.user_id,
+            )
+        }
+        available: list[dict[str, Any]] = []
+        excluded: list[dict[str, Any]] = []
+        for record in records:
+            manifest = record.manifest
+            aina_id = manifest.aina.id
+            installation = installations.get(aina_id)
+            is_available, reason, missing_permissions = _aina_availability(
+                record,
+                installation,
+                conversation,
+            )
+            if not is_available:
+                excluded.append(
+                    {
+                        "id": aina_id,
+                        "name": manifest.aina.name,
+                        "runtime": manifest.runtime.type,
+                        "reason": reason,
+                        "missing_permissions": missing_permissions,
+                    }
+                )
+                continue
+
+            owned_scope = {
+                capability.capability_id: capability
+                for capability in model_capabilities.values()
+                if capability.owner_aina_id == aina_id
+            }
+            entrypoint = next(
+                (
+                    capability
+                    for capability in model_capabilities.values()
+                    if capability.owner_aina_id == aina_id
+                    and capability.kind == "aina"
+                    and capability.capability_id == aina_id
+                ),
+                None,
+            )
+            available.append(
+                {
+                    "id": aina_id,
+                    "name": manifest.aina.name,
+                    "version": manifest.aina.version,
+                    "runtime": manifest.runtime.type,
+                    "availability": reason,
+                    "routing_candidate": manifest.runtime.type == "remote",
+                    "entrypoint": _capability_trace_details(entrypoint) if entrypoint else None,
+                    "capabilities": {
+                        "skills": [
+                            _manifest_capability_trace_details(item, "skill", owned_scope)
+                            for item in manifest.capabilities.skills
+                        ],
+                        "tools": [
+                            _manifest_capability_trace_details(item, "tool", owned_scope)
+                            for item in manifest.capabilities.tools
+                        ],
+                        "ui": [
+                            {
+                                "id": item.id,
+                                "kind": item.kind,
+                                "description": item.description,
+                            }
+                            for item in manifest.capabilities.ui
+                        ],
+                        "events": sanitize_trace_data(manifest.capabilities.events),
+                    },
+                    "main_widget": (
+                        {
+                            "id": manifest.main_widget.id,
+                            "kind": manifest.main_widget.kind,
+                        }
+                        if manifest.main_widget
+                        else None
+                    ),
+                }
+            )
+        return {
+            "available_count": len(available),
+            "counts": {
+                "builtin_aina": sum(item["runtime"] == "builtin" for item in available),
+                "remote_aina": sum(item["runtime"] == "remote" for item in available),
+            },
+            "available": available,
+            "excluded": excluded,
+        }
 
     async def _system_prompt(
         self,
@@ -903,8 +1087,10 @@ class AgentRuntime:
             (
                 "You are Unibot Assistant, the system AINA. Use list_app whenever the user asks to list or "
                 "discover applications. Use open_aina when the user asks to enter a specific AINA. If no "
-                "system skill or tool is needed, answer as an ordinary conversation. When essential details "
-                "are missing and guessing would change the result, call request_clarification to show a "
+                "system skill or tool is needed, answer as an ordinary conversation. After open_aina, only "
+                "confirm that the requested AINA is ready and let the navigation widget carry its details. "
+                "When essential details are missing and guessing would change the result, call "
+                "request_clarification to show a "
                 "host-rendered form. Prefill any values already known from the conversation. Memory tools stay "
                 "available across turns so historical tool calls remain valid. Call memory.remember only when "
                 "the user explicitly asks to remember something or clearly supplies a durable personal fact "
@@ -955,6 +1141,7 @@ class AgentRuntime:
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
             requires_confirmation=False,
             value=LIST_APP_TOOL_ID,
+            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         open_function = _function_name("builtin", OPEN_AINA_TOOL_ID)
         capabilities[open_function] = Capability(
@@ -973,6 +1160,7 @@ class AgentRuntime:
             },
             requires_confirmation=False,
             value=OPEN_AINA_TOOL_ID,
+            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         clarification_function = _function_name("builtin", REQUEST_CLARIFICATION_TOOL_ID)
         capabilities[clarification_function] = Capability(
@@ -1014,6 +1202,7 @@ class AgentRuntime:
             },
             requires_confirmation=False,
             value=REQUEST_CLARIFICATION_TOOL_ID,
+            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         return capabilities
 
@@ -1067,6 +1256,7 @@ class AgentRuntime:
                 },
                 requires_confirmation=_permissions_are_high_risk(aina.manifest.permissions),
                 value=(aina, installation),
+                owner_aina_id=installation.aina_id,
             )
         return capabilities
 
@@ -1125,6 +1315,7 @@ class AgentRuntime:
                 },
                 requires_confirmation=False,
                 value=(memory_aina, installation),
+                owner_aina_id=UNIBOT_MEMORY_ID,
             )
         }
 
@@ -1143,7 +1334,10 @@ class AgentRuntime:
         if declared_tool_ids:
             for function_name, capability in (await self._system_capabilities()).items():
                 if capability.kind == "tool" and capability.capability_id in declared_tool_ids:
-                    capabilities[function_name] = capability
+                    capabilities[function_name] = replace(
+                        capability,
+                        owner_aina_id=aina.manifest.aina.id,
+                    )
         if any(item.kind == "form" for item in aina.manifest.capabilities.ui):
             for function_name, capability in (await self._system_capabilities()).items():
                 if capability.capability_id == REQUEST_CLARIFICATION_TOOL_ID:
@@ -1178,6 +1372,7 @@ class AgentRuntime:
                 },
                 requires_confirmation=False,
                 value=REMEMBER_TOOL_ID,
+                owner_aina_id=UNIBOT_MEMORY_ID,
             ),
             recall_function: Capability(
                 kind="builtin",
@@ -1192,6 +1387,7 @@ class AgentRuntime:
                 },
                 requires_confirmation=False,
                 value=RECALL_TOOL_ID,
+                owner_aina_id=UNIBOT_MEMORY_ID,
             ),
             forget_function: Capability(
                 kind="builtin",
@@ -1207,6 +1403,7 @@ class AgentRuntime:
                 },
                 requires_confirmation=True,
                 value=FORGET_TOOL_ID,
+                owner_aina_id=UNIBOT_MEMORY_ID,
             ),
         }
 
@@ -1238,6 +1435,106 @@ class AgentRuntime:
                 status_code=403,
             )
         return matches[0].function_name
+
+
+def _capability_trace_details(capability: Capability) -> dict[str, Any]:
+    return {
+        "id": capability.capability_id,
+        "kind": capability.kind,
+        "function_name": capability.function_name,
+        "display_name": capability.display_name,
+        "requires_confirmation": capability.requires_confirmation,
+        "owner_aina_id": capability.owner_aina_id,
+    }
+
+
+def _model_scope_trace_details(
+    capabilities: dict[str, Capability],
+    *,
+    forced_capability: str | None,
+    forced_function: str | None,
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    standalone: list[dict[str, Any]] = []
+    for capability in sorted(capabilities.values(), key=lambda item: (item.kind, item.capability_id)):
+        details = _capability_trace_details(capability)
+        if capability.owner_aina_id is None:
+            standalone.append(details)
+        else:
+            grouped.setdefault(capability.owner_aina_id, []).append(details)
+    return {
+        "counts": {
+            "remote_tool": sum(item.kind == "tool" for item in capabilities.values()),
+            "remote_aina": sum(item.kind == "aina" for item in capabilities.values()),
+            "builtin_capability": sum(item.kind == "builtin" for item in capabilities.values()),
+        },
+        "forced": forced_capability,
+        "forced_function": forced_function,
+        "by_aina": [
+            {"aina_id": aina_id, "capabilities": grouped[aina_id]}
+            for aina_id in sorted(grouped)
+        ],
+        "standalone": standalone,
+    }
+
+
+def _manifest_capability_trace_details(
+    capability: AinaCapability,
+    kind: str,
+    owned_scope: dict[str, Capability],
+) -> dict[str, Any]:
+    runtime_capability = owned_scope.get(capability.id)
+    return {
+        "id": capability.id,
+        "kind": kind,
+        "name": capability.name,
+        "description": capability.description,
+        "model_exposed": runtime_capability is not None,
+        "function_name": runtime_capability.function_name if runtime_capability else None,
+    }
+
+
+def _aina_availability(
+    record: AinaRecord,
+    installation: AinaInstallation | None,
+    conversation: Conversation,
+) -> tuple[bool, str, list[str]]:
+    manifest = record.manifest
+    if record.status != "registered":
+        return False, "disabled", []
+    if manifest.runtime.type == "builtin":
+        return True, "builtin", []
+    if installation is None:
+        return False, "not_installed", []
+    if installation.status != "active":
+        return False, "installation_disabled", []
+    if conversation.enabled_ainas and manifest.aina.id not in conversation.enabled_ainas:
+        return False, "disabled_for_conversation", []
+    missing_permissions = sorted(set(manifest.permissions) - set(installation.granted_permissions))
+    if missing_permissions:
+        return False, "missing_permissions", missing_permissions
+    return True, "installed", []
+
+
+def _tool_call_trace_details(
+    call: dict[str, Any],
+    capabilities: dict[str, Capability],
+) -> dict[str, Any]:
+    function = call.get("function") or {}
+    function_name = str(function.get("name") or "")
+    capability = capabilities.get(function_name)
+    arguments_text = function.get("arguments") or "{}"
+    try:
+        arguments = json.loads(arguments_text) if isinstance(arguments_text, str) else arguments_text
+    except (TypeError, ValueError, json.JSONDecodeError):
+        arguments = arguments_text
+    return {
+        "call_id": str(call.get("id") or ""),
+        "function_name": function_name,
+        "capability_id": capability.capability_id if capability else None,
+        "kind": capability.kind if capability else None,
+        "arguments": sanitize_trace_data(arguments),
+    }
 
 
 def _function_name(kind: str, capability_id: str) -> str:

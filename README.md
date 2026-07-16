@@ -158,6 +158,24 @@ cd backend
 uv run python scripts/real_api_test.py
 ```
 
+DeepEval Agent 流程评测会调用真实后端和模型，覆盖普通直答、应用列表、打开 AINA、澄清表单、多轮上下文、
+记忆写入/召回/审批删除、远程 Tool 和远程 AINA 路由，并在完成后清理会话、记忆和临时能力。每条成功路径均验证
+Tool Correctness、Task Completion、Step Efficiency 和语义正确性。完整覆盖映射见
+[`backend/tests/TEST_MATRIX.md`](backend/tests/TEST_MATRIX.md)。先启动后端，再显式指定评测地址：
+
+```powershell
+cd backend
+$env:UV_PROJECT_ENVIRONMENT=".test-deps"
+uv sync --extra dev
+$env:UNIBOT_EVAL_BASE_URL="http://127.0.0.1:8000"
+$env:PYTHONUTF8="1"
+$env:DEEPEVAL_TELEMETRY_OPT_OUT="true"
+uv run --extra dev deepeval test run tests/evals -v
+```
+
+默认复用 `backend/.env` 中的模型作为 Judge。可通过 `DEEPEVAL_JUDGE_BASE_URL`、`DEEPEVAL_JUDGE_API_KEY`
+和 `DEEPEVAL_JUDGE_MODEL` 使用独立 Judge 模型。未设置 `UNIBOT_EVAL_BASE_URL` 时，普通 `pytest` 会跳过真实 Agent 评测。
+
 默认服务地址为 `http://127.0.0.1:8000`，可通过 `UNIBOT_API_URL` 覆盖。脚本会启动
 一个仅监听本机随机端口的临时 Tool/AINA Runtime，并使用后端已配置的真实模型。
 

@@ -251,6 +251,39 @@ def test_open_aina_returns_canvas_and_declared_main_widget() -> None:
     assert response.json()["main_widget"]["actions"][0]["kind"] == "prompt"
 
 
+def test_open_aina_builtin_returns_navigation_widget_through_agent() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_open_aina_",
+                arguments='{"aina_id":"unibot-memory"}',
+            ),
+            assistant("Unibot Memory is ready to open."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post(
+            "/chat",
+            json={
+                "message": "Open the Unibot Memory application",
+                "capability": "builtin:open_aina",
+            },
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
+
+    assert response.status_code == 200
+    widget = response.json()["widgets"][0]
+    assert widget["kind"] == "navigation"
+    assert widget["actions"][0]["kind"] == "open_aina"
+    assert widget["actions"][0]["aina_id"] == "unibot-memory"
+    assert len(llm.calls[0]["tools"]) == 1
+    assert llm.calls[0]["tools"][0]["function"]["name"].startswith("builtin_open_aina_")
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "open_aina"
+        for event in trace.json()["events"]
+    )
+
+
 def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -> None:
     invoked: list[dict[str, Any]] = []
     llm = ScriptedLLM(
@@ -289,6 +322,48 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
         event["kind"] == "routing.aina.completed" and event["target_id"] == "com.example.canvas"
         for event in trace.json()["events"]
     )
+    discovery = next(
+        event for event in trace.json()["events"] if event["kind"] == "capability.discovery"
+    )["details"]
+    remote_aina = next(
+        item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
+    )
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 2, "remote_aina": 1}
+    assert discovery["model_scope"]["counts"] == {
+        "remote_tool": 1,
+        "remote_aina": 1,
+        "builtin_capability": 0,
+    }
+    assert remote_aina["availability"] == "installed"
+    assert remote_aina["routing_candidate"] is True
+    assert remote_aina["entrypoint"]["owner_aina_id"] == "com.example.canvas"
+    linked_tool = next(item for item in remote_aina["capabilities"]["tools"] if item["id"] == "report.data")
+    assert linked_tool["model_exposed"] is True
+    scoped = next(
+        item for item in discovery["model_scope"]["by_aina"] if item["aina_id"] == "com.example.canvas"
+    )
+    assert {item["id"] for item in scoped["capabilities"]} == {"com.example.canvas", "report.data"}
+
+
+def test_trace_graph_explains_why_a_remote_aina_is_unavailable() -> None:
+    llm = ScriptedLLM([assistant("Ordinary response.")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(_remote()))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post("/ainas", json=_manifest())
+        response = client.post("/chat", json={"message": "Hello"})
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
+    excluded = next(
+        item for item in discovery["aina_graph"]["excluded"] if item["id"] == "com.example.canvas"
+    )
+    assert excluded == {
+        "id": "com.example.canvas",
+        "name": "Canvas Report AINA",
+        "runtime": "remote",
+        "reason": "not_installed",
+        "missing_permissions": [],
+    }
 
 
 def test_routing_falls_back_to_system_tools_when_no_aina_matches() -> None:
