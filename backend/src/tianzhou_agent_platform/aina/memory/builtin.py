@@ -52,16 +52,53 @@ def unibot_memory_record() -> AinaRecord:
                         id=REMEMBER_TOOL_ID,
                         name="记住信息",
                         description="保存一条长期事实、偏好、目标或指令。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "content": {
+                                    "type": "string",
+                                    "description": "需要长期保存的简洁陈述。",
+                                },
+                                "category": {
+                                    "type": "string",
+                                    "enum": ["fact", "preference", "goal", "instruction"],
+                                    "description": "记忆分类。",
+                                },
+                            },
+                            "required": ["content", "category"],
+                            "additionalProperties": False,
+                        },
                     ),
                     AinaCapability(
                         id=RECALL_TOOL_ID,
                         name="召回记忆",
                         description="检索与查询相关的记忆。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "用于匹配长期记忆的查询；留空时返回最近记忆。",
+                                }
+                            },
+                            "additionalProperties": False,
+                        },
                     ),
                     AinaCapability(
                         id=FORGET_TOOL_ID,
                         name="删除记忆",
                         description="根据准确的记忆 ID 删除一条记忆。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "memory_id": {
+                                    "type": "string",
+                                    "description": "需要永久删除的准确记忆 ID。",
+                                }
+                            },
+                            "required": ["memory_id"],
+                            "additionalProperties": False,
+                        },
                     ),
                 ],
             ),

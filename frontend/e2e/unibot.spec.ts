@@ -5,6 +5,7 @@ const NOW = "2026-07-12T04:00:00.000Z";
 type JsonObject = Record<string, unknown>;
 
 interface MockState {
+  ainas: JsonObject[];
   conversations: JsonObject[];
   approvals: JsonObject[];
   tools: JsonObject[];
@@ -41,6 +42,7 @@ function json(route: Route, body: unknown, status = 200) {
 
 async function installMockApi(page: Page, initial: Partial<MockState> = {}): Promise<MockState> {
   const state: MockState = {
+    ainas: initial.ainas ?? [],
     conversations: initial.conversations ?? [],
     approvals: initial.approvals ?? [],
     tools: initial.tools ?? [],
@@ -179,7 +181,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         },
       });
     }
-    if (method === "GET" && path === "/ainas") return json(route, []);
+    if (method === "GET" && path === "/ainas") return json(route, state.ainas);
     if (method === "GET" && path === "/installations") return json(route, []);
     if (method === "GET" && path === "/skills") return json(route, []);
     if (method === "GET" && path === "/tools") return json(route, state.tools);
@@ -202,6 +204,20 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "GET" && path === "/memories") return json(route, { items: [], total: 0 });
     if (method === "GET" && path === "/memories/stats") {
       return json(route, { total: 0, fact: 0, preference: 0, goal: 0, instruction: 0 });
+    }
+    if (method === "GET" && /^\/documents\/[^/]+\/sections$/.test(path)) {
+      const heading = url.searchParams.get("heading") ?? "未命名章节";
+      return json(route, {
+        name: decodeURIComponent(path.split("/")[2]),
+        heading,
+        level: 2,
+        occurrence: Number(url.searchParams.get("occurrence") ?? 1),
+        revision: "revision-e2e",
+        content:
+          heading === "进阶"
+            ? `## ${heading}\n\n| 用户角色 | 核心诉求 |\n| --- | --- |\n| 平台管理员 | 系统监控 |\n| 开发者 | Agent 调试 |\n| 业务用户 | 流畅交互 |`
+            : `## ${heading}\n\n这是${heading}的正文内容。`,
+      });
     }
     if (method === "GET" && path === "/model-settings") {
       const activeProvider = state.modelProviders.find((provider) =>
@@ -300,6 +316,82 @@ test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
 
   await expect(page.getByText("工具注册成功。", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "浏览器加法工具" })).toBeVisible();
+});
+
+test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page }) => {
+  await installMockApi(page, {
+    ainas: [
+      {
+        manifest: {
+          protocol_version: "1.0",
+          aina: {
+            id: "unibot-documents",
+            name: "文档编辑器",
+            version: "1.0.0",
+            description: "管理存储在 NAS 中的 Markdown 文档。",
+            publisher: { id: "unibot", name: "Unibot" },
+          },
+          runtime: { type: "builtin" },
+          capabilities: {
+            skills: [
+              {
+                id: "markdown-document-management",
+                name: "Markdown 文档管理",
+                description: "维护用户自己的 Markdown 文档。",
+                input_schema: { type: "object", properties: {}, additionalProperties: false },
+                instructions: "局部修改时先读取章节，再只更新目标章节。",
+              },
+            ],
+            tools: [
+              {
+                id: "document.read_section",
+                name: "读取文档章节",
+                description: "只读取指定章节，不读取全文。",
+                input_schema: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string", description: "Markdown 文档名称。" },
+                    heading: { type: "string", description: "准确的章节标题。" },
+                  },
+                  required: ["name", "heading"],
+                  additionalProperties: false,
+                },
+                instructions: null,
+              },
+            ],
+            ui: [
+              {
+                id: "document-editor",
+                kind: "document",
+                description: "平台渲染的 Markdown 编辑器。",
+                instructions: null,
+              },
+            ],
+            events: [],
+          },
+          main_widget: null,
+          permissions: [],
+          authentication: { type: "none", header_name: "Authorization" },
+          health_check: null,
+        },
+        status: "registered",
+        registered_at: NOW,
+        last_health: { status: "healthy" },
+      },
+    ],
+  });
+  await page.goto("/apps");
+
+  await page.getByRole("button", { name: "查看能力", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "文档编辑器 能力详情" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("局部修改时先读取章节，再只更新目标章节。", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("只读取指定章节，不读取全文。", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("cell", { name: "name", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("cell", { name: "heading", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("cell", { name: "必填", exact: true })).toHaveCount(2);
+  await dialog.getByRole("button", { name: "关闭能力详情" }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
@@ -441,4 +533,51 @@ test("FE-E2E-007 拒绝高风险审批并恢复空闲状态", async ({ page }) =
   await expect(page.getByRole("region", { name: "授权确认" })).toBeHidden();
   await expect(page.locator("main").getByText("The requested operation was cancelled.", { exact: true })).toBeVisible();
   expect(state.approvals[0].status).toBe("denied");
+});
+
+test("FE-E2E-008 在章节 Widget 中选择并查看文档内容", async ({ page }) => {
+  const outlineWidget = {
+    id: "document-outline-e2e",
+    kind: "document_outline",
+    title: "使用指南.md",
+    description: "选择章节即可查看对应内容。",
+    markdown: null,
+    fields: [],
+    actions: [],
+    apps: [],
+    document_name: "使用指南.md",
+    sections: [
+      { index: 1, heading: "使用指南", level: 1, occurrence: 1, line_start: 1, line_end: 12 },
+      { index: 2, heading: "入门", level: 2, occurrence: 1, line_start: 3, line_end: 7 },
+      { index: 3, heading: "进阶", level: 2, occurrence: 1, line_start: 8, line_end: 12 },
+    ],
+  };
+  await installMockApi(page, {
+    conversations: [
+      conversation({
+        messages: [
+          {
+            id: "msg-outline",
+            role: "assistant",
+            content: "请选择要查看的章节。",
+            content_type: "text",
+            widgets: [outlineWidget],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+  await page.goto("/chat/conv-e2e-1");
+
+  const widget = page.getByRole("region", { name: "文档章节 使用指南.md" });
+  await expect(widget.getByRole("heading", { name: "入门", exact: true })).toBeVisible();
+  await expect(widget.getByText("这是入门的正文内容。", { exact: true })).toBeVisible();
+
+  await widget.getByRole("button", { name: "进阶", exact: true }).click();
+  await expect(widget.getByRole("heading", { name: "进阶", exact: true })).toBeVisible();
+  await expect(widget.getByRole("columnheader", { name: "用户角色", exact: true })).toBeVisible();
+  await expect(widget.getByRole("cell", { name: "系统监控", exact: true })).toHaveCSS("border-bottom-width", "1px");
+  await expect(widget.getByRole("cell", { name: "Agent 调试", exact: true })).toHaveCSS("border-bottom-width", "1px");
+  await expect(widget.getByRole("cell", { name: "流畅交互", exact: true })).toHaveCSS("border-bottom-width", "0px");
 });

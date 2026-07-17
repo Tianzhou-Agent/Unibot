@@ -131,6 +131,30 @@ def test_aina_protocol_version_is_rejected_with_standard_error() -> None:
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
 
+def test_builtin_aina_manifests_expose_skill_prompts_and_tool_inputs() -> None:
+    with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+        records = {
+            item["manifest"]["aina"]["id"]: item["manifest"]
+            for item in client.get("/ainas").json()
+        }
+
+    memory = records["unibot-memory"]
+    assert memory["capabilities"]["skills"][0]["instructions"]
+    memory_tools = {item["id"]: item for item in memory["capabilities"]["tools"]}
+    assert set(memory_tools["memory.remember"]["input_schema"]["properties"]) == {
+        "content",
+        "category",
+    }
+    assert memory_tools["memory.forget"]["input_schema"]["required"] == ["memory_id"]
+
+    assistant = records["unibot-assistant"]
+    assistant_tools = {item["id"]: item for item in assistant["capabilities"]["tools"]}
+    assert assistant_tools["open_aina"]["input_schema"]["required"] == ["aina_id"]
+    clarification = assistant_tools["request_clarification"]["input_schema"]
+    assert clarification["required"] == ["title", "fields"]
+    assert clarification["properties"]["fields"]["items"]["required"] == ["id", "label"]
+
+
 async def test_builtin_aina_definition_is_refreshed_without_changing_registration_time() -> None:
     repository = InMemoryRepository()
     stale = unibot_assistant_record()

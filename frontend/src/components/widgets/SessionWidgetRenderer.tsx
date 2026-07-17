@@ -3,19 +3,29 @@ import { AppWindow, ArrowRight, Boxes, Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
 import type { WidgetActionDefinition, WidgetDefinition } from "@/types";
+import { DocumentOutlineWidget } from "./DocumentOutlineWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
 
-export function SessionWidgetRenderer({
-  widget,
-  disabled = false,
-  onOpenAina,
-  onPrompt,
-}: {
+interface SessionWidgetRendererProps {
   widget: WidgetDefinition;
   disabled?: boolean;
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
-}) {
+}
+
+export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
+  if (props.widget.kind === "document_outline") {
+    return <DocumentOutlineWidget widget={props.widget} />;
+  }
+  return <DeclarativeSessionWidgetRenderer {...props} />;
+}
+
+function DeclarativeSessionWidgetRenderer({
+  widget,
+  disabled = false,
+  onOpenAina,
+  onPrompt,
+}: SessionWidgetRendererProps) {
   const initialValues = useMemo(
     () => Object.fromEntries(widget.fields.map((field) => [field.id, field.value ?? ""])),
     [widget.fields],

@@ -253,15 +253,26 @@ export interface WidgetAppDefinition {
   has_main_widget: boolean;
 }
 
+export interface WidgetDocumentSectionDefinition {
+  index: number;
+  heading: string;
+  level: number;
+  occurrence: number;
+  line_start: number;
+  line_end: number;
+}
+
 export interface WidgetDefinition {
   id: string;
-  kind: "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document";
+  kind: "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline";
   title: string;
   description: string;
   markdown?: string | null;
   fields: WidgetFieldDefinition[];
   actions: WidgetActionDefinition[];
   apps: WidgetAppDefinition[];
+  document_name?: string | null;
+  sections?: WidgetDocumentSectionDefinition[];
 }
 
 export interface AinaManifest {
@@ -357,6 +368,15 @@ export interface DocumentSummary {
 }
 
 export interface DocumentRecord extends DocumentSummary {
+  content: string;
+}
+
+export interface DocumentSectionRecord {
+  name: string;
+  heading: string;
+  level: number;
+  occurrence: number;
+  revision: string;
   content: string;
 }
 
