@@ -11,12 +11,14 @@ from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import conflict
+from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
 from tianzhou_agent_platform.core.repository import (
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,
     CONVERSATIONS_RESOURCE,
     INSTALLATIONS_RESOURCE,
     MEMORIES_RESOURCE,
+    MODEL_PROVIDERS_RESOURCE,
     SKILLS_RESOURCE,
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
@@ -49,6 +51,7 @@ repository_tables = {
         INSTALLATIONS_RESOURCE,
         TRACES_RESOURCE,
         APPROVALS_RESOURCE,
+        MODEL_PROVIDERS_RESOURCE,
     )
 }
 
@@ -70,6 +73,7 @@ class PersistentRepository(InMemoryRepository):
         installations = await self._load_models(INSTALLATIONS_RESOURCE, AinaInstallation)
         traces = await self._load_models(TRACES_RESOURCE, TraceRecord)
         approvals = await self._load_models(APPROVALS_RESOURCE, ApprovalRecord)
+        model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -82,6 +86,7 @@ class PersistentRepository(InMemoryRepository):
             }
             self._traces = {item.trace_id: item for item in traces}
             self._approvals = {item.id: item for item in approvals}
+            self._model_providers = {item.id: item for item in model_providers}
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
         acquired = await self.stores.redis.set_if_absent(

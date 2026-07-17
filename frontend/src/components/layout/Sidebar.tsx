@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, LayoutGrid, MessageSquarePlus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
+import { Bug, Check, LayoutGrid, MessageSquarePlus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
@@ -257,9 +257,10 @@ function SkeletonList() {
 
 function FooterUtility() {
   return (
-    <div className="border-t border-sidebar-border p-2 md:p-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-      <FooterButton to="/apps" label="能力中心" icon={<LayoutGrid className="w-4 h-4" />} />
-      <FooterButton to="/settings" label="运行中心" icon={<SettingsIcon className="w-4 h-4" />} />
+    <div className="grid grid-cols-1 gap-2 border-t border-sidebar-border p-2 md:grid-cols-3 md:p-3">
+      <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
+      <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
+      <FooterButton to="/debug" label="Debug" icon={<Bug className="h-4 w-4" />} />
     </div>
   );
 }

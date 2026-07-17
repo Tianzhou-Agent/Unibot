@@ -9,6 +9,7 @@ import httpx
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.model_settings import current_model_runtime
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -49,11 +50,19 @@ class OpenAICompatibleClient:
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None,
         stream: bool,
-    ) -> tuple[str, dict[str, str], dict[str, Any]]:
-        url = self.settings.chat_completions_url
-        api_key = self.settings.llm_api_key
-        model = self.settings.llm_model
-        if not url or api_key is None or not model:
+    ) -> tuple[str, dict[str, str], dict[str, Any], float]:
+        runtime_model = current_model_runtime()
+        url = runtime_model.chat_completions_url if runtime_model else self.settings.chat_completions_url
+        api_key = (
+            runtime_model.api_key
+            if runtime_model
+            else self.settings.llm_api_key.get_secret_value()
+            if self.settings.llm_api_key is not None
+            else ""
+        )
+        model = runtime_model.model if runtime_model else self.settings.llm_model
+        timeout_seconds = runtime_model.timeout_seconds if runtime_model else self.settings.llm_timeout_seconds
+        if not url or not model:
             raise PlatformError(
                 code="INVALID_REQUEST",
                 message="The LLM provider is not configured",
@@ -61,16 +70,15 @@ class OpenAICompatibleClient:
                 source="model",
                 user_message="The language model is not configured for this service.",
             )
-        headers = {
-            "Authorization": f"Bearer {api_key.get_secret_value()}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         body: dict[str, Any] = {"model": model, "messages": messages, "stream": stream}
         if tools:
             body["tools"] = tools
             if tool_choice is not None:
                 body["tool_choice"] = tool_choice
-        return url, headers, body
+        return url, headers, body, timeout_seconds
 
     async def complete(
         self,
@@ -92,7 +100,7 @@ class OpenAICompatibleClient:
                 event_sink=event_sink,
             )
 
-        url, headers, body = self._request_parts(
+        url, headers, body, timeout_seconds = self._request_parts(
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -103,7 +111,7 @@ class OpenAICompatibleClient:
                 url,
                 headers=headers,
                 json=body,
-                timeout=self.settings.llm_timeout_seconds,
+                timeout=timeout_seconds,
             )
         except httpx.TimeoutException as exc:
             raise PlatformError(
@@ -133,7 +141,7 @@ class OpenAICompatibleClient:
                     url,
                     headers=headers,
                     json=fallback_body,
-                    timeout=self.settings.llm_timeout_seconds,
+                    timeout=timeout_seconds,
                 )
             except httpx.TimeoutException as exc:
                 raise PlatformError(
@@ -187,7 +195,7 @@ class OpenAICompatibleClient:
         tool_choice: dict[str, Any] | str | None,
         event_sink: EventSink,
     ) -> LLMResult:
-        url, headers, body = self._request_parts(
+        url, headers, body, timeout_seconds = self._request_parts(
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -204,7 +212,7 @@ class OpenAICompatibleClient:
                 url,
                 headers=headers,
                 json=body,
-                timeout=self.settings.llm_timeout_seconds,
+                timeout=timeout_seconds,
             ) as response:
                 if response.is_error:
                     await response.aread()

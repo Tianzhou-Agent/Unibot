@@ -6,10 +6,15 @@ from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.config import AgentSettings
 
 
 def repository(request: Request) -> InMemoryRepository:
     return cast(InMemoryRepository, request.app.state.repository)
+
+
+def settings(request: Request) -> AgentSettings:
+    return cast(AgentSettings, request.app.state.settings)
 
 
 def runtime(request: Request) -> AgentRuntime:

@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import ChatModePage from "@/pages/ChatModePage";
 import CanvasModePage from "@/pages/CanvasModePage";
 import SettingsPage from "@/pages/SettingsPage";
+import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
         <Route path="/chat/:conversationId" element={<ChatModePage />} />
         <Route path="/canvas/:ainaId" element={<CanvasModePage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/debug" element={<DebugPage />} />
         <Route path="/apps" element={<AllAppsPage />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>
