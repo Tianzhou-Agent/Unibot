@@ -48,13 +48,19 @@ def call_first_tool(
     arguments: str = "{}",
     call_id: str = "call_1",
     prefix: str | None = None,
+    description_contains: str | None = None,
 ) -> Callable[..., LLMResult]:
     def response(*, tools: list[dict[str, Any]], **_: Any) -> LLMResult:
         candidates = [
-            item["function"]["name"] for item in tools if prefix is None or item["function"]["name"].startswith(prefix)
+            item["function"]["name"]
+            for item in tools
+            if (prefix is None or item["function"]["name"].startswith(prefix))
+            and (description_contains is None or description_contains in item["function"].get("description", ""))
         ]
         if not candidates:
-            raise AssertionError(f"No advertised tool matched prefix {prefix!r}")
+            raise AssertionError(
+                f"No advertised tool matched prefix {prefix!r} and description {description_contains!r}"
+            )
         return LLMResult(
             message={
                 "role": "assistant",

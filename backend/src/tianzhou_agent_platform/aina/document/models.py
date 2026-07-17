@@ -33,6 +33,42 @@ class DocumentRecord(DocumentSummary):
     content: str
 
 
+class DocumentHeading(StrictModel):
+    index: int
+    heading: str
+    level: int
+    occurrence: int
+    line_start: int
+    line_end: int
+
+
+class DocumentOutline(StrictModel):
+    name: str
+    size_bytes: int
+    revision: str
+    headings: list[DocumentHeading]
+
+
+class DocumentSection(StrictModel):
+    name: str
+    heading: str
+    level: int
+    occurrence: int
+    revision: str
+    content: str
+
+
+class DocumentSectionUpdateResult(StrictModel):
+    name: str
+    previous_heading: str
+    heading: str
+    level: int
+    occurrence: int
+    revision: str
+    size_bytes: int
+    modified_at: datetime | None = None
+
+
 class DocumentListResponse(StrictModel):
     items: list[DocumentSummary]
     total: int
