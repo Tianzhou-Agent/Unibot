@@ -11,6 +11,7 @@ import {
   Clock3,
   Code2,
   Database,
+  MessageSquareText,
   RefreshCw,
   Route,
   ShieldCheck,
@@ -22,7 +23,7 @@ import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
-import type { AdminSummary, TraceEvent, TraceRecord } from "@/types";
+import type { AdminSummary, ConversationRecord, TraceEvent, TraceRecord } from "@/types";
 
 export default function SettingsPage() {
   const { debugMode, setDebugMode } = useDebugMode();
@@ -31,21 +32,25 @@ export default function SettingsPage() {
   const [health, setHealth] = useState<"checking" | "ok" | "error">("checking");
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
+  const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<string | null>(requestedTrace);
+  const [expandedTraceGroups, setExpandedTraceGroups] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [healthData, summaryData, traceData] = await Promise.all([
+      const [healthData, summaryData, traceData, conversationData] = await Promise.all([
         api.get<{ status: string }>("/health"),
         api.get<AdminSummary>("/admin/summary"),
         api.get<TraceRecord[]>("/traces?user_id=anonymous&tenant_id=default"),
+        api.get<ConversationRecord[]>("/conversations?user_id=anonymous&tenant_id=default"),
       ]);
       setHealth(healthData.status === "ok" ? "ok" : "error");
       setSummary(summaryData);
       setTraces(traceData);
+      setConversations(conversationData);
       setError(null);
       if (requestedTrace && traceData.some((trace) => trace.trace_id === requestedTrace)) {
         setSelectedTrace(requestedTrace);
@@ -66,6 +71,30 @@ export default function SettingsPage() {
     () => traces.find((trace) => trace.trace_id === selectedTrace) ?? null,
     [selectedTrace, traces],
   );
+  const conversationsById = useMemo(
+    () => new Map(conversations.map((conversation) => [conversation.id, conversation])),
+    [conversations],
+  );
+  const traceGroups = useMemo(
+    () => groupTracesByConversation(traces, conversationsById),
+    [conversationsById, traces],
+  );
+
+  useEffect(() => {
+    const selectedRecord = traces.find((trace) => trace.trace_id === selectedTrace);
+    const groupKey = selectedRecord ? traceGroupKey(selectedRecord.conversation_id) : traceGroups[0]?.key;
+    if (!groupKey) return;
+    setExpandedTraceGroups((current) => {
+      if (current.has(groupKey) || (!selectedRecord && current.size > 0)) return current;
+      const next = new Set(current);
+      next.add(groupKey);
+      return next;
+    });
+  }, [selectedTrace, traceGroups, traces]);
+
+  const selectedConversationTitle = selected?.conversation_id
+    ? conversationsById.get(selected.conversation_id)?.title ?? "已删除或不可用的会话"
+    : "未关联会话";
 
   return (
     <div className="h-full flex flex-col bg-app-bg">
@@ -114,18 +143,25 @@ export default function SettingsPage() {
               <div className="h-13 px-4 py-3 border-b border-line flex items-center gap-2">
                 <Activity className="w-4 h-4 text-accent" />
                 <h2 className="text-[13px] font-extrabold text-ink">调用记录</h2>
-                <span className="ml-auto text-[10.5px] text-ink-muted">最近 {traces.length} 条</span>
+                <span className="ml-auto text-[10.5px] text-ink-muted">{traceGroups.length} 个会话 · {traces.length} 条 Trace</span>
               </div>
-              <div className="max-h-[280px] xl:max-h-[620px] overflow-y-auto divide-y divide-line">
+              <div className="max-h-[280px] xl:max-h-[620px] overflow-y-auto">
                 {traces.length === 0 ? (
                   <div className="py-20 text-center text-[12px] text-ink-muted">完成一次对话后，调用记录会显示在这里。</div>
                 ) : (
-                  traces.map((trace) => (
-                    <TraceRow
-                      key={trace.trace_id}
-                      trace={trace}
-                      active={trace.trace_id === selectedTrace}
-                      onClick={() => setSelectedTrace(trace.trace_id)}
+                  traceGroups.map((group) => (
+                    <ConversationTraceGroup
+                      key={group.key}
+                      group={group}
+                      expanded={expandedTraceGroups.has(group.key)}
+                      selectedTrace={selectedTrace}
+                      onToggle={() => setExpandedTraceGroups((current) => {
+                        const next = new Set(current);
+                        if (next.has(group.key)) next.delete(group.key);
+                        else next.add(group.key);
+                        return next;
+                      })}
+                      onSelectTrace={setSelectedTrace}
                     />
                   ))
                 )}
@@ -133,7 +169,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="rounded-xl border border-line bg-white shadow-card overflow-hidden">
-              {selected ? <TraceDetail trace={selected} /> : <NoTraceSelected />}
+              {selected ? <TraceDetail trace={selected} conversationTitle={selectedConversationTitle} /> : <NoTraceSelected />}
             </div>
           </section> : (
             <section className="rounded-xl border border-line bg-white px-6 py-16 text-center shadow-card" aria-label="调试模式说明">
@@ -179,17 +215,86 @@ function SummaryCard({
   );
 }
 
+interface ConversationTraceGroupData {
+  key: string;
+  conversationId: string | null;
+  title: string;
+  traces: TraceRecord[];
+}
+
+function ConversationTraceGroup({
+  group,
+  expanded,
+  selectedTrace,
+  onToggle,
+  onSelectTrace,
+}: {
+  group: ConversationTraceGroupData;
+  expanded: boolean;
+  selectedTrace: string | null;
+  onToggle: () => void;
+  onSelectTrace: (traceId: string) => void;
+}) {
+  const containsSelected = group.traces.some((trace) => trace.trace_id === selectedTrace);
+  return (
+    <section className="border-b border-line last:border-b-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className={classNames(
+          "flex w-full items-start gap-2.5 px-4 py-3 text-left transition-colors hover:bg-app-soft",
+          containsSelected && "bg-accent-soft/60",
+        )}
+      >
+        <span className={classNames(
+          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
+          containsSelected ? "bg-white text-accent shadow-sm" : "bg-app-soft text-ink-muted",
+        )}>
+          <MessageSquareText className="h-3.5 w-3.5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <strong className="min-w-0 flex-1 truncate text-[11.5px] text-ink">{group.title}</strong>
+            <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[9px] font-bold text-ink-muted shadow-sm">
+              {group.traces.length} Trace
+            </span>
+          </span>
+          <span className="mt-1 block truncate font-mono text-[9.5px] text-ink-subtle">
+            {group.conversationId ?? "无 Conversation ID"}
+          </span>
+        </span>
+        {expanded ? <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-accent" /> : <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-ink-subtle" />}
+      </button>
+      {expanded ? (
+        <div className="border-t border-line bg-white">
+          {group.traces.map((trace) => (
+            <TraceRow
+              key={trace.trace_id}
+              trace={trace}
+              active={trace.trace_id === selectedTrace}
+              onClick={() => onSelectTrace(trace.trace_id)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={classNames("w-full px-4 py-3 text-left transition-colors", active ? "bg-accent-soft" : "hover:bg-app-soft")}
+      className={classNames(
+        "w-full border-l-2 px-4 py-2.5 pl-[50px] text-left transition-colors",
+        active ? "border-accent bg-accent-soft" : "border-transparent hover:bg-app-soft",
+      )}
     >
       <div className="flex items-center gap-2">
         <TraceStatus status={trace.status} />
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-ink">{trace.trace_id}</span>
-        {active ? <ChevronDown className="w-3.5 h-3.5 text-accent" /> : <ChevronRight className="w-3.5 h-3.5 text-ink-subtle" />}
       </div>
       <div className="mt-1.5 flex items-center gap-2 text-[10px] text-ink-muted">
         <span>{trace.events.length} 个事件</span>
@@ -200,7 +305,7 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
   );
 }
 
-function TraceDetail({ trace }: { trace: TraceRecord }) {
+function TraceDetail({ trace, conversationTitle }: { trace: TraceRecord; conversationTitle: string }) {
   return (
     <div className="h-full flex flex-col">
       <div className="px-4 py-3 border-b border-line bg-app-soft">
@@ -209,7 +314,8 @@ function TraceDetail({ trace }: { trace: TraceRecord }) {
           <h2 className="font-mono text-[11px] font-bold text-ink break-all">{trace.trace_id}</h2>
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-ink-muted">
-          <span>会话：{trace.conversation_id ?? "—"}</span>
+          <span>会话：{conversationTitle}</span>
+          <span className="font-mono">{trace.conversation_id ?? "—"}</span>
           <span>主体：{trace.tenant_id}/{trace.user_id}</span>
           <span>开始：{new Date(trace.created_at).toLocaleString("zh-CN")}</span>
         </div>
@@ -249,6 +355,39 @@ function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
       </div>
     </div>
   );
+}
+
+function traceGroupKey(conversationId: string | null | undefined): string {
+  return conversationId ?? "__unassigned__";
+}
+
+function groupTracesByConversation(
+  traces: TraceRecord[],
+  conversationsById: Map<string, ConversationRecord>,
+): ConversationTraceGroupData[] {
+  const groups = new Map<string, ConversationTraceGroupData>();
+  for (const trace of traces) {
+    const conversationId = trace.conversation_id ?? null;
+    const key = traceGroupKey(conversationId);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.traces.push(trace);
+      continue;
+    }
+    const conversation = conversationId ? conversationsById.get(conversationId) : null;
+    groups.set(key, {
+      key,
+      conversationId,
+      title: conversation?.title.trim() || (conversationId ? "已删除或不可用的会话" : "未关联会话"),
+      traces: [trace],
+    });
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      traces: [...group.traces].sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    }))
+    .sort((left, right) => right.traces[0].created_at.localeCompare(left.traces[0].created_at));
 }
 
 interface DiscoveryCapability {
