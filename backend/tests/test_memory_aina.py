@@ -88,7 +88,7 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
     assert memories.json()["items"][0]["content"] == "The user likes blue"
     assert memories.json()["items"][0]["source_conversation_id"] == response.json()["conversation_id"]
     assert all(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[0]["tools"])
-    assert "Durable memory management" in llm.calls[0]["messages"][0]["content"]
+    assert "持久记忆管理" in llm.calls[0]["messages"][0]["content"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
 
 

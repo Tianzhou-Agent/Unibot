@@ -30,9 +30,9 @@ def unibot_assistant_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_ASSISTANT_ID,
-                name="Unibot Assistant",
+                name="Unibot 助手",
                 version="1.0.0",
-                description="System AINA that discovers applications, routes requests, and opens an AINA canvas.",
+                description="负责发现应用、路由请求并打开 AINA 画布的系统应用。",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -40,25 +40,25 @@ def unibot_assistant_record() -> AinaRecord:
                 tools=[
                     AinaCapability(
                         id=LIST_APP_TOOL_ID,
-                        name="List applications",
-                        description="List every AINA application available to the current user in a widget.",
+                        name="列出应用",
+                        description="以组件形式列出当前用户可用的全部 AINA 应用。",
                     ),
                     AinaCapability(
                         id=OPEN_AINA_TOOL_ID,
-                        name="Open AINA",
-                        description="Open a selected AINA and return its canvas route and main widget.",
+                        name="打开 AINA",
+                        description="打开选定的 AINA，并返回其画布路由和主组件。",
                     ),
                     AinaCapability(
                         id=REQUEST_CLARIFICATION_TOOL_ID,
-                        name="Request clarification",
-                        description="Show a host-rendered form when essential information is missing.",
+                        name="请求补充信息",
+                        description="缺少必要信息时显示由平台渲染的表单。",
                     ),
                 ],
                 ui=[
                     AinaUiCapability(
                         id="clarification-form",
                         kind="form",
-                        description="A host-rendered form for collecting missing details.",
+                        description="由平台渲染、用于收集缺失信息的表单。",
                         instructions=(
                             "Declare fields, labels, required flags, and optional prefilled values. The host renders "
                             "and submits the form without AINA-specific frontend code."
@@ -69,17 +69,8 @@ def unibot_assistant_record() -> AinaRecord:
             main_widget=WidgetDefinition(
                 id="unibot-assistant-main",
                 kind="panel",
-                title="Unibot Assistant",
-                description="发现并调度已安装的 AINA 应用。",
-                markdown="## 应用调度中心\n\n你可以直接描述需求，或让助手列出当前可用的 AINA。",
-                actions=[
-                    WidgetAction(
-                        id="list-apps",
-                        label="列出应用",
-                        kind="prompt",
-                        prompt="列出我可以使用的 AINA 应用",
-                    )
-                ],
+                title="Unibot 助手",
+                description="发现并打开当前可用的 AINA 应用。",
             ),
             authentication=Authentication(type="none"),
         ),
@@ -93,6 +84,38 @@ async def list_app_widget(
     user_id: str,
     tenant_id: str,
 ) -> WidgetDefinition:
+    apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
+    return WidgetDefinition(
+        id="unibot-app-list",
+        kind="app_list",
+        title="AINA 应用",
+        description=f"当前共有 {len(apps)} 个可用应用。",
+        apps=apps,
+    )
+
+
+async def assistant_main_widget(
+    repository: InMemoryRepository,
+    *,
+    user_id: str,
+    tenant_id: str,
+) -> WidgetDefinition:
+    apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
+    return WidgetDefinition(
+        id="unibot-assistant-main",
+        kind="panel",
+        title="Unibot 助手",
+        description="发现并打开当前可用的 AINA 应用。",
+        apps=apps,
+    )
+
+
+async def _available_apps(
+    repository: InMemoryRepository,
+    *,
+    user_id: str,
+    tenant_id: str,
+) -> list[WidgetApp]:
     from tianzhou_agent_platform.aina.document.builtin import UNIBOT_DOCUMENTS_ID
     from tianzhou_agent_platform.aina.memory.builtin import UNIBOT_MEMORY_ID
 
@@ -126,13 +149,7 @@ async def list_app_widget(
             )
         )
     apps.sort(key=lambda item: (item.aina_id not in builtin_aina_ids, item.name.casefold()))
-    return WidgetDefinition(
-        id="unibot-app-list",
-        kind="app_list",
-        title="AINA 应用",
-        description=f"当前共有 {len(apps)} 个可用应用。点击任意应用进入 Canvas。",
-        apps=apps,
-    )
+    return apps
 
 
 async def open_aina(
@@ -164,7 +181,7 @@ async def open_aina(
 
     main_widget = record.manifest.main_widget
     if aina_id == UNIBOT_ASSISTANT_ID:
-        main_widget = await list_app_widget(repository, user_id=user_id, tenant_id=tenant_id)
+        main_widget = await assistant_main_widget(repository, user_id=user_id, tenant_id=tenant_id)
     if main_widget is None:
         main_widget = _default_main_widget(record)
     query = urlencode({"conversation": conversation_id}) if conversation_id else ""

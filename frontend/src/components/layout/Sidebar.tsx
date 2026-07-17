@@ -178,7 +178,7 @@ function Brand() {
       </div>
       <div className="hidden md:block">
         <div className="text-ink-inverse text-[15px] font-extrabold tracking-tight">Unibot</div>
-        <div className="text-[10px] text-ink-onDarkMuted">Agent Runtime</div>
+        <div className="text-[10px] text-ink-onDarkMuted">智能体运行平台</div>
       </div>
     </NavLink>
   );
@@ -200,6 +200,7 @@ function ConversationLink({
   onConfirmDelete: () => void;
 }) {
   const preview = conversation.messages.at(-1)?.content || "等待第一条消息";
+  const title = conversation.title === "New conversation" ? "新对话" : conversation.title;
   return (
     <div className="relative">
       <NavLink
@@ -211,7 +212,7 @@ function ConversationLink({
       >
         {({ isActive }) => (
           <>
-            <div className="truncate text-[12.5px] font-semibold text-ink-onDark">{conversation.title}</div>
+            <div className="truncate text-[12.5px] font-semibold text-ink-onDark">{title}</div>
             <div className={classNames("mt-1 truncate text-[10.5px]", isActive ? "text-white/75" : "text-ink-onDarkMuted/70")}>{preview}</div>
             <div className="mt-1.5 flex items-center gap-1.5">
               <span className={classNames("h-1.5 w-1.5 rounded-full", conversation.run_status === "running" ? "animate-pulse bg-warning" : isActive ? "bg-white" : "bg-success")} />
@@ -225,7 +226,7 @@ function ConversationLink({
       <button
         type="button"
         onClick={onRequestDelete}
-        aria-label={`删除对话 ${conversation.title}`}
+        aria-label={`删除对话 ${title}`}
         className="absolute right-2 top-2 rounded p-1 text-ink-onDarkMuted hover:bg-white/10 hover:text-red-200"
       >
         <Trash2 className="h-3.5 w-3.5" />
@@ -234,7 +235,7 @@ function ConversationLink({
         <div className="mt-1 flex items-center gap-1 rounded-lg border border-danger/30 bg-danger/10 px-2 py-1.5 text-[10px] text-red-100">
           <span>确认删除？</span><span className="flex-1" />
           <button type="button" onClick={onCancelDelete} disabled={deleting} aria-label="取消删除"><X className="h-3.5 w-3.5" /></button>
-          <button type="button" onClick={onConfirmDelete} disabled={deleting} aria-label={`确认删除 ${conversation.title}`}><Check className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={onConfirmDelete} disabled={deleting} aria-label={`确认删除 ${title}`}><Check className="h-3.5 w-3.5" /></button>
         </div>
       ) : null}
     </div>

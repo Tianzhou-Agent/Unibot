@@ -49,12 +49,17 @@ async def ensure_unibot_assistant(
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
     for aina_id, factory in builtins:
+        definition = factory()
         try:
-            await repository.get_aina(aina_id)
+            current = await repository.get_aina(aina_id)
         except PlatformError as exc:
             if exc.code != "RESOURCE_NOT_FOUND":
                 raise
-            await repository.register_aina(factory())
+            await repository.register_aina(definition)
+        else:
+            await repository.upsert_aina(
+                definition.model_copy(update={"registered_at": current.registered_at}, deep=True)
+            )
 
 
 async def invoke_builtin(

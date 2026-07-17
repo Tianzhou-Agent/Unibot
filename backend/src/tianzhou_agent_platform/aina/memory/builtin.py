@@ -28,13 +28,9 @@ def unibot_memory_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_MEMORY_ID,
-                name="Unibot Memory",
+                name="记忆管理",
                 version="1.0.0",
-                description=(
-                    "Stores, recalls, and removes durable user facts, preferences, goals, and instructions. "
-                    "Use when the user asks Unibot to remember or forget something, or asks what Unibot "
-                    "remembers about them."
-                ),
+                description="保存、召回和删除用户的长期事实、偏好、目标与指令。",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -42,8 +38,8 @@ def unibot_memory_record() -> AinaRecord:
                 skills=[
                     AinaCapability(
                         id="memory-management",
-                        name="Durable memory management",
-                        description="Curate durable cross-conversation memory without storing transient chat.",
+                        name="持久记忆管理",
+                        description="管理跨对话保留的长期记忆，不保存临时聊天内容。",
                         instructions=(
                             "When the user explicitly asks to remember a durable fact, call memory.remember. "
                             "When they ask what is remembered, call memory.recall. When they explicitly ask to "
@@ -54,18 +50,18 @@ def unibot_memory_record() -> AinaRecord:
                 tools=[
                     AinaCapability(
                         id=REMEMBER_TOOL_ID,
-                        name="Remember",
-                        description="Store one durable fact, preference, goal, or instruction.",
+                        name="记住信息",
+                        description="保存一条长期事实、偏好、目标或指令。",
                     ),
                     AinaCapability(
                         id=RECALL_TOOL_ID,
-                        name="Recall",
-                        description="Retrieve memories relevant to a query.",
+                        name="召回记忆",
+                        description="检索与查询相关的记忆。",
                     ),
                     AinaCapability(
                         id=FORGET_TOOL_ID,
-                        name="Forget",
-                        description="Delete a memory by its exact memory id.",
+                        name="删除记忆",
+                        description="根据准确的记忆 ID 删除一条记忆。",
                     ),
                 ],
             ),

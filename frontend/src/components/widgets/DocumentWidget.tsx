@@ -169,7 +169,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   }
 
   return (
-    <div className="grid h-full min-h-[520px] overflow-hidden rounded-lg border border-line bg-white md:grid-cols-[220px_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 grid-rows-[minmax(180px,32%)_minmax(0,1fr)] overflow-hidden bg-white md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
       <aside className="flex min-h-0 flex-col border-b border-line bg-app-soft md:border-b-0 md:border-r">
         <form onSubmit={createDocument} className="border-b border-line p-3">
           <label className="text-[10px] font-bold uppercase text-ink-muted">新建文档</label>
@@ -307,7 +307,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
             </div>
           ) : null}
           {selectedName ? (
-            <div className={classNames("grid h-full min-h-0", mode === "split" && "lg:grid-cols-2")}>
+            <div className={classNames("grid h-full min-h-0", mode === "split" && "grid-rows-2 lg:grid-cols-2 lg:grid-rows-1")}>
               {mode !== "preview" ? (
                 <textarea
                   value={content}
@@ -316,13 +316,13 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
                   spellCheck={false}
                   aria-label="Markdown 编辑器"
                   className={classNames(
-                    "h-full min-h-[420px] w-full resize-none bg-white p-4 font-mono text-[12px] leading-6 text-ink outline-none",
+                    "h-full min-h-0 w-full resize-none bg-white p-4 font-mono text-[12px] leading-6 text-ink outline-none",
                     mode === "split" && "border-b border-line lg:border-b-0 lg:border-r",
                   )}
                 />
               ) : null}
               {mode !== "edit" ? (
-                <div className="h-full min-h-[420px] overflow-y-auto bg-app-soft p-5" aria-label="Markdown 预览">
+                <div className="h-full min-h-0 overflow-y-auto bg-app-soft p-5" aria-label="Markdown 预览">
                   <MarkdownContent content={content || "_空文档_"} />
                 </div>
               ) : null}

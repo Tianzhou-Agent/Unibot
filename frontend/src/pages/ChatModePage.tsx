@@ -17,7 +17,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
-import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
+import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { CONVERSATION_CATEGORIES } from "@/lib/conversationCategories";
 import { useDebugMode } from "@/lib/debugMode";
@@ -207,7 +207,7 @@ export default function ChatModePage() {
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
           if (event.type === "tool.requested") {
             if (debugMode) {
-              const kindLabel = event.kind === "aina" ? "AINA" : event.kind === "builtin" ? "内置工具" : "Tool";
+              const kindLabel = event.kind === "aina" ? "AINA" : event.kind === "builtin" ? "内置工具" : "远程工具";
               setActivity(`正在调用 ${kindLabel}：${event.id}`);
             } else {
               setActivity("正在处理，请稍候…");
@@ -224,11 +224,11 @@ export default function ChatModePage() {
           if (event.type === "message.completed") completion = event.response;
         },
       );
-      if (!completion) throw new Error(streamFailure ?? "Agent 流结束前没有返回完成事件。");
+      if (!completion) throw new Error(streamFailure ?? "智能体流程结束前没有返回完成事件。");
       const completed = completion as ChatResponse;
       setLastRun(completed);
       setApproval(completed.approval ?? null);
-      if (targetConversation.title === "New conversation") {
+      if (["New conversation", "新对话"].includes(targetConversation.title)) {
         await api.patch(`/conversations/${completed.conversation_id}`, {
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
         });
@@ -339,7 +339,7 @@ export default function ChatModePage() {
     [conversation?.messages, optimisticUser],
   );
 
-  const title = conversation?.title ?? "新对话";
+  const title = conversation?.title === "New conversation" ? "新对话" : conversation?.title ?? "新对话";
   const badge = deleted
     ? ({ label: "已删除", tone: "warning" } as const)
     : sending
@@ -369,7 +369,7 @@ export default function ChatModePage() {
                 type="button"
                 onClick={() => {
                   setRenaming(true);
-                  setTitleDraft(conversation.title);
+                  setTitleDraft(title);
                 }}
                 className="btn-outline h-8 text-[12px]"
                 aria-label="重命名对话"
@@ -514,7 +514,7 @@ function ConversationMessage({
         />
       ) : null}
       {message.widgets?.map((widget) => (
-        <WidgetRenderer
+        <SessionWidgetRenderer
           key={widget.id}
           widget={widget}
           onOpenAina={onOpenAina}
@@ -530,7 +530,7 @@ function ToolCallMessage({ message }: { message: BackendMessage }) {
     <div className="rounded-lg border border-accent-ring bg-accent-soft px-3.5 py-3">
       <div className="flex items-center gap-2 text-[12.5px] font-bold text-accent-hover">
         <Wrench className="w-4 h-4" />
-        Agent 请求能力调用
+        智能体请求调用能力
       </div>
       <div className="mt-2 space-y-1.5">
         {message.tool_calls?.map((call) => (
@@ -591,7 +591,7 @@ function ApprovalCard({
         <div className="flex-1">
           <h2 className="text-[14px] font-extrabold text-warning-deep">高风险操作需要确认</h2>
           <p className="mt-1 text-[12.5px] text-warning-deep/80">
-            Agent 准备运行：{approval.capability_names.join("、")}。请核对参数后决定是否继续。
+            智能体准备运行：{approval.capability_names.join("、")}。请核对参数后决定是否继续。
           </p>
           {debugMode ? (
             <div className="mt-3 space-y-2">
@@ -624,10 +624,10 @@ function RunSummary({ response }: { response: ChatResponse }) {
     <div className="flex items-center justify-end gap-2 text-[10.5px] text-ink-muted">
       <span>{response.iterations} 次模型迭代</span>
       <span>·</span>
-      <span>{response.usage.input_tokens + response.usage.output_tokens} tokens</span>
+      <span>{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
       <span>·</span>
       <Link to={`/settings?trace=${response.trace_id}`} className="text-accent hover:underline">
-        查看 Trace
+        查看调用记录
       </Link>
     </div>
   );
@@ -699,7 +699,7 @@ function ChatComposer({
               <option value="">自动发现能力</option>
               {capabilities.map((capability) => (
                 <option key={capability.value} value={capability.value}>
-                  {capability.kind === "aina" ? "AINA" : capability.kind === "builtin" ? "内置" : "Tool"} · {capability.label}
+                  {capability.kind === "aina" ? "AINA" : capability.kind === "builtin" ? "内置" : "远程工具"} · {capability.label}
                 </option>
               ))}
             </select>
@@ -739,7 +739,7 @@ function WelcomePanel() {
         <div className="mt-5 grid grid-cols-3 gap-2 text-left">
           {[
             ["多轮上下文", "会话历史自动恢复"],
-            ["能力路由", "Tool 与 AINA"],
+            ["能力路由", "工具与 AINA"],
             ["安全确认", "高风险操作可控"],
           ].map(([label, detail]) => (
             <div key={label} className="rounded-lg border border-line bg-white p-3">

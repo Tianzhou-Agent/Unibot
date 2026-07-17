@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowUp, Bot, Loader2, Maximize2, MessageSquareText, PanelRightOpen, Wrench } from "lucide-react";
+import { ArrowLeft, ArrowUp, Bot, Loader2, MessageSquareText, PanelRightOpen, Wrench } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { Topbar } from "@/components/layout/Topbar";
-import { WidgetRenderer } from "@/components/widgets/WidgetRenderer";
+import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
+import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { classNames, uid } from "@/lib/utils";
@@ -56,12 +57,10 @@ export default function CanvasModePage() {
       setCanvas(supplied);
       setConversationId(searchParams.get("conversation") ?? supplied.conversation_id ?? null);
       setLoading(false);
-      return () => {
-        cancelled = true;
-      };
+    } else {
+      setLoading(true);
+      setMessages([]);
     }
-    setLoading(true);
-    setMessages([]);
     api
       .post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...ACTOR,
@@ -194,11 +193,11 @@ export default function CanvasModePage() {
   return (
     <div className="flex h-full flex-col bg-app-bg">
       <Topbar
-        title={canvas?.name ?? "AINA Canvas"}
-        badge={{ label: sending ? "运行中" : "Canvas", tone: sending ? "thinking" : "info" }}
+        title={canvas?.name ?? "AINA 画布"}
+        badge={{ label: sending ? "运行中" : "画布", tone: sending ? "thinking" : "info" }}
         actions={
           <div className="flex items-center gap-2">
-            <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label="Canvas 移动端视图">
+            <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label="画布移动端视图">
               <button
                 type="button"
                 onClick={() => setMobilePane("chat")}
@@ -217,9 +216,9 @@ export default function CanvasModePage() {
                   "flex h-6 items-center gap-1 rounded px-2 text-[10px] font-bold",
                   mobilePane === "app" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
                 )}
-                aria-label="显示编辑器"
+                aria-label="显示应用"
               >
-                <PanelRightOpen className="h-3.5 w-3.5" />编辑器
+                <PanelRightOpen className="h-3.5 w-3.5" />应用
               </button>
             </div>
             <button
@@ -227,18 +226,18 @@ export default function CanvasModePage() {
               onClick={() => navigate(conversationId ? `/chat/${conversationId}` : "/chat")}
               className="btn-outline h-8"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />退出 Canvas
+              <ArrowLeft className="h-3.5 w-3.5" />退出画布
             </button>
           </div>
         }
       />
 
-      <div className="min-h-0 flex-1 p-3">
+      <div className="min-h-0 flex-1">
         {loading ? <CanvasSkeleton /> : null}
         {!loading && canvas ? (
-          <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,420px)_minmax(0,1fr)]">
+          <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
             <section className={classNames(
-              "min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card lg:flex",
+              "min-h-0 flex-col overflow-hidden bg-white lg:flex lg:border-r lg:border-line",
               mobilePane === "chat" ? "flex" : "hidden",
             )}>
               <header className="flex items-center gap-3 border-b border-line px-4 py-3">
@@ -247,7 +246,7 @@ export default function CanvasModePage() {
                 </span>
                 <div className="min-w-0">
                   <h2 className="truncate text-[13.5px] font-extrabold text-ink">与 {canvas.name} 对话</h2>
-                  <p className="truncate text-[10.5px] text-ink-muted">描述需求，或在右侧 Widget 直接操作</p>
+                  <p className="truncate text-[10.5px] text-ink-muted">描述需求，也可在右侧应用直接操作</p>
                 </div>
               </header>
 
@@ -292,37 +291,24 @@ export default function CanvasModePage() {
             </section>
 
             <section className={classNames(
-              "min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card lg:flex",
+              "relative min-h-0 flex-col overflow-hidden bg-white lg:flex",
               mobilePane === "app" ? "flex" : "hidden",
             )}>
-              <header className="flex items-start gap-3 border-b border-line bg-white px-5 py-4">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white">
-                  <Maximize2 className="h-4.5 w-4.5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h1 className="truncate text-[18px] font-extrabold font-display text-ink">{canvas.name}</h1>
-                    <span className="rounded-md bg-app-soft px-2 py-1 font-mono text-[9.5px] text-ink-muted">v{canvas.version}</span>
-                  </div>
-                  <p className="mt-1 max-w-3xl text-[12px] leading-relaxed text-ink-muted">{canvas.description}</p>
-                </div>
-              </header>
-              <div className="min-h-0 flex-1 overflow-y-auto bg-app-bg p-5">
-                <div className={canvas.main_widget.kind === "document" ? "h-full" : "mx-auto max-w-4xl"}>
-                  <WidgetRenderer
-                    key={`${canvas.main_widget.id}:${lastRun?.trace_id ?? "initial"}`}
-                    widget={canvas.main_widget}
-                    disabled={sending}
-                    onOpenAina={(id) => void openAina(id)}
-                    onPrompt={(prompt) => void sendMessage(prompt)}
-                  />
-                  {debugMode && lastRun ? (
-                    <p className="mt-3 text-right text-[10px] text-ink-subtle">
-                      {lastRun.iterations} 次模型迭代 · {lastRun.usage.input_tokens + lastRun.usage.output_tokens} tokens
-                    </p>
-                  ) : null}
-                </div>
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <MainWidgetRenderer
+                  key={`${canvas.main_widget.id}:${lastRun?.trace_id ?? "initial"}`}
+                  ainaId={canvas.aina_id}
+                  widget={canvas.main_widget}
+                  disabled={sending}
+                  onOpenAina={(id) => void openAina(id)}
+                  onPrompt={(prompt) => void sendMessage(prompt)}
+                />
               </div>
+              {debugMode && lastRun ? (
+                <p className="pointer-events-none absolute bottom-2 right-3 rounded bg-white/90 px-2 py-1 text-[10px] text-ink-subtle shadow-sm">
+                  {lastRun.iterations} 次模型迭代 · {lastRun.usage.input_tokens + lastRun.usage.output_tokens} Tokens
+                </p>
+              ) : null}
             </section>
           </div>
         ) : null}
@@ -369,7 +355,7 @@ function CanvasMessage({
         />
       ) : null}
       {message.widgets?.map((widget) => (
-        <WidgetRenderer key={widget.id} widget={widget} onOpenAina={onOpenAina} onPrompt={onPrompt} />
+        <SessionWidgetRenderer key={widget.id} widget={widget} onOpenAina={onOpenAina} onPrompt={onPrompt} />
       ))}
     </div>
   );
@@ -401,7 +387,7 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
           disabled={disabled}
           rows={2}
           placeholder="向当前 AINA 描述需求"
-          aria-label="Canvas 消息"
+          aria-label="画布消息"
           className="w-full resize-none bg-transparent px-1 text-[12.5px] outline-none placeholder:text-ink-muted"
         />
         <div className="mt-1 flex justify-end">
@@ -412,7 +398,7 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
               "flex h-8 w-8 items-center justify-center rounded-lg text-white",
               disabled || !text.trim() ? "cursor-not-allowed bg-ink-subtle" : "bg-accent hover:bg-accent-hover",
             )}
-            aria-label="发送 Canvas 消息"
+            aria-label="发送画布消息"
           >
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
@@ -424,9 +410,9 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
 
 function CanvasSkeleton() {
   return (
-    <div className="grid h-full grid-cols-1 gap-3 lg:grid-cols-[420px_1fr]">
-      <div className="animate-pulse rounded-xl bg-line/60" />
-      <div className="animate-pulse rounded-xl bg-line/60" />
+    <div className="grid h-full grid-cols-1 lg:grid-cols-[380px_1fr]">
+      <div className="animate-pulse border-r border-line bg-line/60" />
+      <div className="animate-pulse bg-line/60" />
     </div>
   );
 }

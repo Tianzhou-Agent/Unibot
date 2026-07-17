@@ -45,7 +45,7 @@ class UnibotClient:
     async def create_conversation(
         self,
         *,
-        title: str = "New conversation",
+        title: str = "新对话",
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> dict[str, Any]:

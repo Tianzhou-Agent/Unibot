@@ -6,7 +6,9 @@ from typing import Any
 import httpx
 from fastapi.testclient import TestClient
 
+from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant, unibot_assistant_record
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
@@ -127,6 +129,19 @@ def test_aina_protocol_version_is_rejected_with_standard_error() -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+async def test_builtin_aina_definition_is_refreshed_without_changing_registration_time() -> None:
+    repository = InMemoryRepository()
+    stale = unibot_assistant_record()
+    stale.manifest.aina.name = "Legacy Assistant"
+    await repository.register_aina(stale)
+
+    await ensure_unibot_assistant(repository)
+
+    refreshed = await repository.get_aina(stale.manifest.aina.id)
+    assert refreshed.manifest.aina.name == "Unibot 助手"
+    assert refreshed.registered_at == stale.registered_at
 
 
 def test_conversation_soft_delete_and_restore() -> None:

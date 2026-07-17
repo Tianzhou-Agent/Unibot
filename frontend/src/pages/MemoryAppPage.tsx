@@ -44,7 +44,7 @@ export default function MemoryAppPage() {
 
   return (
     <div className="h-full flex flex-col bg-app-bg">
-      <Topbar title="Memory 应用" badge={{ label: "应用模块", tone: "info" }} />
+      <Topbar title="记忆应用" badge={{ label: "应用模块", tone: "info" }} />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto max-w-[1640px] space-y-3">
           <div className="flex items-center gap-4">
