@@ -5,11 +5,13 @@ import {
   Bot,
   Brain,
   Bug,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
   Code2,
+  Copy,
   Database,
   MessageSquareText,
   RefreshCw,
@@ -306,12 +308,39 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
 }
 
 function TraceDetail({ trace, conversationTitle }: { trace: TraceRecord; conversationTitle: string }) {
+  const [copiedTraceId, setCopiedTraceId] = useState<string | null>(null);
+
+  const copyTraceId = async () => {
+    try {
+      await navigator.clipboard.writeText(trace.trace_id);
+      setCopiedTraceId(trace.trace_id);
+      window.setTimeout(() => {
+        setCopiedTraceId((current) => (current === trace.trace_id ? null : current));
+      }, 1600);
+    } catch {
+      setCopiedTraceId(null);
+    }
+  };
+
+  const copied = copiedTraceId === trace.trace_id;
   return (
     <div className="h-full flex flex-col">
       <div className="px-4 py-3 border-b border-line bg-app-soft">
         <div className="flex items-center gap-2">
           <TraceStatus status={trace.status} />
           <h2 className="font-mono text-[11px] font-bold text-ink break-all">{trace.trace_id}</h2>
+          <button
+            type="button"
+            onClick={() => void copyTraceId()}
+            aria-label="复制 Trace ID"
+            title={copied ? "已复制" : "复制 Trace ID"}
+            className={classNames(
+              "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-white transition-colors",
+              copied ? "border-success/30 text-success" : "border-line text-ink-muted hover:border-accent hover:text-accent",
+            )}
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          </button>
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-ink-muted">
           <span>会话：{conversationTitle}</span>

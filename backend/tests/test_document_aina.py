@@ -1,11 +1,15 @@
+import hashlib
+import json
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
+from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
@@ -130,6 +134,7 @@ def test_missing_document_is_returned_to_model_for_list_and_retry(tmp_path: Path
         [
             call_first_tool(
                 prefix="builtin_document_read_",
+                description_contains="完整内容",
                 arguments='{"name":"stale.md"}',
             ),
             call_first_tool(prefix="builtin_document_list_", arguments="{}"),
@@ -157,3 +162,109 @@ def test_missing_document_is_returned_to_model_for_list_and_retry(tmp_path: Path
         event["kind"] == "builtin.completed" and event["target_id"] == "document.list"
         for event in trace.json()["events"]
     )
+
+
+def test_document_aina_updates_only_the_requested_markdown_section(tmp_path: Path) -> None:
+    original = (
+        "# 使用手册\n\n"
+        "开场说明。\n\n"
+        "## 第一节\n\n"
+        "UNCHANGED_FIRST_SECTION\n\n"
+        "## 第四节\n\n"
+        "需要翻译的原文。\n\n"
+        "### 示例\n\n"
+        "```markdown\n"
+        "## 代码块内不是目录标题\n"
+        "```\n\n"
+        "## 第五节\n\n"
+        "UNCHANGED_FIFTH_SECTION\n"
+    )
+    revision = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    replacement = "## 第四节\n\nTranslated source text.\n\n### Example\n\nUpdated example."
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_document_outline_",
+                arguments='{"name":"manual.md"}',
+                call_id="call_outline",
+            ),
+            call_first_tool(
+                prefix="builtin_document_read_section_",
+                arguments='{"name":"manual.md","heading":"第四节"}',
+                call_id="call_read_section",
+            ),
+            call_first_tool(
+                prefix="builtin_document_update_section_",
+                arguments=json.dumps(
+                    {
+                        "name": "manual.md",
+                        "heading": "第四节",
+                        "section_content": replacement,
+                        "expected_revision": revision,
+                    },
+                    ensure_ascii=False,
+                ),
+                call_id="call_update_section",
+            ),
+            assistant("第四节已更新。"),
+        ]
+    )
+
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "manual", "content": original})
+        response = client.post(
+            "/chat",
+            json={"message": "把第四节翻译成英文", "capability": "aina:unibot-documents"},
+        )
+        document = client.get("/documents/manual.md")
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
+
+    updated_content = document.json()["content"]
+    assert response.status_code == 200
+    assert "UNCHANGED_FIRST_SECTION" in updated_content
+    assert "UNCHANGED_FIFTH_SECTION" in updated_content
+    assert replacement in updated_content
+    assert "需要翻译的原文" not in updated_content
+    assert "代码块内不是目录标题" not in json.dumps(llm.calls[1]["messages"], ensure_ascii=False)
+    assert "UNCHANGED_FIRST_SECTION" not in json.dumps(llm.calls, ensure_ascii=False)
+    assert "UNCHANGED_FIFTH_SECTION" not in json.dumps(llm.calls, ensure_ascii=False)
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "document.update_section"
+        for event in trace.json()["events"]
+    )
+    update_request = next(
+        event
+        for event in trace.json()["events"]
+        if event["kind"] == "builtin.requested" and event["target_id"] == "document.update_section"
+    )
+    assert "UNCHANGED_FIRST_SECTION" not in json.dumps(update_request["details"], ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_document_section_update_rejects_a_stale_revision(tmp_path: Path) -> None:
+    service = DocumentService(NasStore(tmp_path))
+    original = "# Notes\n\n## Target\n\nOld text.\n\n## Keep\n\nKeep text.\n"
+    await service.create_document("notes", original, user_id="alice", tenant_id="team-a")
+    section = await service.get_section(
+        "notes.md",
+        "Target",
+        1,
+        user_id="alice",
+        tenant_id="team-a",
+    )
+    current = original.replace("Keep text.", "Newer text from another edit.")
+    await service.update_document("notes.md", current, user_id="alice", tenant_id="team-a")
+
+    with pytest.raises(StorageValidationError, match="revision changed"):
+        await service.update_section(
+            "notes.md",
+            "Target",
+            1,
+            "## Target\n\nStale replacement.",
+            section.revision,
+            user_id="alice",
+            tenant_id="team-a",
+        )
+
+    latest = await service.get_document("notes.md", user_id="alice", tenant_id="team-a")
+    assert latest.content == current

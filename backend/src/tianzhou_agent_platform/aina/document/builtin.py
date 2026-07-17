@@ -18,16 +18,22 @@ from tianzhou_agent_platform.core.errors import PlatformError
 UNIBOT_DOCUMENTS_ID = "unibot-documents"
 LIST_DOCUMENTS_TOOL_ID = "document.list"
 READ_DOCUMENT_TOOL_ID = "document.read"
+OUTLINE_DOCUMENT_TOOL_ID = "document.outline"
+READ_DOCUMENT_SECTION_TOOL_ID = "document.read_section"
 CREATE_DOCUMENT_TOOL_ID = "document.create"
 UPDATE_DOCUMENT_TOOL_ID = "document.update"
+UPDATE_DOCUMENT_SECTION_TOOL_ID = "document.update_section"
 APPEND_DOCUMENT_TOOL_ID = "document.append"
 RENAME_DOCUMENT_TOOL_ID = "document.rename"
 DELETE_DOCUMENT_TOOL_ID = "document.delete"
 DOCUMENT_TOOL_IDS = {
     LIST_DOCUMENTS_TOOL_ID,
     READ_DOCUMENT_TOOL_ID,
+    OUTLINE_DOCUMENT_TOOL_ID,
+    READ_DOCUMENT_SECTION_TOOL_ID,
     CREATE_DOCUMENT_TOOL_ID,
     UPDATE_DOCUMENT_TOOL_ID,
+    UPDATE_DOCUMENT_SECTION_TOOL_ID,
     APPEND_DOCUMENT_TOOL_ID,
     RENAME_DOCUMENT_TOOL_ID,
     DELETE_DOCUMENT_TOOL_ID,
@@ -40,6 +46,16 @@ def document_tool_capabilities() -> list[AinaCapability]:
         "description": "Markdown 文档名称；省略 .md 扩展名时会自动补充。",
     }
     content_property = {"type": "string", "description": "UTF-8 编码的 Markdown 内容。"}
+    heading_property = {
+        "type": "string",
+        "description": "目录中返回的精确标题文字，不包含开头的 #。",
+    }
+    occurrence_property = {
+        "type": "integer",
+        "minimum": 1,
+        "default": 1,
+        "description": "同名标题第几次出现；默认 1。",
+    }
     return [
         AinaCapability(
             id=LIST_DOCUMENTS_TOOL_ID,
@@ -48,9 +64,35 @@ def document_tool_capabilities() -> list[AinaCapability]:
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         AinaCapability(
+            id=OUTLINE_DOCUMENT_TOOL_ID,
+            name="读取文档目录",
+            description="只读取 Markdown 标题目录、行范围和 revision，不返回正文；局部编辑时先用它定位章节。",
+            input_schema={
+                "type": "object",
+                "properties": {"name": name_property},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        ),
+        AinaCapability(
+            id=READ_DOCUMENT_SECTION_TOOL_ID,
+            name="读取文档章节",
+            description="只读取一个 Markdown 标题及其正文，并返回用于安全更新的 revision。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": name_property,
+                    "heading": heading_property,
+                    "occurrence": occurrence_property,
+                },
+                "required": ["name", "heading"],
+                "additionalProperties": False,
+            },
+        ),
+        AinaCapability(
             id=READ_DOCUMENT_TOOL_ID,
             name="读取文档",
-            description="读取一个 Markdown 文档的完整内容和元数据。",
+            description="读取一个 Markdown 文档的完整内容和元数据；仅在任务确实需要全文时使用。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -70,9 +112,32 @@ def document_tool_capabilities() -> list[AinaCapability]:
             },
         ),
         AinaCapability(
+            id=UPDATE_DOCUMENT_SECTION_TOOL_ID,
+            name="更新文档章节",
+            description="只替换一个 Markdown 章节。section_content 必须以同层级标题开始，revision 过期时拒绝覆盖。",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": name_property,
+                    "heading": heading_property,
+                    "occurrence": occurrence_property,
+                    "section_content": {
+                        "type": "string",
+                        "description": "目标章节的完整 Markdown，仅包含该标题、正文及其子标题。",
+                    },
+                    "expected_revision": {
+                        "type": "string",
+                        "description": "document.read_section 返回的 revision，必须原样传入。",
+                    },
+                },
+                "required": ["name", "heading", "section_content", "expected_revision"],
+                "additionalProperties": False,
+            },
+        ),
+        AinaCapability(
             id=UPDATE_DOCUMENT_TOOL_ID,
             name="更新文档",
-            description="替换已有 Markdown 文档的完整内容。",
+            description="替换已有 Markdown 文档的完整内容；仅用于明确要求重写全文的任务。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -135,10 +200,14 @@ def unibot_documents_record() -> AinaRecord:
                         name="Markdown 文档管理",
                         description="在持久化 NAS 存储中编写和维护用户自己的 Markdown 文档。",
                         instructions=(
-                            "Use document.list when the target filename is unknown. Read the current document "
-                            "before changing only part of it, then send the complete revised Markdown to "
-                            "document.update. Use document.append only when the user explicitly wants content "
-                            "added at the end. Never claim a file changed until the tool succeeds."
+                            "Use document.list when the target filename is unknown. For a change limited to one "
+                            "section, use document.outline to locate the exact heading when needed, then call "
+                            "document.read_section and document.update_section with only that section and the "
+                            "returned revision. Never use document.read or document.update for a local section "
+                            "change. If the revision changed, read the section again before retrying. Use the full "
+                            "document tools only when the task genuinely requires the whole document. Use "
+                            "document.append only when the user explicitly wants content added at the end. Never "
+                            "claim a file changed until the tool succeeds."
                         ),
                     )
                 ],
@@ -177,6 +246,41 @@ async def invoke_document_tool(
         return {"count": len(items), "documents": [item.model_dump(mode="json") for item in items]}, []
     if not name:
         raise PlatformError("INVALID_REQUEST", f"{tool_id} requires name")
+    occurrence = arguments.get("occurrence", 1)
+    if not isinstance(occurrence, int) or isinstance(occurrence, bool) or occurrence < 1:
+        raise PlatformError("INVALID_REQUEST", f"{tool_id} occurrence must be a positive integer")
+    if tool_id == OUTLINE_DOCUMENT_TOOL_ID:
+        outline = await service.get_outline(name, user_id=user_id, tenant_id=tenant_id)
+        return {"outline": outline.model_dump(mode="json")}, []
+    if tool_id == READ_DOCUMENT_SECTION_TOOL_ID:
+        heading = str(arguments.get("heading") or "").strip()
+        if not heading:
+            raise PlatformError("INVALID_REQUEST", "document.read_section requires heading")
+        section = await service.get_section(
+            name,
+            heading,
+            occurrence,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        return {"section": section.model_dump(mode="json")}, []
+    if tool_id == UPDATE_DOCUMENT_SECTION_TOOL_ID:
+        heading = str(arguments.get("heading") or "").strip()
+        if not heading or "section_content" not in arguments or "expected_revision" not in arguments:
+            raise PlatformError(
+                "INVALID_REQUEST",
+                "document.update_section requires heading, section_content, and expected_revision",
+            )
+        updated_section = await service.update_section(
+            name,
+            heading,
+            occurrence,
+            str(arguments["section_content"]),
+            str(arguments["expected_revision"]),
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        return {"updated_section": updated_section.model_dump(mode="json")}, []
     if tool_id == READ_DOCUMENT_TOOL_ID:
         document = await service.get_document(name, user_id=user_id, tenant_id=tenant_id)
     elif tool_id == CREATE_DOCUMENT_TOOL_ID:
