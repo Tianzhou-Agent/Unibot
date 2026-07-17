@@ -6,6 +6,7 @@ import {
   Code2,
   Download,
   ExternalLink,
+  ListTree,
   Plus,
   RefreshCw,
   ShieldAlert,
@@ -15,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { AinaCapabilityDialog } from "@/components/apps/AinaCapabilityDialog";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames } from "@/lib/utils";
@@ -328,15 +330,17 @@ function AinaGrid({
   onOpen: (aina: AinaRecord) => void;
   onDelete: (id: string) => void;
 }) {
+  const [selectedAina, setSelectedAina] = useState<AinaRecord | null>(null);
   if (!ainas.length) return <EmptyState icon={<AppWindow />} title="尚未注册 AINA" detail="请先注册远程运行服务清单。" />;
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {ainas.map((record) => {
-        const manifest = record.manifest;
-        const builtin = manifest.runtime.type === "builtin";
-        const installed = builtin || installedIds.has(manifest.aina.id);
-        return (
-          <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-card">
+    <>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {ainas.map((record) => {
+          const manifest = record.manifest;
+          const builtin = manifest.runtime.type === "builtin";
+          const installed = builtin || installedIds.has(manifest.aina.id);
+          return (
+            <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-card">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-accent-soft text-accent flex items-center justify-center">
                 <Box className="w-5 h-5" />
@@ -366,7 +370,10 @@ function AinaGrid({
                 {manifest.permissions.map((permission) => <span key={permission} className="rounded-md bg-warning-soft px-2 py-1 text-[10px] font-bold text-warning-deep">{permission}</span>)}
               </div>
             ) : null}
-            <div className="mt-4 flex items-center gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => setSelectedAina(record)} className="btn-outline">
+                <ListTree className="h-4 w-4" />查看能力
+              </button>
               {builtin ? (
                 <button type="button" onClick={() => onOpen(record)} className="btn-primary">
                   <ExternalLink className="w-4 h-4" />打开画布
@@ -392,10 +399,12 @@ function AinaGrid({
                 </button>
               ) : null}
             </div>
-          </article>
-        );
-      })}
-    </div>
+            </article>
+          );
+        })}
+      </div>
+      {selectedAina ? <AinaCapabilityDialog record={selectedAina} onClose={() => setSelectedAina(null)} /> : null}
+    </>
   );
 }
 

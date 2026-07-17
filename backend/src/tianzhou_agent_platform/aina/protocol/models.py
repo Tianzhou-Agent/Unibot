@@ -42,7 +42,16 @@ class AinaCapability(StrictModel):
 
 class AinaUiCapability(StrictModel):
     id: str = Field(min_length=1, max_length=128)
-    kind: Literal["app_list", "form", "markdown", "panel", "navigation", "memory", "document"]
+    kind: Literal[
+        "app_list",
+        "form",
+        "markdown",
+        "panel",
+        "navigation",
+        "memory",
+        "document",
+        "document_outline",
+    ]
     description: str = Field(min_length=1, max_length=2000)
     instructions: str | None = None
 

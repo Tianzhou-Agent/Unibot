@@ -11,7 +11,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
     BuiltinRuntimeDefinition,
     Publisher,
 )
-from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition, WidgetDocumentSection
 from tianzhou_agent_platform.aina.security.models import Authentication
 from tianzhou_agent_platform.core.errors import PlatformError
 
@@ -19,6 +19,7 @@ UNIBOT_DOCUMENTS_ID = "unibot-documents"
 LIST_DOCUMENTS_TOOL_ID = "document.list"
 READ_DOCUMENT_TOOL_ID = "document.read"
 OUTLINE_DOCUMENT_TOOL_ID = "document.outline"
+BROWSE_DOCUMENT_TOOL_ID = "document.browse"
 READ_DOCUMENT_SECTION_TOOL_ID = "document.read_section"
 CREATE_DOCUMENT_TOOL_ID = "document.create"
 UPDATE_DOCUMENT_TOOL_ID = "document.update"
@@ -30,6 +31,7 @@ DOCUMENT_TOOL_IDS = {
     LIST_DOCUMENTS_TOOL_ID,
     READ_DOCUMENT_TOOL_ID,
     OUTLINE_DOCUMENT_TOOL_ID,
+    BROWSE_DOCUMENT_TOOL_ID,
     READ_DOCUMENT_SECTION_TOOL_ID,
     CREATE_DOCUMENT_TOOL_ID,
     UPDATE_DOCUMENT_TOOL_ID,
@@ -62,6 +64,20 @@ def document_tool_capabilities() -> list[AinaCapability]:
             name="列出文档",
             description="列出当前用户拥有的 Markdown 文档。",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        AinaCapability(
+            id=BROWSE_DOCUMENT_TOOL_ID,
+            name="浏览文档章节",
+            description=(
+                "当用户想查看文档目录、章节结构或选择章节阅读时使用。返回交互式章节导航组件，"
+                "不要在文字回答中重复罗列标题。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {"name": name_property},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
         ),
         AinaCapability(
             id=OUTLINE_DOCUMENT_TOOL_ID,
@@ -207,7 +223,10 @@ def unibot_documents_record() -> AinaRecord:
                             "change. If the revision changed, read the section again before retrying. Use the full "
                             "document tools only when the task genuinely requires the whole document. Use "
                             "document.append only when the user explicitly wants content added at the end. Never "
-                            "claim a file changed until the tool succeeds."
+                            "claim a file changed until the tool succeeds. When the user wants to view the outline, "
+                            "browse chapters, or choose a section to read, use document.browse. It attaches an "
+                            "interactive chapter widget, so keep the text response to one short sentence and never "
+                            "transcribe the headings into Markdown."
                         ),
                     )
                 ],
@@ -217,7 +236,12 @@ def unibot_documents_record() -> AinaRecord:
                         id="document-editor",
                         kind="document",
                         description="由平台渲染、以 NAS 为存储的 Markdown 文件列表、编辑器和预览。",
-                    )
+                    ),
+                    AinaUiCapability(
+                        id="document-outline",
+                        kind="document_outline",
+                        description="在对话中按标题层级浏览文档，并按需读取单个章节。",
+                    ),
                 ],
             ),
             main_widget=WidgetDefinition(
@@ -252,6 +276,40 @@ async def invoke_document_tool(
     if tool_id == OUTLINE_DOCUMENT_TOOL_ID:
         outline = await service.get_outline(name, user_id=user_id, tenant_id=tenant_id)
         return {"outline": outline.model_dump(mode="json")}, []
+    if tool_id == BROWSE_DOCUMENT_TOOL_ID:
+        outline = await service.get_outline(name, user_id=user_id, tenant_id=tenant_id)
+        levels = [heading.level for heading in outline.headings]
+        root_level = min(levels, default=1)
+        chapter_level = root_level + 1 if root_level + 1 in levels else root_level
+        chapter_count = sum(heading.level == chapter_level for heading in outline.headings)
+        widget = WidgetDefinition(
+            id=f"document-outline-{outline.revision[:16]}",
+            kind="document_outline",
+            title=outline.name,
+            description="选择章节即可查看对应内容，无需再次发送消息。",
+            document_name=outline.name,
+            sections=[
+                WidgetDocumentSection(**heading.model_dump())
+                for heading in outline.headings
+            ],
+        )
+        return (
+            {
+                "document": {
+                    "name": outline.name,
+                    "size_bytes": outline.size_bytes,
+                    "revision": outline.revision,
+                },
+                "chapter_count": chapter_count,
+                "heading_count": len(outline.headings),
+                "presentation": "interactive_document_outline_widget",
+                "response_instruction": (
+                    "Reply exactly in Chinese: 已加载章节导航，请在下方组件中选择要查看的章节。 "
+                    "Do not add headings, counts, or other explanation."
+                ),
+            },
+            [widget],
+        )
     if tool_id == READ_DOCUMENT_SECTION_TOOL_ID:
         heading = str(arguments.get("heading") or "").strip()
         if not heading:

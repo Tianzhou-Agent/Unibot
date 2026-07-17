@@ -102,6 +102,50 @@ def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
     )
 
 
+def test_document_browse_returns_interactive_chapter_widget(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_document_browse_",
+                arguments='{"name":"guide.md"}',
+            ),
+            assistant("已加载章节导航，请在组件中选择要查看的章节。"),
+        ]
+    )
+    content = "# 使用指南\n\n## 入门\n\n欢迎使用。\n\n## 进阶\n\n高级内容。\n"
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": content})
+        response = client.post(
+            "/chat",
+            json={"message": "查看当前文档章节", "capability": "aina:unibot-documents"},
+        )
+        section = client.get(
+            "/documents/guide.md/sections",
+            params={"heading": "进阶", "occurrence": 1},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
+
+    widget = response.json()["widgets"][0]
+    tool_result = next(message for message in llm.calls[1]["messages"] if message["role"] == "tool")
+    assert response.status_code == 200
+    assert response.json()["content"] == "已加载章节导航，请在组件中选择要查看的章节。"
+    assert widget["kind"] == "document_outline"
+    assert widget["document_name"] == "guide.md"
+    assert [item["heading"] for item in widget["sections"]] == ["使用指南", "入门", "进阶"]
+    assert "interactive_document_outline_widget" in tool_result["content"]
+    assert "高级内容" not in tool_result["content"]
+    assert section.status_code == 200
+    assert section.json()["content"] == "## 进阶\n\n高级内容。\n"
+    browse_event = next(
+        event
+        for event in trace.json()["events"]
+        if event["kind"] == "builtin.completed" and event["target_id"] == "document.browse"
+    )
+    assert browse_event["details"]["widgets"] == [
+        {"id": widget["id"], "kind": "document_outline"}
+    ]
+
+
 def test_document_delete_requires_approval(tmp_path: Path) -> None:
     llm = ScriptedLLM([])
     with TestClient(_app(tmp_path, llm)) as client:

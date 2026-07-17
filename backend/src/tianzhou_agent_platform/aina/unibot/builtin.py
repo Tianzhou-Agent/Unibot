@@ -42,16 +42,64 @@ def unibot_assistant_record() -> AinaRecord:
                         id=LIST_APP_TOOL_ID,
                         name="列出应用",
                         description="以组件形式列出当前用户可用的全部 AINA 应用。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
                     ),
                     AinaCapability(
                         id=OPEN_AINA_TOOL_ID,
                         name="打开 AINA",
                         description="打开选定的 AINA，并返回其画布路由和主组件。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "aina_id": {
+                                    "type": "string",
+                                    "description": "需要打开的准确 AINA ID。",
+                                }
+                            },
+                            "required": ["aina_id"],
+                            "additionalProperties": False,
+                        },
                     ),
                     AinaCapability(
                         id=REQUEST_CLARIFICATION_TOOL_ID,
                         name="请求补充信息",
                         description="缺少必要信息时显示由平台渲染的表单。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "description": "表单标题。"},
+                                "description": {"type": "string", "description": "表单说明。"},
+                                "submit_label": {"type": "string", "description": "提交按钮文字。"},
+                                "fields": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 6,
+                                    "description": "需要用户补充的字段，最多 6 项。",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "string"},
+                                            "label": {"type": "string"},
+                                            "input_type": {
+                                                "type": "string",
+                                                "enum": ["text", "number", "textarea"],
+                                            },
+                                            "placeholder": {"type": "string"},
+                                            "required": {"type": "boolean"},
+                                            "value": {"type": "string"},
+                                        },
+                                        "required": ["id", "label"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            },
+                            "required": ["title", "fields"],
+                            "additionalProperties": False,
+                        },
                     ),
                 ],
                 ui=[

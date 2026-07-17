@@ -47,8 +47,9 @@ const components: Components = {
       <table className="w-full border-collapse text-left text-[12px]">{children}</table>
     </div>
   ),
+  tbody: ({ children }) => <tbody className="[&>tr:last-child>td]:border-b-0">{children}</tbody>,
   th: ({ children }) => <th className="border-b border-line bg-app-soft px-3 py-2 font-bold">{children}</th>,
-  td: ({ children }) => <td className="border-b border-line px-3 py-2 last:border-b-0">{children}</td>,
+  td: ({ children }) => <td className="border-b border-line px-3 py-2">{children}</td>,
   hr: () => <hr className="my-4 border-line" />,
 };
 

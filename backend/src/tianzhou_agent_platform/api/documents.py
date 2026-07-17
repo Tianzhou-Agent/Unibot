@@ -3,8 +3,10 @@ from fastapi import APIRouter, Query, Request, Response, status
 from tianzhou_agent_platform.aina.document.models import (
     DocumentCreate,
     DocumentListResponse,
+    DocumentOutline,
     DocumentRecord,
     DocumentRename,
+    DocumentSection,
     DocumentUpdate,
 )
 from tianzhou_agent_platform.api.dependencies import documents
@@ -29,6 +31,32 @@ def create_document_router() -> APIRouter:
             payload.content,
             user_id=payload.user_id,
             tenant_id=payload.tenant_id,
+        )
+
+    @router.get("/{name}/outline", response_model=DocumentOutline)
+    async def get_document_outline(
+        name: str,
+        request: Request,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+    ) -> DocumentOutline:
+        return await documents(request).get_outline(name, user_id=user_id, tenant_id=tenant_id)
+
+    @router.get("/{name}/sections", response_model=DocumentSection)
+    async def get_document_section(
+        name: str,
+        request: Request,
+        heading: str = Query(min_length=1),
+        occurrence: int = Query(default=1, ge=1),
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+    ) -> DocumentSection:
+        return await documents(request).get_section(
+            name,
+            heading,
+            occurrence,
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
 
     @router.get("/{name}", response_model=DocumentRecord)

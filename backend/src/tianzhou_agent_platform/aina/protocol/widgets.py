@@ -33,12 +33,32 @@ class WidgetApp(StrictModel):
     has_main_widget: bool = False
 
 
+class WidgetDocumentSection(StrictModel):
+    index: int = Field(ge=1)
+    heading: str = Field(min_length=1, max_length=500)
+    level: int = Field(ge=1, le=6)
+    occurrence: int = Field(ge=1)
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+
+
 class WidgetDefinition(StrictModel):
     id: str = Field(min_length=1, max_length=160)
-    kind: Literal["app_list", "form", "markdown", "panel", "navigation", "memory", "document"]
+    kind: Literal[
+        "app_list",
+        "form",
+        "markdown",
+        "panel",
+        "navigation",
+        "memory",
+        "document",
+        "document_outline",
+    ]
     title: str
     description: str = ""
     markdown: str | None = None
     fields: list[WidgetField] = Field(default_factory=list)
     actions: list[WidgetAction] = Field(default_factory=list)
     apps: list[WidgetApp] = Field(default_factory=list)
+    document_name: str | None = None
+    sections: list[WidgetDocumentSection] = Field(default_factory=list)
