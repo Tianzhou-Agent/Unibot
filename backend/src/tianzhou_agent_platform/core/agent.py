@@ -38,6 +38,7 @@ from tianzhou_agent_platform.core.chat import ApprovalRecord, ChatRequest, ChatR
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
+from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
 
@@ -161,13 +162,15 @@ class AgentRuntime:
     async def _model_node(self, state: AgentState) -> AgentState:
         iterations = state.get("iterations", 0) + 1
         started = perf_counter()
+        runtime_model = current_model_runtime()
+        model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
         await self.repository.add_trace_event(
             state["trace_id"],
             TraceEvent(
                 kind="model.requested",
                 status="started",
                 target_type="model",
-                target_id=self.settings.llm_model,
+                target_id=model_target_id,
                 details={
                     "iteration": iterations,
                     "message_count": len(state["messages"]),
@@ -200,7 +203,7 @@ class AgentRuntime:
                     kind="model.failed",
                     status="failed",
                     target_type="model",
-                    target_id=self.settings.llm_model,
+                    target_id=model_target_id,
                     duration_ms=(perf_counter() - started) * 1000,
                     details={
                         "iteration": iterations,
@@ -225,7 +228,7 @@ class AgentRuntime:
                 kind="model.completed",
                 status="completed",
                 target_type="model",
-                target_id=self.settings.llm_model,
+                target_id=model_target_id,
                 duration_ms=(perf_counter() - started) * 1000,
                 details={
                     "iteration": iterations,
@@ -575,12 +578,17 @@ class AgentRuntime:
             )
             conversation = await self.repository.get_conversation(conversation.id)
             forced_capability = request.capability or _obvious_builtin_capability(request.message)
-            response = await self._dispatch(
-                conversation=conversation,
-                trace_id=trace_id,
-                forced_capability=forced_capability,
-                event_sink=event_sink,
+            runtime_model = await self.repository.get_default_model_runtime(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
             )
+            with use_model_runtime(runtime_model):
+                response = await self._dispatch(
+                    conversation=conversation,
+                    trace_id=trace_id,
+                    forced_capability=forced_capability,
+                    event_sink=event_sink,
+                )
         except PlatformError as exc:
             await self.repository.finish_trace(trace_id, "failed")
             await self.repository.finish_conversation_run(conversation.id, status="failed", error=exc.user_message)
@@ -790,12 +798,17 @@ class AgentRuntime:
             ),
         )
         try:
-            response = await self._run(
-                conversation=conversation,
-                trace_id=approval.trace_id,
-                approved_call_ids={str(call.get("id")) for call in approval.tool_calls},
-                resume=True,
+            runtime_model = await self.repository.get_default_model_runtime(
+                user_id=user_id,
+                tenant_id=tenant_id,
             )
+            with use_model_runtime(runtime_model):
+                response = await self._run(
+                    conversation=conversation,
+                    trace_id=approval.trace_id,
+                    approved_call_ids={str(call.get("id")) for call in approval.tool_calls},
+                    resume=True,
+                )
         except Exception:
             await self.repository.finish_conversation_run(
                 conversation.id,

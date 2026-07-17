@@ -626,7 +626,7 @@ function RunSummary({ response }: { response: ChatResponse }) {
       <span>·</span>
       <span>{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
       <span>·</span>
-      <Link to={`/settings?trace=${response.trace_id}`} className="text-accent hover:underline">
+      <Link to={`/debug?trace=${response.trace_id}`} className="text-accent hover:underline">
         查看调用记录
       </Link>
     </div>

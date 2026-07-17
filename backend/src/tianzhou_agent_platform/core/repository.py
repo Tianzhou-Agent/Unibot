@@ -15,6 +15,13 @@ from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
+from tianzhou_agent_platform.core.model_settings import (
+    ModelDefinition,
+    ModelProviderCreate,
+    ModelProviderRecord,
+    ModelProviderUpdate,
+    ModelRuntimeConfig,
+)
 
 CONVERSATIONS_RESOURCE = "conversations"
 MEMORIES_RESOURCE = "memories"
@@ -24,6 +31,7 @@ AINAS_RESOURCE = "ainas"
 INSTALLATIONS_RESOURCE = "installations"
 TRACES_RESOURCE = "traces"
 APPROVALS_RESOURCE = "approvals"
+MODEL_PROVIDERS_RESOURCE = "model_providers"
 
 
 class InMemoryRepository:
@@ -44,6 +52,7 @@ class InMemoryRepository:
         self._traces: dict[str, TraceRecord] = {}
         self._approvals: dict[str, ApprovalRecord] = {}
         self._memories: dict[str, MemoryRecord] = {}
+        self._model_providers: dict[str, ModelProviderRecord] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -56,6 +65,194 @@ class InMemoryRepository:
         if hasattr(value, "model_copy"):
             return value.model_copy(deep=True)  # type: ignore[no-any-return, union-attr]
         return value
+
+    async def create_model_provider(self, data: ModelProviderCreate) -> ModelProviderRecord:
+        async with self._lock:
+            actor_count = sum(
+                item.user_id == data.user_id and item.tenant_id == data.tenant_id
+                for item in self._model_providers.values()
+            )
+            if actor_count >= 20:
+                raise conflict("Model provider limit reached")
+            provider = ModelProviderRecord(
+                id=f"provider_{uuid4().hex}",
+                user_id=data.user_id,
+                tenant_id=data.tenant_id,
+                provider_type=data.provider_type,
+                name=data.name,
+                base_url=data.base_url,
+                api_key=data.api_key or "",
+                timeout_seconds=data.timeout_seconds,
+                models=[
+                    ModelDefinition(
+                        id=f"model_{uuid4().hex}",
+                        name=model.name,
+                        model=model.model,
+                        enabled=model.enabled,
+                    )
+                    for model in data.models
+                ],
+            )
+            self._model_providers[provider.id] = provider
+            await self._save_record(MODEL_PROVIDERS_RESOURCE, provider.id, provider)
+            return self._copy(provider)
+
+    async def get_model_provider(
+        self,
+        provider_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> ModelProviderRecord:
+        async with self._lock:
+            provider = self._model_providers.get(provider_id)
+            if provider is None:
+                raise not_found("Model provider", provider_id)
+            if provider.user_id != user_id or provider.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "Model provider ownership does not match the caller",
+                    status_code=403,
+                )
+            return self._copy(provider)
+
+    async def list_model_providers(self, *, user_id: str, tenant_id: str) -> list[ModelProviderRecord]:
+        async with self._lock:
+            values = [
+                self._copy(item)
+                for item in self._model_providers.values()
+                if item.user_id == user_id and item.tenant_id == tenant_id
+            ]
+        return sorted(values, key=lambda item: item.created_at)
+
+    async def update_model_provider(
+        self,
+        provider_id: str,
+        data: ModelProviderUpdate,
+    ) -> ModelProviderRecord:
+        async with self._lock:
+            provider = self._model_providers.get(provider_id)
+            if provider is None:
+                raise not_found("Model provider", provider_id)
+            if provider.user_id != data.user_id or provider.tenant_id != data.tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "Model provider ownership does not match the caller",
+                    status_code=403,
+                )
+            current_models = {item.id: item for item in provider.models}
+            submitted_ids = [item.id for item in data.models if item.id is not None]
+            if len(submitted_ids) != len(set(submitted_ids)):
+                raise conflict("Model identifiers must be unique")
+            unknown_ids = set(submitted_ids) - set(current_models)
+            if unknown_ids:
+                raise conflict("A submitted model does not belong to this provider")
+            models = [
+                ModelDefinition(
+                    id=model.id or f"model_{uuid4().hex}",
+                    name=model.name,
+                    model=model.model,
+                    enabled=model.enabled,
+                    is_default=(current_models[model.id].is_default and model.enabled if model.id else False),
+                )
+                for model in data.models
+            ]
+            updated = provider.model_copy(
+                update={
+                    "provider_type": data.provider_type,
+                    "name": data.name,
+                    "base_url": data.base_url,
+                    "api_key": provider.api_key if data.api_key is None or data.api_key == "" else data.api_key,
+                    "timeout_seconds": data.timeout_seconds,
+                    "models": models,
+                    "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            self._model_providers[provider_id] = updated
+            await self._save_record(MODEL_PROVIDERS_RESOURCE, provider_id, updated)
+            return self._copy(updated)
+
+    async def remove_model_provider(self, provider_id: str, *, user_id: str, tenant_id: str) -> None:
+        async with self._lock:
+            provider = self._model_providers.get(provider_id)
+            if provider is None:
+                raise not_found("Model provider", provider_id)
+            if provider.user_id != user_id or provider.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "Model provider ownership does not match the caller",
+                    status_code=403,
+                )
+            del self._model_providers[provider_id]
+            await self._delete_record(MODEL_PROVIDERS_RESOURCE, provider_id)
+
+    async def set_default_model(
+        self,
+        provider_id: str,
+        model_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> ModelProviderRecord:
+        async with self._lock:
+            provider = self._model_providers.get(provider_id)
+            if provider is None:
+                raise not_found("Model provider", provider_id)
+            if provider.user_id != user_id or provider.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "Model provider ownership does not match the caller",
+                    status_code=403,
+                )
+            selected = next((item for item in provider.models if item.id == model_id), None)
+            if selected is None:
+                raise not_found("Model", model_id)
+            if not selected.enabled:
+                raise conflict("A disabled model cannot be selected as default")
+
+            changed: list[ModelProviderRecord] = []
+            now = datetime.now(UTC)
+            for item in list(self._model_providers.values()):
+                if item.user_id != user_id or item.tenant_id != tenant_id:
+                    continue
+                models = [
+                    model.model_copy(
+                        update={"is_default": item.id == provider_id and model.id == model_id},
+                    )
+                    for model in item.models
+                ]
+                if models != item.models:
+                    updated = item.model_copy(update={"models": models, "updated_at": now}, deep=True)
+                    self._model_providers[item.id] = updated
+                    changed.append(updated)
+            for item in changed:
+                await self._save_record(MODEL_PROVIDERS_RESOURCE, item.id, item)
+            return self._copy(self._model_providers[provider_id])
+
+    async def get_default_model_runtime(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> ModelRuntimeConfig | None:
+        async with self._lock:
+            for provider in self._model_providers.values():
+                if provider.user_id != user_id or provider.tenant_id != tenant_id:
+                    continue
+                model = next((item for item in provider.models if item.is_default and item.enabled), None)
+                if model is not None:
+                    return ModelRuntimeConfig(
+                        provider_id=provider.id,
+                        provider_name=provider.name,
+                        base_url=provider.base_url,
+                        api_key=provider.api_key,
+                        model_id=model.id,
+                        model_name=model.name,
+                        model=model.model,
+                        timeout_seconds=provider.timeout_seconds,
+                    )
+        return None
 
     async def create_conversation(self, data: ConversationCreate) -> Conversation:
         conversation = Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())

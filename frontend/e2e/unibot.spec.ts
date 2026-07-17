@@ -8,6 +8,7 @@ interface MockState {
   conversations: JsonObject[];
   approvals: JsonObject[];
   tools: JsonObject[];
+  modelProviders: JsonObject[];
   streamDelayMs: number;
   staleFirstConversationLoadMs: number;
   conversationLoadCount: number;
@@ -43,6 +44,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     conversations: initial.conversations ?? [],
     approvals: initial.approvals ?? [],
     tools: initial.tools ?? [],
+    modelProviders: initial.modelProviders ?? [],
     streamDelayMs: initial.streamDelayMs ?? 0,
     staleFirstConversationLoadMs: initial.staleFirstConversationLoadMs ?? 0,
     conversationLoadCount: 0,
@@ -201,6 +203,34 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "GET" && path === "/memories/stats") {
       return json(route, { total: 0, fact: 0, preference: 0, goal: 0, instruction: 0 });
     }
+    if (method === "GET" && path === "/model-settings") {
+      const activeProvider = state.modelProviders.find((provider) =>
+        (provider.models as JsonObject[]).some((model) => model.is_default),
+      );
+      const activeModel = (activeProvider?.models as JsonObject[] | undefined)?.find((model) => model.is_default);
+      return json(route, {
+        providers: state.modelProviders,
+        active_model: activeProvider && activeModel
+          ? {
+              source: "user",
+              provider_id: activeProvider.id,
+              provider_name: activeProvider.name,
+              model_id: activeModel.id,
+              model_name: activeModel.name,
+              model: activeModel.model,
+            }
+          : { source: "environment", provider_name: "环境变量", model_name: "env-model", model: "env-model" },
+      });
+    }
+    if (method === "POST" && /^\/model-settings\/providers\/[^/]+\/models\/[^/]+\/default$/.test(path)) {
+      const [, , , providerId, , modelId] = path.split("/");
+      for (const provider of state.modelProviders) {
+        for (const model of provider.models as JsonObject[]) {
+          model.is_default = provider.id === providerId && model.id === modelId;
+        }
+      }
+      return json(route, state.modelProviders.find((provider) => provider.id === providerId));
+    }
     if (method === "GET" && path === "/health") return json(route, { status: "ok" });
     if (method === "GET" && path === "/admin/summary") {
       return json(route, { conversations: 2, tools: 1, skills: 1, ainas: 2, installations: 1, traces: 1, memories: 3 });
@@ -263,26 +293,62 @@ test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
   await page.goto("/apps");
 
   await expect(page.getByRole("heading", { name: "能力中心" })).toBeVisible();
-  await page.getByRole("button", { name: /Tools/ }).click();
-  await page.getByRole("button", { name: "注册Tool" }).click();
-  await expect(page.getByLabel("Tool JSON")).toHaveValue(/browser\.demo\.add/);
+  await page.getByRole("button", { name: /工具/ }).click();
+  await page.getByRole("button", { name: "注册工具" }).click();
+  await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.add/);
   await page.getByRole("button", { name: "提交注册" }).click();
 
-  await expect(page.getByText("Tool注册成功。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "浏览器加法 Tool" })).toBeVisible();
+  await expect(page.getByText("工具注册成功。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "浏览器加法工具" })).toBeVisible();
 });
 
 test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
   await installMockApi(page);
-  await page.goto("/settings");
+  await page.goto("/debug");
 
   await expect(page.getByText("后端在线", { exact: true })).toBeVisible();
   await expect(page.getByLabel("运行统计").getByText("3", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Debug 模式已关闭" })).toBeVisible();
-  await page.getByRole("button", { name: "Debug 已关闭" }).click();
+  await expect(page.getByRole("heading", { name: "调试模式已关闭" })).toBeVisible();
+  await page.getByRole("button", { name: "调试模式已关闭" }).click();
 
-  await expect(page.getByRole("heading", { name: "调用 Trace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "调用记录", exact: true })).toBeVisible();
   await expect(page.getByText("trace-e2e-1", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004B 区分应用、设置和 Debug，并切换默认模型", async ({ page }) => {
+  await installMockApi(page, {
+    modelProviders: [
+      {
+        id: "provider-e2e-1",
+        provider_type: "openai",
+        name: "团队模型服务",
+        base_url: "https://models.example.com/v1",
+        api_key_masked: "tes******-key",
+        has_api_key: true,
+        timeout_seconds: 60,
+        models: [
+          { id: "model-fast", name: "快速模型", model: "team-fast", enabled: true, is_default: false },
+          { id: "model-reasoning", name: "推理模型", model: "team-reasoning", enabled: true, is_default: true },
+        ],
+      },
+    ],
+  });
+  await page.goto("/settings");
+
+  await expect(page.getByRole("link", { name: "应用", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "设置", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Debug", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Provider 团队模型服务").getByText("快速模型", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Provider 团队模型服务").getByText("推理模型", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "设为默认" }).click();
+  await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();
+  await expect(page.getByText("快速模型", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("link", { name: "Debug", exact: true }).click();
+  await expect(page).toHaveURL(/\/debug$/);
+  await expect(page.getByRole("heading", { name: "Debug", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-005 new conversation reloads messages after a delayed stream", async ({ page }) => {
@@ -340,7 +406,8 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-e2e-1$/);
   await expect(page.getByRole("heading", { name: "Unibot Memory", exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("region", { name: "记忆系统" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "长期记忆", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-007 拒绝高风险审批并恢复空闲状态", async ({ page }) => {
