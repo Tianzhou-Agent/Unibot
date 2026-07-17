@@ -24,8 +24,8 @@ type Tab = "aina" | "tools" | "skills";
 
 const SAMPLE_TOOL = {
   tool_id: "browser.demo.add",
-  name: "浏览器加法 Tool",
-  description: "通过本地演示 Runtime 将两个整数相加。",
+  name: "浏览器加法工具",
+  description: "通过本地演示运行服务将两个整数相加。",
   input_schema: {
     type: "object",
     properties: { a: { type: "integer" }, b: { type: "integer" } },
@@ -45,7 +45,7 @@ const SAMPLE_TOOL = {
 const SAMPLE_RISKY_TOOL = {
   ...SAMPLE_TOOL,
   tool_id: "browser.demo.risky-add",
-  name: "高风险演示 Tool",
+  name: "高风险演示工具",
   description: "用于验证授权门禁的演示调用；实际只执行整数相加。",
   side_effect_level: "high",
 };
@@ -103,12 +103,12 @@ const SAMPLE_AINA = {
 
 const SAMPLE_SKILL = {
   skill_id: "browser.demo.arithmetic",
-  name: "算术验证 Skill",
-  description: "指导 Agent 优先使用已注册的确定性算术工具。",
+  name: "算术验证技能",
+  description: "指导智能体优先使用已注册的确定性算术工具。",
   version: "1.0.0",
   input_schema: { type: "object" },
   output_schema: { type: "object" },
-  instructions: "遇到精确加法请求时，调用浏览器加法 Tool，并基于工具结果回答。",
+  instructions: "遇到精确加法请求时，调用浏览器加法工具，并基于工具结果回答。",
   tools: ["browser.demo.add"],
   permissions: [],
   publisher: "unibot-demo",
@@ -260,10 +260,10 @@ export default function AllAppsPage() {
                 AINA 应用 <Count value={ainas.length} />
               </TabButton>
               <TabButton active={tab === "tools"} onClick={() => setTab("tools")} icon={<Wrench className="w-4 h-4" />}>
-                Tools <Count value={tools.length} />
+                工具 <Count value={tools.length} />
               </TabButton>
               <TabButton active={tab === "skills"} onClick={() => setTab("skills")} icon={<Code2 className="w-4 h-4" />}>
-                Skills <Count value={skills.length} />
+                技能 <Count value={skills.length} />
               </TabButton>
               <span className="flex-1" />
               {tab === "tools" ? (
@@ -328,7 +328,7 @@ function AinaGrid({
   onOpen: (aina: AinaRecord) => void;
   onDelete: (id: string) => void;
 }) {
-  if (!ainas.length) return <EmptyState icon={<AppWindow />} title="尚未注册 AINA" detail="从远程 Runtime Manifest 开始。" />;
+  if (!ainas.length) return <EmptyState icon={<AppWindow />} title="尚未注册 AINA" detail="请先注册远程运行服务清单。" />;
   return (
     <div className="grid grid-cols-2 gap-3">
       {ainas.map((record) => {
@@ -358,7 +358,7 @@ function AinaGrid({
                 </span>
               </div>
               <div className="text-[11px] text-ink-muted">
-                {manifest.capabilities.skills.length} Skills · {manifest.capabilities.tools.length} Tools · {manifest.permissions.length} 权限
+                {manifest.capabilities.skills.length} 项技能 · {manifest.capabilities.tools.length} 项工具 · {manifest.permissions.length} 项权限
               </div>
             </div>
             {manifest.permissions.length ? (
@@ -369,12 +369,12 @@ function AinaGrid({
             <div className="mt-4 flex items-center gap-2">
               {builtin ? (
                 <button type="button" onClick={() => onOpen(record)} className="btn-primary">
-                  <ExternalLink className="w-4 h-4" />打开 Canvas
+                  <ExternalLink className="w-4 h-4" />打开画布
                 </button>
               ) : installed ? (
                 <>
                   <button type="button" onClick={() => onOpen(record)} className="btn-primary">
-                    <ExternalLink className="w-4 h-4" />打开 Canvas
+                    <ExternalLink className="w-4 h-4" />打开画布
                   </button>
                   <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
                     <Unplug className="w-4 h-4" />卸载
@@ -400,7 +400,7 @@ function AinaGrid({
 }
 
 function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete: (id: string) => void }) {
-  if (!tools.length) return <EmptyState icon={<Wrench />} title="尚未注册 Tool" detail="注册一个 OpenAI function schema 与远程执行 Endpoint。" />;
+  if (!tools.length) return <EmptyState icon={<Wrench />} title="尚未注册工具" detail="请注册 OpenAI 函数结构和远程执行地址。" />;
   return (
     <div className="space-y-2.5">
       {tools.map((tool) => (
@@ -428,7 +428,7 @@ function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete: (id: str
 }
 
 function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete: (id: string) => void }) {
-  if (!skills.length) return <EmptyState icon={<Code2 />} title="尚未定义 Skill" detail="Skill 为 Agent 提供可复用行为指令。" />;
+  if (!skills.length) return <EmptyState icon={<Code2 />} title="尚未定义技能" detail="技能为智能体提供可复用的行为指令。" />;
   return (
     <div className="grid grid-cols-2 gap-3">
       {skills.map((skill) => (
@@ -470,7 +470,7 @@ function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { ta
           className="w-full rounded-lg border border-line-strong bg-slate-950 p-3 font-mono text-[11.5px] leading-relaxed text-slate-100 outline-none focus:border-accent"
         />
         <div className="mt-3 flex items-center gap-2">
-          <p className="text-[11px] text-ink-muted">提交前由后端执行 Schema、协议和远程健康检查。</p>
+          <p className="text-[11px] text-ink-muted">提交前由后端执行数据结构、协议和远程健康检查。</p>
           <span className="flex-1" />
           <button type="button" onClick={onClose} className="btn-outline">取消</button>
           <button type="button" disabled={saving} onClick={onSave} className="btn-primary">{saving ? "正在注册…" : "提交注册"}</button>
@@ -519,5 +519,5 @@ function LoadingCards() {
 }
 
 function tabLabel(tab: Tab): string {
-  return tab === "aina" ? "AINA" : tab === "tools" ? "Tool" : "Skill";
+  return tab === "aina" ? "AINA" : tab === "tools" ? "工具" : "技能";
 }

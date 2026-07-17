@@ -6,7 +6,7 @@ export class ApiError extends Error {
   status: number;
   body: unknown;
   constructor(status: number, body: unknown, message?: string) {
-    super(message ?? `Request failed: ${status}`);
+    super(message ?? `请求失败：${status}`);
     this.status = status;
     this.body = body;
   }
@@ -23,7 +23,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const text = await res.text();
   const body = text ? safeJson(text) : null;
   if (!res.ok) {
-    throw new ApiError(res.status, body, `Request failed (${res.status}) for ${path}`);
+    throw new ApiError(res.status, body, `请求 ${path} 失败（${res.status}）`);
   }
   return body as T;
 }

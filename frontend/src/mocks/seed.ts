@@ -16,7 +16,7 @@ const iso = (offsetMin: number) => new Date(now.getTime() - offsetMin * 60_000).
 export const SESSIONS: SessionSummary[] = [
   {
     id: "sess_canvas_app",
-    title: "询问Canvas应用详情",
+    title: "询问画布应用详情",
     kind: "conversation",
     status: "active",
     preview: "当前可用应用如下…",
@@ -72,7 +72,7 @@ const choiceCanvas = {
 
 export const CHAT_THREAD_CHAT_MODE: ChatThread = {
   sessionId: "sess_canvas_app",
-  title: "询问 Canvas 应用详情",
+  title: "询问画布应用详情",
   messages: [
     {
       id: "m1",
@@ -242,8 +242,8 @@ export const CHAT_THREAD_SYSTEM_INTERACTION: ChatThread = {
 export const APPS: AppDescriptor[] = [
   {
     id: "app_memory",
-    name: "Memory",
-    description: "memory-one 注册应用；从 Page 07 全部应用选择后，在 Canvas 中打开 memory-manager 主模块。",
+    name: "记忆管理",
+    description: "memory-one 注册应用；从全部应用页面选择后，在画布中打开 memory-manager 主模块。",
     icon: "database",
     tone: "blue",
     category: "extension",
@@ -254,7 +254,7 @@ export const APPS: AppDescriptor[] = [
   {
     id: "app_files",
     name: "文件解析",
-    description: "上传本地文件并交给 Agent 解析，适合文档、表格和运行日志。",
+    description: "上传本地文件并交给智能体解析，适合文档、表格和运行日志。",
     icon: "upload",
     tone: "blue",
     category: "extension",
@@ -264,7 +264,7 @@ export const APPS: AppDescriptor[] = [
     id: "app_events",
     name: "待处理事件",
     description:
-      "事件不是独立应用，而是 Agent 工具链中断后的待处理入口；从 Page 04 进入后补参数并恢复原会话。",
+      "事件不是独立应用，而是智能体工具链中断后的待处理入口；进入后补充参数并恢复原会话。",
     icon: "calendar-clock",
     tone: "blue",
     category: "system",
@@ -273,7 +273,7 @@ export const APPS: AppDescriptor[] = [
   {
     id: "app_tasks",
     name: "任务会话",
-    description: "任务由 Agent 派生，不手动新建；从 Page 06 进入后查看独立上下文、恢复 Canvas、完成或作废。",
+    description: "任务由智能体派生，不手动新建；进入后查看独立上下文、恢复画布、完成或作废。",
     icon: "list-todo",
     tone: "blue",
     category: "system",
@@ -291,7 +291,7 @@ export const APPS: AppDescriptor[] = [
   {
     id: "app_drawing",
     name: "画板",
-    description: "轻量白板工具，Agent 可以在对话中发起草图协作。",
+    description: "轻量白板工具，智能体可以在对话中发起草图协作。",
     icon: "pen-tool",
     tone: "indigo",
     category: "extension",
@@ -310,9 +310,9 @@ export const MEMORY_STATS: MemoryStats = {
 export const MEMORY_ITEMS: MemoryItem[] = [
   {
     id: "mem_1",
-    title: "World One 是本体 Agent 主机",
+    title: "World One 是本体智能体主机",
     meta: "事实 · workspace · 置信度 0.92 · 今天更新",
-    source: "来源：Page 1 对话 / Agent State",
+    source: "来源：对话页面 / 智能体状态",
     sourceTone: "accent",
     actions: ["keep", "delete"],
     category: "fact",
@@ -323,9 +323,9 @@ export const MEMORY_ITEMS: MemoryItem[] = [
   },
   {
     id: "mem_2",
-    title: "用户希望对 Canvas 与记忆关系保存摘要",
+    title: "用户希望保存画布与记忆关系的摘要",
     meta: "目标 · workspace · 置信度 0.68 · 待确认",
-    source: "来源：Canvas Mode 操作记录",
+    source: "来源：画布模式操作记录",
     sourceTone: "muted",
     actions: ["keep", "delete"],
     category: "goal",

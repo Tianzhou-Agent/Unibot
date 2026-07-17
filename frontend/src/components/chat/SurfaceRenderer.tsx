@@ -207,7 +207,7 @@ function FormBlock({ block }: { block: Extract<SurfaceBlock, { kind: "form" }> }
         ))}
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-[12px] text-ink-muted">填写后 Agent 将继续创建该需求。</span>
+        <span className="text-[12px] text-ink-muted">填写后智能体将继续创建该需求。</span>
         <div className="flex items-center gap-2">
           <button
             type="button"

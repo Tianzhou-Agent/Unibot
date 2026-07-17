@@ -113,11 +113,11 @@ export const handlers = [
 
 function echoReply(content: string, choiceId?: string): string {
   if (choiceId) {
-    return `已记录你选择的操作（${choiceId}）。Agent 正在调用对应工具，结果将出现在下一条消息。`;
+    return `已记录你选择的操作（${choiceId}）。智能体正在调用对应工具，结果将出现在下一条消息。`;
   }
   if (content.includes("记忆"))
     return "已扫描工作区：18 条语义记忆、7 个关系节点、2 个活跃上下文。最相关的是 workspace memory、canvas context 与 ontology session。";
   if (content.includes("应用") || content.includes("画布"))
-    return "可用应用：Memory、文件解析、待处理事件、任务会话。选择应用后会进入对应工作台。";
+    return "可用应用：记忆管理、文件解析、待处理事件、任务会话。选择应用后会进入对应工作台。";
   return "收到。让我先调用相应工具再回复你。";
 }

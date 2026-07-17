@@ -33,7 +33,7 @@ class Message(StrictModel):
 class ConversationCreate(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
-    title: str = "New conversation"
+    title: str = "新对话"
     category: str = Field(default="general", min_length=1, max_length=40)
     config: dict[str, Any] = Field(default_factory=dict)
     enabled_ainas: list[str] = Field(default_factory=list)

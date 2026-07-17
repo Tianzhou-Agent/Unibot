@@ -153,6 +153,17 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert llm.calls[0]["tool_choice"]["function"]["name"].startswith("builtin_list_app_")
 
 
+def test_open_assistant_returns_a_dedicated_main_widget() -> None:
+    with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+        response = client.post("/ainas/unibot-assistant/open", json={})
+
+    assert response.status_code == 200
+    widget = response.json()["main_widget"]
+    assert widget["id"] == "unibot-assistant-main"
+    assert widget["kind"] == "panel"
+    assert {item["aina_id"] for item in widget["apps"]} >= {"unibot-assistant", "unibot-memory"}
+
+
 def test_clarification_builtin_returns_a_host_rendered_prefilled_form() -> None:
     llm = ScriptedLLM(
         [

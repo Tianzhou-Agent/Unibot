@@ -389,6 +389,13 @@ class InMemoryRepository:
             await self._save_record(AINAS_RESOURCE, aina_id, aina)
         return self._copy(aina)
 
+    async def upsert_aina(self, aina: AinaRecord) -> AinaRecord:
+        aina_id = aina.manifest.aina.id
+        async with self._lock:
+            self._ainas[aina_id] = aina
+            await self._save_record(AINAS_RESOURCE, aina_id, aina)
+        return self._copy(aina)
+
     async def get_aina(self, aina_id: str) -> AinaRecord:
         async with self._lock:
             aina = self._ainas.get(aina_id)

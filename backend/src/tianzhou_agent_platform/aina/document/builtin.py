@@ -37,20 +37,20 @@ DOCUMENT_TOOL_IDS = {
 def document_tool_capabilities() -> list[AinaCapability]:
     name_property = {
         "type": "string",
-        "description": "Markdown document name. The .md extension is added when omitted.",
+        "description": "Markdown 文档名称；省略 .md 扩展名时会自动补充。",
     }
-    content_property = {"type": "string", "description": "UTF-8 Markdown content."}
+    content_property = {"type": "string", "description": "UTF-8 编码的 Markdown 内容。"}
     return [
         AinaCapability(
             id=LIST_DOCUMENTS_TOOL_ID,
-            name="List documents",
-            description="List Markdown documents owned by the current user.",
+            name="列出文档",
+            description="列出当前用户拥有的 Markdown 文档。",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         AinaCapability(
             id=READ_DOCUMENT_TOOL_ID,
-            name="Read document",
-            description="Read the complete content and metadata of one Markdown document.",
+            name="读取文档",
+            description="读取一个 Markdown 文档的完整内容和元数据。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -60,8 +60,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=CREATE_DOCUMENT_TOOL_ID,
-            name="Create document",
-            description="Create a new Markdown document. This never overwrites an existing file.",
+            name="创建文档",
+            description="创建新的 Markdown 文档，不会覆盖已有文件。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -71,8 +71,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=UPDATE_DOCUMENT_TOOL_ID,
-            name="Update document",
-            description="Replace the complete content of an existing Markdown document.",
+            name="更新文档",
+            description="替换已有 Markdown 文档的完整内容。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -82,8 +82,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=APPEND_DOCUMENT_TOOL_ID,
-            name="Append to document",
-            description="Append Markdown text to an existing document without replacing its current content.",
+            name="追加文档内容",
+            description="在已有文档末尾追加 Markdown 内容，不替换原内容。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -93,8 +93,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=RENAME_DOCUMENT_TOOL_ID,
-            name="Rename document",
-            description="Rename an existing Markdown document without changing its content.",
+            name="重命名文档",
+            description="重命名已有 Markdown 文档，不改变文档内容。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "new_name": name_property},
@@ -104,8 +104,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=DELETE_DOCUMENT_TOOL_ID,
-            name="Delete document",
-            description="Permanently delete an existing Markdown document after user confirmation.",
+            name="删除文档",
+            description="经用户确认后永久删除已有 Markdown 文档。",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -122,12 +122,9 @@ def unibot_documents_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_DOCUMENTS_ID,
-                name="Document Editor",
+                name="文档编辑器",
                 version="1.0.0",
-                description=(
-                    "Creates, reads, edits, renames, lists, and deletes Markdown documents stored on NAS. "
-                    "Use for document writing and file-management requests."
-                ),
+                description="创建、读取、编辑、重命名和删除存储在 NAS 中的 Markdown 文档。",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -135,8 +132,8 @@ def unibot_documents_record() -> AinaRecord:
                 skills=[
                     AinaCapability(
                         id="markdown-document-management",
-                        name="Markdown document management",
-                        description="Write and maintain user-owned Markdown documents in persistent NAS storage.",
+                        name="Markdown 文档管理",
+                        description="在持久化 NAS 存储中编写和维护用户自己的 Markdown 文档。",
                         instructions=(
                             "Use document.list when the target filename is unknown. Read the current document "
                             "before changing only part of it, then send the complete revised Markdown to "
@@ -150,15 +147,15 @@ def unibot_documents_record() -> AinaRecord:
                     AinaUiCapability(
                         id="document-editor",
                         kind="document",
-                        description="Host-rendered Markdown file list, editor, and preview backed by NAS.",
+                        description="由平台渲染、以 NAS 为存储的 Markdown 文件列表、编辑器和预览。",
                     )
                 ],
             ),
             main_widget=WidgetDefinition(
                 id="unibot-documents-main",
                 kind="document",
-                title="Markdown Document Editor",
-                description="Create and edit Markdown documents stored in persistent NAS storage.",
+                title="Markdown 文档编辑器",
+                description="创建和编辑持久化存储在 NAS 中的 Markdown 文档。",
             ),
             authentication=Authentication(type="none"),
         ),
