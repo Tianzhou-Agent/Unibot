@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import socket
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,6 +52,10 @@ class AgentSettings(BaseSettings):
         ge=1,
         le=32,
         validation_alias=AliasChoices("UNIBOT_MAX_AGENT_ITERATIONS", "max_agent_iterations"),
+    )
+    node_id: str = Field(
+        default_factory=socket.gethostname,
+        validation_alias=AliasChoices("UNIBOT_NODE_ID", "node_id"),
     )
     system_prompt: str = Field(
         default=(

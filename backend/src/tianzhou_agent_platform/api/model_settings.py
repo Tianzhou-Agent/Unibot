@@ -1,14 +1,19 @@
+from time import perf_counter
+
+import httpx
 from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.api.dependencies import repository, settings
 from tianzhou_agent_platform.core.model_settings import (
     ActiveModel,
     ModelActor,
+    ModelHealthResult,
     ModelProviderCreate,
     ModelProviderUpdate,
     ModelProviderView,
     ModelSettingsResponse,
     provider_view,
+    chat_completions_url,
 )
 
 
@@ -92,5 +97,55 @@ def create_model_settings_router() -> APIRouter:
             tenant_id=payload.tenant_id,
         )
         return provider_view(provider)
+
+    @router.post(
+        "/providers/{provider_id}/models/{model_id}/health",
+        response_model=ModelHealthResult,
+    )
+    async def check_model_health(
+        provider_id: str,
+        model_id: str,
+        payload: ModelActor,
+        request: Request,
+    ) -> ModelHealthResult:
+        provider = await repository(request).get_model_provider(
+            provider_id,
+            user_id=payload.user_id,
+            tenant_id=payload.tenant_id,
+        )
+        model = next((item for item in provider.models if item.id == model_id), None)
+        if model is None:
+            from tianzhou_agent_platform.core.errors import not_found
+
+            raise not_found("Model", model_id)
+        headers = {"Content-Type": "application/json"}
+        if provider.api_key:
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+        started = perf_counter()
+        error: str | None = None
+        try:
+            client: httpx.AsyncClient = request.app.state.model_health_http_client
+            response = await client.post(
+                    chat_completions_url(provider.base_url),
+                    headers=headers,
+                    json={
+                        "model": model.model,
+                        "messages": [{"role": "user", "content": "Reply with OK."}],
+                        "max_tokens": 1,
+                        "stream": False,
+                    },
+                    timeout=provider.timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data.get("choices"), list) or not data["choices"]:
+                raise ValueError("Provider response did not contain choices")
+        except (httpx.HTTPError, ValueError) as exc:
+            error = str(exc)
+        return ModelHealthResult(
+            status="unhealthy" if error else "healthy",
+            latency_ms=round((perf_counter() - started) * 1000, 1),
+            error=error,
+        )
 
     return router

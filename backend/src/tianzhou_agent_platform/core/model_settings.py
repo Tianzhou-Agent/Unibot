@@ -114,6 +114,13 @@ class ModelActor(StrictModel):
     tenant_id: str = "default"
 
 
+class ModelHealthResult(StrictModel):
+    status: Literal["healthy", "unhealthy"]
+    checked_at: datetime = Field(default_factory=utc_now)
+    latency_ms: float
+    error: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class ModelRuntimeConfig:
     provider_id: str
