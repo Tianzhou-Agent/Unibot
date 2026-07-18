@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
+from tianzhou_agent_platform.aina.scheduler import AinaScheduler
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.router import create_router
 from tianzhou_agent_platform.config import AgentSettings
@@ -35,6 +36,7 @@ def create_app(
     storage_settings: StorageSettings | None = None,
     llm: LLMClient | None = None,
     capability_http_client: httpx.AsyncClient | None = None,
+    model_health_http_client: httpx.AsyncClient | None = None,
     document_service: DocumentService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -56,6 +58,8 @@ def create_app(
     )
     resolved_llm = llm or OpenAICompatibleClient(resolved_settings)
     gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
+    health_client = model_health_http_client or httpx.AsyncClient()
+    scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -68,12 +72,17 @@ def create_app(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
             )
+            scheduler_task = asyncio.create_task(scheduler.run())
+            lifespan_app.state.background_tasks.add(scheduler_task)
             yield
         finally:
+            scheduler.stop()
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
             await gateway.aclose()
+            if model_health_http_client is None:
+                await health_client.aclose()
             close = getattr(resolved_llm, "aclose", None)
             if close is not None:
                 await close()
@@ -89,6 +98,7 @@ def create_app(
     app.state.repository = resolved_repository
     app.state.llm = resolved_llm
     app.state.capability_gateway = gateway
+    app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
     app.state.storage_stores = storage_stores
     app.state.storage_status = None
@@ -100,6 +110,7 @@ def create_app(
         document_service=resolved_document_service,
     )
     app.state.background_tasks = set()
+    app.state.aina_scheduler = scheduler
 
     @app.middleware("http")
     async def attach_trace_id(request: Request, call_next):  # type: ignore[no-untyped-def]

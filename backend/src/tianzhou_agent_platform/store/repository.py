@@ -12,6 +12,7 @@ from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import conflict
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
+from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTask
 from tianzhou_agent_platform.core.repository import (
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,
@@ -19,6 +20,7 @@ from tianzhou_agent_platform.core.repository import (
     INSTALLATIONS_RESOURCE,
     MEMORIES_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
+    SCHEDULED_AINA_TASKS_RESOURCE,
     SKILLS_RESOURCE,
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
@@ -52,6 +54,7 @@ repository_tables = {
         TRACES_RESOURCE,
         APPROVALS_RESOURCE,
         MODEL_PROVIDERS_RESOURCE,
+        SCHEDULED_AINA_TASKS_RESOURCE,
     )
 }
 
@@ -74,6 +77,7 @@ class PersistentRepository(InMemoryRepository):
         traces = await self._load_models(TRACES_RESOURCE, TraceRecord)
         approvals = await self._load_models(APPROVALS_RESOURCE, ApprovalRecord)
         model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
+        scheduled_tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -87,6 +91,15 @@ class PersistentRepository(InMemoryRepository):
             self._traces = {item.trace_id: item for item in traces}
             self._approvals = {item.id: item for item in approvals}
             self._model_providers = {item.id: item for item in model_providers}
+            self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}
+
+    async def list_scheduled_aina_tasks(self) -> list[ScheduledAinaTask]:
+        # Every node refreshes from MySQL so updates made by the elected node
+        # become visible to all schedulers without process-local cache drift.
+        tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
+        async with self._lock:
+            self._scheduled_aina_tasks = {item.id: item for item in tasks}
+        return [self._copy(item) for item in tasks]
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
         acquired = await self.stores.redis.set_if_absent(

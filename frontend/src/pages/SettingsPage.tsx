@@ -15,6 +15,7 @@ import { ProviderEditor } from "@/features/model-settings/ProviderEditor";
 import type {
   ModelProvider,
   ModelProviderPayload,
+  ModelHealthResult,
   ModelSettingsResponse,
   ProviderType,
 } from "@/features/model-settings/types";
@@ -33,6 +34,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [busyModel, setBusyModel] = useState<string | null>(null);
+  const [modelHealth, setModelHealth] = useState<Record<string, ModelHealthResult>>({});
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -96,6 +98,21 @@ export default function SettingsPage() {
       await load();
     } catch (deleteError) {
       setError(apiErrorMessage(deleteError));
+    } finally {
+      setBusyModel(null);
+    }
+  }
+
+  async function checkHealth(providerId: string, modelId: string) {
+    setBusyModel(modelId);
+    try {
+      const result = await api.post<ModelHealthResult>(
+        `/model-settings/providers/${providerId}/models/${modelId}/health`,
+        { user_id: "anonymous", tenant_id: "default" },
+      );
+      setModelHealth((current) => ({ ...current, [modelId]: result }));
+    } catch (healthError) {
+      setError(apiErrorMessage(healthError));
     } finally {
       setBusyModel(null);
     }
@@ -176,6 +193,8 @@ export default function SettingsPage() {
                   onCancelDelete={() => setPendingDelete(null)}
                   onDelete={() => void deleteProvider(provider.id)}
                   onSetDefault={(modelId) => void setDefault(provider.id, modelId)}
+                  health={modelHealth}
+                  onCheckHealth={(modelId) => void checkHealth(provider.id, modelId)}
                 />
               ))}
             </div>
@@ -213,6 +232,8 @@ function ProviderSection({
   onCancelDelete,
   onDelete,
   onSetDefault,
+  health,
+  onCheckHealth,
 }: {
   provider: ModelProvider;
   activeModelId: string | null;
@@ -223,6 +244,8 @@ function ProviderSection({
   onCancelDelete: () => void;
   onDelete: () => void;
   onSetDefault: (modelId: string) => void;
+  health: Record<string, ModelHealthResult>;
+  onCheckHealth: (modelId: string) => void;
 }) {
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white shadow-card" aria-label={`Provider ${provider.name}`}>
@@ -255,6 +278,7 @@ function ProviderSection({
       <div className="divide-y divide-line">
         {provider.models.map((model) => {
           const isActive = model.id === activeModelId;
+          const modelStatus = health[model.id];
           return (
             <div key={model.id} className={classNames("grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5", isActive && "bg-success-soft/60")}>
               <div className="min-w-0">
@@ -264,12 +288,22 @@ function ProviderSection({
                   {!model.enabled ? <span className="text-[10px] font-bold text-ink-subtle">已停用</span> : null}
                 </div>
                 <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-muted">{model.model}</p>
+                {modelStatus ? (
+                  <p className={classNames("mt-1 text-[10.5px] font-semibold", modelStatus.status === "healthy" ? "text-success-deep" : "text-danger-deep")}>
+                    {modelStatus.status === "healthy" ? `健康 · ${modelStatus.latency_ms} ms` : `异常 · ${modelStatus.error ?? "检测失败"}`}
+                  </p>
+                ) : null}
               </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => onCheckHealth(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:opacity-40">
+                  <RefreshCw className={classNames("h-3.5 w-3.5", busyModel === model.id && "animate-spin")} />健康检测
+                </button>
               {!isActive ? (
                 <button type="button" onClick={() => onSetDefault(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-40">
                   <Check className="h-3.5 w-3.5" />设为默认
                 </button>
               ) : null}
+              </div>
             </div>
           );
         })}

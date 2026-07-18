@@ -7,6 +7,7 @@ from tianzhou_agent_platform.api.documents import create_document_router
 from tianzhou_agent_platform.api.memories import create_memory_router
 from tianzhou_agent_platform.api.model_settings import create_model_settings_router
 from tianzhou_agent_platform.api.operations import create_operations_router
+from tianzhou_agent_platform.api.schedules import create_schedule_router
 
 
 def create_router() -> APIRouter:
@@ -18,4 +19,5 @@ def create_router() -> APIRouter:
     router.include_router(create_memory_router())
     router.include_router(create_model_settings_router())
     router.include_router(create_capability_router())
+    router.include_router(create_schedule_router())
     return router
