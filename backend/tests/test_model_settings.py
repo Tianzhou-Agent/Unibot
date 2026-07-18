@@ -124,3 +124,27 @@ def test_agent_uses_the_users_selected_model_configuration() -> None:
         for event in trace["events"]
         if event["kind"].startswith("model.")
     )
+
+
+def test_model_health_check_reports_latency_and_uses_selected_model() -> None:
+    requests: list[httpx.Request] = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    with TestClient(create_app(settings=_settings(), model_health_http_client=http_client)) as client:
+        created = client.post("/model-settings/providers", json=_provider_payload()).json()
+        model = created["models"][0]
+        response = client.post(
+            f"/model-settings/providers/{created['id']}/models/{model['id']}/health",
+            json={},
+        )
+
+    asyncio.run(http_client.aclose())
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+    assert response.json()["latency_ms"] >= 0
+    assert json.loads(requests[0].content)["model"] == "team-fast"
+    assert requests[0].headers["Authorization"] == "Bearer user-secret-key-value"

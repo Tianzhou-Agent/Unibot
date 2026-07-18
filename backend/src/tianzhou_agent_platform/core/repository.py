@@ -12,6 +12,11 @@ from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecor
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.aina.scheduler import (
+    ScheduledAinaTask,
+    ScheduledAinaTaskCreate,
+    ScheduledAinaTaskUpdate,
+)
 from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
@@ -32,6 +37,7 @@ INSTALLATIONS_RESOURCE = "installations"
 TRACES_RESOURCE = "traces"
 APPROVALS_RESOURCE = "approvals"
 MODEL_PROVIDERS_RESOURCE = "model_providers"
+SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 
 
 class InMemoryRepository:
@@ -53,6 +59,7 @@ class InMemoryRepository:
         self._approvals: dict[str, ApprovalRecord] = {}
         self._memories: dict[str, MemoryRecord] = {}
         self._model_providers: dict[str, ModelProviderRecord] = {}
+        self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -253,6 +260,43 @@ class InMemoryRepository:
                         timeout_seconds=provider.timeout_seconds,
                     )
         return None
+
+    async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
+        task = ScheduledAinaTask(**data.model_dump())
+        async with self._lock:
+            self._scheduled_aina_tasks[task.id] = task
+            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
+        return self._copy(task)
+
+    async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask:
+        async with self._lock:
+            self._scheduled_aina_tasks[task.id] = task
+            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
+        return self._copy(task)
+
+    async def list_scheduled_aina_tasks(self) -> list[ScheduledAinaTask]:
+        async with self._lock:
+            return [self._copy(item) for item in self._scheduled_aina_tasks.values()]
+
+    async def update_scheduled_aina_task(
+        self, task_id: str, data: ScheduledAinaTaskUpdate
+    ) -> ScheduledAinaTask:
+        async with self._lock:
+            task = self._scheduled_aina_tasks.get(task_id)
+            if task is None:
+                raise not_found("Scheduled AINA task", task_id)
+            changes = data.model_dump(exclude_none=True)
+            changes["updated_at"] = datetime.now(UTC)
+            updated = task.model_copy(update=changes, deep=True)
+            self._scheduled_aina_tasks[task_id] = updated
+            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
+            return self._copy(updated)
+
+    async def remove_scheduled_aina_task(self, task_id: str) -> None:
+        async with self._lock:
+            if self._scheduled_aina_tasks.pop(task_id, None) is None:
+                raise not_found("Scheduled AINA task", task_id)
+            await self._delete_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id)
 
     async def create_conversation(self, data: ConversationCreate) -> Conversation:
         conversation = Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())

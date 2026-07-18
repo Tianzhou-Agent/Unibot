@@ -33,6 +33,13 @@ export interface ModelSettingsResponse {
   active_model: ActiveModel;
 }
 
+export interface ModelHealthResult {
+  status: "healthy" | "unhealthy";
+  checked_at: string;
+  latency_ms: number;
+  error?: string | null;
+}
+
 export interface ModelProviderPayload {
   user_id: string;
   tenant_id: string;
