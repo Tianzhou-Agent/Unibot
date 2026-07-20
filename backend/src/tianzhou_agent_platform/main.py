@@ -83,6 +83,7 @@ def create_app(
             await gateway.aclose()
             if model_health_http_client is None:
                 await health_client.aclose()
+            await lifespan_app.state.agent_runtime.aclose()
             close = getattr(resolved_llm, "aclose", None)
             if close is not None:
                 await close()
