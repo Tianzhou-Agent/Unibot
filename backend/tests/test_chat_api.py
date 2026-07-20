@@ -11,8 +11,12 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.chat import TraceRecord
+from tianzhou_agent_platform.core.conversation import ConversationCreate
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.core.llm import EventSink, LLMResult
+from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
@@ -77,6 +81,52 @@ def test_conversations_can_be_categorized_filtered_and_deleted() -> None:
     assert [item["id"] for item in work.json()] == [created["id"]]
     assert deleted.status_code == 204
     assert remaining.json() == []
+
+
+def test_get_conversation_recovers_running_state_when_active_trace_is_missing() -> None:
+    repository = InMemoryRepository()
+
+    async def seed_interrupted_run() -> str:
+        conversation = await repository.create_conversation(ConversationCreate(title="Interrupted"))
+        await repository.start_conversation_run(conversation.id, "trace_missing")
+        return conversation.id
+
+    conversation_id = asyncio.run(seed_interrupted_run())
+    with TestClient(create_app(settings=_settings(), repository=repository, llm=ScriptedLLM([]))) as client:
+        response = client.get(f"/conversations/{conversation_id}")
+
+    assert response.status_code == 200
+    assert response.json()["run_status"] == "failed"
+    assert response.json()["active_trace_id"] is None
+    assert response.json()["run_error"] == "上一次处理未正常结束，请重新发送请求。"
+
+
+class TraceCreationFailureRepository(InMemoryRepository):
+    async def create_trace(self, trace: TraceRecord) -> TraceRecord:
+        del trace
+        raise PlatformError(
+            "DEPENDENCY_FAILED",
+            "Trace storage is unavailable",
+            status_code=503,
+            source="storage",
+        )
+
+
+def test_trace_creation_failure_does_not_leave_conversation_running() -> None:
+    repository = TraceCreationFailureRepository()
+    conversation = asyncio.run(repository.create_conversation(ConversationCreate(title="Trace failure")))
+
+    with TestClient(create_app(settings=_settings(), repository=repository, llm=ScriptedLLM([]))) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "Trigger trace failure", "conversation_id": conversation.id},
+        )
+        recovered = client.get(f"/conversations/{conversation.id}")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "Trace storage is unavailable"
+    assert recovered.json()["run_status"] == "idle"
+    assert recovered.json()["active_trace_id"] is None
 
 
 class BlockingLLM:

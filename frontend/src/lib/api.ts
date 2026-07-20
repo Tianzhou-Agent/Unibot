@@ -52,6 +52,7 @@ export async function streamChat(
     user_id?: string;
     tenant_id?: string;
     capability?: string;
+    preferred_aina_id?: string;
   },
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,

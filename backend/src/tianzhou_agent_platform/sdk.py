@@ -28,6 +28,7 @@ class UnibotClient:
         user_id: str = "anonymous",
         tenant_id: str = "default",
         capability: str | None = None,
+        preferred_aina_id: str | None = None,
     ) -> dict[str, Any]:
         response = await self._client.post(
             "/chat",
@@ -37,6 +38,7 @@ class UnibotClient:
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "capability": capability,
+                "preferred_aina_id": preferred_aina_id,
             },
         )
         response.raise_for_status()

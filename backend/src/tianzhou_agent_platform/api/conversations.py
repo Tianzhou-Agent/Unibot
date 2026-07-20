@@ -26,7 +26,7 @@ def create_conversation_router() -> APIRouter:
 
     @router.get("/conversations/{conversation_id}", response_model=Conversation)
     async def get_conversation(conversation_id: str, request: Request) -> Conversation:
-        return await repository(request).get_conversation(conversation_id)
+        return await repository(request).reconcile_conversation_run(conversation_id)
 
     @router.patch("/conversations/{conversation_id}", response_model=Conversation)
     async def update_conversation(

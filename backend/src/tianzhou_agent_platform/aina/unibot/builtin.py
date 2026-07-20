@@ -227,6 +227,18 @@ async def open_aina(
                 status_code=403,
             )
 
+    if conversation_id is not None:
+        await repository.require_conversation_actor(
+            conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        await repository.bind_conversation_aina(
+            conversation_id,
+            aina_id,
+            make_primary=True,
+        )
+
     main_widget = record.manifest.main_widget
     if aina_id == UNIBOT_ASSISTANT_ID:
         main_widget = await assistant_main_widget(repository, user_id=user_id, tenant_id=tenant_id)

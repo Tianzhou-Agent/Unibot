@@ -183,6 +183,45 @@ def test_memory_tool_remains_available_for_follow_up_durable_fact() -> None:
     assert not any(event["kind"] == "tool.failed" for event in trace.json()["events"])
 
 
+def test_memory_update_tool_replaces_existing_fact() -> None:
+    llm = ScriptedLLM([])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        memory = client.post(
+            "/memories",
+            json={"content": "The user is an engineer", "category": "fact"},
+        ).json()
+        llm.responses.extend(
+            [
+                call_first_tool(
+                    prefix="builtin_memory_update_",
+                    arguments=(
+                        f'{{"memory_id":"{memory["id"]}",'
+                        '"content":"The user is a software engineer","category":"fact"}'
+                    ),
+                ),
+                assistant("I updated your occupation."),
+            ]
+        )
+        response = client.post(
+            "/chat",
+            json={
+                "message": "Update my occupation to software engineer",
+                "capability": "aina:unibot-memory",
+            },
+        )
+        memories = client.get("/memories")
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
+
+    assert response.status_code == 200
+    assert memories.json()["total"] == 1
+    assert memories.json()["items"][0]["id"] == memory["id"]
+    assert memories.json()["items"][0]["content"] == "The user is a software engineer"
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "memory.update"
+        for event in trace.json()["events"]
+    )
+
+
 def test_forget_memory_requires_approval_then_deletes() -> None:
     llm = ScriptedLLM([])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:

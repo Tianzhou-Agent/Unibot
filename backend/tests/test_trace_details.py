@@ -32,6 +32,7 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
     assert {item["id"] for item in available["unibot-memory"]["capabilities"]["tools"]} == {
         "memory.remember",
         "memory.recall",
+        "memory.update",
         "memory.forget",
     }
     scope = {item["aina_id"]: item["capabilities"] for item in discovery["model_scope"]["by_aina"]}
@@ -43,6 +44,7 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
     assert {item["id"] for item in scope["unibot-memory"]} == {
         "memory.remember",
         "memory.recall",
+        "memory.update",
         "memory.forget",
     }
 

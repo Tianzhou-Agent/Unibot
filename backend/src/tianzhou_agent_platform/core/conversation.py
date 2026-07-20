@@ -37,6 +37,9 @@ class ConversationCreate(StrictModel):
     category: str = Field(default="general", min_length=1, max_length=40)
     config: dict[str, Any] = Field(default_factory=dict)
     enabled_ainas: list[str] = Field(default_factory=list)
+    active_aina_ids: list[str] = Field(default_factory=list)
+    primary_aina_id: str | None = None
+    last_aina_id: str | None = None
 
 
 class ConversationUpdate(StrictModel):
@@ -44,6 +47,9 @@ class ConversationUpdate(StrictModel):
     category: str | None = Field(default=None, min_length=1, max_length=40)
     config: dict[str, Any] | None = None
     enabled_ainas: list[str] | None = None
+    active_aina_ids: list[str] | None = None
+    primary_aina_id: str | None = None
+    last_aina_id: str | None = None
 
 
 class Conversation(StrictModel):
@@ -59,6 +65,9 @@ class Conversation(StrictModel):
     run_started_at: datetime | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     enabled_ainas: list[str] = Field(default_factory=list)
+    active_aina_ids: list[str] = Field(default_factory=list)
+    primary_aina_id: str | None = None
+    last_aina_id: str | None = None
     messages: list[Message] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

@@ -38,6 +38,7 @@ TRACES_RESOURCE = "traces"
 APPROVALS_RESOURCE = "approvals"
 MODEL_PROVIDERS_RESOURCE = "model_providers"
 SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
+INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
 
 
 class InMemoryRepository:
@@ -413,6 +414,63 @@ class InMemoryRepository:
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
+
+    async def bind_conversation_aina(
+        self,
+        conversation_id: str,
+        aina_id: str,
+        *,
+        make_primary: bool = False,
+        mark_used: bool = False,
+    ) -> Conversation:
+        async with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is None or conversation.status == "deleted":
+                raise not_found("Conversation", conversation_id)
+            active_aina_ids = list(conversation.active_aina_ids)
+            if aina_id not in active_aina_ids:
+                active_aina_ids.append(aina_id)
+            changes: dict[str, Any] = {
+                "active_aina_ids": active_aina_ids,
+                "updated_at": datetime.now(UTC),
+            }
+            if make_primary or conversation.primary_aina_id is None:
+                changes["primary_aina_id"] = aina_id
+            if mark_used:
+                changes["last_aina_id"] = aina_id
+            updated = conversation.model_copy(update=changes, deep=True)
+            self._conversations[conversation_id] = updated
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
+            return self._copy(updated)
+
+    async def reconcile_conversation_run(self, conversation_id: str) -> Conversation:
+        conversation = await self.get_conversation(conversation_id)
+        if conversation.run_status != "running":
+            return conversation
+        if conversation.active_trace_id is None:
+            return await self.finish_conversation_run(
+                conversation_id,
+                status="failed",
+                error=INTERRUPTED_RUN_ERROR,
+            )
+        try:
+            trace = await self.get_trace(conversation.active_trace_id)
+        except PlatformError as exc:
+            if exc.code != "RESOURCE_NOT_FOUND":
+                raise
+            return await self.finish_conversation_run(
+                conversation_id,
+                status="failed",
+                error=INTERRUPTED_RUN_ERROR,
+            )
+        if trace.status == "running":
+            return conversation
+        status = "idle" if trace.status == "completed" else trace.status
+        return await self.finish_conversation_run(
+            conversation_id,
+            status=status,
+            error=INTERRUPTED_RUN_ERROR if status == "failed" else None,
+        )
 
     async def create_memory(self, data: MemoryCreate) -> MemoryRecord:
         normalized = data.content.casefold()

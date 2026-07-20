@@ -4,11 +4,9 @@ import {
   ArrowUp,
   Bot,
   Check,
-  ChevronDown,
   Pencil,
   RotateCcw,
   ShieldAlert,
-  Sparkles,
   Trash2,
   Wrench,
   X,
@@ -23,15 +21,11 @@ import { CONVERSATION_CATEGORIES } from "@/lib/conversationCategories";
 import { useDebugMode } from "@/lib/debugMode";
 import { classNames, uid } from "@/lib/utils";
 import type {
-  AinaInstallation,
   AinaCanvasResponse,
-  AinaRecord,
   ApprovalRecord,
   BackendMessage,
-  CapabilityOption,
   ChatResponse,
   ConversationRecord,
-  ToolRecord,
 } from "@/types";
 
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
@@ -48,8 +42,6 @@ export default function ChatModePage() {
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
-  const [capabilities, setCapabilities] = useState<CapabilityOption[]>([]);
-  const [selectedCapability, setSelectedCapability] = useState("");
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -119,48 +111,6 @@ export default function ChatModePage() {
   }, []);
 
   useEffect(() => {
-    async function loadCapabilities() {
-      try {
-        const [tools, ainas, installations] = await Promise.all([
-          api.get<ToolRecord[]>("/tools"),
-          api.get<AinaRecord[]>("/ainas"),
-          api.get<AinaInstallation[]>("/installations?user_id=anonymous&tenant_id=default"),
-        ]);
-        const installedIds = new Set(
-          installations.filter((item) => item.status === "active").map((item) => item.aina_id),
-        );
-        setCapabilities([
-          ...tools
-            .filter((tool) => tool.status === "published")
-            .map((tool) => ({
-              value: `tool:${tool.tool_id}`,
-              label: tool.name,
-              kind: "tool" as const,
-            })),
-          ...ainas
-            .filter((aina) => (
-              aina.status === "registered"
-              && (
-                installedIds.has(aina.manifest.aina.id)
-                || aina.manifest.aina.id === "unibot-memory"
-              )
-            ))
-            .map((aina) => ({
-              value: `aina:${aina.manifest.aina.id}`,
-              label: aina.manifest.aina.name,
-                kind: "aina" as const,
-              })),
-          { value: "builtin:list_app", label: "列出应用", kind: "builtin" as const },
-          { value: "builtin:open_aina", label: "打开 AINA", kind: "builtin" as const },
-        ]);
-      } catch {
-        setCapabilities([]);
-      }
-    }
-    void loadCapabilities();
-  }, [conversationId]);
-
-  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
   }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending]);
 
@@ -201,7 +151,6 @@ export default function ChatModePage() {
           message: text,
           conversation_id: targetConversation.id,
           ...ACTOR,
-          capability: selectedCapability || undefined,
         },
         (event: StreamEvent) => {
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
@@ -472,9 +421,6 @@ export default function ChatModePage() {
           {!deleted ? (
             <ChatComposer
               disabled={sending || loading}
-              capabilities={capabilities}
-              selectedCapability={selectedCapability}
-              onCapabilityChange={setSelectedCapability}
               onSend={sendMessage}
             />
           ) : null}
@@ -647,15 +593,9 @@ function ErrorNotice({ message, onDismiss }: { message: string; onDismiss: () =>
 
 function ChatComposer({
   disabled,
-  capabilities,
-  selectedCapability,
-  onCapabilityChange,
   onSend,
 }: {
   disabled: boolean;
-  capabilities: CapabilityOption[];
-  selectedCapability: string;
-  onCapabilityChange: (value: string) => void;
   onSend: (text: string) => void;
 }) {
   const [text, setText] = useState("");
@@ -686,26 +626,7 @@ function ChatComposer({
           aria-label="消息"
           className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
         />
-        <div className="mt-2 flex items-center gap-2">
-          <label className="relative inline-flex items-center">
-            <Sparkles className="pointer-events-none absolute left-2.5 w-3.5 h-3.5 text-accent" />
-            <select
-              value={selectedCapability}
-              onChange={(event) => onCapabilityChange(event.target.value)}
-              disabled={disabled}
-              aria-label="能力路由"
-              className="h-8 max-w-[260px] appearance-none rounded-lg border border-line bg-app-soft pl-8 pr-8 text-[11.5px] font-semibold text-ink outline-none focus:border-accent"
-            >
-              <option value="">自动发现能力</option>
-              {capabilities.map((capability) => (
-                <option key={capability.value} value={capability.value}>
-                  {capability.kind === "aina" ? "AINA" : capability.kind === "builtin" ? "内置" : "远程工具"} · {capability.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2.5 w-3.5 h-3.5 text-ink-muted" />
-          </label>
-          <span className="ml-auto" />
+        <div className="mt-2 flex justify-end">
           <button
             type="submit"
             disabled={disabled || !text.trim()}
@@ -734,12 +655,12 @@ function WelcomePanel() {
         </div>
         <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">开始新对话</h2>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-          Unibot 会保留多轮上下文、自动发现已注册能力，并在高风险调用前暂停等待你的确认。
+          Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。
         </p>
         <div className="mt-5 grid grid-cols-3 gap-2 text-left">
           {[
             ["多轮上下文", "会话历史自动恢复"],
-            ["能力路由", "工具与 AINA"],
+            ["能力调度", "按任务自动组合"],
             ["安全确认", "高风险操作可控"],
           ].map(([label, detail]) => (
             <div key={label} className="rounded-lg border border-line bg-white p-3">

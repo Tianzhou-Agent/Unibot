@@ -1,6 +1,6 @@
 from typing import Any, cast
 
-from tianzhou_agent_platform.aina.memory.models import MemoryCategory, MemoryCreate
+from tianzhou_agent_platform.aina.memory.models import MemoryCategory, MemoryCreate, MemoryUpdate
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCapabilities,
     AinaCapability,
@@ -18,8 +18,9 @@ from tianzhou_agent_platform.core.repository import InMemoryRepository
 UNIBOT_MEMORY_ID = "unibot-memory"
 REMEMBER_TOOL_ID = "memory.remember"
 RECALL_TOOL_ID = "memory.recall"
+UPDATE_TOOL_ID = "memory.update"
 FORGET_TOOL_ID = "memory.forget"
-MEMORY_TOOL_IDS = {REMEMBER_TOOL_ID, RECALL_TOOL_ID, FORGET_TOOL_ID}
+MEMORY_TOOL_IDS = {REMEMBER_TOOL_ID, RECALL_TOOL_ID, UPDATE_TOOL_ID, FORGET_TOOL_ID}
 
 
 def unibot_memory_record() -> AinaRecord:
@@ -42,6 +43,7 @@ def unibot_memory_record() -> AinaRecord:
                         description="管理跨对话保留的长期记忆，不保存临时聊天内容。",
                         instructions=(
                             "When the user explicitly asks to remember a durable fact, call memory.remember. "
+                            "When they correct or refine an existing memory and its id is known, call memory.update. "
                             "When they ask what is remembered, call memory.recall. When they explicitly ask to "
                             "forget an item and its id is known, call memory.forget. Never invent a memory write."
                         ),
@@ -81,6 +83,31 @@ def unibot_memory_record() -> AinaRecord:
                                     "description": "用于匹配长期记忆的查询；留空时返回最近记忆。",
                                 }
                             },
+                            "additionalProperties": False,
+                        },
+                    ),
+                    AinaCapability(
+                        id=UPDATE_TOOL_ID,
+                        name="更新记忆",
+                        description="根据准确的记忆 ID 原地更新内容或分类，不创建重复记忆。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "memory_id": {
+                                    "type": "string",
+                                    "description": "需要更新的准确记忆 ID。",
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "更新后的完整记忆内容。",
+                                },
+                                "category": {
+                                    "type": "string",
+                                    "enum": ["fact", "preference", "goal", "instruction"],
+                                    "description": "可选的新分类。",
+                                },
+                            },
+                            "required": ["memory_id", "content"],
                             "additionalProperties": False,
                         },
                     ),
@@ -167,6 +194,33 @@ async def invoke_memory_tool(
             "count": len(memories),
             "memories": [memory.model_dump(mode="json") for memory in memories],
         }, []
+    if tool_id == UPDATE_TOOL_ID:
+        memory_id = str(arguments.get("memory_id") or "").strip()
+        content = str(arguments.get("content") or "").strip()
+        if not memory_id:
+            raise PlatformError("INVALID_REQUEST", "memory.update requires memory_id")
+        update_category_raw = arguments.get("category")
+        if update_category_raw is not None and update_category_raw not in {
+            "fact",
+            "preference",
+            "goal",
+            "instruction",
+        }:
+            raise PlatformError("INVALID_REQUEST", f"Unsupported memory category: {update_category_raw}")
+        update_category = cast(MemoryCategory | None, update_category_raw)
+        try:
+            memory = await repository.update_memory(
+                memory_id,
+                MemoryUpdate(
+                    content=content,
+                    category=update_category,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                ),
+            )
+        except ValueError as exc:
+            raise PlatformError("INVALID_REQUEST", str(exc)) from exc
+        return {"updated": True, "memory": memory.model_dump(mode="json")}, []
     if tool_id == FORGET_TOOL_ID:
         memory_id = str(arguments.get("memory_id") or "").strip()
         if not memory_id:
