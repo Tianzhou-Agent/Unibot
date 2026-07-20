@@ -126,6 +126,8 @@ export default function CanvasModePage() {
           ...ACTOR,
           title: `${canvas?.name ?? ainaId} 对话`,
           category: "general",
+          active_aina_ids: ainaId === "unibot-assistant" ? [] : [ainaId],
+          primary_aina_id: ainaId === "unibot-assistant" ? null : ainaId,
         });
         targetConversationId = created.id;
         setConversationId(created.id);
@@ -139,7 +141,6 @@ export default function CanvasModePage() {
           message: prompt,
           conversation_id: targetConversationId,
           ...ACTOR,
-          capability: ainaId === "unibot-assistant" ? undefined : `aina:${ainaId}`,
         },
         (event: StreamEvent) => {
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);

@@ -166,6 +166,9 @@ export interface ConversationRecord {
   run_started_at?: string | null;
   config: Record<string, unknown>;
   enabled_ainas: string[];
+  active_aina_ids: string[];
+  primary_aina_id?: string | null;
+  last_aina_id?: string | null;
   messages: BackendMessage[];
   created_at: string;
   updated_at: string;

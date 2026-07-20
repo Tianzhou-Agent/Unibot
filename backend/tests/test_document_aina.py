@@ -95,11 +95,208 @@ def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["content"] == "Created plan.md."
     assert document.json()["content"] == "# Plan\n\n- Build"
-    assert all(item["function"]["name"].startswith("builtin_document_") for item in llm.calls[0]["tools"])
+    assert any(
+        item["function"]["name"].startswith("builtin_document_create_")
+        for item in llm.calls[0]["tools"]
+    )
     assert any(
         event["kind"] == "builtin.completed" and event["target_id"] == "document.create"
         for event in trace.json()["events"]
     )
+
+
+def test_document_aina_keeps_global_memory_update_available(tmp_path: Path) -> None:
+    llm = ScriptedLLM([])
+    with TestClient(_app(tmp_path, llm)) as client:
+        memory = client.post(
+            "/memories",
+            json={"content": "The user is an engineer", "category": "fact"},
+        ).json()
+        llm.responses.extend(
+            [
+                call_first_tool(
+                    prefix="builtin_memory_update_",
+                    arguments=(
+                        f'{{"memory_id":"{memory["id"]}",'
+                        '"content":"The user is a software engineer","category":"fact"}'
+                    ),
+                ),
+                assistant("I updated your occupation."),
+            ]
+        )
+        response = client.post(
+            "/chat",
+            json={
+                "message": "I am a software engineer",
+                "capability": "aina:unibot-documents",
+            },
+        )
+        memories = client.get("/memories")
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
+
+    assert response.status_code == 200
+    assert memories.json()["total"] == 1
+    assert memories.json()["items"][0]["id"] == memory["id"]
+    assert memories.json()["items"][0]["content"] == "The user is a software engineer"
+    assert any(
+        item["function"]["name"].startswith("builtin_memory_update_")
+        for item in llm.calls[0]["tools"]
+    )
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "memory.update"
+        for event in trace.json()["events"]
+    )
+
+
+def test_conversation_alternates_preferred_ainas_without_router_model(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            assistant("The document AINA handled this turn."),
+            assistant("The memory AINA handled this turn."),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        conversation = client.post("/conversations", json={"title": "Multi AINA"}).json()
+        first = client.post(
+            "/chat",
+            json={
+                "message": "Work on the document",
+                "conversation_id": conversation["id"],
+                "preferred_aina_id": "unibot-documents",
+            },
+        )
+        second = client.post(
+            "/chat",
+            json={
+                "message": "Work with memory instead",
+                "conversation_id": conversation["id"],
+                "preferred_aina_id": "unibot-memory",
+            },
+        )
+        updated = client.get(f"/conversations/{conversation['id']}").json()
+        trace = client.get(f"/traces/{second.json()['trace_id']}").json()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(llm.calls) == 2
+    assert any(
+        item["function"]["name"].startswith("builtin_document_")
+        for item in llm.calls[0]["tools"]
+    )
+    assert all(
+        item["function"]["name"].startswith("builtin_memory_")
+        for item in llm.calls[1]["tools"]
+    )
+    assert updated["active_aina_ids"] == ["unibot-documents", "unibot-memory"]
+    assert updated["primary_aina_id"] == "unibot-documents"
+    assert updated["last_aina_id"] == "unibot-memory"
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["target_id"] == "unibot-memory"
+    assert resolution["details"]["source"] == "preferred_aina"
+    assert resolution["details"]["router_model_called"] is False
+
+
+def test_short_follow_up_reuses_last_aina_without_router_model(tmp_path: Path) -> None:
+    llm = ScriptedLLM([assistant("Started."), assistant("Continued.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        conversation = client.post("/conversations", json={"title": "Sticky AINA"}).json()
+        first = client.post(
+            "/chat",
+            json={
+                "message": "Start editing the document",
+                "conversation_id": conversation["id"],
+                "preferred_aina_id": "unibot-documents",
+            },
+        )
+        second = client.post(
+            "/chat",
+            json={"message": "Continue", "conversation_id": conversation["id"]},
+        )
+        trace = client.get(f"/traces/{second.json()['trace_id']}").json()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(llm.calls) == 2
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["target_id"] == "unibot-documents"
+    assert resolution["details"]["source"] == "sticky_aina"
+    assert resolution["details"]["router_model_called"] is False
+
+
+def test_single_active_primary_aina_bypasses_router_model(tmp_path: Path) -> None:
+    llm = ScriptedLLM([assistant("Handled by the primary document AINA.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        conversation = client.post(
+            "/conversations",
+            json={
+                "title": "Primary AINA",
+                "active_aina_ids": ["unibot-documents"],
+                "primary_aina_id": "unibot-documents",
+            },
+        ).json()
+        response = client.post(
+            "/chat",
+            json={"message": "Edit the introduction", "conversation_id": conversation["id"]},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert len(llm.calls) == 1
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["target_id"] == "unibot-documents"
+    assert resolution["details"]["source"] == "primary_aina"
+    assert resolution["details"]["router_model_called"] is False
+
+
+def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-memory_",
+                arguments='{"input":"Use my profile"}',
+            ),
+            assistant("The memory AINA handled the ambiguous turn."),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        conversation = client.post(
+            "/conversations",
+            json={
+                "title": "Router fallback",
+                "active_aina_ids": ["unibot-documents", "unibot-memory"],
+                "primary_aina_id": "unibot-documents",
+                "last_aina_id": "unibot-documents",
+            },
+        ).json()
+        response = client.post(
+            "/chat",
+            json={"message": "Use my profile", "conversation_id": conversation["id"]},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert len(llm.calls) == 2
+    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
+    assert len(llm.calls[0]["tools"]) == 2
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["target_id"] == "unibot-memory"
+    assert resolution["details"]["source"] == "model_router"
+    assert resolution["details"]["router_model_called"] is True
+
+
+def test_opening_aina_binds_it_as_conversation_primary(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        conversation = client.post("/conversations", json={"title": "Canvas binding"}).json()
+        opened = client.post(
+            "/ainas/unibot-documents/open",
+            json={"conversation_id": conversation["id"]},
+        )
+        updated = client.get(f"/conversations/{conversation['id']}").json()
+
+    assert opened.status_code == 200
+    assert updated["active_aina_ids"] == ["unibot-documents"]
+    assert updated["primary_aina_id"] == "unibot-documents"
+    assert updated["last_aina_id"] is None
 
 
 def test_document_browse_returns_interactive_chapter_widget(tmp_path: Path) -> None:

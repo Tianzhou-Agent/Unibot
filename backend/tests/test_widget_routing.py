@@ -251,15 +251,19 @@ def test_open_aina_returns_canvas_and_declared_main_widget() -> None:
     ) as client:
         client.post("/ainas", json=_manifest())
         client.post("/ainas/com.example.canvas/install", json={})
+        conversation = client.post("/conversations", json={"title": "Canvas"}).json()
         response = client.post(
             "/ainas/com.example.canvas/open",
-            json={"conversation_id": "conv_existing"},
+            json={"conversation_id": conversation["id"]},
         )
+        bound = client.get(f"/conversations/{conversation['id']}").json()
 
     assert response.status_code == 200
-    assert response.json()["route"] == "/canvas/com.example.canvas?conversation=conv_existing"
+    assert response.json()["route"] == f"/canvas/com.example.canvas?conversation={conversation['id']}"
     assert response.json()["main_widget"]["id"] == "report-main"
     assert response.json()["main_widget"]["actions"][0]["kind"] == "prompt"
+    assert bound["active_aina_ids"] == ["com.example.canvas"]
+    assert bound["primary_aina_id"] == "com.example.canvas"
 
 
 def test_open_aina_builtin_returns_navigation_widget_through_agent() -> None:

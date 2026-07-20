@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, replace
 from time import perf_counter
@@ -17,6 +18,7 @@ from tianzhou_agent_platform.aina.builtin import (
     REQUEST_CLARIFICATION_TOOL_ID,
     RECALL_TOOL_ID,
     REMEMBER_TOOL_ID,
+    UPDATE_TOOL_ID,
     UNIBOT_ASSISTANT_ID,
     UNIBOT_MEMORY_ID,
     invoke_builtin,
@@ -53,6 +55,8 @@ _HIGH_RISK_MARKERS = (
     "irreversible",
     "sensitive.third_party",
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -507,7 +511,14 @@ class AgentRuntime:
         message: str,
         capability: Capability | None = None,
     ) -> None:
-        payload = {"error": {"code": code, "message": message, "retryable": code in {"TIMEOUT", "RATE_LIMITED"}}}
+        payload = {
+            "error": {
+                "code": code,
+                "message": message,
+                "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
+            },
+            "instruction": "The capability did not complete. Do not claim success; retry or report the failure.",
+        }
         messages.append(
             {
                 "role": "tool",
@@ -546,7 +557,7 @@ class AgentRuntime:
                 tenant_id=request.tenant_id,
             )
         trace_id = f"trace_{uuid4().hex}"
-        await self.repository.start_conversation_run(conversation.id, trace_id)
+        trace_created = False
         try:
             await self.repository.create_trace(
                 TraceRecord(
@@ -556,6 +567,8 @@ class AgentRuntime:
                     tenant_id=request.tenant_id,
                 )
             )
+            trace_created = True
+            await self.repository.start_conversation_run(conversation.id, trace_id)
             await self.repository.close_dangling_tool_calls(conversation.id, trace_id=trace_id)
             appended_user = await self.repository.append_provider_messages(
                 conversation.id,
@@ -577,7 +590,15 @@ class AgentRuntime:
                 ),
             )
             conversation = await self.repository.get_conversation(conversation.id)
-            forced_capability = request.capability or _obvious_builtin_capability(request.message)
+            obvious_capability = _obvious_builtin_capability(request.message)
+            requested_capability = request.capability or obvious_capability
+            requested_source = (
+                "explicit_capability"
+                if request.capability is not None
+                else "deterministic_capability"
+                if obvious_capability is not None
+                else None
+            )
             runtime_model = await self.repository.get_default_model_runtime(
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
@@ -586,18 +607,25 @@ class AgentRuntime:
                 response = await self._dispatch(
                     conversation=conversation,
                     trace_id=trace_id,
-                    forced_capability=forced_capability,
+                    requested_capability=requested_capability,
+                    requested_source=requested_source,
+                    preferred_aina_id=request.preferred_aina_id,
                     event_sink=event_sink,
                 )
         except PlatformError as exc:
-            await self.repository.finish_trace(trace_id, "failed")
-            await self.repository.finish_conversation_run(conversation.id, status="failed", error=exc.user_message)
+            await self._cleanup_failed_run(
+                conversation.id,
+                trace_id,
+                trace_created=trace_created,
+                error=exc.user_message or exc.message,
+            )
             raise
         except Exception:
-            await self.repository.finish_trace(trace_id, "failed")
-            await self.repository.finish_conversation_run(
+            logger.exception("Agent run failed unexpectedly", extra={"trace_id": trace_id})
+            await self._cleanup_failed_run(
                 conversation.id,
-                status="failed",
+                trace_id,
+                trace_created=trace_created,
                 error="The agent run failed unexpectedly.",
             )
             raise
@@ -611,40 +639,172 @@ class AgentRuntime:
         )
         return response
 
+    async def _cleanup_failed_run(
+        self,
+        conversation_id: str,
+        trace_id: str,
+        *,
+        trace_created: bool,
+        error: str,
+    ) -> None:
+        if trace_created:
+            try:
+                await self.repository.finish_trace(trace_id, "failed")
+            except Exception:
+                logger.exception("Failed to mark trace as failed", extra={"trace_id": trace_id})
+        try:
+            conversation = await self.repository.get_conversation(conversation_id)
+            if conversation.run_status == "running" and conversation.active_trace_id == trace_id:
+                await self.repository.finish_conversation_run(
+                    conversation_id,
+                    status="failed",
+                    error=error,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to release conversation run",
+                extra={"conversation_id": conversation_id, "trace_id": trace_id},
+            )
+
     async def _dispatch(
         self,
         *,
         conversation: Conversation,
         trace_id: str,
-        forced_capability: str | None,
+        requested_capability: str | None,
+        requested_source: str | None,
+        preferred_aina_id: str | None,
         event_sink: EventSink | None,
     ) -> ChatResponse:
         latest_user_message = conversation.messages[-1].content
         memory_context = await self._memory_context(conversation, latest_user_message)
-        if forced_capability is not None:
-            all_capabilities = await self._available_capabilities(conversation)
-            forced_function = self._resolve_forced_capability(forced_capability, all_capabilities)
+        all_capabilities = await self._available_capabilities(conversation)
+        if requested_capability is not None:
+            forced_function = self._resolve_forced_capability(requested_capability, all_capabilities)
             if forced_function is None:
                 raise PlatformError("INVALID_REQUEST", "The forced capability could not be resolved")
             selected = all_capabilities[forced_function]
             if selected.kind == "aina":
-                capabilities, aina = await self._aina_scope(conversation, selected)
-                prompt = await self._system_prompt(aina, memory_context=memory_context)
-                resolved_forced_capability = None if aina.manifest.runtime.type == "builtin" else forced_capability
-            else:
-                capabilities = {selected.function_name: selected}
-                prompt = await self._system_prompt(memory_context=memory_context)
-                resolved_forced_capability = forced_capability
+                conversation = await self.repository.bind_conversation_aina(
+                    conversation.id,
+                    selected.capability_id,
+                    mark_used=True,
+                )
+                await self._record_scope_resolution(
+                    trace_id,
+                    conversation,
+                    selected=selected,
+                    source=requested_source or "explicit_capability",
+                    router_model_called=False,
+                    requested_capability=requested_capability,
+                    preferred_aina_id=preferred_aina_id,
+                )
+                return await self._run_selected_aina(
+                    conversation=conversation,
+                    trace_id=trace_id,
+                    selected=selected,
+                    memory_context=memory_context,
+                    event_sink=event_sink,
+                    direct=True,
+                )
+            await self._record_scope_resolution(
+                trace_id,
+                conversation,
+                selected=selected,
+                source=requested_source or "explicit_capability",
+                router_model_called=False,
+                requested_capability=requested_capability,
+                preferred_aina_id=preferred_aina_id,
+            )
             return await self._run(
                 conversation=conversation,
                 trace_id=trace_id,
-                forced_capability=resolved_forced_capability,
+                forced_capability=requested_capability,
                 event_sink=event_sink,
-                capabilities=capabilities,
-                system_prompt=prompt,
+                capabilities={selected.function_name: selected},
+                system_prompt=await self._system_prompt(memory_context=memory_context),
             )
 
-        aina_candidates = await self._available_aina_capabilities(conversation)
+        if preferred_aina_id is not None:
+            preferred_function = self._resolve_forced_capability(
+                f"aina:{preferred_aina_id}",
+                all_capabilities,
+            )
+            if preferred_function is None:
+                raise PlatformError("INVALID_REQUEST", "The preferred AINA could not be resolved")
+            selected = all_capabilities[preferred_function]
+            conversation = await self.repository.bind_conversation_aina(
+                conversation.id,
+                selected.capability_id,
+                mark_used=True,
+            )
+            await self._record_scope_resolution(
+                trace_id,
+                conversation,
+                selected=selected,
+                source="preferred_aina",
+                router_model_called=False,
+                requested_capability=None,
+                preferred_aina_id=preferred_aina_id,
+            )
+            return await self._run_selected_aina(
+                conversation=conversation,
+                trace_id=trace_id,
+                selected=selected,
+                memory_context=memory_context,
+                event_sink=event_sink,
+                direct=True,
+            )
+
+        sticky_aina_id = conversation.last_aina_id if _looks_like_follow_up(latest_user_message) else None
+        primary_aina_id = (
+            conversation.primary_aina_id
+            if sticky_aina_id is None and len(conversation.active_aina_ids) == 1
+            else None
+        )
+        deterministic_aina_id = sticky_aina_id or primary_aina_id
+        if deterministic_aina_id is not None:
+            deterministic_selected = next(
+                (
+                    capability
+                    for capability in all_capabilities.values()
+                    if capability.kind == "aina" and capability.capability_id == deterministic_aina_id
+                ),
+                None,
+            )
+            if deterministic_selected is not None:
+                conversation = await self.repository.bind_conversation_aina(
+                    conversation.id,
+                    deterministic_selected.capability_id,
+                    mark_used=True,
+                )
+                await self._record_scope_resolution(
+                    trace_id,
+                    conversation,
+                    selected=deterministic_selected,
+                    source="sticky_aina" if sticky_aina_id is not None else "primary_aina",
+                    router_model_called=False,
+                    requested_capability=None,
+                    preferred_aina_id=None,
+                )
+                return await self._run_selected_aina(
+                    conversation=conversation,
+                    trace_id=trace_id,
+                    selected=deterministic_selected,
+                    memory_context=memory_context,
+                    event_sink=event_sink,
+                    direct=True,
+                )
+
+        if conversation.active_aina_ids:
+            active_ids = set(conversation.active_aina_ids)
+            aina_candidates = {
+                function_name: capability
+                for function_name, capability in all_capabilities.items()
+                if capability.kind == "aina" and capability.capability_id in active_ids
+            }
+        else:
+            aina_candidates = await self._available_aina_capabilities(conversation)
         if aina_candidates:
             route = await self._route_to_aina(
                 conversation=conversation,
@@ -653,34 +813,51 @@ class AgentRuntime:
                 event_sink=event_sink,
             )
             if route.capability is not None and route.assistant_message is not None:
-                capabilities, aina = await self._aina_scope(conversation, route.capability)
-                if aina.manifest.runtime.type == "builtin":
-                    return await self._run(
-                        conversation=conversation,
-                        trace_id=trace_id,
-                        event_sink=event_sink,
-                        capabilities=capabilities,
-                        system_prompt=await self._system_prompt(aina, memory_context=memory_context),
-                        initial_iterations=1,
-                        initial_usage_input=route.result.input_tokens,
-                        initial_usage_output=route.result.output_tokens,
-                    )
-                return await self._run(
+                conversation = await self.repository.bind_conversation_aina(
+                    conversation.id,
+                    route.capability.capability_id,
+                    mark_used=True,
+                )
+                await self._record_scope_resolution(
+                    trace_id,
+                    conversation,
+                    selected=route.capability,
+                    source="model_router",
+                    router_model_called=True,
+                    requested_capability=None,
+                    preferred_aina_id=None,
+                )
+                return await self._run_selected_aina(
                     conversation=conversation,
                     trace_id=trace_id,
+                    selected=route.capability,
+                    memory_context=memory_context,
                     event_sink=event_sink,
-                    capabilities=capabilities,
-                    system_prompt=await self._system_prompt(aina, memory_context=memory_context),
-                    initial_assistant=route.assistant_message,
-                    initial_iterations=1,
-                    initial_usage_input=route.result.input_tokens,
-                    initial_usage_output=route.result.output_tokens,
-                    resume=True,
+                    direct=False,
+                    route=route,
                 )
+            await self._record_scope_resolution(
+                trace_id,
+                conversation,
+                selected=None,
+                source="model_router",
+                router_model_called=True,
+                requested_capability=None,
+                preferred_aina_id=None,
+            )
             initial_iterations = 1
             initial_usage_input = route.result.input_tokens
             initial_usage_output = route.result.output_tokens
         else:
+            await self._record_scope_resolution(
+                trace_id,
+                conversation,
+                selected=None,
+                source="system_fallback",
+                router_model_called=False,
+                requested_capability=None,
+                preferred_aina_id=None,
+            )
             initial_iterations = 0
             initial_usage_input = 0
             initial_usage_output = 0
@@ -694,6 +871,63 @@ class AgentRuntime:
             initial_iterations=initial_iterations,
             initial_usage_input=initial_usage_input,
             initial_usage_output=initial_usage_output,
+        )
+
+    async def _run_selected_aina(
+        self,
+        *,
+        conversation: Conversation,
+        trace_id: str,
+        selected: Capability,
+        memory_context: list[MemoryRecord],
+        event_sink: EventSink | None,
+        direct: bool,
+        route: AinaRoute | None = None,
+    ) -> ChatResponse:
+        capabilities, aina = await self._aina_scope(conversation, selected)
+        remote = aina.manifest.runtime.type == "remote"
+        return await self._run(
+            conversation=conversation,
+            trace_id=trace_id,
+            forced_capability=f"aina:{selected.capability_id}" if direct and remote else None,
+            event_sink=event_sink,
+            capabilities=capabilities,
+            system_prompt=await self._system_prompt(aina, memory_context=memory_context),
+            initial_assistant=route.assistant_message if route is not None and remote else None,
+            initial_iterations=1 if route is not None else 0,
+            initial_usage_input=route.result.input_tokens if route is not None else 0,
+            initial_usage_output=route.result.output_tokens if route is not None else 0,
+            resume=route is not None and remote,
+        )
+
+    async def _record_scope_resolution(
+        self,
+        trace_id: str,
+        conversation: Conversation,
+        *,
+        selected: Capability | None,
+        source: str,
+        router_model_called: bool,
+        requested_capability: str | None,
+        preferred_aina_id: str | None,
+    ) -> None:
+        await self.repository.add_trace_event(
+            trace_id,
+            TraceEvent(
+                kind="routing.scope.resolved",
+                status="completed",
+                target_type=selected.kind if selected is not None else "system",
+                target_id=selected.capability_id if selected is not None else None,
+                details={
+                    "source": source,
+                    "router_model_called": router_model_called,
+                    "requested_capability": requested_capability,
+                    "preferred_aina_id": preferred_aina_id,
+                    "active_aina_ids": conversation.active_aina_ids,
+                    "primary_aina_id": conversation.primary_aina_id,
+                    "last_aina_id": conversation.last_aina_id,
+                },
+            ),
         )
 
     async def _route_to_aina(
@@ -1073,6 +1307,12 @@ class AgentRuntime:
     ) -> str:
         if selected_aina is not None:
             manifest = selected_aina.manifest
+            scope_guidance = "Use only this AINA and the capabilities declared by it."
+            if manifest.aina.id == UNIBOT_DOCUMENTS_ID:
+                scope_guidance = (
+                    "Use this AINA for document work. Platform memory tools remain available only for explicit "
+                    "durable-memory requests or corrections; do not use other undeclared capabilities."
+                )
             aina_skills = "\n".join(
                 f"- {skill.name}: {skill.instructions or skill.description}"
                 for skill in manifest.capabilities.skills
@@ -1088,7 +1328,7 @@ class AgentRuntime:
                 self.settings.system_prompt,
                 (
                     f"The request was routed to AINA {manifest.aina.name} ({manifest.aina.id}). "
-                    "Use only this AINA and the capabilities declared by it."
+                    f"{scope_guidance}"
                 ),
             ]
             if aina_skills:
@@ -1405,7 +1645,7 @@ class AgentRuntime:
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
             return self._memory_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
-            return self._document_capabilities(), aina
+            return {**self._document_capabilities(), **self._memory_capabilities()}, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected}
         if declared_tool_ids:
@@ -1425,6 +1665,7 @@ class AgentRuntime:
     def _memory_capabilities() -> dict[str, Capability]:
         remember_function = _function_name("builtin", REMEMBER_TOOL_ID)
         recall_function = _function_name("builtin", RECALL_TOOL_ID)
+        update_function = _function_name("builtin", UPDATE_TOOL_ID)
         forget_function = _function_name("builtin", FORGET_TOOL_ID)
         return {
             remember_function: Capability(
@@ -1464,6 +1705,32 @@ class AgentRuntime:
                 },
                 requires_confirmation=False,
                 value=RECALL_TOOL_ID,
+                owner_aina_id=UNIBOT_MEMORY_ID,
+            ),
+            update_function: Capability(
+                kind="builtin",
+                capability_id=UPDATE_TOOL_ID,
+                function_name=update_function,
+                display_name="Update memory",
+                description=(
+                    "Replace an existing memory in place when the user corrects or refines it and its exact id "
+                    "is available. Prefer this over forget followed by remember."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string"},
+                        "content": {"type": "string", "description": "The complete updated memory."},
+                        "category": {
+                            "type": "string",
+                            "enum": ["fact", "preference", "goal", "instruction"],
+                        },
+                    },
+                    "required": ["memory_id", "content"],
+                    "additionalProperties": False,
+                },
+                requires_confirmation=False,
+                value=UPDATE_TOOL_ID,
                 owner_aina_id=UNIBOT_MEMORY_ID,
             ),
             forget_function: Capability(
@@ -1700,6 +1967,21 @@ def _obvious_builtin_capability(message: str) -> str | None:
     if memory_request:
         return f"aina:{UNIBOT_MEMORY_ID}"
     return None
+
+
+def _looks_like_follow_up(message: str) -> bool:
+    normalized = " ".join(message.casefold().split())
+    if len(normalized) > 80:
+        return False
+    if any(
+        marker in normalized
+        for marker in ("继续", "再来", "再改", "改成", "这个", "那个", "上一", "刚才", "同样", "好的")
+    ):
+        return True
+    return re.search(
+        r"^(continue|again|do the same|make it|change it|update it|that|this|yes|ok|okay)\b",
+        normalized,
+    ) is not None
 
 
 def _memory_context_block(memories: list[MemoryRecord]) -> str:

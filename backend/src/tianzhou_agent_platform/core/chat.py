@@ -16,6 +16,10 @@ class ChatRequest(StrictModel):
         default=None,
         description="Optionally force the first call to tool:<id> or aina:<id>.",
     )
+    preferred_aina_id: str | None = Field(
+        default=None,
+        description="Prefer an AINA without forcing every capability call to remain in that application.",
+    )
 
 
 class ApprovalAction(StrictModel):
