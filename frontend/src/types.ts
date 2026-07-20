@@ -322,6 +322,51 @@ export interface AinaInstallation {
   installed_at: string;
 }
 
+export type ScheduleType = "interval" | "cron";
+export type ScheduledAinaStatus = "never" | "running" | "succeeded" | "failed";
+
+export interface ScheduledAinaTask {
+  id: string;
+  aina_id: string;
+  user_id: string;
+  tenant_id: string;
+  name: string;
+  schedule_type: ScheduleType;
+  interval_seconds: number;
+  cron_expression?: string | null;
+  timezone: string;
+  prompt?: string | null;
+  input: Record<string, unknown>;
+  enabled: boolean;
+  next_run_at: string;
+  last_run_at?: string | null;
+  last_status: ScheduledAinaStatus;
+  last_node_id?: string | null;
+  last_error?: string | null;
+  last_result?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduledAinaExecution {
+  id: string;
+  task_id: string;
+  aina_id: string;
+  user_id: string;
+  tenant_id: string;
+  trigger: "scheduled" | "manual";
+  scheduled_for?: string | null;
+  call_id: string;
+  node_id: string;
+  input: Record<string, unknown>;
+  status: "running" | "succeeded" | "failed";
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  started_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+}
+
 export interface ApprovalRecord {
   id: string;
   conversation_id: string;

@@ -147,7 +147,11 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert response.status_code == 200
     widget = response.json()["widgets"][0]
     assert widget["kind"] == "app_list"
-    assert [item["aina_id"] for item in widget["apps"]] == ["unibot-assistant", "unibot-memory"]
+    assert [item["aina_id"] for item in widget["apps"]] == [
+        "unibot-assistant",
+        "unibot-memory",
+        "unibot-scheduler",
+    ]
     assert conversation.json()["messages"][-1]["widgets"] == response.json()["widgets"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
     assert llm.calls[0]["tool_choice"]["function"]["name"].startswith("builtin_list_app_")
@@ -339,7 +343,7 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
     remote_aina = next(
         item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
     )
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 2, "remote_aina": 1}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 1,
