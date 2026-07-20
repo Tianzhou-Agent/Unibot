@@ -23,6 +23,7 @@ dependencies = [
     "aiofiles>=24.1.0",
     "boto3>=1.35.0",
     "pyyaml>=6.0.2",
+    "tzdata>=2025.2",
 ]
 
 [project.scripts]

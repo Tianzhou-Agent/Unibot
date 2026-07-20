@@ -20,8 +20,8 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
 
     discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
     graph = discovery["aina_graph"]
-    assert graph["available_count"] == 2
-    assert graph["counts"] == {"builtin_aina": 2, "remote_aina": 0}
+    assert graph["available_count"] == 3
+    assert graph["counts"] == {"builtin_aina": 3, "remote_aina": 0}
     assert graph["excluded"] == []
     available = {item["id"]: item for item in graph["available"]}
     assert {item["id"] for item in available["unibot-assistant"]["capabilities"]["tools"]} == {
