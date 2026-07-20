@@ -7,6 +7,7 @@ import { AssistantMainWidget } from "./AssistantMainWidget";
 import { DocumentWidget } from "./DocumentWidget";
 import { MemoryMainWidget } from "./MemoryMainWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
+import { ScheduledAinaMainWidget } from "@/pages/ScheduledAinaPage";
 
 export function MainWidgetRenderer({
   ainaId,
@@ -21,6 +22,7 @@ export function MainWidgetRenderer({
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
 }) {
+  if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
   if (widget.kind === "document") return <DocumentWidget disabled={disabled} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   if (ainaId === "unibot-assistant") {

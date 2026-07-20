@@ -13,9 +13,11 @@ from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaR
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.aina.scheduler import (
+    ScheduledAinaExecution,
     ScheduledAinaTask,
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
+    next_scheduled_run,
 )
 from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
@@ -39,6 +41,7 @@ APPROVALS_RESOURCE = "approvals"
 MODEL_PROVIDERS_RESOURCE = "model_providers"
 SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
+SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
 
 
 class InMemoryRepository:
@@ -61,6 +64,7 @@ class InMemoryRepository:
         self._memories: dict[str, MemoryRecord] = {}
         self._model_providers: dict[str, ModelProviderRecord] = {}
         self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
+        self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -263,7 +267,12 @@ class InMemoryRepository:
         return None
 
     async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
-        task = ScheduledAinaTask(**data.model_dump())
+        now = datetime.now(UTC)
+        values = data.model_dump()
+        if data.prompt is not None:
+            values["input"] = {"message": data.prompt}
+        task = ScheduledAinaTask(**values, created_at=now, updated_at=now)
+        task = task.model_copy(update={"next_run_at": next_scheduled_run(task, after=now)})
         async with self._lock:
             self._scheduled_aina_tasks[task.id] = task
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
@@ -279,6 +288,36 @@ class InMemoryRepository:
         async with self._lock:
             return [self._copy(item) for item in self._scheduled_aina_tasks.values()]
 
+    async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask:
+        async with self._lock:
+            task = self._scheduled_aina_tasks.get(task_id)
+            if task is None:
+                raise not_found("Scheduled AINA task", task_id)
+            return self._copy(task)
+
+    async def put_scheduled_aina_execution(
+        self, execution: ScheduledAinaExecution
+    ) -> ScheduledAinaExecution:
+        async with self._lock:
+            self._scheduled_aina_executions[execution.id] = execution
+            await self._save_record(
+                SCHEDULED_AINA_EXECUTIONS_RESOURCE,
+                execution.id,
+                execution,
+            )
+        return self._copy(execution)
+
+    async def list_scheduled_aina_executions(
+        self, task_id: str, *, limit: int = 50
+    ) -> list[ScheduledAinaExecution]:
+        async with self._lock:
+            values = [
+                self._copy(item)
+                for item in self._scheduled_aina_executions.values()
+                if item.task_id == task_id
+            ]
+        return sorted(values, key=lambda item: item.started_at, reverse=True)[:limit]
+
     async def update_scheduled_aina_task(
         self, task_id: str, data: ScheduledAinaTaskUpdate
     ) -> ScheduledAinaTask:
@@ -287,8 +326,15 @@ class InMemoryRepository:
             if task is None:
                 raise not_found("Scheduled AINA task", task_id)
             changes = data.model_dump(exclude_none=True)
-            changes["updated_at"] = datetime.now(UTC)
-            updated = task.model_copy(update=changes, deep=True)
+            if data.prompt is not None:
+                changes["input"] = {"message": data.prompt}
+            now = datetime.now(UTC)
+            changes["updated_at"] = now
+            updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
+            schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
+            reenabled = data.enabled is True and not task.enabled
+            if schedule_fields.intersection(changes) or reenabled:
+                updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
             self._scheduled_aina_tasks[task_id] = updated
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
             return self._copy(updated)
@@ -298,6 +344,14 @@ class InMemoryRepository:
             if self._scheduled_aina_tasks.pop(task_id, None) is None:
                 raise not_found("Scheduled AINA task", task_id)
             await self._delete_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id)
+            execution_ids = [
+                item.id
+                for item in self._scheduled_aina_executions.values()
+                if item.task_id == task_id
+            ]
+            for execution_id in execution_ids:
+                del self._scheduled_aina_executions[execution_id]
+                await self._delete_record(SCHEDULED_AINA_EXECUTIONS_RESOURCE, execution_id)
 
     async def create_conversation(self, data: ConversationCreate) -> Conversation:
         conversation = Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())

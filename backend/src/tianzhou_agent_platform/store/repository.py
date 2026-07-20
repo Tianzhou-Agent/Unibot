@@ -12,7 +12,7 @@ from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import conflict
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
-from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTask
+from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
 from tianzhou_agent_platform.core.repository import (
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,
@@ -21,6 +21,7 @@ from tianzhou_agent_platform.core.repository import (
     MEMORIES_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
     SCHEDULED_AINA_TASKS_RESOURCE,
+    SCHEDULED_AINA_EXECUTIONS_RESOURCE,
     SKILLS_RESOURCE,
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
@@ -55,6 +56,7 @@ repository_tables = {
         APPROVALS_RESOURCE,
         MODEL_PROVIDERS_RESOURCE,
         SCHEDULED_AINA_TASKS_RESOURCE,
+        SCHEDULED_AINA_EXECUTIONS_RESOURCE,
     )
 }
 
@@ -78,6 +80,10 @@ class PersistentRepository(InMemoryRepository):
         approvals = await self._load_models(APPROVALS_RESOURCE, ApprovalRecord)
         model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
         scheduled_tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
+        scheduled_executions = await self._load_models(
+            SCHEDULED_AINA_EXECUTIONS_RESOURCE,
+            ScheduledAinaExecution,
+        )
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -92,6 +98,9 @@ class PersistentRepository(InMemoryRepository):
             self._approvals = {item.id: item for item in approvals}
             self._model_providers = {item.id: item for item in model_providers}
             self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}
+            self._scheduled_aina_executions = {
+                item.id: item for item in scheduled_executions
+            }
 
     async def list_scheduled_aina_tasks(self) -> list[ScheduledAinaTask]:
         # Every node refreshes from MySQL so updates made by the elected node
@@ -100,6 +109,18 @@ class PersistentRepository(InMemoryRepository):
         async with self._lock:
             self._scheduled_aina_tasks = {item.id: item for item in tasks}
         return [self._copy(item) for item in tasks]
+
+    async def list_scheduled_aina_executions(
+        self, task_id: str, *, limit: int = 50
+    ) -> list[ScheduledAinaExecution]:
+        executions = await self._load_models(
+            SCHEDULED_AINA_EXECUTIONS_RESOURCE,
+            ScheduledAinaExecution,
+        )
+        async with self._lock:
+            self._scheduled_aina_executions = {item.id: item for item in executions}
+        matching = [item for item in executions if item.task_id == task_id]
+        return sorted(matching, key=lambda item: item.started_at, reverse=True)[:limit]
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
         acquired = await self.stores.redis.set_if_absent(

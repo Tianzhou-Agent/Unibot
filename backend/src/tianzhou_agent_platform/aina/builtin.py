@@ -20,6 +20,10 @@ from tianzhou_agent_platform.aina.memory.builtin import (
     unibot_memory_record,
 )
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.aina.schedule.builtin import (
+    UNIBOT_SCHEDULER_ID,
+    unibot_scheduler_record,
+)
 from tianzhou_agent_platform.aina.unibot.builtin import (
     LIST_APP_TOOL_ID,
     OPEN_AINA_TOOL_ID,
@@ -35,7 +39,12 @@ from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 
-BUILTIN_AINA_IDS = {UNIBOT_ASSISTANT_ID, UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID}
+BUILTIN_AINA_IDS = {
+    UNIBOT_ASSISTANT_ID,
+    UNIBOT_MEMORY_ID,
+    UNIBOT_DOCUMENTS_ID,
+    UNIBOT_SCHEDULER_ID,
+}
 
 
 async def ensure_unibot_assistant(
@@ -46,6 +55,7 @@ async def ensure_unibot_assistant(
     builtins = [
         (UNIBOT_ASSISTANT_ID, unibot_assistant_record),
         (UNIBOT_MEMORY_ID, unibot_memory_record),
+        (UNIBOT_SCHEDULER_ID, unibot_scheduler_record),
     ]
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
@@ -148,6 +158,7 @@ __all__ = [
     "UNIBOT_ASSISTANT_ID",
     "UNIBOT_DOCUMENTS_ID",
     "UNIBOT_MEMORY_ID",
+    "UNIBOT_SCHEDULER_ID",
     "ensure_unibot_assistant",
     "invoke_builtin",
     "list_app_widget",
@@ -155,4 +166,5 @@ __all__ = [
     "unibot_assistant_record",
     "unibot_documents_record",
     "unibot_memory_record",
+    "unibot_scheduler_record",
 ]
