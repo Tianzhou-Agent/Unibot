@@ -112,6 +112,13 @@ base_url=https://your-openai-compatible-api.example/v1
 api_key=your-api-key
 model=your-model
 
+# Optional LangSmith observability (disabled by default)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=your-langsmith-api-key
+LANGSMITH_PROJECT=unibot
+# LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+# LANGSMITH_TRACING_SAMPLING_RATE=1.0
+
 TZ_STORAGE_MYSQL_DSN=mysql+aiomysql://unibot:unibot@127.0.0.1:13306/unibot
 TZ_STORAGE_REDIS_DSN=redis://127.0.0.1:16379/0
 TZ_STORAGE_NAS_ROOT_PATH=../data/nas
@@ -121,7 +128,7 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 
 当前后端不依赖前端即可运行，包含：
 
-- `POST /chat`：多轮 Agent Loop；
+- `POST /chat`：基于 LangChain/LangGraph 的多轮 Agent Loop；
 - `POST /chat/stream`：SSE 文本与运行事件流；
 - `/conversations`：会话创建、读取、重命名、软删除和恢复；
 - 会话支持分类筛选与可恢复的 `run_status`，SSE 断开不会取消后台 Agent 运行；
@@ -135,7 +142,7 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - 内置 `unibot-documents`：通过对话创建、读取、编辑、追加、重命名和删除 Markdown 文档，删除操作需要确认；
 - `/documents`：Markdown 文档列表与 CRUD，文件按租户和用户隔离并持久化到 `data/nas/documents/`；
 - `/approvals/{id}/confirm|deny`：高风险调用确认；
-- `/traces`、`/admin/summary`：调用链和基础管理数据。
+- `/traces`、`/admin/summary`：本地运行状态和基础管理数据；启用 LangSmith 后会额外上报模型、工具与 Agent 调用链。
 
 最小对话请求：
 
