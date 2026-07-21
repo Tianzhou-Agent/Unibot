@@ -6,12 +6,12 @@ import {
   Check,
   Pencil,
   RotateCcw,
-  ShieldAlert,
   Trash2,
   Wrench,
   X,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -528,56 +528,6 @@ function ActivityBubble({ text }: { text: string }) {
       <span className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
       <span className="text-accent-hover text-[12.5px] font-semibold">{text}</span>
     </div>
-  );
-}
-
-function ApprovalCard({
-  approval,
-  disabled,
-  debugMode,
-  onConfirm,
-  onDeny,
-}: {
-  approval: ApprovalRecord;
-  disabled: boolean;
-  debugMode: boolean;
-  onConfirm: () => void;
-  onDeny: () => void;
-}) {
-  return (
-    <section className="rounded-xl border border-warning-ring bg-warning-soft p-4" aria-label="授权确认">
-      <div className="flex items-start gap-3">
-        <div className="w-9 h-9 rounded-lg bg-warning/15 text-warning flex items-center justify-center">
-          <ShieldAlert className="w-5 h-5" />
-        </div>
-        <div className="flex-1">
-          <h2 className="text-[14px] font-extrabold text-warning-deep">高风险操作需要确认</h2>
-          <p className="mt-1 text-[12.5px] text-warning-deep/80">
-            智能体准备运行：{approval.capability_names.join("、")}。请核对参数后决定是否继续。
-          </p>
-          {debugMode ? (
-            <div className="mt-3 space-y-2">
-              {approval.tool_calls.map((call) => (
-                <pre
-                  key={call.id}
-                  className="rounded-lg border border-warning-ring bg-white p-2.5 text-[10.5px] text-ink whitespace-pre-wrap break-all"
-                >
-                  {call.function.name}\n{formatJson(call.function.arguments)}
-                </pre>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-3 flex items-center gap-2">
-            <button type="button" disabled={disabled} onClick={onConfirm} className="btn-primary">
-              确认并执行
-            </button>
-            <button type="button" disabled={disabled} onClick={onDeny} className="btn-outline">
-              拒绝
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }
 
