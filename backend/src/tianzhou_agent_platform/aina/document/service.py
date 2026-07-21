@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from urllib.parse import quote
 
 from tianzhou_agent_platform.aina.document.models import (
+    DocumentFolder,
     DocumentHeading,
     DocumentOutline,
     DocumentRecord,
@@ -49,12 +50,55 @@ class DocumentService:
         prefix = self._actor_prefix(user_id=user_id, tenant_id=tenant_id)
         metadata = await self._nas.list_files(StoragePath(relative_path=prefix))
         items = [
-            self._summary(item)
+            self._summary(item, prefix)
             for item in metadata
-            if PurePosixPath(item.path.relative_path).parent.as_posix() == prefix
-            and item.path.relative_path.casefold().endswith(".md")
+            if item.path.relative_path.casefold().endswith(".md")
         ]
         return sorted(items, key=lambda item: item.name.casefold())
+
+    async def list_folders(self, *, user_id: str, tenant_id: str) -> list[DocumentFolder]:
+        prefix = self._actor_prefix(user_id=user_id, tenant_id=tenant_id)
+        directories = await self._nas.list_directories(StoragePath(relative_path=prefix))
+        return [
+            DocumentFolder(
+                path=directory.relative_path.removeprefix(f"{prefix}/"),
+                name=PurePosixPath(directory.relative_path).name,
+            )
+            for directory in directories
+            if directory.relative_path != prefix
+        ]
+
+    async def create_folder(self, path: str, *, user_id: str, tenant_id: str) -> DocumentFolder:
+        normalized = normalize_folder_path(path)
+        await self._nas.create_directory(self._path(normalized, user_id=user_id, tenant_id=tenant_id))
+        return DocumentFolder(path=normalized, name=PurePosixPath(normalized).name)
+
+    async def rename_folder(
+        self,
+        path: str,
+        new_path: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentFolder:
+        normalized = normalize_folder_path(path)
+        normalized_new_path = normalize_folder_path(new_path)
+        if normalized_new_path == normalized:
+            return DocumentFolder(path=normalized, name=PurePosixPath(normalized).name)
+        if normalized_new_path.startswith(f"{normalized}/"):
+            raise StorageValidationError("A folder cannot be moved inside itself")
+        await self._nas.move(
+            self._path(normalized, user_id=user_id, tenant_id=tenant_id),
+            self._path(normalized_new_path, user_id=user_id, tenant_id=tenant_id),
+        )
+        return DocumentFolder(path=normalized_new_path, name=PurePosixPath(normalized_new_path).name)
+
+    async def delete_folder(self, path: str, *, user_id: str, tenant_id: str) -> bool:
+        normalized = normalize_folder_path(path)
+        result = await self._nas.delete_directory(
+            self._path(normalized, user_id=user_id, tenant_id=tenant_id)
+        )
+        return result.deleted
 
     async def get_document(self, name: str, *, user_id: str, tenant_id: str) -> DocumentRecord:
         normalized = normalize_document_name(name)
@@ -65,7 +109,7 @@ class DocumentService:
         except UnicodeDecodeError as exc:
             raise StorageValidationError("Document content is not valid UTF-8") from exc
         metadata = await self._nas.metadata(path)
-        summary = self._summary(metadata)
+        summary = self._summary(metadata, self._actor_prefix(user_id=user_id, tenant_id=tenant_id))
         return DocumentRecord(**summary.model_dump(), content=decoded)
 
     async def get_outline(self, name: str, *, user_id: str, tenant_id: str) -> DocumentOutline:
@@ -279,9 +323,10 @@ class DocumentService:
         normalized_new_name = normalize_document_name(new_name)
         if current.name == normalized_new_name:
             return current
-        destination = self._path(normalized_new_name, user_id=user_id, tenant_id=tenant_id)
-        await self._nas.write(destination, _encode_content(current.content), overwrite=False)
-        await self._nas.delete(self._path(current.name, user_id=user_id, tenant_id=tenant_id))
+        await self._nas.move(
+            self._path(current.name, user_id=user_id, tenant_id=tenant_id),
+            self._path(normalized_new_name, user_id=user_id, tenant_id=tenant_id),
+        )
         return await self.get_document(normalized_new_name, user_id=user_id, tenant_id=tenant_id)
 
     async def delete_document(self, name: str, *, user_id: str, tenant_id: str) -> bool:
@@ -297,32 +342,66 @@ class DocumentService:
         return StoragePath(relative_path=f"{self._actor_prefix(user_id=user_id, tenant_id=tenant_id)}/{name}")
 
     @staticmethod
-    def _summary(metadata: FileMetadata) -> DocumentSummary:
+    def _summary(metadata: FileMetadata, actor_prefix: str) -> DocumentSummary:
         return DocumentSummary(
-            name=PurePosixPath(metadata.path.relative_path).name,
+            name=metadata.path.relative_path.removeprefix(f"{actor_prefix}/"),
             size_bytes=metadata.size_bytes,
             modified_at=metadata.modified_at,
         )
 
 
 def normalize_document_name(value: str) -> str:
-    name = value.strip()
-    if not name:
-        raise StorageValidationError("Document name must not be empty")
-    if any(character in _INVALID_FILENAME_CHARS or ord(character) < 32 for character in name):
-        raise StorageValidationError("Document name contains unsupported characters")
-    if name.endswith((".", " ")):
-        raise StorageValidationError("Document name must not end with a dot or space")
+    path = _normalize_relative_path(value, label="Document path")
+    parts = list(PurePosixPath(path).parts)
+    name = parts[-1]
     if not name.casefold().endswith(".md"):
         if "." in name:
             raise StorageValidationError("Only Markdown (.md) documents are supported")
         name = f"{name}.md"
+    _validate_path_segment(name, label="Document name")
     stem = name[:-3]
     if not stem or stem.casefold() in _WINDOWS_RESERVED_NAMES:
         raise StorageValidationError("Document name is reserved by the filesystem")
+    parts[-1] = name
+    normalized = "/".join(parts)
+    if len(normalized) > 512:
+        raise StorageValidationError("Document path exceeds 512 characters")
+    return normalized
+
+
+def normalize_folder_path(value: str) -> str:
+    path = _normalize_relative_path(value, label="Folder path")
+    if len(path) > 512:
+        raise StorageValidationError("Folder path exceeds 512 characters")
+    return path
+
+
+def _normalize_relative_path(value: str, *, label: str) -> str:
+    path = value.replace("\\", "/").strip()
+    if path.startswith("/"):
+        raise StorageValidationError(f"{label} must be relative")
+    path = path.rstrip("/")
+    if not path:
+        raise StorageValidationError(f"{label} must not be empty")
+    parts = path.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise StorageValidationError(f"{label} contains an invalid segment")
+    for part in parts:
+        _validate_path_segment(part, label=label)
+    return "/".join(parts)
+
+
+def _validate_path_segment(name: str, *, label: str) -> None:
+    if not name:
+        raise StorageValidationError("Document name must not be empty")
+    if any(character in _INVALID_FILENAME_CHARS or ord(character) < 32 for character in name):
+        raise StorageValidationError(f"{label} contains unsupported characters")
+    if name.endswith((".", " ")):
+        raise StorageValidationError(f"{label} must not end with a dot or space")
+    if name.casefold() in _WINDOWS_RESERVED_NAMES:
+        raise StorageValidationError(f"{label} is reserved by the filesystem")
     if len(name) > 160:
-        raise StorageValidationError("Document name exceeds 160 characters")
-    return name
+        raise StorageValidationError(f"{label} segment exceeds 160 characters")
 
 
 def _actor_segment(value: str) -> str:

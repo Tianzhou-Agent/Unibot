@@ -15,7 +15,7 @@ def create_document_task_router() -> APIRouter:
     router = APIRouter()
 
     @router.post(
-        "/documents/{name}/edit-tasks",
+        "/documents/{name:path}/edit-tasks",
         response_model=DocumentEditTask,
         status_code=status.HTTP_202_ACCEPTED,
     )
@@ -27,7 +27,7 @@ def create_document_task_router() -> APIRouter:
         return await document_edit_tasks(request).create_task(name, payload)
 
     @router.get(
-        "/documents/{name}/edit-tasks",
+        "/documents/{name:path}/edit-tasks",
         response_model=DocumentEditTaskListResponse,
     )
     async def list_tasks(

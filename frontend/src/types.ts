@@ -419,6 +419,16 @@ export interface DocumentRecord extends DocumentSummary {
   content: string;
 }
 
+export interface DocumentFolder {
+  path: string;
+  name: string;
+}
+
+export interface DocumentTreeResponse {
+  folders: DocumentFolder[];
+  documents: DocumentSummary[];
+}
+
 export interface DocumentSectionRecord {
   name: string;
   heading: string;

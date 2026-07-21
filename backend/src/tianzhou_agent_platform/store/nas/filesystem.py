@@ -57,6 +57,54 @@ class NasStore:
         except OSError as exc:
             raise StorageUnknownBackendError("NAS delete operation failed") from exc
 
+    async def create_directory(self, path: StoragePath) -> None:
+        target = self._resolve(path)
+        try:
+            await asyncio.to_thread(target.mkdir, parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise StorageValidationError("NAS directory already exists") from exc
+        except FileNotFoundError as exc:
+            raise StorageValidationError("NAS parent directory does not exist") from exc
+        except OSError as exc:
+            raise StorageUnknownBackendError("NAS directory creation failed") from exc
+
+    async def list_directories(self, prefix: StoragePath) -> list[StoragePath]:
+        target = self._resolve(prefix)
+        try:
+            return await asyncio.to_thread(self._list_directories, target)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise StorageUnknownBackendError("NAS directory list operation failed") from exc
+
+    async def move(self, source: StoragePath, destination: StoragePath) -> None:
+        source_target = self._resolve(source)
+        destination_target = self._resolve(destination)
+        try:
+            if destination_target.exists():
+                raise StorageValidationError("NAS destination already exists")
+            if not destination_target.parent.is_dir():
+                raise StorageValidationError("NAS destination parent directory does not exist")
+            await asyncio.to_thread(source_target.rename, destination_target)
+        except FileNotFoundError as exc:
+            raise StorageNotFoundError("NAS source path was not found") from exc
+        except StorageError:
+            raise
+        except OSError as exc:
+            raise StorageUnknownBackendError("NAS move operation failed") from exc
+
+    async def delete_directory(self, path: StoragePath) -> DeleteResult:
+        target = self._resolve(path)
+        try:
+            await asyncio.to_thread(target.rmdir)
+            return DeleteResult(deleted=True)
+        except FileNotFoundError:
+            return DeleteResult(deleted=False)
+        except OSError as exc:
+            if target.exists() and target.is_dir() and any(target.iterdir()):
+                raise StorageValidationError("NAS directory is not empty") from exc
+            raise StorageUnknownBackendError("NAS directory delete operation failed") from exc
+
     async def exists(self, path: StoragePath) -> bool:
         target = self._resolve(path)
         return await asyncio.to_thread(target.exists)
@@ -125,3 +173,17 @@ class NasStore:
                 )
             )
         return sorted(items, key=lambda item: item.path.relative_path.casefold())
+
+    def _list_directories(self, target: Path) -> list[StoragePath]:
+        if not target.exists():
+            return []
+        if not target.is_dir():
+            raise StorageValidationError("NAS list prefix must be a directory")
+        items = []
+        for directory in target.rglob("*"):
+            if not directory.is_dir():
+                continue
+            resolved = directory.resolve(strict=False)
+            if resolved.is_relative_to(self._root_path):
+                items.append(StoragePath(relative_path=resolved.relative_to(self._root_path).as_posix()))
+        return sorted(items, key=lambda item: item.relative_path.casefold())

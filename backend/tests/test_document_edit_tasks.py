@@ -61,6 +61,27 @@ def _wait_for_section(client: TestClient, task_id: str, section_id: str, revisio
     raise AssertionError("Document draft section did not finish")
 
 
+def test_nested_document_path_supports_edit_tasks(tmp_path: Path) -> None:
+    llm = ScriptedLLM([_draft("## Intro\n\nNested draft.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents/folders", json={"path": "Projects/Specs"})
+        client.post(
+            "/documents",
+            json={"name": "Projects/Specs/guide", "content": "# Guide\n\n## Intro\n\nOld."},
+        )
+        created = client.post(
+            "/documents/Projects/Specs/guide.md/edit-tasks",
+            json={"description": "Rewrite intro", "sections": [{"heading": "Intro"}]},
+        )
+        task = _wait_for_review(client, created.json()["id"])
+        listed = client.get("/documents/Projects/Specs/guide.md/edit-tasks").json()
+
+    assert created.status_code == 202
+    assert task["document_name"] == "Projects/Specs/guide.md"
+    assert task["sections"][0]["draft_content"] == "## Intro\n\nNested draft."
+    assert listed["items"][0]["id"] == task["id"]
+
+
 def test_edit_task_generates_reviewable_drafts_and_merges_once(tmp_path: Path) -> None:
     original = "# Guide\n\n## One\n\nOld one.\n\n## Two\n\nOld two.\n"
     llm = ScriptedLLM(

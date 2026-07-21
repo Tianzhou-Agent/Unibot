@@ -243,7 +243,12 @@ export default function CanvasModePage() {
       <div className="min-h-0 flex-1">
         {loading ? <CanvasSkeleton /> : null}
         {!loading && canvas ? (
-          <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
+          <div className={classNames(
+            "grid h-full min-h-0 grid-cols-1",
+            ainaId === "unibot-documents"
+              ? "lg:grid-cols-[minmax(250px,300px)_minmax(0,1fr)]"
+              : "lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]",
+          )}>
             <section className={classNames(
               "min-h-0 flex-col overflow-hidden bg-white lg:flex lg:border-r lg:border-line",
               mobilePane === "chat" ? "flex" : "hidden",

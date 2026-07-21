@@ -83,6 +83,42 @@ def test_document_api_isolates_actors_and_rejects_non_markdown_names(tmp_path: P
     assert invalid.json()["error"]["code"] == "INVALID_REQUEST"
 
 
+def test_document_folders_support_nested_documents_and_safe_moves(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        root = client.post("/documents/folders", json={"path": "Projects"})
+        nested = client.post("/documents/folders", json={"path": "Projects/2026"})
+        created = client.post(
+            "/documents",
+            json={"name": "Projects/2026/plan", "content": "# Plan\n\n## Scope\n\nDraft."},
+        )
+        tree = client.get("/documents/tree").json()
+        loaded = client.get("/documents/Projects/2026/plan.md")
+        moved = client.post(
+            "/documents/folders/Projects/2026/rename",
+            json={"new_path": "Projects/Archive"},
+        )
+        moved_document = client.get("/documents/Projects/Archive/plan.md")
+        non_empty_delete = client.delete("/documents/folders/Projects/Archive")
+        traversal = client.post("/documents", json={"name": "../outside", "content": "unsafe"})
+        client.delete("/documents/Projects/Archive/plan.md")
+        deleted_nested = client.delete("/documents/folders/Projects/Archive")
+        deleted_root = client.delete("/documents/folders/Projects")
+
+    assert root.status_code == 201
+    assert nested.status_code == 201
+    assert created.status_code == 201
+    assert created.json()["name"] == "Projects/2026/plan.md"
+    assert [item["path"] for item in tree["folders"]] == ["Projects", "Projects/2026"]
+    assert [item["name"] for item in tree["documents"]] == ["Projects/2026/plan.md"]
+    assert loaded.json()["content"].endswith("Draft.")
+    assert moved.json()["path"] == "Projects/Archive"
+    assert moved_document.status_code == 200
+    assert non_empty_delete.status_code == 422
+    assert traversal.status_code == 422
+    assert deleted_nested.status_code == 204
+    assert deleted_root.status_code == 204
+
+
 def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
     llm = ScriptedLLM(
         [

@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   Code2,
   Columns2,
   Eye,
   FileCheck2,
   FilePlus2,
   FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   GitMerge,
   Loader2,
+  ListTree,
   Pencil,
   Plus,
   RefreshCw,
@@ -21,18 +27,19 @@ import {
 } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { api, apiErrorMessage } from "@/lib/api";
+import { documentApiPath } from "@/lib/documentPaths";
 import { classNames } from "@/lib/utils";
 import type {
   DocumentDraftSection,
   DocumentEditTask,
   DocumentEditTaskListResponse,
+  DocumentFolder,
   DocumentHeading,
-  DocumentListResponse,
   DocumentOutline,
   DocumentRecord,
-  DocumentSectionRecord,
   DocumentSectionUpdateResult,
   DocumentSummary,
+  DocumentTreeResponse,
 } from "@/types";
 
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
@@ -41,10 +48,12 @@ type EditorMode = "edit" | "split" | "preview";
 
 export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   const [items, setItems] = useState<DocumentSummary[]>([]);
+  const [folders, setFolders] = useState<DocumentFolder[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState("");
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
-  const [sectionRevision, setSectionRevision] = useState("");
   const [editHeadingIndex, setEditHeadingIndex] = useState<number | null>(null);
   const [outline, setOutline] = useState<DocumentOutline | null>(null);
   const [tasks, setTasks] = useState<DocumentEditTask[]>([]);
@@ -58,6 +67,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   const [draftContent, setDraftContent] = useState("");
   const [aiInstruction, setAiInstruction] = useState("");
   const [newName, setNewName] = useState("");
+  const [newFolderName, setNewFolderName] = useState("");
   const [renameValue, setRenameValue] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(false);
@@ -78,6 +88,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     () => tasks.some((task) => taskPending(task)),
     [tasks],
   );
+  const documentTree = useMemo(() => buildDocumentTree(folders, items), [folders, items]);
 
   useEffect(() => {
     void refreshDocuments();
@@ -101,11 +112,12 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   async function refreshDocuments(preferredName?: string | null) {
     setLoading(true);
     try {
-      const response = await api.get<DocumentListResponse>(`/documents?${new URLSearchParams(ACTOR)}`);
-      setItems(response.items);
-      const target = preferredName && response.items.some((item) => item.name === preferredName)
+      const response = await api.get<DocumentTreeResponse>(`/documents/tree?${new URLSearchParams(ACTOR)}`);
+      setItems(response.documents);
+      setFolders(response.folders);
+      const target = preferredName && response.documents.some((item) => item.name === preferredName)
         ? preferredName
-        : response.items[0]?.name ?? null;
+        : response.documents[0]?.name ?? null;
       if (target) await loadDocument(target, false);
       else clearDocument();
       setError(null);
@@ -121,13 +133,19 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     setLoading(true);
     try {
       const actorQuery = new URLSearchParams(ACTOR);
-      const [nextOutline, taskList] = await Promise.all([
-        api.get<DocumentOutline>(`/documents/${encodeURIComponent(name)}/outline?${actorQuery}`),
-        api.get<DocumentEditTaskListResponse>(`/documents/${encodeURIComponent(name)}/edit-tasks?${actorQuery}`),
+      const path = documentApiPath(name);
+      const [document, nextOutline, taskList] = await Promise.all([
+        api.get<DocumentRecord>(`/documents/${path}?${actorQuery}`),
+        api.get<DocumentOutline>(`/documents/${path}/outline?${actorQuery}`),
+        api.get<DocumentEditTaskListResponse>(`/documents/${path}/edit-tasks?${actorQuery}`),
       ]);
       setSelectedName(name);
+      setSelectedFolder(parentFolder(name));
+      setExpandedFolders((current) => withParentFolders(current, name));
       setOutline(nextOutline);
-      await loadEditorSection(name, nextOutline, editableDocumentHeadings(nextOutline)[0]?.index ?? null);
+      setEditHeadingIndex(editableDocumentHeadings(nextOutline)[0]?.index ?? null);
+      setContent(document.content);
+      setSavedContent(document.content);
       setTasks(taskList.items);
       setActiveTask(taskList.items[0] ?? null);
       setActiveSectionId(taskList.items[0]?.sections[0]?.id ?? null);
@@ -144,48 +162,15 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     }
   }
 
-  async function loadEditorSection(name: string, documentOutline: DocumentOutline, headingIndex: number | null) {
-    const headings = editableDocumentHeadings(documentOutline);
-    const heading = headings.find((item) => item.index === headingIndex) ?? headings[0];
-    if (!heading) {
-      setEditHeadingIndex(null);
-      setSectionRevision("");
-      setContent("");
-      setSavedContent("");
-      return;
-    }
-    const query = new URLSearchParams({
-      ...ACTOR,
-      heading: heading.heading,
-      occurrence: String(heading.occurrence),
-    });
-    const section = await api.get<DocumentSectionRecord>(
-      `/documents/${encodeURIComponent(name)}/sections?${query}`,
-    );
-    setEditHeadingIndex(heading.index);
-    setSectionRevision(section.revision);
-    setContent(section.content);
-    setSavedContent(section.content);
-  }
-
   async function selectEditorSection(index: number) {
-    if (!selectedName || !outline || index === editHeadingIndex) return;
-    if (dirty && !window.confirm("当前章节有未保存修改，确认放弃并切换章节吗？")) return;
-    setSaving(true);
-    try {
-      await loadEditorSection(selectedName, outline, index);
-      setError(null);
-    } catch (loadError) {
-      setError(apiErrorMessage(loadError));
-    } finally {
-      setSaving(false);
-    }
+    if (!outline?.headings.some((heading) => heading.index === index)) return;
+    setEditHeadingIndex(index);
   }
 
   async function refreshTasks(name: string, activeTaskId?: string | null) {
     try {
       const response = await api.get<DocumentEditTaskListResponse>(
-        `/documents/${encodeURIComponent(name)}/edit-tasks?${new URLSearchParams(ACTOR)}`,
+        `/documents/${documentApiPath(name)}/edit-tasks?${new URLSearchParams(ACTOR)}`,
       );
       setTasks(response.items);
       const taskId = activeTaskId ?? activeTask?.id;
@@ -202,7 +187,6 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     setSelectedName(null);
     setContent("");
     setSavedContent("");
-    setSectionRevision("");
     setEditHeadingIndex(null);
     setOutline(null);
     setTasks([]);
@@ -211,11 +195,12 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
 
   async function createDocument(event: FormEvent) {
     event.preventDefault();
-    const name = newName.trim();
-    if (!name || disabled || saving) return;
+    const fileName = newName.trim();
+    if (!fileName || disabled || saving) return;
     setSaving(true);
     try {
-      const title = name.replace(/\.md$/i, "");
+      const name = selectedFolder ? `${selectedFolder}/${fileName}` : fileName;
+      const title = fileName.replace(/\.md$/i, "");
       const record = await api.post<DocumentRecord>("/documents", {
         ...ACTOR,
         name,
@@ -230,28 +215,105 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     }
   }
 
+  async function createFolder(event: FormEvent) {
+    event.preventDefault();
+    const folderName = newFolderName.trim();
+    if (!folderName || disabled || saving) return;
+    const path = selectedFolder ? `${selectedFolder}/${folderName}` : folderName;
+    setSaving(true);
+    try {
+      await api.post("/documents/folders", { ...ACTOR, path });
+      setNewFolderName("");
+      setSelectedFolder(path);
+      setExpandedFolders((current) => new Set(current).add(path));
+      await refreshTreeOnly();
+      setError(null);
+    } catch (createError) {
+      setError(apiErrorMessage(createError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function renameFolder(path: string) {
+    const nextPath = window.prompt("输入新的文件夹路径", path)?.trim();
+    if (!nextPath || nextPath === path || disabled || saving) return;
+    setSaving(true);
+    try {
+      await api.post(`/documents/folders/${documentApiPath(path)}/rename`, {
+        ...ACTOR,
+        new_path: nextPath,
+      });
+      const preferredDocument = selectedName?.startsWith(`${path}/`)
+        ? `${nextPath}${selectedName.slice(path.length)}`
+        : selectedName;
+      setSelectedFolder(nextPath);
+      await refreshDocuments(preferredDocument);
+      setError(null);
+    } catch (renameError) {
+      setError(apiErrorMessage(renameError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteFolder(path: string) {
+    if (!window.confirm(`删除空文件夹“${path}”？`) || disabled || saving) return;
+    setSaving(true);
+    try {
+      await api.delete(`/documents/folders/${documentApiPath(path)}?${new URLSearchParams(ACTOR)}`);
+      setSelectedFolder(parentFolder(path));
+      await refreshTreeOnly();
+      setError(null);
+    } catch (deleteError) {
+      setError(apiErrorMessage(deleteError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function selectFolder(path: string) {
+    setSelectedFolder(path);
+    setExpandedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
   async function saveSection() {
     const heading = outline?.headings.find((item) => item.index === editHeadingIndex);
-    if (!selectedName || !outline || !heading || !sectionRevision || disabled || saving || !dirty) return;
+    if (!selectedName || !outline || !heading || disabled || saving || !dirty) return;
+    const sectionContent = changedSectionContent(savedContent, content, heading);
+    if (sectionContent === null) {
+      setError(`只能保存“${heading.heading}”章节，请撤销对其他章节或章节外内容的修改。`);
+      return;
+    }
     setSaving(true);
     try {
       const result = await api.put<DocumentSectionUpdateResult>(
-        `/documents/${encodeURIComponent(selectedName)}/sections`,
+        `/documents/${documentApiPath(selectedName)}/sections`,
         {
         ...ACTOR,
           heading: heading.heading,
           occurrence: heading.occurrence,
-          section_content: content,
-          expected_revision: sectionRevision,
+          section_content: sectionContent,
+          expected_revision: outline.revision,
         },
       );
-      const nextOutline = await api.get<DocumentOutline>(
-        `/documents/${encodeURIComponent(selectedName)}/outline?${new URLSearchParams(ACTOR)}`,
-      );
+      const path = documentApiPath(selectedName);
+      const [document, nextOutline] = await Promise.all([
+        api.get<DocumentRecord>(`/documents/${path}?${new URLSearchParams(ACTOR)}`),
+        api.get<DocumentOutline>(`/documents/${path}/outline?${new URLSearchParams(ACTOR)}`),
+      ]);
+      setContent(document.content);
+      setSavedContent(document.content);
       setOutline(nextOutline);
-      const updatedHeading = nextOutline.headings.find((item) =>
-        item.heading === result.heading && item.occurrence === result.occurrence);
-      await loadEditorSection(selectedName, nextOutline, updatedHeading?.index ?? null);
+      const updatedHeading = nextOutline.headings.find(
+        (item) => item.heading === result.heading && item.occurrence === result.occurrence,
+      );
+      setEditHeadingIndex(updatedHeading?.index ?? editableDocumentHeadings(nextOutline)[0]?.index ?? null);
       await refreshListOnly();
       setError(null);
     } catch (saveError) {
@@ -280,7 +342,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     try {
       const selectedHeadings = outline.headings.filter((heading) => selectedHeadingIndexes.has(heading.index));
       const task = await api.post<DocumentEditTask>(
-        `/documents/${encodeURIComponent(selectedName)}/edit-tasks`,
+        `/documents/${documentApiPath(selectedName)}/edit-tasks`,
         {
           ...ACTOR,
           description: taskDescription.trim(),
@@ -389,11 +451,19 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     try {
       const task = await api.post<DocumentEditTask>(`/document-edit-tasks/${activeTask.id}/merge`, ACTOR);
       replaceTask(task);
-      const nextOutline = await api.get<DocumentOutline>(
-        `/documents/${encodeURIComponent(selectedName)}/outline?${new URLSearchParams(ACTOR)}`,
-      );
+      const path = documentApiPath(selectedName);
+      const [document, nextOutline] = await Promise.all([
+        api.get<DocumentRecord>(`/documents/${path}?${new URLSearchParams(ACTOR)}`),
+        api.get<DocumentOutline>(`/documents/${path}/outline?${new URLSearchParams(ACTOR)}`),
+      ]);
+      setContent(document.content);
+      setSavedContent(document.content);
       setOutline(nextOutline);
-      await loadEditorSection(selectedName, nextOutline, editHeadingIndex);
+      setEditHeadingIndex((current) =>
+        nextOutline.headings.some((heading) => heading.index === current)
+          ? current
+          : editableDocumentHeadings(nextOutline)[0]?.index ?? null,
+      );
       await refreshListOnly();
       setError(null);
     } catch (mergeError) {
@@ -419,7 +489,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     setSaving(true);
     try {
       const record = await api.post<DocumentRecord>(
-        `/documents/${encodeURIComponent(selectedName)}/rename`,
+        `/documents/${documentApiPath(selectedName)}/rename`,
         { ...ACTOR, new_name: value },
       );
       await refreshDocuments(record.name);
@@ -434,7 +504,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     if (!selectedName || disabled || saving) return;
     setSaving(true);
     try {
-      await api.delete(`/documents/${encodeURIComponent(selectedName)}?${new URLSearchParams(ACTOR)}`);
+      await api.delete(`/documents/${documentApiPath(selectedName)}?${new URLSearchParams(ACTOR)}`);
       setPendingDelete(false);
       await refreshDocuments(null);
     } catch (deleteError) {
@@ -445,17 +515,31 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   }
 
   async function refreshListOnly() {
-    const response = await api.get<DocumentListResponse>(`/documents?${new URLSearchParams(ACTOR)}`);
-    setItems(response.items);
+    await refreshTreeOnly();
+  }
+
+  async function refreshTreeOnly() {
+    const response = await api.get<DocumentTreeResponse>(`/documents/tree?${new URLSearchParams(ACTOR)}`);
+    setItems(response.documents);
+    setFolders(response.folders);
   }
 
   return (
-    <div className={classNames("grid h-full min-h-0 grid-rows-1 overflow-hidden bg-white",
-      mode === "edit" ? "grid-cols-[132px_minmax(0,1fr)]" : "grid-cols-1")}>
-      {mode === "edit" ? <aside className="flex min-h-0 flex-col border-r border-line bg-app-soft">
+    <div className="grid h-full min-h-0 grid-cols-[220px_minmax(0,1fr)] grid-rows-1 overflow-hidden bg-white">
+      <aside className="flex min-h-0 flex-col border-r border-line bg-app-soft">
+        <div className="border-b border-line p-2.5">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1"><h3 className="text-[11.5px] font-extrabold text-ink">文件树</h3>
+              <p className="truncate text-[9px] text-ink-muted">{selectedFolder ? `当前位置 / ${selectedFolder}` : "根目录"}</p></div>
+            {selectedFolder ? <><IconButton label="重命名文件夹" onClick={() => void renameFolder(selectedFolder)} disabled={saving}>
+              <Pencil className="h-3.5 w-3.5" /></IconButton>
+              <IconButton label="删除空文件夹" onClick={() => void deleteFolder(selectedFolder)} disabled={saving} danger>
+                <Trash2 className="h-3.5 w-3.5" /></IconButton></> : null}
+          </div>
+        </div>
         <form onSubmit={createDocument} className="border-b border-line p-2.5">
-          <label className="text-[10px] font-bold uppercase text-ink-muted">新建文档</label>
-          <div className="mt-1.5 flex gap-1.5">
+          <label className="text-[9.5px] font-bold text-ink-muted">在当前位置新建文档</label>
+          <div className="mt-1 flex gap-1.5">
             <input value={newName} onChange={(event) => setNewName(event.target.value)} disabled={disabled || saving}
               placeholder="文件名.md" aria-label="新文档名称" className="input-soft min-w-0 flex-1 text-[11.5px]" />
             <button type="submit" disabled={disabled || saving || !newName.trim()}
@@ -464,26 +548,30 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
             </button>
           </div>
         </form>
+        <form onSubmit={createFolder} className="border-b border-line px-2.5 py-2">
+          <div className="flex gap-1.5">
+            <input value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} disabled={disabled || saving}
+              placeholder="子文件夹名称" aria-label="新文件夹名称" className="input-soft min-w-0 flex-1 text-[11px]" />
+            <button type="submit" disabled={disabled || saving || !newFolderName.trim()}
+              className="btn-outline h-9 w-9 shrink-0 p-0 disabled:opacity-50" aria-label="创建文件夹" title="创建文件夹">
+              <FolderPlus className="h-4 w-4" />
+            </button>
+          </div>
+        </form>
         <div className="flex items-center border-b border-line px-2.5 py-1.5">
-          <span className="text-[10.5px] font-bold text-ink-muted">文档 {items.length}</span>
+          <button type="button" onClick={() => setSelectedFolder("")}
+            className={classNames("text-[10.5px] font-bold", selectedFolder ? "text-ink-muted" : "text-accent")}>全部文件 · {items.length}</button>
           <button type="button" onClick={() => void refreshDocuments(selectedName)} disabled={loading || saving}
             className="btn-ghost ml-auto h-7 w-7 p-0" aria-label="刷新文档列表" title="刷新">
             <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-1.5" aria-label="文档列表">
-          {items.map((item) => (
-            <button key={item.name} type="button" onClick={() => void loadDocument(item.name)}
-              className={classNames("mb-1 flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition",
-                item.name === selectedName ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
-              <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 flex-1"><strong className="block truncate text-[11.5px]">{item.name}</strong>
-                <span className="block text-[9px] text-ink-subtle">{formatBytes(item.size_bytes)}</span></span>
-            </button>
-          ))}
+        <div className="min-h-0 flex-1 overflow-y-auto p-1.5" aria-label="文档文件树">
+          <DocumentTree node={documentTree} selectedName={selectedName} selectedFolder={selectedFolder}
+            expanded={expandedFolders} onFolder={selectFolder} onDocument={(name) => void loadDocument(name)} />
           {!loading && !items.length ? <p className="px-2 py-6 text-center text-[11px] text-ink-muted">暂无 Markdown 文档</p> : null}
         </div>
-      </aside> : null}
+      </aside>
 
       <section className="flex min-h-0 min-w-0 flex-col">
         <header className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
@@ -554,34 +642,61 @@ function DocumentEditor({ content, dirty, saving, disabled, mode, outline, headi
   onContent: (value: string) => void; onMode: (mode: EditorMode) => void; onSave: () => void;
 }) {
   const headings = outline ? editableDocumentHeadings(outline) : [];
-  return <div className="flex h-full min-h-0 flex-col">
-    <div className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-1.5">
-      <div><h3 className="text-[11.5px] font-extrabold text-ink">章节编辑</h3><p className="text-[9px] text-ink-muted">仅保存当前章节，不支持全文覆盖</p></div>
-      <select value={headingIndex ?? ""} onChange={(event) => onHeading(Number(event.target.value))}
-        disabled={disabled || saving || !headings.length} aria-label="编辑章节"
-        className="input-soft h-8 min-w-0 flex-1 py-1 text-[10.5px]">
-        {headings.map((heading) => <option key={heading.index} value={heading.index}>
-          {`${"　".repeat(Math.max(0, heading.level - 1))}${heading.heading}`}
-        </option>)}
-      </select>
-      <div className="ml-auto flex h-7 items-center rounded-md border border-line bg-white p-0.5" aria-label="编辑器视图">
-        <ModeButton active={mode === "edit"} label="仅编辑" onClick={() => onMode("edit")}><Code2 className="h-3.5 w-3.5" /></ModeButton>
-        <ModeButton active={mode === "split"} label="分栏" onClick={() => onMode("split")}><Columns2 className="h-3.5 w-3.5" /></ModeButton>
-        <ModeButton active={mode === "preview"} label="仅预览" onClick={() => onMode("preview")}><Eye className="h-3.5 w-3.5" /></ModeButton>
+  const activeHeading = headings.find((heading) => heading.index === headingIndex) ?? headings[0];
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const [showOutline, setShowOutline] = useState(false);
+
+  function jumpToHeading(heading: DocumentHeading) {
+    onHeading(heading.index);
+    setShowOutline(false);
+    if (!editorRef.current) return;
+    const lineHeight = 24;
+    editorRef.current.focus();
+    editorRef.current.scrollTop = Math.max(0, (heading.line_start - 2) * lineHeight);
+  }
+
+  return <div className={classNames("grid h-full min-h-0", showOutline && "grid-cols-[minmax(0,1fr)_190px]")}>
+    <div className="flex min-h-0 min-w-0 flex-col">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-1.5">
+        <div className="min-w-0 flex-1"><h3 className="truncate text-[11.5px] font-extrabold text-ink">全文编辑</h3>
+          <p className="truncate text-[9px] text-ink-muted">全文可见；当前保存单元：{activeHeading?.heading ?? "无可编辑章节"}</p></div>
+        <div className="flex h-7 items-center rounded-md border border-line bg-white p-0.5" aria-label="编辑器视图">
+          <ModeButton active={mode === "edit"} label="仅编辑" onClick={() => onMode("edit")}><Code2 className="h-3.5 w-3.5" /></ModeButton>
+          <ModeButton active={mode === "split"} label="分栏" onClick={() => onMode("split")}><Columns2 className="h-3.5 w-3.5" /></ModeButton>
+          <ModeButton active={mode === "preview"} label="仅预览" onClick={() => onMode("preview")}><Eye className="h-3.5 w-3.5" /></ModeButton>
+        </div>
+        <button type="button" className={classNames("btn-outline h-8 px-2 text-[10px]", showOutline && "border-accent-ring bg-accent-soft text-accent")}
+          onClick={() => setShowOutline((current) => !current)} aria-pressed={showOutline}>
+          <ListTree className="h-3.5 w-3.5" />章节
+        </button>
+        <button type="button" className="btn-primary h-8 text-[10.5px]" onClick={onSave}
+          disabled={disabled || saving || !dirty || !activeHeading}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}保存当前章节
+        </button>
       </div>
-      <button type="button" className="btn-primary h-8 text-[10.5px]" onClick={onSave} disabled={disabled || saving || !dirty}>
-        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}保存章节
-      </button>
+      <div className={classNames("grid min-h-0 flex-1", mode === "split" && "grid-rows-2 xl:grid-cols-2 xl:grid-rows-1")}>
+        {mode !== "preview" ? <textarea ref={editorRef} value={content} onChange={(event) => onContent(event.target.value)}
+          disabled={disabled || saving} spellCheck={false} aria-label="全文 Markdown 编辑器"
+          className={classNames("h-full min-h-0 w-full resize-none bg-white p-3 font-mono text-[12px] leading-6 text-ink outline-none",
+            mode === "split" && "border-b border-line xl:border-b-0 xl:border-r")} /> : null}
+        {mode !== "edit" ? <div className="h-full min-h-0 overflow-y-auto bg-app-soft p-3" aria-label="全文 Markdown 预览">
+          <MarkdownContent content={content || "_空文档_"} />
+        </div> : null}
+      </div>
     </div>
-    <div className={classNames("grid min-h-0 flex-1", mode === "split" && "grid-rows-2 lg:grid-cols-2 lg:grid-rows-1")}>
-      {mode !== "preview" ? <textarea value={content} onChange={(event) => onContent(event.target.value)} disabled={disabled || saving}
-        spellCheck={false} aria-label="章节 Markdown 编辑器"
-        className={classNames("h-full min-h-0 w-full resize-none bg-white p-3 font-mono text-[12px] leading-6 text-ink outline-none",
-          mode === "split" && "border-b border-line lg:border-b-0 lg:border-r")} /> : null}
-      {mode !== "edit" ? <div className="h-full min-h-0 overflow-y-auto bg-app-soft p-3" aria-label="章节 Markdown 预览">
-        <MarkdownContent content={content || "_空文档_"} />
-      </div> : null}
-    </div>
+    {showOutline ? <aside className="flex min-h-0 flex-col border-l border-line bg-app-soft">
+      <div className="border-b border-line px-3 py-2"><h3 className="text-[11px] font-extrabold text-ink">章节导航</h3>
+        <p className="text-[9px] text-ink-muted">选择章节后定位并限定保存范围</p></div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        {headings.map((heading) => <button key={heading.index} type="button" onClick={() => jumpToHeading(heading)}
+          className={classNames("mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[10.5px]",
+            heading.index === activeHeading?.index ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}
+          style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 10}px` }}>
+          <span className="truncate">{heading.heading}</span><span className="ml-auto font-mono text-[8px] text-ink-subtle">H{heading.level}</span>
+        </button>)}
+        {!headings.length ? <p className="p-4 text-center text-[10px] text-ink-muted">没有可编辑章节</p> : null}
+      </div>
+    </aside> : null}
   </div>;
 }
 
@@ -596,7 +711,7 @@ function TaskWorkspace({ tasks, activeTask, activeSection, activeSectionId, crea
   isHeadingDisabled: (heading: DocumentHeading) => boolean; onCreate: () => void; onDraft: (value: string) => void;
   onInstruction: (value: string) => void; onSave: () => void; onRevise: () => void; onRetry: () => void; onMerge: () => void;
 }) {
-  return <div className="grid h-full min-h-0 grid-cols-[150px_minmax(0,1fr)] grid-rows-1">
+  return <div className="grid h-full min-h-0 grid-cols-[210px_minmax(0,1fr)] grid-rows-1">
     <aside className="flex min-h-0 flex-col border-r border-line bg-app-soft">
       <div className="flex items-center gap-2 border-b border-line px-2.5 py-2">
         <div className="min-w-0 flex-1"><h3 className="text-[11.5px] font-extrabold text-ink">修改任务</h3><p className="text-[9px] text-ink-muted">草稿检视后合并</p></div>
@@ -714,6 +829,100 @@ function TaskIcon({ task }: { task: DocumentEditTask }) {
 }
 
 function EmptyDocument() { return <div className="flex h-full min-h-72 flex-col items-center justify-center text-center text-ink-muted"><FileText className="h-8 w-8 text-ink-subtle" /><p className="mt-2 text-[11.5px] font-semibold">新建或选择一个 Markdown 文档</p></div>; }
+
+interface DocumentTreeNode {
+  path: string;
+  name: string;
+  folders: DocumentTreeNode[];
+  documents: DocumentSummary[];
+}
+
+function DocumentTree({ node, selectedName, selectedFolder, expanded, onFolder, onDocument }: {
+  node: DocumentTreeNode;
+  selectedName: string | null;
+  selectedFolder: string;
+  expanded: Set<string>;
+  onFolder: (path: string) => void;
+  onDocument: (name: string) => void;
+}) {
+  return <>
+    {node.folders.map((folder) => {
+      const open = expanded.has(folder.path);
+      return <div key={folder.path}>
+        <button type="button" onClick={() => onFolder(folder.path)}
+          className={classNames("mb-0.5 flex w-full items-center gap-1 rounded px-1.5 py-1.5 text-left text-[10.5px]",
+            selectedFolder === folder.path ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
+          {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+          {open ? <FolderOpen className="h-3.5 w-3.5 shrink-0" /> : <Folder className="h-3.5 w-3.5 shrink-0" />}
+          <span className="truncate font-semibold">{folder.name}</span>
+        </button>
+        {open ? <div className="ml-3 border-l border-line pl-1">
+          <DocumentTree node={folder} selectedName={selectedName} selectedFolder={selectedFolder}
+            expanded={expanded} onFolder={onFolder} onDocument={onDocument} />
+        </div> : null}
+      </div>;
+    })}
+    {node.documents.map((document) => <button key={document.name} type="button" onClick={() => onDocument(document.name)}
+      className={classNames("mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left",
+        document.name === selectedName ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
+      <FileText className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{baseName(document.name)}</strong>
+        <span className="block text-[8px] text-ink-subtle">{formatBytes(document.size_bytes)}</span></span>
+    </button>)}
+  </>;
+}
+
+function buildDocumentTree(folders: DocumentFolder[], documents: DocumentSummary[]): DocumentTreeNode {
+  const root: DocumentTreeNode = { path: "", name: "", folders: [], documents: [] };
+  const nodes = new Map<string, DocumentTreeNode>([["", root]]);
+
+  function ensureFolder(path: string): DocumentTreeNode {
+    const existing = nodes.get(path);
+    if (existing) return existing;
+    const parentPath = parentFolder(path);
+    const node = { path, name: baseName(path), folders: [], documents: [] };
+    ensureFolder(parentPath).folders.push(node);
+    nodes.set(path, node);
+    return node;
+  }
+
+  folders.forEach((folder) => ensureFolder(folder.path));
+  documents.forEach((document) => ensureFolder(parentFolder(document.name)).documents.push(document));
+  nodes.forEach((node) => {
+    node.folders.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+    node.documents.sort((left, right) => baseName(left.name).localeCompare(baseName(right.name), "zh-CN"));
+  });
+  return root;
+}
+
+function changedSectionContent(original: string, updated: string, heading: DocumentHeading): string | null {
+  const lines = original.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const prefix = lines.slice(0, heading.line_start - 1).join("");
+  const suffix = lines.slice(heading.line_end).join("");
+  if (!updated.startsWith(prefix) || !updated.endsWith(suffix) || updated.length < prefix.length + suffix.length) {
+    return null;
+  }
+  return updated.slice(prefix.length, updated.length - suffix.length);
+}
+
+function parentFolder(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index < 0 ? "" : path.slice(0, index);
+}
+
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+function withParentFolders(current: Set<string>, path: string): Set<string> {
+  const next = new Set(current);
+  let folder = parentFolder(path);
+  while (folder) {
+    next.add(folder);
+    folder = parentFolder(folder);
+  }
+  return next;
+}
 
 function IconButton({ label, onClick, disabled = false, danger = false, children }: { label: string; onClick: () => void; disabled?: boolean; danger?: boolean; children: React.ReactNode }) {
   return <button type="button" onClick={onClick} disabled={disabled} aria-label={label} title={label}
