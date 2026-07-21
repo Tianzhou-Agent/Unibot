@@ -14,6 +14,8 @@ interface MockState {
   staleFirstConversationLoadMs: number;
   conversationLoadCount: number;
   documentTasks: JsonObject[];
+  documentFolders: string[];
+  documentName: string;
   documentContent: string;
   streamWidgets: JsonObject[];
 }
@@ -54,6 +56,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     staleFirstConversationLoadMs: initial.staleFirstConversationLoadMs ?? 0,
     conversationLoadCount: 0,
     documentTasks: initial.documentTasks ?? [],
+    documentFolders: initial.documentFolders ?? [],
+    documentName: initial.documentName ?? "guide.md",
     documentContent: initial.documentContent ?? "# 使用指南\n\n## 简介\n\n旧内容。\n",
     streamWidgets: initial.streamWidgets ?? [],
   };
@@ -211,20 +215,32 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "GET" && path === "/memories/stats") {
       return json(route, { total: 0, fact: 0, preference: 0, goal: 0, instruction: 0 });
     }
+    const documentPath = `/documents/${state.documentName}`;
     if (method === "GET" && path === "/documents") {
-      return json(route, { items: [{ name: "guide.md", size_bytes: state.documentContent.length, modified_at: NOW }], total: 1 });
+      return json(route, { items: [{ name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW }], total: 1 });
     }
-    if (method === "GET" && path === "/documents/guide.md") {
-      return json(route, { name: "guide.md", size_bytes: state.documentContent.length, modified_at: NOW, content: state.documentContent });
+    if (method === "GET" && path === "/documents/tree") {
+      return json(route, {
+        folders: state.documentFolders.map((folderPath) => ({ path: folderPath, name: folderPath.split("/").at(-1) })),
+        documents: [{ name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW }],
+      });
     }
-    if (method === "PUT" && path === "/documents/guide.md/sections") {
+    if (method === "POST" && path === "/documents/folders") {
+      const payload = request.postDataJSON() as JsonObject;
+      state.documentFolders.push(payload.path as string);
+      return json(route, { path: payload.path, name: (payload.path as string).split("/").at(-1) }, 201);
+    }
+    if (method === "GET" && path === documentPath) {
+      return json(route, { name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW, content: state.documentContent });
+    }
+    if (method === "PUT" && path === `${documentPath}/sections`) {
       const payload = request.postDataJSON() as JsonObject;
       const sectionContent = payload.section_content as string;
       state.documentContent = payload.heading === "简介"
         ? state.documentContent.replace(/## 简介[\s\S]*$/, sectionContent)
         : sectionContent;
       return json(route, {
-        name: "guide.md",
+        name: state.documentName,
         previous_heading: payload.heading,
         heading: payload.heading,
         level: payload.heading === "使用指南" ? 1 : 2,
@@ -234,9 +250,9 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         modified_at: NOW,
       });
     }
-    if (method === "GET" && path === "/documents/guide.md/outline") {
+    if (method === "GET" && path === `${documentPath}/outline`) {
       return json(route, {
-        name: "guide.md",
+        name: state.documentName,
         size_bytes: state.documentContent.length,
         revision: "revision-e2e",
         headings: [
@@ -245,14 +261,14 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         ],
       });
     }
-    if (method === "GET" && path === "/documents/guide.md/edit-tasks") {
+    if (method === "GET" && path === `${documentPath}/edit-tasks`) {
       return json(route, { items: state.documentTasks, total: state.documentTasks.length });
     }
-    if (method === "POST" && path === "/documents/guide.md/edit-tasks") {
+    if (method === "POST" && path === `${documentPath}/edit-tasks`) {
       const payload = request.postDataJSON() as JsonObject;
       const task = {
         id: "document-edit-e2e",
-        document_name: "guide.md",
+        document_name: state.documentName,
         title: payload.description,
         description: payload.description,
         status: "reviewing",
@@ -385,11 +401,12 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
   await installMockApi(page);
   await page.goto("/canvas/unibot-documents");
 
-  await expect(page.getByText("章节编辑", { exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "使用指南", exact: true })).toHaveCount(0);
-  await page.getByRole("combobox", { name: "编辑章节" }).selectOption("2");
-  await page.getByRole("textbox", { name: "章节 Markdown 编辑器" }).fill("## 简介\n\n章节编辑后的内容。\n");
-  await page.getByRole("button", { name: "保存章节" }).click();
+  await expect(page.getByText("全文编辑", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "章节", exact: true }).click();
+  await expect(page.getByText("章节导航", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toHaveValue(/# 使用指南/);
+  await page.getByRole("textbox", { name: "全文 Markdown 编辑器" }).fill("# 使用指南\n\n## 简介\n\n章节编辑后的内容。\n");
+  await page.getByRole("button", { name: "保存当前章节" }).click();
   await expect(page.getByText("章节编辑后的内容。", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "任务 0" }).click();
@@ -406,6 +423,39 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
   await page.getByRole("button", { name: "编辑", exact: true }).click();
 
   await expect(page.getByText("用户检视后的内容。", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-009B 文档 Canvas 展示嵌套文件树和全文章节导航", async ({ page }) => {
+  await installMockApi(page, {
+    documentFolders: ["Projects", "Projects/Specs"],
+    documentName: "Projects/Specs/guide.md",
+  });
+  await page.goto("/canvas/unibot-documents");
+
+  await expect(page.getByRole("button", { name: "Projects", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Specs", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /guide\.md/ })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toHaveValue(/旧内容/);
+  await page.getByRole("button", { name: "章节", exact: true }).click();
+  await expect(page.getByText("章节导航", { exact: true })).toBeVisible();
+
+  await page.getByRole("textbox", { name: "新文件夹名称" }).fill("Archive");
+  await page.getByRole("button", { name: "创建文件夹" }).click();
+  await expect(page.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-009C 全文编辑器拒绝跨章节保存", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/canvas/unibot-documents");
+
+  await page.getByRole("textbox", { name: "全文 Markdown 编辑器" }).fill(
+    "# 被修改的根标题\n\n## 简介\n\n同时修改多个范围。\n",
+  );
+  await page.getByRole("button", { name: "保存当前章节" }).click();
+
+  await expect(page.getByText(/只能保存“简介”章节/)).toBeVisible();
+  expect(state.documentContent).toContain("# 使用指南");
+  expect(state.documentContent).toContain("旧内容");
 });
 
 test("FE-E2E-002 重命名、分类、删除并恢复会话", async ({ page }) => {
