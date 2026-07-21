@@ -3,12 +3,15 @@
 from typing import Any
 
 from tianzhou_agent_platform.aina.document.builtin import (
+    DOCUMENT_EDIT_TASK_TOOL_IDS,
     DOCUMENT_TOOL_IDS,
     UNIBOT_DOCUMENTS_ID,
+    invoke_document_edit_task_tool,
     invoke_document_tool,
     unibot_documents_record,
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.memory.builtin import (
     FORGET_TOOL_ID,
     MEMORY_TOOL_IDS,
@@ -82,6 +85,7 @@ async def invoke_builtin(
     tenant_id: str,
     conversation_id: str,
     document_service: DocumentService | None = None,
+    document_edit_task_service: DocumentEditTaskService | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
     if tool_id in DOCUMENT_TOOL_IDS:
         if document_service is None:
@@ -92,6 +96,20 @@ async def invoke_builtin(
                 source="storage",
             )
         try:
+            if tool_id in DOCUMENT_EDIT_TASK_TOOL_IDS:
+                if document_edit_task_service is None:
+                    raise PlatformError(
+                        "DEPENDENCY_FAILED",
+                        "Document edit tasks are unavailable",
+                        status_code=503,
+                    )
+                return await invoke_document_edit_task_tool(
+                    document_edit_task_service,
+                    tool_id,
+                    arguments,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
             return await invoke_document_tool(
                 document_service,
                 tool_id,

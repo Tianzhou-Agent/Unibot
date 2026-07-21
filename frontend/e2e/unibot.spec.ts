@@ -13,6 +13,9 @@ interface MockState {
   streamDelayMs: number;
   staleFirstConversationLoadMs: number;
   conversationLoadCount: number;
+  documentTasks: JsonObject[];
+  documentContent: string;
+  streamWidgets: JsonObject[];
 }
 
 function conversation(overrides: JsonObject = {}): JsonObject {
@@ -50,6 +53,9 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     streamDelayMs: initial.streamDelayMs ?? 0,
     staleFirstConversationLoadMs: initial.staleFirstConversationLoadMs ?? 0,
     conversationLoadCount: 0,
+    documentTasks: initial.documentTasks ?? [],
+    documentContent: initial.documentContent ?? "# 使用指南\n\n## 简介\n\n旧内容。\n",
+    streamWidgets: initial.streamWidgets ?? [],
   };
 
   await page.route("**/api/**", async (route) => {
@@ -117,7 +123,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         iterations: 1,
         usage: { input_tokens: 4, output_tokens: 6 },
         approval: null,
-        widgets: [],
+        widgets: state.streamWidgets,
       };
       const frames = [
         `event: message.delta\ndata: ${JSON.stringify({ type: "message.delta", delta: reply })}\n\n`,
@@ -171,7 +177,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         route: `/canvas/${ainaId}${conversationId ? `?conversation=${conversationId}` : ""}`,
         main_widget: {
           id: `${ainaId}-main`,
-          kind: ainaId === "unibot-memory" ? "memory" : "panel",
+          kind: ainaId === "unibot-memory" ? "memory" : ainaId === "unibot-documents" ? "document" : "panel",
           title: ainaId === "unibot-memory" ? "记忆系统" : ainaId,
           description: "管理跨对话保留的长期记忆。",
           markdown: null,
@@ -205,18 +211,109 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "GET" && path === "/memories/stats") {
       return json(route, { total: 0, fact: 0, preference: 0, goal: 0, instruction: 0 });
     }
+    if (method === "GET" && path === "/documents") {
+      return json(route, { items: [{ name: "guide.md", size_bytes: state.documentContent.length, modified_at: NOW }], total: 1 });
+    }
+    if (method === "GET" && path === "/documents/guide.md") {
+      return json(route, { name: "guide.md", size_bytes: state.documentContent.length, modified_at: NOW, content: state.documentContent });
+    }
+    if (method === "PUT" && path === "/documents/guide.md/sections") {
+      const payload = request.postDataJSON() as JsonObject;
+      const sectionContent = payload.section_content as string;
+      state.documentContent = payload.heading === "简介"
+        ? state.documentContent.replace(/## 简介[\s\S]*$/, sectionContent)
+        : sectionContent;
+      return json(route, {
+        name: "guide.md",
+        previous_heading: payload.heading,
+        heading: payload.heading,
+        level: payload.heading === "使用指南" ? 1 : 2,
+        occurrence: payload.occurrence ?? 1,
+        revision: "revision-e2e-updated",
+        size_bytes: state.documentContent.length,
+        modified_at: NOW,
+      });
+    }
+    if (method === "GET" && path === "/documents/guide.md/outline") {
+      return json(route, {
+        name: "guide.md",
+        size_bytes: state.documentContent.length,
+        revision: "revision-e2e",
+        headings: [
+          { index: 1, heading: "使用指南", level: 1, occurrence: 1, line_start: 1, line_end: 6 },
+          { index: 2, heading: "简介", level: 2, occurrence: 1, line_start: 3, line_end: 6 },
+        ],
+      });
+    }
+    if (method === "GET" && path === "/documents/guide.md/edit-tasks") {
+      return json(route, { items: state.documentTasks, total: state.documentTasks.length });
+    }
+    if (method === "POST" && path === "/documents/guide.md/edit-tasks") {
+      const payload = request.postDataJSON() as JsonObject;
+      const task = {
+        id: "document-edit-e2e",
+        document_name: "guide.md",
+        title: payload.description,
+        description: payload.description,
+        status: "reviewing",
+        base_revision: "revision-e2e",
+        user_id: "anonymous",
+        tenant_id: "default",
+        version: 2,
+        error: null,
+        created_at: NOW,
+        updated_at: NOW,
+        merged_at: null,
+        sections: [{
+          id: "draft-section-e2e",
+          heading: "简介",
+          occurrence: 1,
+          level: 2,
+          base_content: "## 简介\n\n旧内容。\n",
+          draft_content: "## 简介\n\nAI 草稿。",
+          draft_revision: 1,
+          ai_status: "ready",
+          ai_instruction: null,
+          ai_base_revision: 0,
+          ai_error: null,
+          updated_by: "ai",
+        }],
+      };
+      state.documentTasks = [task];
+      return json(route, task, 202);
+    }
+    if (method === "PATCH" && path === "/document-edit-tasks/document-edit-e2e/sections/draft-section-e2e") {
+      const payload = request.postDataJSON() as JsonObject;
+      const task = state.documentTasks[0];
+      const section = (task.sections as JsonObject[])[0];
+      section.draft_content = payload.content;
+      section.draft_revision = 2;
+      section.updated_by = "user";
+      return json(route, task);
+    }
+    if (method === "POST" && path === "/document-edit-tasks/document-edit-e2e/merge") {
+      const task = state.documentTasks[0];
+      task.status = "merged";
+      task.merged_at = NOW;
+      state.documentContent = `# 使用指南\n\n${((task.sections as JsonObject[])[0]).draft_content as string}\n`;
+      return json(route, task);
+    }
     if (method === "GET" && /^\/documents\/[^/]+\/sections$/.test(path)) {
       const heading = url.searchParams.get("heading") ?? "未命名章节";
+      const content = heading === "使用指南"
+        ? state.documentContent
+        : heading === "简介"
+          ? state.documentContent.match(/## 简介[\s\S]*$/)?.[0] ?? "## 简介\n"
+          : heading === "进阶"
+            ? `## ${heading}\n\n| 用户角色 | 核心诉求 |\n| --- | --- |\n| 平台管理员 | 系统监控 |\n| 开发者 | Agent 调试 |\n| 业务用户 | 流畅交互 |`
+            : `## ${heading}\n\n这是${heading}的正文内容。`;
       return json(route, {
         name: decodeURIComponent(path.split("/")[2]),
         heading,
-        level: 2,
+        level: heading === "使用指南" ? 1 : 2,
         occurrence: Number(url.searchParams.get("occurrence") ?? 1),
         revision: "revision-e2e",
-        content:
-          heading === "进阶"
-            ? `## ${heading}\n\n| 用户角色 | 核心诉求 |\n| --- | --- |\n| 平台管理员 | 系统监控 |\n| 开发者 | Agent 调试 |\n| 业务用户 | 流畅交互 |`
-            : `## ${heading}\n\n这是${heading}的正文内容。`,
+        content,
       });
     }
     if (method === "GET" && path === "/model-settings") {
@@ -282,6 +379,33 @@ test("FE-E2E-001 新建会话并展示流式回复", async ({ page }) => {
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
   await expect(page.locator("main p").filter({ hasText: "请执行前端端到端测试" })).toBeVisible();
   await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/canvas/unibot-documents");
+
+  await expect(page.getByText("章节编辑", { exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "使用指南", exact: true })).toHaveCount(0);
+  await page.getByRole("combobox", { name: "编辑章节" }).selectOption("2");
+  await page.getByRole("textbox", { name: "章节 Markdown 编辑器" }).fill("## 简介\n\n章节编辑后的内容。\n");
+  await page.getByRole("button", { name: "保存章节" }).click();
+  await expect(page.getByText("章节编辑后的内容。", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "任务 0" }).click();
+  await expect(page.getByText("修改任务", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "新建", exact: true }).click();
+  await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
+  await page.getByRole("checkbox", { name: "简介" }).check();
+  await page.getByRole("button", { name: "创建并执行" }).click();
+
+  await expect(page.getByText("AI 草稿。", { exact: false })).toBeVisible();
+  await page.getByRole("textbox", { name: "章节草稿" }).fill("## 简介\n\n用户检视后的内容。");
+  await page.getByRole("button", { name: "保存草稿" }).click();
+  await page.getByRole("button", { name: "合并全部" }).click();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+
+  await expect(page.getByText("用户检视后的内容。", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-002 重命名、分类、删除并恢复会话", async ({ page }) => {
@@ -405,6 +529,75 @@ test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "调用记录", exact: true })).toBeVisible();
   await expect(page.getByText("trace-e2e-1", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("unibot:debug-mode", "true"));
+  await installMockApi(page, {
+    conversations: [
+      conversation({
+        messages: [
+          {
+            id: "msg-tool-success",
+            role: "tool",
+            name: "builtin_document_edit_task_create_success",
+            tool_call_id: "call-success",
+            content: JSON.stringify({ task: { status: "queued", sections: [{ ai_error: null }] } }),
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-error",
+            role: "tool",
+            name: "builtin_document_edit_task_create_error",
+            tool_call_id: "call-error",
+            content: JSON.stringify({ error: { code: "CONFLICT", message: "Task creation failed" } }),
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+
+  await page.goto("/chat/conv-e2e-1");
+
+  await expect(page.getByText("能力调用结果 · builtin_document_edit_task_create_success", { exact: true })).toBeVisible();
+  await expect(page.getByText("能力调用失败 · builtin_document_edit_task_create_error", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
+  await installMockApi(page, {
+    conversations: [conversation()],
+    streamWidgets: [
+      {
+        id: "open-unibot-documents",
+        kind: "navigation",
+        title: "打开文档编辑器",
+        description: "文档应用已准备好。",
+        markdown: null,
+        fields: [],
+        apps: [],
+        actions: [
+          {
+            id: "open",
+            label: "进入 Canvas",
+            kind: "open_aina",
+            aina_id: "unibot-documents",
+            style: "primary",
+          },
+        ],
+      },
+    ],
+  });
+  await page.goto("/chat/conv-e2e-1");
+
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("打开文档应用");
+  await page.getByRole("button", { name: "发送消息" }).click();
+
+  await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-e2e-1$/);
 });
 
 test("FE-E2E-004B 区分应用、设置和 Debug，并切换默认模型", async ({ page }) => {

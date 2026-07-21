@@ -159,6 +159,13 @@ export default function CanvasModePage() {
       setLastRun(completed);
       setConversationId(completed.conversation_id);
       await loadConversation(completed.conversation_id);
+      const openAction = completed.widgets
+        .flatMap((widget) => widget.actions)
+        .find((action) => action.kind === "open_aina" && action.aina_id);
+      if (openAction?.aina_id) {
+        await openAina(openAction.aina_id, completed.conversation_id);
+        return;
+      }
       navigate(`/canvas/${ainaId}?conversation=${completed.conversation_id}`, {
         replace: true,
         state: canvas ? { canvas: { ...canvas, conversation_id: completed.conversation_id } } : undefined,
@@ -174,11 +181,11 @@ export default function CanvasModePage() {
     }
   }
 
-  async function openAina(targetAinaId: string) {
+  async function openAina(targetAinaId: string, targetConversationId = conversationId) {
     try {
       const opened = await api.post<AinaCanvasResponse>(`/ainas/${targetAinaId}/open`, {
         ...ACTOR,
-        conversation_id: conversationId,
+        conversation_id: targetConversationId,
       });
       navigate(opened.route, { state: { canvas: opened } });
     } catch (openError) {

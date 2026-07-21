@@ -158,7 +158,12 @@ class DocumentService:
                 "Document revision changed. Call document.read_section again before retrying the update."
             )
 
-        target = _find_section(_markdown_sections(current.content), heading, occurrence)
+        sections = _markdown_sections(current.content)
+        target = _find_section(sections, heading, occurrence)
+        if _covers_whole_document(target, sections):
+            raise StorageValidationError(
+                "The document root cannot be updated. Select one of its child sections."
+            )
         replacement, replacement_heading = _validate_section_replacement(
             section_content,
             target_level=target.level,
@@ -184,6 +189,66 @@ class DocumentService:
             revision=_document_revision(updated.content),
             size_bytes=updated.size_bytes,
             modified_at=updated.modified_at,
+        )
+
+    async def merge_sections(
+        self,
+        name: str,
+        replacements: list[tuple[str, int, str]],
+        expected_revision: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentRecord:
+        if not replacements:
+            raise StorageValidationError("At least one document section is required")
+        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        if _document_revision(current.content) != expected_revision:
+            raise StorageValidationError("Document revision changed. Review the latest document before merging.")
+
+        sections = _markdown_sections(current.content)
+        resolved: list[tuple[_MarkdownSection, str]] = []
+        seen: set[tuple[str, int]] = set()
+        newline = _preferred_newline(current.content)
+        for heading, occurrence, section_content in replacements:
+            key = (heading.strip(), occurrence)
+            if key in seen:
+                raise StorageValidationError("A document section cannot be merged more than once")
+            seen.add(key)
+            target = _find_section(sections, heading, occurrence)
+            if _covers_whole_document(target, sections):
+                raise StorageValidationError(
+                    "The document root cannot be merged. Select one of its child sections."
+                )
+            replacement, _ = _validate_section_replacement(
+                section_content,
+                target_level=target.level,
+                newline=newline,
+            )
+            resolved.append((target, replacement))
+
+        ordered = sorted(resolved, key=lambda item: item[0].start_index)
+        for (previous, _), (following, _) in zip(ordered, ordered[1:]):
+            if following.start_index < previous.end_index:
+                raise StorageValidationError("Selected document sections must not overlap")
+
+        lines = current.content.splitlines(keepends=True)
+        offsets = [0]
+        for line in lines:
+            offsets.append(offsets[-1] + len(line))
+        updated_content = current.content
+        for target, replacement in sorted(resolved, key=lambda item: item[0].start_index, reverse=True):
+            start = offsets[target.start_index]
+            end = offsets[target.end_index]
+            if end < len(current.content) and not replacement.endswith(("\n", "\r")):
+                replacement += newline
+            updated_content = updated_content[:start] + replacement + updated_content[end:]
+
+        return await self.update_document(
+            current.name,
+            updated_content,
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
 
     async def append_document(
@@ -335,6 +400,13 @@ def _find_section(sections: list[_MarkdownSection], heading: str, occurrence: in
             return section
     raise StorageValidationError(
         f"Markdown section {normalized_heading!r} occurrence {occurrence} was not found. Call document.outline first."
+    )
+
+
+def _covers_whole_document(target: _MarkdownSection, sections: list[_MarkdownSection]) -> bool:
+    return len(sections) > 1 and all(
+        target.start_index <= section.start_index and target.end_index >= section.end_index
+        for section in sections
     )
 
 
