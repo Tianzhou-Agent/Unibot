@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { ArrowLeft, ArrowUp, Bot, Loader2, MessageSquareText, PanelRightOpen, Wrench } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
+import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { classNames, uid } from "@/lib/utils";
-import type { AinaCanvasResponse, BackendMessage, ChatResponse, ConversationRecord } from "@/types";
+import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord } from "@/types";
 
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 
@@ -31,6 +32,7 @@ export default function CanvasModePage() {
   const [streamText, setStreamText] = useState("");
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [recoveringRun, setRecoveringRun] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
@@ -38,8 +40,12 @@ export default function CanvasModePage() {
   const localRunRef = useRef(false);
 
   const loadConversation = useCallback(async (id: string) => {
-    const record = await api.get<ConversationRecord>(`/conversations/${id}`);
+    const [record, pendingApprovals] = await Promise.all([
+      api.get<ConversationRecord>(`/conversations/${id}`),
+      api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
+    ]);
     setMessages(record.messages);
+    setApproval(pendingApprovals[0] ?? null);
     if (!localRunRef.current) {
       const running = record.run_status === "running";
       setRecoveringRun(running);
@@ -98,7 +104,7 @@ export default function CanvasModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [messages, streamText, activity, sending]);
+  }, [messages, streamText, activity, approval, sending]);
 
   async function sendMessage(text: string) {
     const prompt = text.trim();
@@ -117,6 +123,7 @@ export default function CanvasModePage() {
     setStreamText("");
     setActivity(debugMode ? "正在连接 AINA…" : "正在处理，请稍候…");
     setError(null);
+    setApproval(null);
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
     try {
@@ -147,6 +154,7 @@ export default function CanvasModePage() {
           if (event.type === "tool.requested") setActivity(debugMode ? `正在调用 ${event.id}…` : "正在处理，请稍候…");
           if (event.type === "tool.completed") setActivity(debugMode ? "调用完成，正在整理结果…" : "正在整理结果…");
           if (event.type === "routing.started") setActivity(debugMode ? "正在匹配 AINA…" : "正在处理，请稍候…");
+          if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
             streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
             setError(streamFailure);
@@ -157,6 +165,7 @@ export default function CanvasModePage() {
       if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
       const completed = completion as ChatResponse;
       setLastRun(completed);
+      setApproval(completed.approval ?? null);
       setConversationId(completed.conversation_id);
       await loadConversation(completed.conversation_id);
       const openAction = completed.widgets
@@ -177,6 +186,28 @@ export default function CanvasModePage() {
       localRunRef.current = false;
       setSending(false);
       setStreamText("");
+      setActivity(null);
+    }
+  }
+
+  async function resolveApproval(action: "confirm" | "deny") {
+    if (!approval) return;
+    setSending(true);
+    setError(null);
+    setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
+    try {
+      if (action === "confirm") {
+        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, ACTOR);
+        setLastRun(response);
+      } else {
+        await api.post(`/approvals/${approval.id}/deny`, ACTOR);
+      }
+      setApproval(null);
+      await loadConversation(approval.conversation_id);
+    } catch (approvalError) {
+      setError(apiErrorMessage(approvalError));
+    } finally {
+      setSending(false);
       setActivity(null);
     }
   }
@@ -296,6 +327,15 @@ export default function CanvasModePage() {
                   <div className="flex items-center gap-2 rounded-lg border border-accent-ring bg-accent-soft px-3 py-2.5 text-[11.5px] font-semibold text-accent-hover">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />{activity}
                   </div>
+                ) : null}
+                {approval ? (
+                  <ApprovalCard
+                    approval={approval}
+                    disabled={sending}
+                    debugMode={debugMode}
+                    onConfirm={() => void resolveApproval("confirm")}
+                    onDeny={() => void resolveApproval("deny")}
+                  />
                 ) : null}
                 {error ? <p className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">{error}</p> : null}
                 <div ref={endRef} />

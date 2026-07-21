@@ -16,6 +16,7 @@ import {
   GitMerge,
   Loader2,
   ListTree,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -46,6 +47,14 @@ const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 type DocumentMode = "edit" | "tasks";
 type EditorMode = "edit" | "split" | "preview";
 
+interface ConfirmRequest {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger: boolean;
+  resolve: (confirmed: boolean) => void;
+}
+
 export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   const [items, setItems] = useState<DocumentSummary[]>([]);
   const [folders, setFolders] = useState<DocumentFolder[]>([]);
@@ -66,14 +75,32 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   const [selectedHeadingIndexes, setSelectedHeadingIndexes] = useState<Set<number>>(new Set());
   const [draftContent, setDraftContent] = useState("");
   const [aiInstruction, setAiInstruction] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingEntry, setCreatingEntry] = useState<"document" | "folder" | null>(null);
+  const [createValue, setCreateValue] = useState("");
+  const [renamingItem, setRenamingItem] = useState<{ kind: "document" | "folder"; path: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [renaming, setRenaming] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+
+  function requestConfirm(options: { title: string; message: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
+    return new Promise((resolve) => {
+      setConfirmRequest({
+        title: options.title,
+        message: options.message,
+        confirmLabel: options.confirmLabel ?? "确认",
+        danger: options.danger ?? false,
+        resolve,
+      });
+    });
+  }
+
+  function settleConfirm(confirmed: boolean) {
+    if (!confirmRequest) return;
+    confirmRequest.resolve(confirmed);
+    setConfirmRequest(null);
+  }
 
   const dirty = selectedName !== null && content !== savedContent;
   const selected = useMemo(
@@ -129,7 +156,12 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   }
 
   async function loadDocument(name: string, guardDirty = true) {
-    if (guardDirty && dirty && !window.confirm("当前文档有未保存修改，确认放弃并切换文档吗？")) return;
+    if (guardDirty && dirty && !(await requestConfirm({
+      title: "放弃未保存修改？",
+      message: "当前文档有未保存修改，切换文档将丢失这些修改。",
+      confirmLabel: "放弃修改",
+      danger: true,
+    }))) return;
     setLoading(true);
     try {
       const actorQuery = new URLSearchParams(ACTOR);
@@ -151,9 +183,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
       setActiveSectionId(taskList.items[0]?.sections[0]?.id ?? null);
       setMode("edit");
       setCreatingTask(false);
-      setRenameValue(name);
-      setRenaming(false);
-      setPendingDelete(false);
+      setRenamingItem(null);
       setError(null);
     } catch (loadError) {
       setError(apiErrorMessage(loadError));
@@ -193,40 +223,37 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     setActiveTask(null);
   }
 
-  async function createDocument(event: FormEvent) {
-    event.preventDefault();
-    const fileName = newName.trim();
-    if (!fileName || disabled || saving) return;
-    setSaving(true);
-    try {
-      const name = selectedFolder ? `${selectedFolder}/${fileName}` : fileName;
-      const title = fileName.replace(/\.md$/i, "");
-      const record = await api.post<DocumentRecord>("/documents", {
-        ...ACTOR,
-        name,
-        content: `# ${title}\n\n`,
-      });
-      setNewName("");
-      await refreshDocuments(record.name);
-    } catch (createError) {
-      setError(apiErrorMessage(createError));
-    } finally {
-      setSaving(false);
-    }
+  function toggleCreateEntry(kind: "document" | "folder") {
+    setCreatingEntry((current) => (current === kind ? null : kind));
+    setCreateValue("");
   }
 
-  async function createFolder(event: FormEvent) {
+  async function submitCreate(event: FormEvent) {
     event.preventDefault();
-    const folderName = newFolderName.trim();
-    if (!folderName || disabled || saving) return;
-    const path = selectedFolder ? `${selectedFolder}/${folderName}` : folderName;
+    const value = createValue.trim();
+    if (!value || disabled || saving || !creatingEntry) return;
     setSaving(true);
     try {
-      await api.post("/documents/folders", { ...ACTOR, path });
-      setNewFolderName("");
-      setSelectedFolder(path);
-      setExpandedFolders((current) => new Set(current).add(path));
-      await refreshTreeOnly();
+      if (creatingEntry === "document") {
+        const name = selectedFolder ? `${selectedFolder}/${value}` : value;
+        const title = value.replace(/\.md$/i, "");
+        const record = await api.post<DocumentRecord>("/documents", {
+          ...ACTOR,
+          name,
+          content: `# ${title}\n\n`,
+        });
+        setCreateValue("");
+        setCreatingEntry(null);
+        await refreshDocuments(record.name);
+      } else {
+        const path = selectedFolder ? `${selectedFolder}/${value}` : value;
+        await api.post("/documents/folders", { ...ACTOR, path });
+        setCreateValue("");
+        setCreatingEntry(null);
+        setSelectedFolder(path);
+        setExpandedFolders((current) => new Set(current).add(path));
+        await refreshTreeOnly();
+      }
       setError(null);
     } catch (createError) {
       setError(apiErrorMessage(createError));
@@ -235,9 +262,49 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     }
   }
 
-  async function renameFolder(path: string) {
-    const nextPath = window.prompt("输入新的文件夹路径", path)?.trim();
-    if (!nextPath || nextPath === path || disabled || saving) return;
+  function startRename(item: { kind: "document" | "folder"; path: string }) {
+    setRenamingItem(item);
+    setRenameValue(baseName(item.path));
+  }
+
+  async function submitRename() {
+    if (!renamingItem || disabled || saving) return;
+    const value = renameValue.trim();
+    if (!value) return;
+    const parent = parentFolder(renamingItem.path);
+    const nextPath = value.includes("/") ? value : parent ? `${parent}/${value}` : value;
+    if (nextPath === renamingItem.path) {
+      setRenamingItem(null);
+      return;
+    }
+    if (renamingItem.kind === "document") await renameDocument(renamingItem.path, nextPath);
+    else await renameFolder(renamingItem.path, nextPath);
+  }
+
+  async function renameDocument(name: string, nextName: string) {
+    if (name === selectedName && dirty) {
+      setError("请先保存当前内容，再重命名文档。");
+      setRenamingItem(null);
+      return;
+    }
+    setSaving(true);
+    try {
+      const record = await api.post<DocumentRecord>(
+        `/documents/${documentApiPath(name)}/rename`,
+        { ...ACTOR, new_name: nextName },
+      );
+      setRenamingItem(null);
+      if (name === selectedName) await refreshDocuments(record.name);
+      else await refreshTreeOnly();
+      setError(null);
+    } catch (renameError) {
+      setError(apiErrorMessage(renameError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function renameFolder(path: string, nextPath: string) {
     setSaving(true);
     try {
       await api.post(`/documents/folders/${documentApiPath(path)}/rename`, {
@@ -247,6 +314,7 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
       const preferredDocument = selectedName?.startsWith(`${path}/`)
         ? `${nextPath}${selectedName.slice(path.length)}`
         : selectedName;
+      setRenamingItem(null);
       setSelectedFolder(nextPath);
       await refreshDocuments(preferredDocument);
       setError(null);
@@ -258,7 +326,13 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   }
 
   async function deleteFolder(path: string) {
-    if (!window.confirm(`删除空文件夹“${path}”？`) || disabled || saving) return;
+    if (disabled || saving) return;
+    if (!(await requestConfirm({
+      title: "删除文件夹",
+      message: `删除空文件夹“${path}”？此操作不可撤销。`,
+      confirmLabel: "删除",
+      danger: true,
+    }))) return;
     setSaving(true);
     try {
       await api.delete(`/documents/folders/${documentApiPath(path)}?${new URLSearchParams(ACTOR)}`);
@@ -479,34 +553,20 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     setTasks((current) => current.map((item) => item.id === task.id ? task : item));
   }
 
-  async function renameDocument() {
-    const value = renameValue.trim();
-    if (!selectedName || !value || disabled || saving) return;
-    if (dirty) {
-      setError("请先保存当前内容，再重命名文档。");
-      return;
-    }
+  async function deleteDocument(name: string) {
+    if (disabled || saving) return;
+    if (!(await requestConfirm({
+      title: "删除文档",
+      message: `删除文档“${name}”？此操作不可撤销。`,
+      confirmLabel: "删除",
+      danger: true,
+    }))) return;
     setSaving(true);
     try {
-      const record = await api.post<DocumentRecord>(
-        `/documents/${documentApiPath(selectedName)}/rename`,
-        { ...ACTOR, new_name: value },
-      );
-      await refreshDocuments(record.name);
-    } catch (renameError) {
-      setError(apiErrorMessage(renameError));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function deleteDocument() {
-    if (!selectedName || disabled || saving) return;
-    setSaving(true);
-    try {
-      await api.delete(`/documents/${documentApiPath(selectedName)}?${new URLSearchParams(ACTOR)}`);
-      setPendingDelete(false);
-      await refreshDocuments(null);
+      await api.delete(`/documents/${documentApiPath(name)}?${new URLSearchParams(ACTOR)}`);
+      if (name === selectedName) await refreshDocuments(null);
+      else await refreshTreeOnly();
+      setError(null);
     } catch (deleteError) {
       setError(apiErrorMessage(deleteError));
     } finally {
@@ -527,82 +587,75 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   return (
     <div className="grid h-full min-h-0 grid-cols-[220px_minmax(0,1fr)] grid-rows-1 overflow-hidden bg-white">
       <aside className="flex min-h-0 flex-col border-r border-line bg-app-soft">
-        <div className="border-b border-line p-2.5">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1"><h3 className="text-[11.5px] font-extrabold text-ink">文件树</h3>
-              <p className="truncate text-[9px] text-ink-muted">{selectedFolder ? `当前位置 / ${selectedFolder}` : "根目录"}</p></div>
-            {selectedFolder ? <><IconButton label="重命名文件夹" onClick={() => void renameFolder(selectedFolder)} disabled={saving}>
-              <Pencil className="h-3.5 w-3.5" /></IconButton>
-              <IconButton label="删除空文件夹" onClick={() => void deleteFolder(selectedFolder)} disabled={saving} danger>
-                <Trash2 className="h-3.5 w-3.5" /></IconButton></> : null}
-          </div>
-        </div>
-        <form onSubmit={createDocument} className="border-b border-line p-2.5">
-          <label className="text-[9.5px] font-bold text-ink-muted">在当前位置新建文档</label>
-          <div className="mt-1 flex gap-1.5">
-            <input value={newName} onChange={(event) => setNewName(event.target.value)} disabled={disabled || saving}
-              placeholder="文件名.md" aria-label="新文档名称" className="input-soft min-w-0 flex-1 text-[11.5px]" />
-            <button type="submit" disabled={disabled || saving || !newName.trim()}
-              className="btn-primary h-9 w-9 shrink-0 p-0 disabled:opacity-50" aria-label="创建文档" title="创建文档">
-              <FilePlus2 className="h-4 w-4" />
-            </button>
-          </div>
-        </form>
-        <form onSubmit={createFolder} className="border-b border-line px-2.5 py-2">
-          <div className="flex gap-1.5">
-            <input value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} disabled={disabled || saving}
-              placeholder="子文件夹名称" aria-label="新文件夹名称" className="input-soft min-w-0 flex-1 text-[11px]" />
-            <button type="submit" disabled={disabled || saving || !newFolderName.trim()}
-              className="btn-outline h-9 w-9 shrink-0 p-0 disabled:opacity-50" aria-label="创建文件夹" title="创建文件夹">
-              <FolderPlus className="h-4 w-4" />
-            </button>
-          </div>
-        </form>
-        <div className="flex items-center border-b border-line px-2.5 py-1.5">
-          <button type="button" onClick={() => setSelectedFolder("")}
-            className={classNames("text-[10.5px] font-bold", selectedFolder ? "text-ink-muted" : "text-accent")}>全部文件 · {items.length}</button>
+        <div className="flex items-center gap-1.5 border-b border-line px-2.5 py-2">
+          <div className="min-w-0 flex-1"><h3 className="text-[11.5px] font-extrabold text-ink">文件树</h3>
+            <p className="truncate text-[9px] text-ink-muted">{selectedFolder ? `当前位置 /${selectedFolder}` : "当前位置 /根目录"}</p></div>
+          <button type="button" onClick={() => toggleCreateEntry("document")} disabled={disabled || saving}
+            className={classNames("flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-40",
+              creatingEntry === "document" ? "border-accent-ring bg-accent-soft text-accent" : "border-line bg-white text-ink-muted hover:bg-app-soft hover:text-ink")}
+            aria-label="新建文档" title="在当前位置新建文档">
+            <FilePlus2 className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={() => toggleCreateEntry("folder")} disabled={disabled || saving}
+            className={classNames("flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-40",
+              creatingEntry === "folder" ? "border-accent-ring bg-accent-soft text-accent" : "border-line bg-white text-ink-muted hover:bg-app-soft hover:text-ink")}
+            aria-label="新建文件夹" title="在当前位置新建文件夹">
+            <FolderPlus className="h-3.5 w-3.5" />
+          </button>
           <button type="button" onClick={() => void refreshDocuments(selectedName)} disabled={loading || saving}
-            className="btn-ghost ml-auto h-7 w-7 p-0" aria-label="刷新文档列表" title="刷新">
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-white text-ink-muted transition hover:bg-app-soft hover:text-ink disabled:opacity-40"
+            aria-label="刷新文档列表" title="刷新">
             <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} />
           </button>
         </div>
+        {creatingEntry ? (
+          <form onSubmit={(event) => void submitCreate(event)} className="flex items-center gap-1.5 border-b border-line bg-white px-2 py-1.5">
+            {creatingEntry === "document"
+              ? <FileText className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
+              : <Folder className="h-3.5 w-3.5 shrink-0 text-ink-muted" />}
+            <input autoFocus value={createValue} onChange={(event) => setCreateValue(event.target.value)} disabled={saving}
+              placeholder={creatingEntry === "document" ? "文件名.md" : "文件夹名称"}
+              aria-label={creatingEntry === "document" ? "新文档名称" : "新文件夹名称"}
+              className="input-soft h-7 min-w-0 flex-1 px-1.5 text-[11px]" />
+            <button type="submit" disabled={saving || !createValue.trim()} aria-label="确认创建" title="创建"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-accent text-white transition hover:bg-accent-hover disabled:opacity-40">
+              <Check className="h-3 w-3" />
+            </button>
+            <button type="button" onClick={() => setCreatingEntry(null)} aria-label="取消创建" title="取消"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line bg-white text-ink-muted transition hover:bg-app-soft">
+              <X className="h-3 w-3" />
+            </button>
+          </form>
+        ) : null}
+        <div className="flex items-center border-b border-line px-2.5 py-1.5">
+          <button type="button" onClick={() => setSelectedFolder("")}
+            className={classNames("text-[10.5px] font-bold", selectedFolder ? "text-ink-muted hover:text-ink" : "text-accent")}>全部文件 · {items.length}</button>
+        </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1.5" aria-label="文档文件树">
-          <DocumentTree node={documentTree} selectedName={selectedName} selectedFolder={selectedFolder}
-            expanded={expandedFolders} onFolder={selectFolder} onDocument={(name) => void loadDocument(name)} />
+          <DocumentTree node={documentTree} depth={0} selectedName={selectedName} selectedFolder={selectedFolder}
+            expanded={expandedFolders} renaming={renamingItem} renameValue={renameValue}
+            onFolder={selectFolder} onDocument={(name) => void loadDocument(name)}
+            onRenameValue={setRenameValue} onRenameSubmit={() => void submitRename()}
+            onRenameCancel={() => setRenamingItem(null)} onRenameStart={startRename}
+            onDeleteDocument={(name) => void deleteDocument(name)} onDeleteFolder={(path) => void deleteFolder(path)} />
           {!loading && !items.length ? <p className="px-2 py-6 text-center text-[11px] text-ink-muted">暂无 Markdown 文档</p> : null}
         </div>
       </aside>
 
       <section className="flex min-h-0 min-w-0 flex-col">
         <header className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-          {renaming && selectedName ? (
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              <input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} disabled={saving}
-                aria-label="重命名文档" className="input-soft h-8 min-w-0 max-w-72 text-[11.5px]" />
-              <IconButton label="确认重命名" onClick={() => void renameDocument()} disabled={!renameValue.trim() || saving}><Check className="h-3.5 w-3.5" /></IconButton>
-              <IconButton label="取消重命名" onClick={() => setRenaming(false)}><X className="h-3.5 w-3.5" /></IconButton>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h4 className="truncate text-[12.5px] font-extrabold text-ink">{selectedName ?? "选择文档"}</h4>
+              {dirty ? <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning-deep">未保存</span> : null}
             </div>
-          ) : (
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h4 className="truncate text-[12.5px] font-extrabold text-ink">{selectedName ?? "选择文档"}</h4>
-                {dirty ? <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning-deep">未保存</span> : null}
-              </div>
-              <p className="mt-0.5 text-[9px] text-ink-subtle">{selected?.modified_at ? `更新于 ${formatDate(selected.modified_at)}` : "选择文档后开始编辑"}</p>
+            <p className="mt-0.5 text-[9px] text-ink-subtle">{selected?.modified_at ? `更新于 ${formatDate(selected.modified_at)}` : "选择文档后开始编辑"}</p>
+          </div>
+          {selectedName ? (
+            <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5" aria-label="文档工作模式">
+              <ViewButton active={mode === "edit"} label="编辑" onClick={() => switchMode("edit")} />
+              <ViewButton active={mode === "tasks"} label={`任务 ${tasks.length}`} onClick={() => switchMode("tasks")} />
             </div>
-          )}
-          {!renaming && selectedName ? (
-            <>
-              <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5" aria-label="文档工作模式">
-                <ViewButton active={mode === "edit"} label="编辑" onClick={() => switchMode("edit")} />
-                <ViewButton active={mode === "tasks"} label={`任务 ${tasks.length}`} onClick={() => switchMode("tasks")} />
-              </div>
-              <IconButton label="重命名" onClick={() => setRenaming(true)} disabled={saving}><Pencil className="h-3.5 w-3.5" /></IconButton>
-              {pendingDelete ? (
-                <div className="flex items-center gap-1"><button type="button" onClick={() => setPendingDelete(false)} className="btn-outline h-8 px-2 text-[10px]">取消</button>
-                  <button type="button" onClick={() => void deleteDocument()} className="btn-danger-outline h-8 px-2 text-[10px]">确认删除</button></div>
-              ) : <IconButton label="删除" onClick={() => setPendingDelete(true)} disabled={saving || disabled} danger><Trash2 className="h-3.5 w-3.5" /></IconButton>}
-            </>
           ) : null}
         </header>
 
@@ -631,6 +684,8 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
           ) : null}
         </div>
       </section>
+
+      {confirmRequest ? <ConfirmDialog request={confirmRequest} onSettle={settleConfirm} /> : null}
     </div>
   );
 }
@@ -655,8 +710,8 @@ function DocumentEditor({ content, dirty, saving, disabled, mode, outline, headi
     editorRef.current.scrollTop = Math.max(0, (heading.line_start - 2) * lineHeight);
   }
 
-  return <div className={classNames("grid h-full min-h-0", showOutline && "grid-cols-[minmax(0,1fr)_190px]")}>
-    <div className="flex min-h-0 min-w-0 flex-col">
+  return <div className="relative h-full min-h-0">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-1.5">
         <div className="min-w-0 flex-1"><h3 className="truncate text-[11.5px] font-extrabold text-ink">全文编辑</h3>
           <p className="truncate text-[9px] text-ink-muted">全文可见；当前保存单元：{activeHeading?.heading ?? "无可编辑章节"}</p></div>
@@ -684,13 +739,19 @@ function DocumentEditor({ content, dirty, saving, disabled, mode, outline, headi
         </div> : null}
       </div>
     </div>
-    {showOutline ? <aside className="flex min-h-0 flex-col border-l border-line bg-app-soft">
-      <div className="border-b border-line px-3 py-2"><h3 className="text-[11px] font-extrabold text-ink">章节导航</h3>
-        <p className="text-[9px] text-ink-muted">选择章节后定位并限定保存范围</p></div>
+    {showOutline ? <aside className="absolute left-2 top-12 z-20 flex max-h-[calc(100%-3.5rem)] w-60 flex-col overflow-hidden rounded-lg border border-line bg-white shadow-xl">
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+        <div className="min-w-0 flex-1"><h3 className="text-[11px] font-extrabold text-ink">章节导航</h3>
+          <p className="text-[9px] text-ink-muted">选择章节后定位并限定保存范围</p></div>
+        <button type="button" onClick={() => setShowOutline(false)} aria-label="关闭章节导航" title="关闭"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-subtle hover:bg-app-soft hover:text-ink">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {headings.map((heading) => <button key={heading.index} type="button" onClick={() => jumpToHeading(heading)}
           className={classNames("mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[10.5px]",
-            heading.index === activeHeading?.index ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}
+            heading.index === activeHeading?.index ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-app-soft")}
           style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 10}px` }}>
           <span className="truncate">{heading.heading}</span><span className="ml-auto font-mono text-[8px] text-ink-subtle">H{heading.level}</span>
         </button>)}
@@ -711,34 +772,29 @@ function TaskWorkspace({ tasks, activeTask, activeSection, activeSectionId, crea
   isHeadingDisabled: (heading: DocumentHeading) => boolean; onCreate: () => void; onDraft: (value: string) => void;
   onInstruction: (value: string) => void; onSave: () => void; onRevise: () => void; onRetry: () => void; onMerge: () => void;
 }) {
-  return <div className="grid h-full min-h-0 grid-cols-[210px_minmax(0,1fr)] grid-rows-1">
-    <aside className="flex min-h-0 flex-col border-r border-line bg-app-soft">
-      <div className="flex items-center gap-2 border-b border-line px-2.5 py-2">
-        <div className="min-w-0 flex-1"><h3 className="text-[11.5px] font-extrabold text-ink">修改任务</h3><p className="text-[9px] text-ink-muted">草稿检视后合并</p></div>
-        <button type="button" className="btn-primary h-7 px-2 text-[10px]" onClick={onCreateStart}><Plus className="h-3 w-3" />新建</button>
+  return <div className="flex h-full min-h-0 flex-col">
+    <header className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-2">
+      <h3 className="shrink-0 text-[11.5px] font-extrabold text-ink">修改任务</h3>
+      <TaskSelect tasks={tasks} activeTask={creating ? null : activeTask} onOpenTask={onOpenTask} />
+      {activeTask && !creating ? <span className={statusBadge(activeTask.status)}>{taskStatusLabel(activeTask.status)}</span> : null}
+      <button type="button" className="btn-primary ml-auto h-8 text-[10.5px]" onClick={onCreateStart}>
+        <Plus className="h-3.5 w-3.5" />新建任务
+      </button>
+    </header>
+    {activeTask && !creating ? (
+      <div className="flex items-center gap-1.5 overflow-x-auto border-b border-line bg-white px-3 py-2" aria-label="任务章节">
+        {activeTask.sections.map((section) => (
+          <button key={section.id} type="button" onClick={() => onSection(section.id)}
+            className={classNames("flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold transition",
+              activeSectionId === section.id ? "border-accent-ring bg-accent-soft text-accent" : "border-line bg-white text-ink-muted hover:bg-app-soft")}>
+            {section.ai_status === "queued" || section.ai_status === "running" ? <Loader2 className="h-3 w-3 animate-spin" />
+              : section.ai_status === "failed" ? <X className="h-3 w-3 text-danger" /> : <Check className="h-3 w-3 text-success-deep" />}
+            <span className="max-w-44 truncate">{section.heading}</span>
+          </button>
+        ))}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-        {tasks.map((task) => <button key={task.id} type="button" onClick={() => onOpenTask(task)}
-          className={classNames("mb-1 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left",
-            activeTask?.id === task.id && !creating ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
-          <TaskIcon task={task} />
-          <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{task.title}</strong>
-            <span className="block text-[8.5px]">{task.sections.length} 章 · {taskStatusLabel(task.status)}</span></span>
-        </button>)}
-        {!tasks.length ? <p className="px-2 py-6 text-center text-[10.5px] text-ink-muted">暂无任务</p> : null}
-      </div>
-      {activeTask && !creating ? <div className="max-h-[42%] overflow-y-auto border-t border-line p-1.5">
-        <p className="px-2 py-1 text-[9px] font-bold uppercase text-ink-subtle">任务章节</p>
-        {activeTask.sections.map((section) => <button key={section.id} type="button" onClick={() => onSection(section.id)}
-          className={classNames("mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-[10px]",
-            activeSectionId === section.id ? "bg-white text-accent" : "text-ink-muted hover:bg-white")}>
-          {section.ai_status === "queued" || section.ai_status === "running" ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-            : section.ai_status === "failed" ? <X className="h-3 w-3 shrink-0 text-danger" /> : <Check className="h-3 w-3 shrink-0 text-success-deep" />}
-          <span className="truncate">{section.heading}</span>
-        </button>)}
-      </div> : null}
-    </aside>
-    <section className="min-h-0 min-w-0 bg-white">
+    ) : null}
+    <section className="min-h-0 flex-1 bg-white">
       {creating ? <TaskCreator outline={outline} description={description} selected={selected} saving={saving} disabled={disabled}
         onDescription={onDescription} onToggle={onToggle} isDisabled={isHeadingDisabled} onCancel={onCreateCancel} onCreate={onCreate} /> : null}
       {!creating && activeTask ? <TaskReview task={activeTask} section={activeSection} draftContent={draftContent}
@@ -750,6 +806,35 @@ function TaskWorkspace({ tasks, activeTask, activeSection, activeSectionId, crea
       </div> : null}
     </section>
   </div>;
+}
+
+function TaskSelect({ tasks, activeTask, onOpenTask }: {
+  tasks: DocumentEditTask[];
+  activeTask: DocumentEditTask | null;
+  onOpenTask: (task: DocumentEditTask) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return <span className="relative min-w-0">
+    <button type="button" onClick={() => setOpen((current) => !current)} disabled={!tasks.length}
+      className="flex h-8 min-w-0 items-center gap-1.5 rounded-md border border-line bg-white px-2.5 text-[11px] font-semibold text-ink transition hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-50"
+      aria-label="选择任务" aria-expanded={open}>
+      {activeTask ? <><TaskIcon task={activeTask} /><span className="max-w-56 truncate">{activeTask.title}</span></>
+        : <span className="text-ink-muted">{tasks.length ? "选择任务" : "暂无任务"}</span>}
+      <ChevronDown className={classNames("h-3.5 w-3.5 shrink-0 text-ink-subtle transition", open && "rotate-180")} />
+    </button>
+    {open ? <>
+      <span className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} />
+      <span className="absolute left-0 top-full z-40 mt-1 block max-h-72 w-72 overflow-y-auto rounded-lg border border-line bg-white p-1 shadow-xl">
+        {tasks.map((task) => <button key={task.id} type="button" onClick={() => { onOpenTask(task); setOpen(false); }}
+          className={classNames("mb-0.5 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left",
+            activeTask?.id === task.id ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-app-soft")}>
+          <TaskIcon task={task} />
+          <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{task.title}</strong>
+            <span className="block text-[8.5px]">{task.sections.length} 章 · {taskStatusLabel(task.status)}</span></span>
+        </button>)}
+      </span>
+    </> : null}
+  </span>;
 }
 
 function TaskCreator({ outline, description, selected, saving, disabled, onDescription, onToggle, isDisabled, onCancel, onCreate }: {
@@ -792,8 +877,8 @@ function TaskReview({ task, section, draftContent, aiInstruction, saving, disabl
   const mergeable = task.status === "reviewing" && task.sections.every((item) => item.ai_status === "ready");
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-2">
-      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[12px] font-extrabold text-ink">{task.title}</h3>
-        <span className={statusBadge(task.status)}>{taskStatusLabel(task.status)}</span></div><p className="mt-0.5 truncate text-[9.5px] text-ink-muted">{task.description}</p></div>
+      <div className="min-w-0 flex-1"><h3 className="truncate text-[11px] font-bold text-ink">{task.description}</h3>
+        <p className="mt-0.5 text-[9px] text-ink-muted">{section ? `当前章节：${section.heading}` : "选择章节进行检视"}</p></div>
       {task.sections.some((item) => item.ai_status === "failed") && task.status !== "conflict" ? <button type="button" className="btn-outline h-8 text-[10px]" onClick={onRetry} disabled={saving}>
         <RotateCcw className="h-3.5 w-3.5" />重试</button> : null}
       {mergeable ? <button type="button" className="btn-primary h-8 text-[10.5px]" onClick={onMerge} disabled={saving || disabled}>
@@ -837,39 +922,110 @@ interface DocumentTreeNode {
   documents: DocumentSummary[];
 }
 
-function DocumentTree({ node, selectedName, selectedFolder, expanded, onFolder, onDocument }: {
+function DocumentTree({ node, depth, selectedName, selectedFolder, expanded, renaming, renameValue,
+  onFolder, onDocument, onRenameValue, onRenameSubmit, onRenameCancel, onRenameStart, onDeleteDocument, onDeleteFolder }: {
   node: DocumentTreeNode;
+  depth: number;
   selectedName: string | null;
   selectedFolder: string;
   expanded: Set<string>;
+  renaming: { kind: "document" | "folder"; path: string } | null;
+  renameValue: string;
   onFolder: (path: string) => void;
   onDocument: (name: string) => void;
+  onRenameValue: (value: string) => void;
+  onRenameSubmit: () => void;
+  onRenameCancel: () => void;
+  onRenameStart: (item: { kind: "document" | "folder"; path: string }) => void;
+  onDeleteDocument: (name: string) => void;
+  onDeleteFolder: (path: string) => void;
 }) {
+  const indent = { paddingLeft: `${6 + depth * 14}px` };
+  const childProps = { selectedName, selectedFolder, expanded, renaming, renameValue,
+    onFolder, onDocument, onRenameValue, onRenameSubmit, onRenameCancel, onRenameStart, onDeleteDocument, onDeleteFolder };
   return <>
     {node.folders.map((folder) => {
       const open = expanded.has(folder.path);
+      const isRenaming = renaming?.kind === "folder" && renaming.path === folder.path;
       return <div key={folder.path}>
-        <button type="button" onClick={() => onFolder(folder.path)}
-          className={classNames("mb-0.5 flex w-full items-center gap-1 rounded px-1.5 py-1.5 text-left text-[10.5px]",
+        <div role="button" tabIndex={0} onClick={() => onFolder(folder.path)}
+          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onFolder(folder.path); } }}
+          style={indent}
+          className={classNames("group mb-0.5 flex w-full cursor-pointer items-center gap-1 rounded py-1.5 pr-1 text-left text-[10.5px]",
             selectedFolder === folder.path ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
           {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
           {open ? <FolderOpen className="h-3.5 w-3.5 shrink-0" /> : <Folder className="h-3.5 w-3.5 shrink-0" />}
-          <span className="truncate font-semibold">{folder.name}</span>
-        </button>
-        {open ? <div className="ml-3 border-l border-line pl-1">
-          <DocumentTree node={folder} selectedName={selectedName} selectedFolder={selectedFolder}
-            expanded={expanded} onFolder={onFolder} onDocument={onDocument} />
-        </div> : null}
+          {isRenaming
+            ? <RenameInput value={renameValue} onValue={onRenameValue} onSubmit={onRenameSubmit} onCancel={onRenameCancel} />
+            : <span className="truncate font-semibold">{folder.name}</span>}
+          {!isRenaming ? <RowMenu items={[
+            { label: "重命名", icon: <Pencil className="h-3 w-3" />, onSelect: () => onRenameStart({ kind: "folder", path: folder.path }) },
+            { label: "删除", icon: <Trash2 className="h-3 w-3" />, danger: true, onSelect: () => onDeleteFolder(folder.path) },
+          ]} /> : null}
+        </div>
+        {open ? <DocumentTree node={folder} depth={depth + 1} {...childProps} /> : null}
       </div>;
     })}
-    {node.documents.map((document) => <button key={document.name} type="button" onClick={() => onDocument(document.name)}
-      className={classNames("mb-0.5 flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left",
-        document.name === selectedName ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
-      <FileText className="h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{baseName(document.name)}</strong>
-        <span className="block text-[8px] text-ink-subtle">{formatBytes(document.size_bytes)}</span></span>
-    </button>)}
+    {node.documents.map((document) => {
+      const isRenaming = renaming?.kind === "document" && renaming.path === document.name;
+      return <div key={document.name} role="button" tabIndex={0} onClick={() => onDocument(document.name)}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onDocument(document.name); } }}
+        style={indent}
+        className={classNames("group mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded py-1.5 pr-1 text-left",
+          document.name === selectedName ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
+        <FileText className="h-3.5 w-3.5 shrink-0" />
+        {isRenaming
+          ? <RenameInput value={renameValue} onValue={onRenameValue} onSubmit={onRenameSubmit} onCancel={onRenameCancel} />
+          : <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{baseName(document.name)}</strong>
+            <span className="block text-[8px] text-ink-subtle">{formatBytes(document.size_bytes)}</span></span>}
+        {!isRenaming ? <RowMenu items={[
+          { label: "重命名", icon: <Pencil className="h-3 w-3" />, onSelect: () => onRenameStart({ kind: "document", path: document.name }) },
+          { label: "删除", icon: <Trash2 className="h-3 w-3" />, danger: true, onSelect: () => onDeleteDocument(document.name) },
+        ]} /> : null}
+      </div>;
+    })}
   </>;
+}
+
+function RenameInput({ value, onValue, onSubmit, onCancel }: {
+  value: string;
+  onValue: (value: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return <input autoFocus value={value} aria-label="重命名" spellCheck={false}
+    onClick={(event) => event.stopPropagation()}
+    onChange={(event) => onValue(event.target.value)}
+    onKeyDown={(event) => {
+      if (event.key === "Enter") { event.preventDefault(); onSubmit(); }
+      if (event.key === "Escape") onCancel();
+    }}
+    className="input-soft h-6 min-w-0 flex-1 px-1.5 text-[10.5px]" />;
+}
+
+function RowMenu({ items }: {
+  items: { label: string; icon: React.ReactNode; danger?: boolean; onSelect: () => void }[];
+}) {
+  const [open, setOpen] = useState(false);
+  return <span className="relative ml-auto shrink-0">
+    <button type="button" aria-label="更多操作" title="更多操作"
+      onClick={(event) => { event.stopPropagation(); setOpen((current) => !current); }}
+      className={classNames("flex h-5 w-5 items-center justify-center rounded text-ink-subtle hover:bg-app-soft hover:text-ink",
+        open ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100")}>
+      <MoreHorizontal className="h-3.5 w-3.5" />
+    </button>
+    {open ? <>
+      <span className="fixed inset-0 z-30 cursor-default" onClick={(event) => { event.stopPropagation(); setOpen(false); }} />
+      <span className="absolute right-0 top-full z-40 mt-0.5 block w-24 overflow-hidden rounded-md border border-line bg-white py-0.5 shadow-lg">
+        {items.map((item) => <button key={item.label} type="button"
+          onClick={(event) => { event.stopPropagation(); setOpen(false); item.onSelect(); }}
+          className={classNames("flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[10.5px]",
+            item.danger ? "text-danger hover:bg-danger-soft" : "text-ink-muted hover:bg-app-soft hover:text-ink")}>
+          {item.icon}{item.label}
+        </button>)}
+      </span>
+    </> : null}
+  </span>;
 }
 
 function buildDocumentTree(folders: DocumentFolder[], documents: DocumentSummary[]): DocumentTreeNode {
@@ -924,10 +1080,35 @@ function withParentFolders(current: Set<string>, path: string): Set<string> {
   return next;
 }
 
-function IconButton({ label, onClick, disabled = false, danger = false, children }: { label: string; onClick: () => void; disabled?: boolean; danger?: boolean; children: React.ReactNode }) {
-  return <button type="button" onClick={onClick} disabled={disabled} aria-label={label} title={label}
-    className={classNames("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-40",
-      danger ? "border-danger-ring bg-white text-danger hover:bg-danger-soft" : "border-line bg-white text-ink-muted hover:bg-app-soft hover:text-ink")}>{children}</button>;
+function ConfirmDialog({ request, onSettle }: {
+  request: ConfirmRequest;
+  onSettle: (confirmed: boolean) => void;
+}) {
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onSettle(false);
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onSettle]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onSettle(false); }}>
+      <section role="dialog" aria-modal="true" aria-label={request.title}
+        className="w-full max-w-sm rounded-lg border border-line bg-white p-4 shadow-soft">
+        <h2 className="text-[13px] font-extrabold text-ink">{request.title}</h2>
+        <p className="mt-1.5 text-[11px] leading-5 text-ink-muted">{request.message}</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" className="btn-outline h-8 text-[10.5px]" onClick={() => onSettle(false)}>取消</button>
+          <button type="button" autoFocus onClick={() => onSettle(true)}
+            className={classNames("h-8 text-[10.5px]", request.danger ? "btn-danger-outline" : "btn-primary")}>
+            {request.confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function ViewButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {

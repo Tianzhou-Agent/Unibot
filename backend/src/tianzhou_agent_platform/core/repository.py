@@ -958,12 +958,25 @@ class InMemoryRepository:
             return self._copy(approval)
 
     async def cancel_pending_approvals(self, conversation_id: str) -> None:
+        cancelled: list[ApprovalRecord] = []
         async with self._lock:
             for approval in self._approvals.values():
                 if approval.conversation_id == conversation_id and approval.status == "pending":
                     approval.status = "denied"
                     approval.resolved_at = datetime.now(UTC)
                     await self._save_record(APPROVALS_RESOURCE, approval.id, approval)
+                    if approval.trace_id in self._traces:
+                        cancelled.append(approval)
+        for approval in cancelled:
+            await self.add_trace_event(
+                approval.trace_id,
+                TraceEvent(
+                    kind="approval.cancelled",
+                    status="completed",
+                    details={"approval_id": approval.id},
+                ),
+            )
+            await self.finish_trace(approval.trace_id, "completed")
 
 
 def _installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:

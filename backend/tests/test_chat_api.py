@@ -409,6 +409,55 @@ def test_high_risk_tool_denial_closes_pending_call_without_execution() -> None:
     assert any(event["kind"] == "approval.denied" for event in trace.json()["events"])
 
 
+def test_new_turn_cancels_pending_approval_and_closes_trace() -> None:
+    calls = 0
+
+    async def remote(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"sent": True})
+
+    llm = ScriptedLLM(
+        [
+            call_first_tool(arguments='{"recipient": "user@example.com"}'),
+            assistant("Understood, skipping that action."),
+        ]
+    )
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.abandoned-send",
+                "name": "Abandoned send",
+                "description": "Approval is abandoned by a new turn.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"recipient": {"type": "string"}},
+                    "required": ["recipient"],
+                },
+                "endpoint": "https://tool.invalid/send",
+                "side_effect_level": "high",
+            },
+        )
+        pending = client.post(
+            "/chat",
+            json={"message": "Send the message", "capability": "tool:demo.abandoned-send"},
+        ).json()
+        follow_up = client.post(
+            "/chat",
+            json={"message": "Never mind", "conversation_id": pending["conversation_id"]},
+        )
+        approvals = client.get("/approvals", params={"conversation_id": pending["conversation_id"]})
+        trace = client.get(f"/traces/{pending['trace_id']}")
+
+    assert follow_up.status_code == 200
+    assert calls == 0
+    assert [item["status"] for item in approvals.json()] == ["denied"]
+    assert trace.json()["status"] == "completed"
+    assert any(event["kind"] == "approval.cancelled" for event in trace.json()["events"])
+
+
 def test_iteration_limit_stops_repeated_tool_loop() -> None:
     async def remote(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": True})
