@@ -4,6 +4,7 @@ from fastapi import Request
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
@@ -33,6 +34,20 @@ def documents(request: Request) -> DocumentService:
         raise PlatformError(
             "DEPENDENCY_FAILED",
             "Document NAS storage is unavailable",
+            status_code=503,
+            source="storage",
+        )
+    return service
+
+
+def document_edit_tasks(request: Request) -> DocumentEditTaskService:
+    service = cast(DocumentEditTaskService | None, request.app.state.document_edit_task_service)
+    if service is None:
+        from tianzhou_agent_platform.core.errors import PlatformError
+
+        raise PlatformError(
+            "DEPENDENCY_FAILED",
+            "Document edit tasks are unavailable",
             status_code=503,
             source="storage",
         )

@@ -15,8 +15,11 @@ class DocumentCreate(DocumentActor):
     content: str = Field(default="", max_length=1_048_576)
 
 
-class DocumentUpdate(DocumentActor):
-    content: str = Field(max_length=1_048_576)
+class DocumentSectionUpdate(DocumentActor):
+    heading: str = Field(min_length=1)
+    occurrence: int = Field(default=1, ge=1)
+    section_content: str = Field(max_length=1_048_576)
+    expected_revision: str = Field(min_length=1)
 
 
 class DocumentRename(DocumentActor):

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
 
+from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
+from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
@@ -301,6 +304,42 @@ def test_open_aina_builtin_returns_navigation_widget_through_agent() -> None:
         event["kind"] == "builtin.completed" and event["target_id"] == "open_aina"
         for event in trace.json()["events"]
     )
+
+
+def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_open_aina_",
+                arguments='{"aina_id":"unibot-documents"}',
+            ),
+            assistant("文档应用已打开。"),
+        ]
+    )
+    with TestClient(
+        create_app(
+            settings=_settings(),
+            llm=llm,
+            document_service=DocumentService(NasStore(tmp_path)),
+        )
+    ) as client:
+        conversation = client.post("/conversations", json={"title": "Documents"}).json()
+        client.post(
+            "/ainas/unibot-documents/open",
+            json={"conversation_id": conversation["id"]},
+        )
+        response = client.post(
+            "/chat",
+            json={"message": "打开文档应用", "conversation_id": conversation["id"]},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
+    assert len(llm.calls[0]["tools"]) == 1
+    assert llm.calls[0]["tools"][0]["function"]["name"].startswith("builtin_open_aina_")
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["details"]["source"] == "deterministic_capability"
 
 
 def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -> None:

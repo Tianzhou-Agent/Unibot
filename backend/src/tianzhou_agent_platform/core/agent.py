@@ -24,11 +24,14 @@ from tianzhou_agent_platform.aina.builtin import (
     invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
+    CREATE_EDIT_TASK_TOOL_ID,
     DELETE_DOCUMENT_TOOL_ID,
+    MERGE_EDIT_TASK_TOOL_ID,
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
@@ -129,12 +132,14 @@ class AgentRuntime:
         llm: LLMClient,
         gateway: RemoteCapabilityGateway,
         document_service: DocumentService | None = None,
+        document_edit_task_service: DocumentEditTaskService | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.llm = llm
         self.gateway = gateway
         self.document_service = document_service
+        self.document_edit_task_service = document_edit_task_service
         graph = StateGraph(AgentState)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
@@ -154,7 +159,7 @@ class AgentRuntime:
 
     @staticmethod
     def _after_tools(state: AgentState) -> str:
-        if state.get("approval") is not None or state.get("final_status") == "failed":
+        if state.get("approval") is not None or state.get("final_status") is not None:
             return "end"
         return "model"
 
@@ -319,6 +324,8 @@ class AgentRuntime:
 
         call_counts = dict(state.get("call_counts", {}))
         widgets = list(state.get("widgets", []))
+        async_task_message: str | None = None
+        tool_failed = False
         available_tool_ids = [
             capability.capability_id for capability in capabilities.values() if capability.kind == "tool"
         ]
@@ -329,6 +336,7 @@ class AgentRuntime:
             arguments_text = function.get("arguments") or "{}"
             capability = capabilities.get(name)
             if capability is None:
+                tool_failed = True
                 await self._append_tool_error(
                     state,
                     messages,
@@ -343,6 +351,7 @@ class AgentRuntime:
                 if not isinstance(arguments, dict):
                     raise ValueError("arguments must decode to an object")
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                tool_failed = True
                 await self._append_tool_error(
                     state,
                     messages,
@@ -357,6 +366,7 @@ class AgentRuntime:
             signature = hashlib.sha256(f"{name}:{normalized_arguments}".encode()).hexdigest()
             call_counts[signature] = call_counts.get(signature, 0) + 1
             if call_counts[signature] > 1:
+                tool_failed = True
                 await self._append_tool_error(
                     state,
                     messages,
@@ -433,6 +443,7 @@ class AgentRuntime:
                         tenant_id=state["tenant_id"],
                         conversation_id=state["conversation_id"],
                         document_service=self.document_service,
+                        document_edit_task_service=self.document_edit_task_service,
                     )
                     widgets.extend(produced_widgets)
                     duration_ms = (perf_counter() - call_started) * 1000
@@ -471,7 +482,19 @@ class AgentRuntime:
                     state,
                     {"type": "tool.completed", "kind": capability.kind, "id": capability.capability_id},
                 )
+                if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
+                    task = result_payload.get("task") if isinstance(result_payload, dict) else None
+                    if isinstance(task, dict):
+                        title = str(task.get("title") or "文档修改任务")
+                        sections = task.get("sections")
+                        section_count = len(sections) if isinstance(sections, list) else 0
+                        async_task_message = (
+                            f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
+                            "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
+                            "正式文档会在您确认合并后才更新。"
+                        )
             except PlatformError as exc:
+                tool_failed = True
                 await self._append_tool_error(
                     state,
                     messages,
@@ -489,7 +512,12 @@ class AgentRuntime:
             "approval": None,
             "widgets": widgets,
         }
-        if state.get("iterations", 0) >= state["max_iterations"]:
+        if async_task_message is not None and not tool_failed:
+            messages.append({"role": "assistant", "content": async_task_message})
+            update["messages"] = messages
+            update["final_content"] = async_task_message
+            update["final_status"] = "completed"
+        elif state.get("iterations", 0) >= state["max_iterations"]:
             limit_message = (
                 f"I stopped after {state['max_iterations']} model iterations because the capability loop "
                 "did not produce a final answer."
@@ -1413,7 +1441,13 @@ class AgentRuntime:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "aina_id": {"type": "string", "description": "The exact AINA identifier to open."}
+                    "aina_id": {
+                        "type": "string",
+                        "description": (
+                            "The exact AINA identifier to open. Use unibot-documents for the document "
+                            "application or document editor."
+                        ),
+                    }
                 },
                 "required": ["aina_id"],
                 "additionalProperties": False,
@@ -1764,7 +1798,7 @@ class AgentRuntime:
                 display_name=tool.name,
                 description=tool.description,
                 input_schema=tool.input_schema,
-                requires_confirmation=tool.id == DELETE_DOCUMENT_TOOL_ID,
+                requires_confirmation=tool.id in {DELETE_DOCUMENT_TOOL_ID, MERGE_EDIT_TASK_TOOL_ID},
                 value=tool.id,
                 owner_aina_id=UNIBOT_DOCUMENTS_ID,
             )
@@ -1944,6 +1978,12 @@ def _normalized_route_message(
 
 def _obvious_builtin_capability(message: str) -> str | None:
     normalized = " ".join(message.casefold().split())
+    open_document_app = (
+        any(marker in normalized for marker in ("打开", "进入"))
+        and any(marker in normalized for marker in ("文档应用", "文档编辑器", "unibot-documents"))
+    ) or re.search(r"\b(open|enter)\s+(the\s+)?(document app|document editor|unibot-documents)\b", normalized)
+    if open_document_app:
+        return f"builtin:{OPEN_AINA_TOOL_ID}"
     chinese_list_request = any(marker in normalized for marker in ("列出应用", "应用列表", "有哪些应用"))
     chinese_aina_request = "aina" in normalized and any(marker in normalized for marker in ("列出", "列表", "有哪些"))
     english_request = re.search(r"\b(list|show)\s+(all\s+)?(apps|applications|ainas)\b", normalized)

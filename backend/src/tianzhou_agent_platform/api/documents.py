@@ -7,7 +7,8 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentRecord,
     DocumentRename,
     DocumentSection,
-    DocumentUpdate,
+    DocumentSectionUpdate,
+    DocumentSectionUpdateResult,
 )
 from tianzhou_agent_platform.api.dependencies import documents
 
@@ -68,11 +69,18 @@ def create_document_router() -> APIRouter:
     ) -> DocumentRecord:
         return await documents(request).get_document(name, user_id=user_id, tenant_id=tenant_id)
 
-    @router.put("/{name}", response_model=DocumentRecord)
-    async def update_document(name: str, payload: DocumentUpdate, request: Request) -> DocumentRecord:
-        return await documents(request).update_document(
+    @router.put("/{name}/sections", response_model=DocumentSectionUpdateResult)
+    async def update_document_section(
+        name: str,
+        payload: DocumentSectionUpdate,
+        request: Request,
+    ) -> DocumentSectionUpdateResult:
+        return await documents(request).update_section(
             name,
-            payload.content,
+            payload.heading,
+            payload.occurrence,
+            payload.section_content,
+            payload.expected_revision,
             user_id=payload.user_id,
             tenant_id=payload.tenant_id,
         )

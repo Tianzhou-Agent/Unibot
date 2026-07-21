@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import JSON, Column, DateTime, MetaData, String, Table
 
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
+from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -17,6 +18,7 @@ from tianzhou_agent_platform.core.repository import (
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,
     CONVERSATIONS_RESOURCE,
+    DOCUMENT_EDIT_TASKS_RESOURCE,
     INSTALLATIONS_RESOURCE,
     MEMORIES_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
@@ -57,6 +59,7 @@ repository_tables = {
         MODEL_PROVIDERS_RESOURCE,
         SCHEDULED_AINA_TASKS_RESOURCE,
         SCHEDULED_AINA_EXECUTIONS_RESOURCE,
+        DOCUMENT_EDIT_TASKS_RESOURCE,
     )
 }
 
@@ -84,6 +87,7 @@ class PersistentRepository(InMemoryRepository):
             SCHEDULED_AINA_EXECUTIONS_RESOURCE,
             ScheduledAinaExecution,
         )
+        document_edit_tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -101,6 +105,61 @@ class PersistentRepository(InMemoryRepository):
             self._scheduled_aina_executions = {
                 item.id: item for item in scheduled_executions
             }
+            self._document_edit_tasks = {item.id: item for item in document_edit_tasks}
+
+    async def get_document_edit_task(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentEditTask:
+        record = await self.stores.mysql.read(DOCUMENT_EDIT_TASKS_RESOURCE, task_id)
+        if record is not None:
+            task = DocumentEditTask.model_validate(record.values["payload"])
+            async with self._lock:
+                self._document_edit_tasks[task.id] = task
+        return await super().get_document_edit_task(task_id, user_id=user_id, tenant_id=tenant_id)
+
+    async def list_document_edit_tasks(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        document_name: str | None = None,
+    ) -> list[DocumentEditTask]:
+        tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
+        async with self._lock:
+            self._document_edit_tasks = {item.id: item for item in tasks}
+        return await super().list_document_edit_tasks(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            document_name=document_name,
+        )
+
+    async def put_document_edit_task(
+        self,
+        task: DocumentEditTask,
+        *,
+        expected_version: int,
+    ) -> DocumentEditTask:
+        acquired = await self.stores.redis.set_if_absent(
+            "document-edit-task-write",
+            task.id,
+            {"expected_version": expected_version},
+            ttl_seconds=30,
+        )
+        if not acquired.written:
+            raise conflict("Document edit task is being updated. Reload it before retrying.")
+        try:
+            record = await self.stores.mysql.read(DOCUMENT_EDIT_TASKS_RESOURCE, task.id)
+            if record is not None:
+                current = DocumentEditTask.model_validate(record.values["payload"])
+                async with self._lock:
+                    self._document_edit_tasks[current.id] = current
+            return await super().put_document_edit_task(task, expected_version=expected_version)
+        finally:
+            await self.stores.redis.delete("document-edit-task-write", task.id)
 
     async def list_scheduled_aina_tasks(self) -> list[ScheduledAinaTask]:
         # Every node refreshes from MySQL so updates made by the elected node

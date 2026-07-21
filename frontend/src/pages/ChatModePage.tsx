@@ -183,6 +183,13 @@ export default function ChatModePage() {
         });
       }
       notifyConversationsChanged();
+      const openAction = completed.widgets
+        .flatMap((widget) => widget.actions)
+        .find((action) => action.kind === "open_aina" && action.aina_id);
+      if (openAction?.aina_id) {
+        await openAina(openAction.aina_id, completed.conversation_id);
+        return;
+      }
       if (conversationId !== completed.conversation_id) {
         navigate(`/chat/${completed.conversation_id}`, { replace: true });
       }
@@ -270,12 +277,12 @@ export default function ChatModePage() {
     }
   }
 
-  async function openAina(ainaId: string) {
+  async function openAina(ainaId: string, targetConversationId = conversation?.id) {
     setError(null);
     try {
       const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...ACTOR,
-        conversation_id: conversation?.id,
+        conversation_id: targetConversationId,
       });
       navigate(canvas.route, { state: { canvas } });
     } catch (openError) {
@@ -493,7 +500,7 @@ function ToolCallMessage({ message }: { message: BackendMessage }) {
 }
 
 function ToolResultMessage({ message }: { message: BackendMessage }) {
-  const isError = message.content.includes('"error"');
+  const isError = toolResultIsError(message.content);
   return (
     <details className="rounded-lg border border-line bg-white px-3.5 py-2.5">
       <summary className="cursor-pointer text-[12px] font-bold text-ink-muted">
@@ -504,6 +511,15 @@ function ToolResultMessage({ message }: { message: BackendMessage }) {
       </pre>
     </details>
   );
+}
+
+function toolResultIsError(content: string): boolean {
+  try {
+    const payload: unknown = JSON.parse(content);
+    return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "error");
+  } catch {
+    return false;
+  }
 }
 
 function ActivityBubble({ text }: { text: string }) {
