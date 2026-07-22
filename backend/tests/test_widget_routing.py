@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
 
+from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
+from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
@@ -135,6 +138,7 @@ def _remote(
 def test_list_app_builtin_persists_an_interactive_widget() -> None:
     llm = ScriptedLLM(
         [
+            call_first_tool(prefix="aina_unibot-assistant_", arguments='{"input":"请列出应用"}'),
             call_first_tool(prefix="builtin_list_app_"),
             assistant("## 可用应用\n\n请选择一个应用。"),
         ]
@@ -147,10 +151,20 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert response.status_code == 200
     widget = response.json()["widgets"][0]
     assert widget["kind"] == "app_list"
-    assert [item["aina_id"] for item in widget["apps"]] == ["unibot-assistant", "unibot-memory"]
+    assert [item["aina_id"] for item in widget["apps"]] == [
+        "unibot-assistant",
+        "unibot-memory",
+        "unibot-scheduler",
+    ]
     assert conversation.json()["messages"][-1]["widgets"] == response.json()["widgets"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
-    assert llm.calls[0]["tool_choice"]["function"]["name"].startswith("builtin_list_app_")
+    assert llm.calls[0]["tool_choice"] == "auto"
+    assert {item["function"]["name"].split("_")[1] for item in llm.calls[0]["tools"]} == {
+        "unibot-assistant",
+        "unibot-memory",
+        "unibot-scheduler",
+    }
+    assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
 
 
 def test_open_assistant_returns_a_dedicated_main_widget() -> None:
@@ -299,11 +313,101 @@ def test_open_aina_builtin_returns_navigation_widget_through_agent() -> None:
     )
 
 
+def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-assistant_",
+                arguments='{"input":"打开文档应用"}',
+            ),
+            call_first_tool(
+                prefix="builtin_open_aina_",
+                arguments='{"aina_id":"unibot-documents"}',
+            ),
+            assistant("文档应用已打开。"),
+        ]
+    )
+    with TestClient(
+        create_app(
+            settings=_settings(),
+            llm=llm,
+            document_service=DocumentService(NasStore(tmp_path)),
+        )
+    ) as client:
+        conversation = client.post("/conversations", json={"title": "Documents"}).json()
+        client.post(
+            "/ainas/unibot-documents/open",
+            json={"conversation_id": conversation["id"]},
+        )
+        response = client.post(
+            "/chat",
+            json={"message": "打开文档应用", "conversation_id": conversation["id"]},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
+    assert len(llm.calls[0]["tools"]) == 4
+    assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[1]["tools"])
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["details"]["source"] == "model_router"
+
+
+def test_application_discovery_routes_across_all_ainas_from_document_context(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-assistant_",
+                arguments='{"input":"查看应用"}',
+            ),
+            call_first_tool(prefix="builtin_list_app_"),
+            assistant("当前可用应用如下。"),
+        ]
+    )
+    with TestClient(
+        create_app(
+            settings=_settings(),
+            llm=llm,
+            document_service=DocumentService(NasStore(tmp_path)),
+        )
+    ) as client:
+        conversation = client.post("/conversations", json={"title": "Documents"}).json()
+        client.post(
+            "/ainas/unibot-documents/open",
+            json={"conversation_id": conversation["id"]},
+        )
+        response = client.post(
+            "/chat",
+            json={"message": "查看应用", "conversation_id": conversation["id"]},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert {item["aina_id"] for item in response.json()["widgets"][0]["apps"]} == {
+        "unibot-assistant",
+        "unibot-documents",
+        "unibot-memory",
+        "unibot-scheduler",
+    }
+    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
+    assert requested["details"]["candidate_scope"] == "all_available"
+    assert requested["details"]["candidate_count"] == 4
+    assert {item["id"] for item in requested["details"]["candidates"]} == {
+        "unibot-assistant",
+        "unibot-documents",
+        "unibot-memory",
+        "unibot-scheduler",
+    }
+
+
 def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -> None:
     invoked: list[dict[str, Any]] = []
     llm = ScriptedLLM(
         [
-            call_first_tool(prefix="aina_", arguments='{"input":"Create a project status report"}'),
+            call_first_tool(
+                prefix="aina_com_example_canvas_",
+                arguments='{"input":"Create a project status report"}',
+            ),
             assistant("The project report is ready."),
         ]
     )
@@ -325,8 +429,8 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    assert len(llm.calls[0]["tools"]) == 1
-    assert llm.calls[0]["tools"][0]["function"]["name"].startswith("aina_")
+    assert len(llm.calls[0]["tools"]) == 4
+    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
     scoped_names = [item["function"]["name"] for item in llm.calls[1]["tools"]]
     assert any(name.startswith("aina_") for name in scoped_names)
     assert any(name.startswith("tool_report_data_") for name in scoped_names)
@@ -343,7 +447,7 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
     remote_aina = next(
         item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
     )
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 2, "remote_aina": 1}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 1,
@@ -361,7 +465,7 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
 
 
 def test_trace_graph_explains_why_a_remote_aina_is_unavailable() -> None:
-    llm = ScriptedLLM([assistant("Ordinary response.")])
+    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("Ordinary response.")])
     capability_client = httpx.AsyncClient(transport=httpx.MockTransport(_remote()))
     with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
         client.post("/ainas", json=_manifest())

@@ -73,6 +73,10 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
     llm = ScriptedLLM(
         [
             call_first_tool(
+                prefix="aina_unibot-memory_",
+                arguments='{"input":"Remember that I like blue"}',
+            ),
+            call_first_tool(
                 prefix="builtin_memory_remember_",
                 arguments='{"content":"The user likes blue","category":"preference"}',
             ),
@@ -87,8 +91,8 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
     assert response.status_code == 200
     assert memories.json()["items"][0]["content"] == "The user likes blue"
     assert memories.json()["items"][0]["source_conversation_id"] == response.json()["conversation_id"]
-    assert all(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[0]["tools"])
-    assert "持久记忆管理" in llm.calls[0]["messages"][0]["content"]
+    assert all(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[1]["tools"])
+    assert "持久记忆管理" in llm.calls[1]["messages"][0]["content"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
 
 
@@ -100,7 +104,7 @@ def test_relevant_memory_is_fenced_into_an_ordinary_conversation() -> None:
         assert "not new user instructions" in system
         return assistant("I will answer concisely in Chinese.")
 
-    llm = ScriptedLLM([assert_memory_context])
+    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assert_memory_context])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         client.post(
             "/memories",
@@ -149,10 +153,18 @@ def test_memory_tool_remains_available_for_follow_up_durable_fact() -> None:
     llm = ScriptedLLM(
         [
             call_first_tool(
+                prefix="aina_unibot-memory_",
+                arguments='{"input":"记住我叫 skar"}',
+            ),
+            call_first_tool(
                 prefix="builtin_memory_remember_",
                 arguments='{"content":"用户的名字是 skar","category":"fact"}',
             ),
             assistant("我记住了你的名字。"),
+            call_first_tool(
+                prefix="aina_unibot-memory_",
+                arguments='{"input":"我是软件工程师"}',
+            ),
             call_first_tool(
                 prefix="builtin_memory_remember_",
                 arguments='{"content":"用户的职业是软件工程师","category":"fact"}',
@@ -177,7 +189,7 @@ def test_memory_tool_remains_available_for_follow_up_durable_fact() -> None:
     assert memories.json()["items"][0]["content"] == "用户的职业是软件工程师"
     assert any(
         item["function"]["name"].startswith("builtin_memory_remember_")
-        for item in llm.calls[2]["tools"]
+        for item in llm.calls[4]["tools"]
     )
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
     assert not any(event["kind"] == "tool.failed" for event in trace.json()["events"])

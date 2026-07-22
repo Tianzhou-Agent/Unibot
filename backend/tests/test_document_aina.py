@@ -1,5 +1,4 @@
-import hashlib
-import json
+import time
 from pathlib import Path
 
 import pytest
@@ -35,10 +34,19 @@ def test_document_aina_opens_editor_and_crud_persists_to_nas(tmp_path: Path) -> 
     with TestClient(_app(tmp_path)) as client:
         ainas = client.get("/ainas")
         opened = client.post("/ainas/unibot-documents/open", json={})
-        created = client.post("/documents", json={"name": "notes", "content": "# First"})
+        created = client.post("/documents", json={"name": "notes", "content": "# First\n\nBody."})
         listed = client.get("/documents")
         loaded = client.get("/documents/notes.md")
-        updated = client.put("/documents/notes.md", json={"content": "# Updated"})
+        section = client.get("/documents/notes.md/sections", params={"heading": "First"}).json()
+        full_update = client.put("/documents/notes.md", json={"content": "# Replaced"})
+        updated = client.put(
+            "/documents/notes.md/sections",
+            json={
+                "heading": "First",
+                "section_content": "# Updated\n\nBody.",
+                "expected_revision": section["revision"],
+            },
+        )
         renamed = client.post("/documents/notes.md/rename", json={"new_name": "project"})
 
     assert {item["manifest"]["aina"]["id"] for item in ainas.json()} >= {
@@ -50,12 +58,13 @@ def test_document_aina_opens_editor_and_crud_persists_to_nas(tmp_path: Path) -> 
     assert created.status_code == 201
     assert created.json()["name"] == "notes.md"
     assert listed.json()["items"][0]["name"] == "notes.md"
-    assert loaded.json()["content"] == "# First"
-    assert updated.json()["content"] == "# Updated"
+    assert loaded.json()["content"] == "# First\n\nBody."
+    assert full_update.status_code == 405
+    assert updated.status_code == 200
     assert renamed.json()["name"] == "project.md"
     assert (tmp_path / "documents" / "t-default" / "u-anonymous" / "project.md").read_text(
         encoding="utf-8"
-    ) == "# Updated"
+    ) == "# Updated\n\nBody."
     assert not (tmp_path / "documents" / "t-default" / "u-anonymous" / "notes.md").exists()
 
 
@@ -72,6 +81,42 @@ def test_document_api_isolates_actors_and_rejects_non_markdown_names(tmp_path: P
     assert other_user.json()["total"] == 0
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_document_folders_support_nested_documents_and_safe_moves(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        root = client.post("/documents/folders", json={"path": "Projects"})
+        nested = client.post("/documents/folders", json={"path": "Projects/2026"})
+        created = client.post(
+            "/documents",
+            json={"name": "Projects/2026/plan", "content": "# Plan\n\n## Scope\n\nDraft."},
+        )
+        tree = client.get("/documents/tree").json()
+        loaded = client.get("/documents/Projects/2026/plan.md")
+        moved = client.post(
+            "/documents/folders/Projects/2026/rename",
+            json={"new_path": "Projects/Archive"},
+        )
+        moved_document = client.get("/documents/Projects/Archive/plan.md")
+        non_empty_delete = client.delete("/documents/folders/Projects/Archive")
+        traversal = client.post("/documents", json={"name": "../outside", "content": "unsafe"})
+        client.delete("/documents/Projects/Archive/plan.md")
+        deleted_nested = client.delete("/documents/folders/Projects/Archive")
+        deleted_root = client.delete("/documents/folders/Projects")
+
+    assert root.status_code == 201
+    assert nested.status_code == 201
+    assert created.status_code == 201
+    assert created.json()["name"] == "Projects/2026/plan.md"
+    assert [item["path"] for item in tree["folders"]] == ["Projects", "Projects/2026"]
+    assert [item["name"] for item in tree["documents"]] == ["Projects/2026/plan.md"]
+    assert loaded.json()["content"].endswith("Draft.")
+    assert moved.json()["path"] == "Projects/Archive"
+    assert moved_document.status_code == 200
+    assert non_empty_delete.status_code == 422
+    assert traversal.status_code == 422
+    assert deleted_nested.status_code == 204
+    assert deleted_root.status_code == 204
 
 
 def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
@@ -103,6 +148,128 @@ def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
         event["kind"] == "builtin.completed" and event["target_id"] == "document.create"
         for event in trace.json()["events"]
     )
+
+
+def test_document_aina_chat_creates_reviewed_edit_task_without_changing_source(tmp_path: Path) -> None:
+    original = "# Guide\n\n## Background\n\nOld background.\n\n## Conclusion\n\nOld conclusion.\n"
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_document_outline_",
+                arguments='{"name":"guide.md"}',
+            ),
+            call_first_tool(
+                prefix="builtin_document_edit_task_create_",
+                arguments=(
+                    '{"name":"guide.md","description":"Rewrite the background",'
+                    '"sections":[{"heading":"Background","occurrence":1}]}'
+                ),
+            ),
+            call_first_tool(
+                prefix="submit_document_section_draft",
+                arguments='{"section_content":"## Background\\n\\nAI draft."}',
+            ),
+        ]
+    )
+
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": original})
+        response = client.post(
+            "/chat",
+            json={"message": "Rewrite the Background section", "capability": "aina:unibot-documents"},
+        )
+        tasks = client.get("/documents/guide.md/edit-tasks").json()["items"]
+        task_id = tasks[0]["id"]
+        for _ in range(100):
+            task = client.get(f"/document-edit-tasks/{task_id}").json()
+            if task["status"] in {"reviewing", "failed"}:
+                break
+            time.sleep(0.05)
+        document = client.get("/documents/guide.md").json()
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert "已创建" in response.json()["content"]
+    assert "后台处理" in response.json()["content"]
+    assert task["status"] == "reviewing"
+    assert task["sections"][0]["draft_content"] == "## Background\n\nAI draft."
+    assert document["content"] == original
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "document.edit_task.create"
+        for event in trace["events"]
+    )
+    assert sum(event["kind"] == "model.completed" for event in trace["events"]) == 2
+
+
+def test_document_aina_merge_section_requires_confirmation(tmp_path: Path) -> None:
+    original = "# Guide\n\n## Background\n\nOld background.\n"
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="submit_document_section_draft",
+                arguments='{"section_content":"## Background\\n\\nReviewed draft."}',
+            )
+        ]
+    )
+
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": original})
+        task_id = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={"description": "Rewrite background", "sections": [{"heading": "Background"}]},
+        ).json()["id"]
+        for _ in range(100):
+            task = client.get(f"/document-edit-tasks/{task_id}").json()
+            if task["status"] in {"reviewing", "failed"}:
+                break
+            time.sleep(0.05)
+        section_id = task["sections"][0]["id"]
+        llm.responses.extend(
+            [
+                call_first_tool(
+                    prefix="builtin_document_edit_task_merge_section_",
+                    arguments=f'{{"task_id":"{task_id}","section_id":"{section_id}"}}',
+                ),
+                assistant("The reviewed section was merged."),
+            ]
+        )
+        pending = client.post(
+            "/chat",
+            json={"message": "Merge the reviewed section", "capability": "aina:unibot-documents"},
+        )
+        before_confirm = client.get("/documents/guide.md").json()["content"]
+        confirmed = client.post(f"/approvals/{pending.json()['approval']['id']}/confirm", json={})
+        after_confirm = client.get("/documents/guide.md").json()["content"]
+
+    assert task["status"] == "reviewing"
+    assert pending.json()["status"] == "approval_required"
+    assert before_confirm == original
+    assert confirmed.json()["status"] == "completed"
+    assert "Reviewed draft." in after_confirm
+    assert "Old background." not in after_confirm
+
+
+def test_preferred_document_aina_receives_transient_ui_context(tmp_path: Path) -> None:
+    llm = ScriptedLLM([assistant("I will update the selected draft section.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        response = client.post(
+            "/chat",
+            json={
+                "message": "继续修改当前章节",
+                "preferred_aina_id": "unibot-documents",
+                "ui_context": "任务 ID：task-1\n章节 ID：section-1\n当前草稿版本：2",
+            },
+        )
+        conversation = client.get(f"/conversations/{response.json()['conversation_id']}").json()
+
+    model_user_message = next(
+        item["content"] for item in reversed(llm.calls[0]["messages"]) if item["role"] == "user"
+    )
+    assert "<ui_context>" in model_user_message
+    assert "任务 ID：task-1" in model_user_message
+    assert "章节 ID：section-1" in model_user_message
+    assert conversation["messages"][0]["content"] == "继续修改当前章节"
 
 
 def test_document_aina_keeps_global_memory_update_available(tmp_path: Path) -> None:
@@ -196,8 +363,17 @@ def test_conversation_alternates_preferred_ainas_without_router_model(tmp_path: 
     assert resolution["details"]["router_model_called"] is False
 
 
-def test_short_follow_up_reuses_last_aina_without_router_model(tmp_path: Path) -> None:
-    llm = ScriptedLLM([assistant("Started."), assistant("Continued.")])
+def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            assistant("Started."),
+            call_first_tool(
+                prefix="aina_unibot-documents_",
+                arguments='{"input":"Continue"}',
+            ),
+            assistant("Continued."),
+        ]
+    )
     with TestClient(_app(tmp_path, llm)) as client:
         conversation = client.post("/conversations", json={"title": "Sticky AINA"}).json()
         first = client.post(
@@ -216,15 +392,27 @@ def test_short_follow_up_reuses_last_aina_without_router_model(tmp_path: Path) -
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 3
+    assert len(llm.calls[1]["tools"]) == 4
+    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[1]["tools"])
+    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
+    assert requested["details"]["last_aina_id"] == "unibot-documents"
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-documents"
-    assert resolution["details"]["source"] == "sticky_aina"
-    assert resolution["details"]["router_model_called"] is False
+    assert resolution["details"]["source"] == "model_router"
+    assert resolution["details"]["router_model_called"] is True
 
 
-def test_single_active_primary_aina_bypasses_router_model(tmp_path: Path) -> None:
-    llm = ScriptedLLM([assistant("Handled by the primary document AINA.")])
+def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-documents_",
+                arguments='{"input":"Edit the introduction"}',
+            ),
+            assistant("Handled by the primary document AINA."),
+        ]
+    )
     with TestClient(_app(tmp_path, llm)) as client:
         conversation = client.post(
             "/conversations",
@@ -241,11 +429,15 @@ def test_single_active_primary_aina_bypasses_router_model(tmp_path: Path) -> Non
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
     assert response.status_code == 200
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2
+    assert len(llm.calls[0]["tools"]) == 4
+    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
+    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
+    assert requested["details"]["primary_aina_id"] == "unibot-documents"
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-documents"
-    assert resolution["details"]["source"] == "primary_aina"
-    assert resolution["details"]["router_model_called"] is False
+    assert resolution["details"]["source"] == "model_router"
+    assert resolution["details"]["router_model_called"] is True
 
 
 def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) -> None:
@@ -277,7 +469,7 @@ def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) ->
     assert response.status_code == 200
     assert len(llm.calls) == 2
     assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
-    assert len(llm.calls[0]["tools"]) == 2
+    assert len(llm.calls[0]["tools"]) == 4
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-memory"
     assert resolution["details"]["source"] == "model_router"
@@ -405,80 +597,66 @@ def test_missing_document_is_returned_to_model_for_list_and_retry(tmp_path: Path
     )
 
 
-def test_document_aina_updates_only_the_requested_markdown_section(tmp_path: Path) -> None:
+def test_document_aina_directly_updates_section_in_edit_mode(tmp_path: Path) -> None:
     original = (
-        "# 使用手册\n\n"
-        "开场说明。\n\n"
-        "## 第一节\n\n"
+        "# Manual\n\n"
+        "## First\n\n"
         "UNCHANGED_FIRST_SECTION\n\n"
-        "## 第四节\n\n"
-        "需要翻译的原文。\n\n"
-        "### 示例\n\n"
-        "```markdown\n"
-        "## 代码块内不是目录标题\n"
-        "```\n\n"
-        "## 第五节\n\n"
+        "## Fourth\n\n"
+        "Text to translate.\n\n"
+        "## Fifth\n\n"
         "UNCHANGED_FIFTH_SECTION\n"
     )
-    revision = hashlib.sha256(original.encode("utf-8")).hexdigest()
-    replacement = "## 第四节\n\nTranslated source text.\n\n### Example\n\nUpdated example."
-    llm = ScriptedLLM(
-        [
-            call_first_tool(
-                prefix="builtin_document_outline_",
-                arguments='{"name":"manual.md"}',
-                call_id="call_outline",
-            ),
-            call_first_tool(
-                prefix="builtin_document_read_section_",
-                arguments='{"name":"manual.md","heading":"第四节"}',
-                call_id="call_read_section",
-            ),
-            call_first_tool(
-                prefix="builtin_document_update_section_",
-                arguments=json.dumps(
-                    {
-                        "name": "manual.md",
-                        "heading": "第四节",
-                        "section_content": replacement,
-                        "expected_revision": revision,
-                    },
-                    ensure_ascii=False,
-                ),
-                call_id="call_update_section",
-            ),
-            assistant("第四节已更新。"),
-        ]
-    )
+    llm = ScriptedLLM([])
 
     with TestClient(_app(tmp_path, llm)) as client:
         client.post("/documents", json={"name": "manual", "content": original})
+        revision = client.get(
+            "/documents/manual.md/sections",
+            params={"heading": "Fourth"},
+        ).json()["revision"]
+        llm.responses.extend(
+            [
+                call_first_tool(
+                    prefix="builtin_document_outline_",
+                    arguments='{"name":"manual.md"}',
+                    call_id="call_outline",
+                ),
+                call_first_tool(
+                    prefix="builtin_document_read_section_",
+                    arguments='{"name":"manual.md","heading":"Fourth"}',
+                    call_id="call_read_section",
+                ),
+                call_first_tool(
+                    prefix="builtin_document_update_section_",
+                    arguments=(
+                        '{"name":"manual.md","heading":"Fourth",'
+                        '"section_content":"## Fourth\\n\\nTranslated directly.",'
+                        f'"expected_revision":"{revision}"}}'
+                    ),
+                    call_id="call_update_section",
+                ),
+                assistant("Updated the section directly."),
+            ]
+        )
         response = client.post(
             "/chat",
-            json={"message": "把第四节翻译成英文", "capability": "aina:unibot-documents"},
+            json={
+                "message": "Directly edit the Fourth section and save it now",
+                "capability": "aina:unibot-documents",
+            },
         )
         document = client.get("/documents/manual.md")
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
-    updated_content = document.json()["content"]
     assert response.status_code == 200
-    assert "UNCHANGED_FIRST_SECTION" in updated_content
-    assert "UNCHANGED_FIFTH_SECTION" in updated_content
-    assert replacement in updated_content
-    assert "需要翻译的原文" not in updated_content
-    assert "代码块内不是目录标题" not in json.dumps(llm.calls[1]["messages"], ensure_ascii=False)
-    assert "UNCHANGED_FIRST_SECTION" not in json.dumps(llm.calls, ensure_ascii=False)
-    assert "UNCHANGED_FIFTH_SECTION" not in json.dumps(llm.calls, ensure_ascii=False)
+    assert "Translated directly." in document.json()["content"]
+    assert "UNCHANGED_FIRST_SECTION" in document.json()["content"]
+    assert "UNCHANGED_FIFTH_SECTION" in document.json()["content"]
     assert any(
         event["kind"] == "builtin.completed" and event["target_id"] == "document.update_section"
         for event in trace.json()["events"]
     )
-    update_request = next(
-        event
-        for event in trace.json()["events"]
-        if event["kind"] == "builtin.requested" and event["target_id"] == "document.update_section"
-    )
-    assert "UNCHANGED_FIRST_SECTION" not in json.dumps(update_request["details"], ensure_ascii=False)
 
 
 @pytest.mark.asyncio

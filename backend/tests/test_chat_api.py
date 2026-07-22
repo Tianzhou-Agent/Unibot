@@ -31,7 +31,14 @@ def _settings(*, max_iterations: int = 8) -> AgentSettings:
 
 
 def test_chat_preserves_multi_turn_context() -> None:
-    llm = ScriptedLLM([assistant("first answer"), assistant("second answer")])
+    llm = ScriptedLLM(
+        [
+            assistant("NO_AINA_MATCH"),
+            assistant("first answer"),
+            assistant("NO_AINA_MATCH"),
+            assistant("second answer"),
+        ]
+    )
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         first = client.post("/chat", json={"message": "first question"})
         second = client.post(
@@ -53,11 +60,26 @@ def test_chat_preserves_multi_turn_context() -> None:
         "user",
         "assistant",
     ]
-    assert any(message.get("content") == "first answer" for message in llm.calls[1]["messages"])
+    assert any(message.get("content") == "first answer" for message in llm.calls[2]["messages"])
+
+
+def test_chat_uses_ui_context_without_persisting_it() -> None:
+    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("done")])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "继续修改", "ui_context": "任务 ID：task-1\n章节 ID：section-1"},
+        )
+        conversation = client.get(f"/conversations/{response.json()['conversation_id']}").json()
+
+    routed_user_message = llm.calls[0]["messages"][-1]["content"]
+    assert "<ui_context>" in routed_user_message
+    assert "任务 ID：task-1" in routed_user_message
+    assert conversation["messages"][0]["content"] == "继续修改"
 
 
 def test_stream_chat_returns_sse_deltas_and_completion() -> None:
-    llm = ScriptedLLM([assistant("streamed answer")])
+    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("streamed answer")])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         with client.stream("POST", "/chat/stream", json={"message": "stream this"}) as response:
             body = "".join(response.iter_text())
@@ -245,12 +267,13 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
         b"What is 17 + 25? password=customer-secret-value"
     ).hexdigest()
     discovery = next(event for event in events if event["kind"] == "capability.discovery")["details"]
-    assert discovery["aina_graph"]["available_count"] == 2
+    assert discovery["aina_graph"]["available_count"] == 3
     assert {item["id"] for item in discovery["aina_graph"]["available"]} == {
         "unibot-assistant",
         "unibot-memory",
+        "unibot-scheduler",
     }
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 2, "remote_aina": 0}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 0}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 0,
@@ -289,6 +312,7 @@ def test_tool_failure_is_isolated_and_returned_to_the_model() -> None:
 
     llm = ScriptedLLM(
         [
+            assistant("NO_AINA_MATCH"),
             call_first_tool(arguments='{"value": "x"}'),
             assistant("The external tool is temporarily unavailable."),
         ]
@@ -314,7 +338,7 @@ def test_tool_failure_is_isolated_and_returned_to_the_model() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
-    tool_result = next(item for item in llm.calls[1]["messages"] if item["role"] == "tool")
+    tool_result = next(item for item in llm.calls[2]["messages"] if item["role"] == "tool")
     assert json.loads(tool_result["content"])["error"]["code"] == "DEPENDENCY_FAILED"
 
 
@@ -328,6 +352,7 @@ def test_high_risk_tool_waits_for_confirmation() -> None:
 
     llm = ScriptedLLM(
         [
+            assistant("NO_AINA_MATCH"),
             call_first_tool(arguments='{"recipient": "user@example.com"}'),
             assistant("The message was sent after confirmation."),
         ]
@@ -406,6 +431,56 @@ def test_high_risk_tool_denial_closes_pending_call_without_execution() -> None:
     assert conversation.json()["run_status"] == "idle"
     assert conversation.json()["messages"][-1]["content"] == "The requested operation was cancelled."
     assert any(event["kind"] == "approval.denied" for event in trace.json()["events"])
+
+
+def test_new_turn_cancels_pending_approval_and_closes_trace() -> None:
+    calls = 0
+
+    async def remote(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"sent": True})
+
+    llm = ScriptedLLM(
+        [
+            call_first_tool(arguments='{"recipient": "user@example.com"}'),
+            assistant("NO_AINA_MATCH"),
+            assistant("Understood, skipping that action."),
+        ]
+    )
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.abandoned-send",
+                "name": "Abandoned send",
+                "description": "Approval is abandoned by a new turn.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"recipient": {"type": "string"}},
+                    "required": ["recipient"],
+                },
+                "endpoint": "https://tool.invalid/send",
+                "side_effect_level": "high",
+            },
+        )
+        pending = client.post(
+            "/chat",
+            json={"message": "Send the message", "capability": "tool:demo.abandoned-send"},
+        ).json()
+        follow_up = client.post(
+            "/chat",
+            json={"message": "Never mind", "conversation_id": pending["conversation_id"]},
+        )
+        approvals = client.get("/approvals", params={"conversation_id": pending["conversation_id"]})
+        trace = client.get(f"/traces/{pending['trace_id']}")
+
+    assert follow_up.status_code == 200
+    assert calls == 0
+    assert [item["status"] for item in approvals.json()] == ["denied"]
+    assert trace.json()["status"] == "completed"
+    assert any(event["kind"] == "approval.cancelled" for event in trace.json()["events"])
 
 
 def test_iteration_limit_stops_repeated_tool_loop() -> None:

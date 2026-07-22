@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.aina.scheduler import (
+    ScheduledAinaDebugRequest,
+    ScheduledAinaExecution,
     ScheduledAinaTask,
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
@@ -28,6 +30,23 @@ def create_schedule_router() -> APIRouter:
     @router.get("", response_model=list[ScheduledAinaTask])
     async def list_schedules(request: Request) -> list[ScheduledAinaTask]:
         return await repository(request).list_scheduled_aina_tasks()
+
+    @router.get("/{task_id}/executions", response_model=list[ScheduledAinaExecution])
+    async def list_schedule_executions(
+        task_id: str,
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[ScheduledAinaExecution]:
+        data_repository = repository(request)
+        await data_repository.get_scheduled_aina_task(task_id)
+        return await data_repository.list_scheduled_aina_executions(task_id, limit=limit)
+
+    @router.post("/{task_id}/run", response_model=ScheduledAinaTask)
+    async def debug_schedule(
+        task_id: str, payload: ScheduledAinaDebugRequest, request: Request
+    ) -> ScheduledAinaTask:
+        scheduler = request.app.state.aina_scheduler
+        return await scheduler.run_now(task_id, input_override=payload.invocation_input())
 
     @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_schedule(task_id: str, request: Request) -> Response:

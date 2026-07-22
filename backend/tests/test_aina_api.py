@@ -109,7 +109,7 @@ def test_aina_without_required_grants_is_not_exposed_to_agent() -> None:
             return httpx.Response(200, json={"protocol_version": "1.0"})
         return httpx.Response(200, json={"status": "healthy"})
 
-    llm = ScriptedLLM([assistant("No authorized AINA is available.")])
+    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("No authorized AINA is available.")])
     capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
     with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
         client.post("/ainas", json=_manifest(permissions=["user.files.read"]))
@@ -117,7 +117,9 @@ def test_aina_without_required_grants_is_not_exposed_to_agent() -> None:
         response = client.post("/chat", json={"message": "Use arithmetic"})
 
     assert response.status_code == 200
-    assert all(not item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
+    candidate_names = {item["function"]["name"] for item in llm.calls[0]["tools"]}
+    assert all(name.startswith("aina_") for name in candidate_names)
+    assert not any(name.startswith("aina_com_example_arithmetic_") for name in candidate_names)
 
 
 def test_aina_protocol_version_is_rejected_with_standard_error() -> None:

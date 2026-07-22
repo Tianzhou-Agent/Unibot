@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, FileText, ListTree, RefreshCw } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { api, apiErrorMessage } from "@/lib/api";
+import { documentApiPath } from "@/lib/documentPaths";
 import { classNames } from "@/lib/utils";
 import type {
   DocumentSectionRecord,
@@ -43,7 +44,7 @@ export function DocumentOutlineWidget({ widget }: { widget: WidgetDefinition }) 
       tenant_id: "default",
     });
     void api
-      .get<DocumentSectionRecord>(`/documents/${encodeURIComponent(documentName)}/sections?${query}`)
+      .get<DocumentSectionRecord>(`/documents/${documentApiPath(documentName)}/sections?${query}`)
       .then((result) => {
         if (active) setSection(result);
       })

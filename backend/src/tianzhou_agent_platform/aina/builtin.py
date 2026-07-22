@@ -3,12 +3,15 @@
 from typing import Any
 
 from tianzhou_agent_platform.aina.document.builtin import (
+    DOCUMENT_EDIT_TASK_TOOL_IDS,
     DOCUMENT_TOOL_IDS,
     UNIBOT_DOCUMENTS_ID,
+    invoke_document_edit_task_tool,
     invoke_document_tool,
     unibot_documents_record,
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.memory.builtin import (
     FORGET_TOOL_ID,
     MEMORY_TOOL_IDS,
@@ -20,6 +23,10 @@ from tianzhou_agent_platform.aina.memory.builtin import (
     unibot_memory_record,
 )
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.aina.schedule.builtin import (
+    UNIBOT_SCHEDULER_ID,
+    unibot_scheduler_record,
+)
 from tianzhou_agent_platform.aina.unibot.builtin import (
     LIST_APP_TOOL_ID,
     OPEN_AINA_TOOL_ID,
@@ -35,7 +42,12 @@ from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 
-BUILTIN_AINA_IDS = {UNIBOT_ASSISTANT_ID, UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID}
+BUILTIN_AINA_IDS = {
+    UNIBOT_ASSISTANT_ID,
+    UNIBOT_MEMORY_ID,
+    UNIBOT_DOCUMENTS_ID,
+    UNIBOT_SCHEDULER_ID,
+}
 
 
 async def ensure_unibot_assistant(
@@ -46,6 +58,7 @@ async def ensure_unibot_assistant(
     builtins = [
         (UNIBOT_ASSISTANT_ID, unibot_assistant_record),
         (UNIBOT_MEMORY_ID, unibot_memory_record),
+        (UNIBOT_SCHEDULER_ID, unibot_scheduler_record),
     ]
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
@@ -72,6 +85,7 @@ async def invoke_builtin(
     tenant_id: str,
     conversation_id: str,
     document_service: DocumentService | None = None,
+    document_edit_task_service: DocumentEditTaskService | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
     if tool_id in DOCUMENT_TOOL_IDS:
         if document_service is None:
@@ -82,6 +96,20 @@ async def invoke_builtin(
                 source="storage",
             )
         try:
+            if tool_id in DOCUMENT_EDIT_TASK_TOOL_IDS:
+                if document_edit_task_service is None:
+                    raise PlatformError(
+                        "DEPENDENCY_FAILED",
+                        "Document edit tasks are unavailable",
+                        status_code=503,
+                    )
+                return await invoke_document_edit_task_tool(
+                    document_edit_task_service,
+                    tool_id,
+                    arguments,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
             return await invoke_document_tool(
                 document_service,
                 tool_id,
@@ -148,6 +176,7 @@ __all__ = [
     "UNIBOT_ASSISTANT_ID",
     "UNIBOT_DOCUMENTS_ID",
     "UNIBOT_MEMORY_ID",
+    "UNIBOT_SCHEDULER_ID",
     "ensure_unibot_assistant",
     "invoke_builtin",
     "list_app_widget",
@@ -155,4 +184,5 @@ __all__ = [
     "unibot_assistant_record",
     "unibot_documents_record",
     "unibot_memory_record",
+    "unibot_scheduler_record",
 ]
