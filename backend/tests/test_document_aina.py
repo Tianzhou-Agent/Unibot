@@ -250,6 +250,28 @@ def test_document_aina_merge_section_requires_confirmation(tmp_path: Path) -> No
     assert "Old background." not in after_confirm
 
 
+def test_preferred_document_aina_receives_transient_ui_context(tmp_path: Path) -> None:
+    llm = ScriptedLLM([assistant("I will update the selected draft section.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        response = client.post(
+            "/chat",
+            json={
+                "message": "继续修改当前章节",
+                "preferred_aina_id": "unibot-documents",
+                "ui_context": "任务 ID：task-1\n章节 ID：section-1\n当前草稿版本：2",
+            },
+        )
+        conversation = client.get(f"/conversations/{response.json()['conversation_id']}").json()
+
+    model_user_message = next(
+        item["content"] for item in reversed(llm.calls[0]["messages"]) if item["role"] == "user"
+    )
+    assert "<ui_context>" in model_user_message
+    assert "任务 ID：task-1" in model_user_message
+    assert "章节 ID：section-1" in model_user_message
+    assert conversation["messages"][0]["content"] == "继续修改当前章节"
+
+
 def test_document_aina_keeps_global_memory_update_available(tmp_path: Path) -> None:
     llm = ScriptedLLM([])
     with TestClient(_app(tmp_path, llm)) as client:

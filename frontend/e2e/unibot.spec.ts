@@ -17,6 +17,8 @@ interface MockState {
   documentFolders: string[];
   documentName: string;
   documentContent: string;
+  documentMergeConflict: boolean;
+  lastStreamPayload: JsonObject | null;
   streamWidgets: JsonObject[];
 }
 
@@ -59,6 +61,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     documentFolders: initial.documentFolders ?? [],
     documentName: initial.documentName ?? "guide.md",
     documentContent: initial.documentContent ?? "# 使用指南\n\n## 简介\n\n旧内容。\n",
+    documentMergeConflict: initial.documentMergeConflict ?? false,
+    lastStreamPayload: null,
     streamWidgets: initial.streamWidgets ?? [],
   };
 
@@ -107,6 +111,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     }
     if (method === "POST" && path === "/chat/stream") {
       const payload = request.postDataJSON() as JsonObject;
+      state.lastStreamPayload = payload;
       const record = state.conversations.find((item) => item.id === payload.conversation_id);
       if (!record) return json(route, { error: { message: "Conversation not found" } }, 404);
       if (state.streamDelayMs) {
@@ -313,6 +318,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "POST" && path === "/document-edit-tasks/document-edit-e2e/sections/draft-section-e2e/merge") {
       const task = state.documentTasks[0];
       const section = (task.sections as JsonObject[])[0];
+      if (state.documentMergeConflict) {
+        task.status = "conflict";
+        task.error = "Document revision changed. Review the latest document before merging.";
+        return json(route, { error: { user_message: task.error } }, 409);
+      }
       task.status = "merged";
       task.merged_at = NOW;
       section.review_status = "merged";
@@ -432,9 +442,13 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
   await page.getByRole("button", { name: "创建并执行" }).click();
 
   await expect(page.getByText("AI 草稿。", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("章节差异")).toBeVisible();
+  await expect(page.getByLabel("章节差异").getByText("旧内容。", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("章节差异").getByText("AI 草稿。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "放弃本章节" })).toBeVisible();
   await expect(page.getByPlaceholder("描述希望 AI 如何继续修改当前章节")).toBeVisible();
   await expect(page.getByPlaceholder("让 AI 继续修改当前章节…")).toHaveCount(0);
+  await page.getByRole("button", { name: "对照编辑", exact: true }).click();
   await page.getByRole("textbox", { name: "章节草稿" }).fill("## 简介\n\n用户检视后的内容。");
   await page.getByRole("button", { name: "保存草稿" }).click();
   await page.getByRole("button", { name: "合入本章节" }).click();
@@ -494,6 +508,49 @@ test("FE-E2E-009D 放弃任务草稿不会更新文档", async ({ page }) => {
   await page.getByRole("button", { name: "放弃本章节", exact: true }).last().click();
   await expect(page.getByText("此任务的所有章节均已放弃，文档原文未发生变化。", { exact: true })).toBeVisible();
   expect(state.documentContent).toContain("旧内容");
+});
+
+test("FE-E2E-009E 章节合入冲突只展示一次任务错误", async ({ page }) => {
+  await installMockApi(page, { documentMergeConflict: true });
+  await page.goto("/canvas/unibot-documents");
+
+  await page.getByRole("button", { name: "任务 0" }).click();
+  await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
+  await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
+  await page.getByRole("checkbox", { name: "简介" }).check();
+  await page.getByRole("button", { name: "创建并执行" }).click();
+  await page.getByRole("button", { name: "合入本章节" }).click();
+  await page.getByRole("button", { name: "合入本章节", exact: true }).last().click();
+
+  await expect(page.getByText("Document revision changed. Review the latest document before merging.", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("存在冲突", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文", async ({ page }) => {
+  const state = await installMockApi(page, { streamDelayMs: 300 });
+  await page.goto("/canvas/unibot-documents");
+
+  await page.getByRole("button", { name: "任务 0" }).click();
+  await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
+  await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
+  await page.getByRole("checkbox", { name: "简介" }).check();
+  await page.getByRole("button", { name: "创建并执行" }).click();
+  await expect(page.getByText("对话上下文：润色简介 / 简介", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "对照编辑", exact: true }).click();
+  const draft = page.getByRole("textbox", { name: "章节草稿" });
+  await draft.fill("## 简介\n\n右侧未保存的人工修改。");
+  await page.getByRole("textbox", { name: "画布消息" }).fill("继续润色当前章节");
+  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await expect(draft).toBeEnabled();
+  await draft.fill("## 简介\n\n模型运行期间继续编辑。");
+  await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+
+  await expect(draft).toHaveValue("## 简介\n\n模型运行期间继续编辑。");
+  await expect(page.getByText("对话上下文：润色简介 / 简介", { exact: true })).toBeVisible();
+  expect(state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
+  expect(state.lastStreamPayload?.ui_context).toContain("任务 ID：document-edit-e2e");
+  expect(state.lastStreamPayload?.ui_context).toContain("章节 ID：draft-section-e2e");
 });
 
 test("FE-E2E-002 重命名、分类、删除并恢复会话", async ({ page }) => {

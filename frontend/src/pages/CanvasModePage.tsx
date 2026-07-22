@@ -352,10 +352,11 @@ export default function CanvasModePage() {
             )}>
               <div className="min-h-0 flex-1 overflow-hidden">
                 <MainWidgetRenderer
-                  key={`${canvas.main_widget.id}:${lastRun?.trace_id ?? "initial"}`}
+                  key={canvas.main_widget.id}
                   ainaId={canvas.aina_id}
                   widget={canvas.main_widget}
-                  disabled={sending}
+                  disabled={false}
+                  refreshToken={lastRun?.trace_id}
                   onOpenAina={(id) => void openAina(id)}
                   onPrompt={(prompt) => void sendMessage(prompt)}
                   onDocumentTaskContextChange={setDocumentTaskContext}
@@ -438,7 +439,7 @@ function CanvasComposer({ disabled, context, onSend }: {
       <div className="rounded-xl border border-line-strong p-2 focus-within:border-accent">
         {context ? <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[9.5px] text-accent">
           <Sparkles className="h-3 w-3 shrink-0" />
-          <span className="truncate">正在处理：{context.taskTitle} / {context.sectionHeading}</span>
+          <span className="truncate">对话上下文：{context.taskTitle} / {context.sectionHeading}</span>
         </div> : null}
         <textarea
           value={text}
