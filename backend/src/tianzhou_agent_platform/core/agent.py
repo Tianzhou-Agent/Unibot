@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse, hook_config
-from langchain.messages import AIMessage, ToolMessage
-from langchain.tools import ToolRuntime
-from langchain_core.messages import BaseMessage, convert_to_messages, convert_to_openai_messages
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import StructuredTool
-from langgraph.runtime import Runtime
+from langgraph.graph import END, START, StateGraph
 
 from tianzhou_agent_platform.aina.builtin import (
     FORGET_TOOL_ID,
@@ -30,14 +21,19 @@ from tianzhou_agent_platform.aina.builtin import (
     UPDATE_TOOL_ID,
     UNIBOT_ASSISTANT_ID,
     UNIBOT_MEMORY_ID,
+    UNIBOT_SCHEDULER_ID,
     invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
+    ABANDON_EDIT_SECTION_TOOL_ID,
+    CREATE_EDIT_TASK_TOOL_ID,
     DELETE_DOCUMENT_TOOL_ID,
+    MERGE_EDIT_SECTION_TOOL_ID,
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
@@ -48,14 +44,8 @@ from tianzhou_agent_platform.core.base import Usage
 from tianzhou_agent_platform.core.chat import ApprovalRecord, ChatRequest, ChatResponse, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.langchain_adapter import (
-    LangChainChatModel,
-    ModelRunContext,
-    ai_message_result,
-)
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
-from tianzhou_agent_platform.core.model_settings import use_model_runtime
-from tianzhou_agent_platform.core.observability import LangSmithObservability
+from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
 
@@ -97,12 +87,27 @@ class Capability:
         }
 
 
-class CapabilityTool(StructuredTool):
-    advertised_schema: dict[str, Any]
-
-    @property
-    def tool_call_schema(self) -> dict[str, Any]:
-        return self.advertised_schema
+class AgentState(TypedDict, total=False):
+    messages: list[dict[str, Any]]
+    capabilities: dict[str, Capability]
+    tool_definitions: list[dict[str, Any]]
+    trace_id: str
+    conversation_id: str
+    user_id: str
+    tenant_id: str
+    iterations: int
+    max_iterations: int
+    forced_function: str | None
+    approved_call_ids: set[str]
+    resume: bool
+    event_sink: EventSink | None
+    usage_input: int
+    usage_output: int
+    final_content: str
+    final_status: Literal["completed", "approval_required", "failed"]
+    approval: ApprovalRecord | None
+    call_counts: dict[str, int]
+    widgets: list[WidgetDefinition]
 
 
 @dataclass(slots=True)
@@ -110,122 +115,6 @@ class AinaRoute:
     capability: Capability | None
     result: LLMResult
     assistant_message: dict[str, Any] | None = None
-
-
-@dataclass(slots=True)
-class AgentLoopContext:
-    runtime: AgentRuntime
-    model: ModelRunContext
-    capabilities: dict[str, Capability]
-    forced_function: str | None
-    max_iterations: int
-    initial_iterations: int
-    conversation_id: str
-    user_id: str
-    tenant_id: str
-    approved_call_ids: set[str]
-    call_counts: dict[str, int]
-    widgets: list[WidgetDefinition]
-    tool_lock: asyncio.Lock
-    approval: ApprovalRecord | None = None
-    final_content: str | None = None
-    final_status: Literal["completed", "approval_required", "failed"] = "completed"
-
-
-class UnibotAgentMiddleware(AgentMiddleware[Any, AgentLoopContext, Any]):
-    @hook_config(can_jump_to=["end"])
-    async def abefore_model(
-        self,
-        state: dict[str, Any],
-        runtime: Runtime[AgentLoopContext],
-    ) -> dict[str, Any] | None:
-        context = runtime.context
-        if context.model.iterations < context.max_iterations:
-            return None
-        if not state.get("messages") or not isinstance(state["messages"][-1], ToolMessage):
-            return None
-        message = (
-            f"I stopped after {context.max_iterations} model iterations because the capability loop "
-            "did not produce a final answer."
-        )
-        context.final_status = "failed"
-        context.final_content = message
-        return {"jump_to": "end", "messages": [AIMessage(content=message)]}
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[AgentLoopContext],
-        handler: Callable[[ModelRequest[AgentLoopContext]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any]:
-        context = request.runtime.context
-        if context.forced_function and context.model.iterations == context.initial_iterations:
-            request = request.override(
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": context.forced_function},
-                }
-            )
-        return await handler(request)
-
-    @hook_config(can_jump_to=["end"])
-    async def aafter_model(
-        self,
-        state: dict[str, Any],
-        runtime: Runtime[AgentLoopContext],
-    ) -> dict[str, Any] | None:
-        context = runtime.context
-        if not state.get("messages") or not isinstance(state["messages"][-1], AIMessage):
-            return None
-        assistant = cast(AIMessage, state["messages"][-1])
-        if not assistant.tool_calls:
-            return None
-        tool_calls = [_langchain_tool_call_wire(call) for call in assistant.tool_calls]
-        risky_calls = []
-        risky_names = []
-        for call in tool_calls:
-            capability = context.capabilities.get((call.get("function") or {}).get("name", ""))
-            if capability and capability.requires_confirmation and call.get("id") not in context.approved_call_ids:
-                risky_calls.append(call)
-                risky_names.append(capability.display_name)
-        if not risky_calls:
-            return None
-
-        approval = ApprovalRecord(
-            id=f"approval_{uuid4().hex}",
-            conversation_id=context.conversation_id,
-            user_id=context.user_id,
-            tenant_id=context.tenant_id,
-            trace_id=context.model.trace_id,
-            tool_calls=tool_calls,
-            capability_names=risky_names,
-        )
-        await context.runtime.repository.create_approval(approval)
-        await context.runtime.repository.add_trace_event(
-            context.model.trace_id,
-            TraceEvent(
-                kind="approval.required",
-                status="pending",
-                target_type="capability",
-                details={
-                    "approval_id": approval.id,
-                    "capabilities": risky_names,
-                    "calls": [_tool_call_trace_details(call, context.capabilities) for call in risky_calls],
-                },
-            ),
-        )
-        if context.model.event_sink is not None:
-            await context.model.event_sink(
-                {
-                    "type": "approval.required",
-                    "approval_id": approval.id,
-                    "capabilities": risky_names,
-                }
-            )
-        content = f"Approval is required before running: {', '.join(risky_names)}."
-        context.approval = approval
-        context.final_content = content
-        context.final_status = "approval_required"
-        return {"jump_to": "end"}
 
 
 class AgentRuntime:
@@ -245,17 +134,446 @@ class AgentRuntime:
         llm: LLMClient,
         gateway: RemoteCapabilityGateway,
         document_service: DocumentService | None = None,
+        document_edit_task_service: DocumentEditTaskService | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.llm = llm
         self.gateway = gateway
         self.document_service = document_service
-        self.observability = LangSmithObservability(settings)
+        self.document_edit_task_service = document_edit_task_service
+        graph = StateGraph(AgentState)
+        graph.add_node("model", self._model_node)
+        graph.add_node("tools", self._tool_node)
+        graph.add_conditional_edges(START, self._entry_route, {"model": "model", "tools": "tools"})
+        graph.add_conditional_edges("model", self._after_model, {"tools": "tools", "end": END})
+        graph.add_conditional_edges("tools", self._after_tools, {"model": "model", "end": END})
+        self._graph = graph.compile()
 
-    async def aclose(self) -> None:
-        await self.observability.close()
+    @staticmethod
+    def _entry_route(state: AgentState) -> str:
+        return "tools" if state.get("resume") else "model"
 
+    @staticmethod
+    def _after_model(state: AgentState) -> str:
+        last = state["messages"][-1]
+        return "tools" if last.get("tool_calls") else "end"
+
+    @staticmethod
+    def _after_tools(state: AgentState) -> str:
+        if state.get("approval") is not None or state.get("final_status") is not None:
+            return "end"
+        return "model"
+
+    async def _emit(self, state: AgentState, event: dict[str, Any]) -> None:
+        sink = state.get("event_sink")
+        if sink is not None:
+            await sink(event)
+
+    async def _model_node(self, state: AgentState) -> AgentState:
+        iterations = state.get("iterations", 0) + 1
+        started = perf_counter()
+        runtime_model = current_model_runtime()
+        model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
+        await self.repository.add_trace_event(
+            state["trace_id"],
+            TraceEvent(
+                kind="model.requested",
+                status="started",
+                target_type="model",
+                target_id=model_target_id,
+                details={
+                    "iteration": iterations,
+                    "message_count": len(state["messages"]),
+                    "message_roles": [str(message.get("role") or "unknown") for message in state["messages"]],
+                    "capability_ids": sorted(
+                        {capability.capability_id for capability in state["capabilities"].values()}
+                    ),
+                    "forced_function": state.get("forced_function") if iterations == 1 else None,
+                    "streaming": state.get("event_sink") is not None,
+                },
+            ),
+        )
+        tool_choice: dict[str, Any] | str | None = None
+        if iterations == 1 and state.get("forced_function"):
+            tool_choice = {
+                "type": "function",
+                "function": {"name": state["forced_function"]},
+            }
+        try:
+            result = await self.llm.complete(
+                messages=state["messages"],
+                tools=state["tool_definitions"],
+                tool_choice=tool_choice,
+                event_sink=state.get("event_sink"),
+            )
+        except PlatformError as exc:
+            await self.repository.add_trace_event(
+                state["trace_id"],
+                TraceEvent(
+                    kind="model.failed",
+                    status="failed",
+                    target_type="model",
+                    target_id=model_target_id,
+                    duration_ms=(perf_counter() - started) * 1000,
+                    details={
+                        "iteration": iterations,
+                        "code": exc.code,
+                        "message": sanitize_trace_data(exc.message),
+                        "retryable": exc.retryable,
+                    },
+                ),
+            )
+            raise
+
+        message = result.message
+        if not message.get("content") and not message.get("tool_calls"):
+            message = {"role": "assistant", "content": "The model returned an empty response."}
+            final_status: Literal["completed", "approval_required", "failed"] = "failed"
+        else:
+            final_status = "completed"
+        messages = [*state["messages"], message]
+        await self.repository.add_trace_event(
+            state["trace_id"],
+            TraceEvent(
+                kind="model.completed",
+                status="completed",
+                target_type="model",
+                target_id=model_target_id,
+                duration_ms=(perf_counter() - started) * 1000,
+                details={
+                    "iteration": iterations,
+                    "finish_reason": result.finish_reason,
+                    "tool_call_count": len(message.get("tool_calls") or []),
+                    "tool_calls": [
+                        _tool_call_trace_details(call, state["capabilities"])
+                        for call in message.get("tool_calls") or []
+                    ],
+                    "content_length": len(str(message.get("content") or "")),
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                },
+            ),
+        )
+        update: AgentState = {
+            **state,
+            "messages": messages,
+            "iterations": iterations,
+            "usage_input": state.get("usage_input", 0) + result.input_tokens,
+            "usage_output": state.get("usage_output", 0) + result.output_tokens,
+        }
+        if not message.get("tool_calls"):
+            update["final_content"] = message.get("content") or ""
+            update["final_status"] = final_status
+        return update
+
+    async def _tool_node(self, state: AgentState) -> AgentState:
+        messages = list(state["messages"])
+        assistant = next(
+            (item for item in reversed(messages) if item.get("role") == "assistant" and item.get("tool_calls")),
+            None,
+        )
+        if assistant is None:
+            raise PlatformError("INTERNAL_ERROR", "No assistant tool-call message is available", status_code=500)
+        tool_calls = assistant.get("tool_calls") or []
+        capabilities = state["capabilities"]
+        approved = state.get("approved_call_ids", set())
+        risky_calls = []
+        risky_names = []
+        for call in tool_calls:
+            capability = capabilities.get((call.get("function") or {}).get("name", ""))
+            if capability and capability.requires_confirmation and call.get("id") not in approved:
+                risky_calls.append(call)
+                risky_names.append(capability.display_name)
+        if risky_calls:
+            approval = ApprovalRecord(
+                id=f"approval_{uuid4().hex}",
+                conversation_id=state["conversation_id"],
+                user_id=state["user_id"],
+                tenant_id=state["tenant_id"],
+                trace_id=state["trace_id"],
+                tool_calls=tool_calls,
+                capability_names=risky_names,
+            )
+            await self.repository.create_approval(approval)
+            await self.repository.add_trace_event(
+                state["trace_id"],
+                TraceEvent(
+                    kind="approval.required",
+                    status="pending",
+                    target_type="capability",
+                    details={
+                        "approval_id": approval.id,
+                        "capabilities": risky_names,
+                        "calls": [_tool_call_trace_details(call, capabilities) for call in risky_calls],
+                    },
+                ),
+            )
+            await self._emit(
+                state,
+                {
+                    "type": "approval.required",
+                    "approval_id": approval.id,
+                    "capabilities": risky_names,
+                },
+            )
+            return {
+                **state,
+                "approval": approval,
+                "final_content": f"Approval is required before running: {', '.join(risky_names)}.",
+                "final_status": "approval_required",
+            }
+
+        call_counts = dict(state.get("call_counts", {}))
+        widgets = list(state.get("widgets", []))
+        async_task_message: str | None = None
+        tool_failed = False
+        available_tool_ids = [
+            capability.capability_id for capability in capabilities.values() if capability.kind == "tool"
+        ]
+        for call in tool_calls:
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            call_id = str(call.get("id") or f"call_{uuid4().hex}")
+            arguments_text = function.get("arguments") or "{}"
+            capability = capabilities.get(name)
+            if capability is None:
+                tool_failed = True
+                await self._append_tool_error(
+                    state,
+                    messages,
+                    call_id=call_id,
+                    name=name,
+                    code="RESOURCE_NOT_FOUND",
+                    message=f"Capability {name!r} is unavailable.",
+                )
+                continue
+            try:
+                arguments = json.loads(arguments_text) if isinstance(arguments_text, str) else arguments_text
+                if not isinstance(arguments, dict):
+                    raise ValueError("arguments must decode to an object")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                tool_failed = True
+                await self._append_tool_error(
+                    state,
+                    messages,
+                    call_id=call_id,
+                    name=name,
+                    code="INVALID_REQUEST",
+                    message=f"Invalid JSON arguments: {exc}",
+                )
+                continue
+
+            normalized_arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+            signature = hashlib.sha256(f"{name}:{normalized_arguments}".encode()).hexdigest()
+            call_counts[signature] = call_counts.get(signature, 0) + 1
+            if call_counts[signature] > 1:
+                tool_failed = True
+                await self._append_tool_error(
+                    state,
+                    messages,
+                    call_id=call_id,
+                    name=name,
+                    code="CONFLICT",
+                    message="The same capability call already completed in this run.",
+                )
+                continue
+
+            await self.repository.add_trace_event(
+                state["trace_id"],
+                TraceEvent(
+                    kind=f"{capability.kind}.requested",
+                    status="started",
+                    target_type=capability.kind,
+                    target_id=capability.capability_id,
+                    details={
+                        "call_id": call_id,
+                        "function_name": name,
+                        "argument_fields": sorted(arguments),
+                        "arguments": sanitize_trace_data(arguments),
+                    },
+                ),
+            )
+            await self._emit(
+                state,
+                {"type": "tool.requested", "kind": capability.kind, "id": capability.capability_id},
+            )
+            try:
+                call_started = perf_counter()
+                widgets_before = len(widgets)
+                if capability.kind == "tool":
+                    tool = cast(ToolRecord, capability.value)
+                    result, duration_ms = await self.gateway.invoke_tool(
+                        tool,
+                        arguments=arguments,
+                        call_id=call_id,
+                        user_id=state["user_id"],
+                        tenant_id=state["tenant_id"],
+                        conversation_id=state["conversation_id"],
+                        trace_id=state["trace_id"],
+                    )
+                    result_payload: Any = result
+                elif capability.kind == "aina":
+                    aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+                    response, duration_ms = await self.gateway.invoke_aina(
+                        aina.manifest,
+                        installation,
+                        arguments=arguments,
+                        call_id=call_id,
+                        conversation_id=state["conversation_id"],
+                        trace_id=state["trace_id"],
+                        available_tools=available_tool_ids,
+                    )
+                    result_payload = response.model_dump(mode="json")
+                    for output in response.outputs:
+                        if output.type == "widget":
+                            try:
+                                widgets.append(WidgetDefinition.model_validate(output.content))
+                            except ValueError as exc:
+                                raise PlatformError(
+                                    "DEPENDENCY_FAILED",
+                                    "AINA returned an invalid widget output",
+                                    status_code=502,
+                                    source="aina",
+                                ) from exc
+                else:
+                    result_payload, produced_widgets = await invoke_builtin(
+                        self.repository,
+                        cast(str, capability.value),
+                        arguments,
+                        user_id=state["user_id"],
+                        tenant_id=state["tenant_id"],
+                        conversation_id=state["conversation_id"],
+                        document_service=self.document_service,
+                        document_edit_task_service=self.document_edit_task_service,
+                    )
+                    widgets.extend(produced_widgets)
+                    duration_ms = (perf_counter() - call_started) * 1000
+                content = json.dumps(result_payload, ensure_ascii=False, default=str)
+                result_size_bytes = len(content.encode("utf-8"))
+                if len(content) > 50_000:
+                    content = f"{content[:50_000]}\n[tool output truncated]"
+                messages.append(
+                    {
+                        "role": "tool",
+                        "name": name,
+                        "tool_call_id": call_id,
+                        "content": content,
+                    }
+                )
+                await self.repository.add_trace_event(
+                    state["trace_id"],
+                    TraceEvent(
+                        kind=f"{capability.kind}.completed",
+                        status="completed",
+                        target_type=capability.kind,
+                        target_id=capability.capability_id,
+                        duration_ms=duration_ms,
+                        details={
+                            "call_id": call_id,
+                            "function_name": name,
+                            "result": sanitize_trace_data(result_payload),
+                            "result_size_bytes": result_size_bytes,
+                            "widgets": [
+                                {"id": widget.id, "kind": widget.kind} for widget in widgets[widgets_before:]
+                            ],
+                        },
+                    ),
+                )
+                await self._emit(
+                    state,
+                    {"type": "tool.completed", "kind": capability.kind, "id": capability.capability_id},
+                )
+                if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
+                    task = result_payload.get("task") if isinstance(result_payload, dict) else None
+                    if isinstance(task, dict):
+                        title = str(task.get("title") or "文档修改任务")
+                        sections = task.get("sections")
+                        section_count = len(sections) if isinstance(sections, list) else 0
+                        async_task_message = (
+                            f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
+                            "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
+                            "正式文档会在您确认合并后才更新。"
+                        )
+            except PlatformError as exc:
+                tool_failed = True
+                await self._append_tool_error(
+                    state,
+                    messages,
+                    call_id=call_id,
+                    name=name,
+                    code=exc.code,
+                    message=exc.message,
+                    capability=capability,
+                )
+
+        update: AgentState = {
+            **state,
+            "messages": messages,
+            "call_counts": call_counts,
+            "approval": None,
+            "widgets": widgets,
+        }
+        if async_task_message is not None and not tool_failed:
+            messages.append({"role": "assistant", "content": async_task_message})
+            update["messages"] = messages
+            update["final_content"] = async_task_message
+            update["final_status"] = "completed"
+        elif state.get("iterations", 0) >= state["max_iterations"]:
+            limit_message = (
+                f"I stopped after {state['max_iterations']} model iterations because the capability loop "
+                "did not produce a final answer."
+            )
+            messages.append({"role": "assistant", "content": limit_message})
+            update["messages"] = messages
+            update["final_content"] = limit_message
+            update["final_status"] = "failed"
+        return update
+
+    async def _append_tool_error(
+        self,
+        state: AgentState,
+        messages: list[dict[str, Any]],
+        *,
+        call_id: str,
+        name: str,
+        code: str,
+        message: str,
+        capability: Capability | None = None,
+    ) -> None:
+        payload = {
+            "error": {
+                "code": code,
+                "message": message,
+                "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
+            },
+            "instruction": "The capability did not complete. Do not claim success; retry or report the failure.",
+        }
+        messages.append(
+            {
+                "role": "tool",
+                "name": name,
+                "tool_call_id": call_id,
+                "content": json.dumps(payload, ensure_ascii=False),
+            }
+        )
+        await self.repository.add_trace_event(
+            state["trace_id"],
+            TraceEvent(
+                kind=f"{capability.kind if capability else 'tool'}.failed",
+                status="failed",
+                target_type=capability.kind if capability else "capability",
+                target_id=capability.capability_id if capability else name,
+                details={
+                    "call_id": call_id,
+                    "function_name": name,
+                    "code": code,
+                    "message": sanitize_trace_data(message),
+                    "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
+                },
+            ),
+        )
+        await self._emit(state, {"type": "error", "code": code, "source": "capability"})
 
     async def chat(self, request: ChatRequest, *, event_sink: EventSink | None = None) -> ChatResponse:
         if request.conversation_id is None:
@@ -302,50 +620,22 @@ class AgentRuntime:
                 ),
             )
             conversation = await self.repository.get_conversation(conversation.id)
-            obvious_capability = _obvious_builtin_capability(request.message)
-            requested_capability = request.capability or obvious_capability
-            requested_source = (
-                "explicit_capability"
-                if request.capability is not None
-                else "deterministic_capability"
-                if obvious_capability is not None
-                else None
-            )
+            requested_capability = request.capability
+            requested_source = "explicit_capability" if request.capability is not None else None
             runtime_model = await self.repository.get_default_model_runtime(
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
             )
             with use_model_runtime(runtime_model):
-                async with self.observability.run(
-                    "unibot.chat",
-                    inputs={
-                        "message": request.message,
-                        "requested_capability": request.capability,
-                        "preferred_aina_id": request.preferred_aina_id,
-                    },
-                    metadata={
-                        "conversation_id": conversation.id,
-                        "unibot_trace_id": trace_id,
-                        "tenant_id": request.tenant_id,
-                    },
-                    tags=["unibot", "chat"],
-                ) as langsmith_run:
-                    response = await self._dispatch(
-                        conversation=conversation,
-                        trace_id=trace_id,
-                        requested_capability=requested_capability,
-                        requested_source=requested_source,
-                        preferred_aina_id=request.preferred_aina_id,
-                        event_sink=event_sink,
-                    )
-                    if langsmith_run is not None:
-                        langsmith_run.end(
-                            outputs={
-                                "status": response.status,
-                                "content": sanitize_trace_data(response.content),
-                                "iterations": response.iterations,
-                            }
-                        )
+                response = await self._dispatch(
+                    conversation=conversation,
+                    trace_id=trace_id,
+                    requested_capability=requested_capability,
+                    requested_source=requested_source,
+                    preferred_aina_id=request.preferred_aina_id,
+                    ui_context=request.ui_context,
+                    event_sink=event_sink,
+                )
         except PlatformError as exc:
             await self._cleanup_failed_run(
                 conversation.id,
@@ -408,8 +698,10 @@ class AgentRuntime:
         requested_capability: str | None,
         requested_source: str | None,
         preferred_aina_id: str | None,
+        ui_context: str | None,
         event_sink: EventSink | None,
     ) -> ChatResponse:
+        conversation = _with_ui_context(conversation, ui_context)
         latest_user_message = conversation.messages[-1].content
         memory_context = await self._memory_context(conversation, latest_user_message)
         all_capabilities = await self._available_capabilities(conversation)
@@ -419,10 +711,13 @@ class AgentRuntime:
                 raise PlatformError("INVALID_REQUEST", "The forced capability could not be resolved")
             selected = all_capabilities[forced_function]
             if selected.kind == "aina":
-                conversation = await self.repository.bind_conversation_aina(
-                    conversation.id,
-                    selected.capability_id,
-                    mark_used=True,
+                conversation = _with_ui_context(
+                    await self.repository.bind_conversation_aina(
+                        conversation.id,
+                        selected.capability_id,
+                        mark_used=True,
+                    ),
+                    ui_context,
                 )
                 await self._record_scope_resolution(
                     trace_id,
@@ -467,10 +762,13 @@ class AgentRuntime:
             if preferred_function is None:
                 raise PlatformError("INVALID_REQUEST", "The preferred AINA could not be resolved")
             selected = all_capabilities[preferred_function]
-            conversation = await self.repository.bind_conversation_aina(
-                conversation.id,
-                selected.capability_id,
-                mark_used=True,
+            conversation = _with_ui_context(
+                await self.repository.bind_conversation_aina(
+                    conversation.id,
+                    selected.capability_id,
+                    mark_used=True,
+                ),
+                ui_context,
             )
             await self._record_scope_resolution(
                 trace_id,
@@ -490,55 +788,11 @@ class AgentRuntime:
                 direct=True,
             )
 
-        sticky_aina_id = conversation.last_aina_id if _looks_like_follow_up(latest_user_message) else None
-        primary_aina_id = (
-            conversation.primary_aina_id
-            if sticky_aina_id is None and len(conversation.active_aina_ids) == 1
-            else None
-        )
-        deterministic_aina_id = sticky_aina_id or primary_aina_id
-        if deterministic_aina_id is not None:
-            deterministic_selected = next(
-                (
-                    capability
-                    for capability in all_capabilities.values()
-                    if capability.kind == "aina" and capability.capability_id == deterministic_aina_id
-                ),
-                None,
-            )
-            if deterministic_selected is not None:
-                conversation = await self.repository.bind_conversation_aina(
-                    conversation.id,
-                    deterministic_selected.capability_id,
-                    mark_used=True,
-                )
-                await self._record_scope_resolution(
-                    trace_id,
-                    conversation,
-                    selected=deterministic_selected,
-                    source="sticky_aina" if sticky_aina_id is not None else "primary_aina",
-                    router_model_called=False,
-                    requested_capability=None,
-                    preferred_aina_id=None,
-                )
-                return await self._run_selected_aina(
-                    conversation=conversation,
-                    trace_id=trace_id,
-                    selected=deterministic_selected,
-                    memory_context=memory_context,
-                    event_sink=event_sink,
-                    direct=True,
-                )
-
-        if conversation.active_aina_ids:
-            active_ids = set(conversation.active_aina_ids)
-            aina_candidates = {
-                function_name: capability
-                for function_name, capability in all_capabilities.items()
-                if capability.kind == "aina" and capability.capability_id in active_ids
-            }
-        else:
-            aina_candidates = await self._available_aina_capabilities(conversation)
+        aina_candidates = {
+            function_name: capability
+            for function_name, capability in all_capabilities.items()
+            if capability.kind == "aina"
+        }
         if aina_candidates:
             route = await self._route_to_aina(
                 conversation=conversation,
@@ -547,10 +801,13 @@ class AgentRuntime:
                 event_sink=event_sink,
             )
             if route.capability is not None and route.assistant_message is not None:
-                conversation = await self.repository.bind_conversation_aina(
-                    conversation.id,
-                    route.capability.capability_id,
-                    mark_used=True,
+                conversation = _with_ui_context(
+                    await self.repository.bind_conversation_aina(
+                        conversation.id,
+                        route.capability.capability_id,
+                        mark_used=True,
+                    ),
+                    ui_context,
                 )
                 await self._record_scope_resolution(
                     trace_id,
@@ -680,42 +937,39 @@ class AgentRuntime:
                 target_type="aina",
                 details={
                     "candidate_count": len(candidates),
+                    "candidate_scope": "all_available",
+                    "active_aina_ids": conversation.active_aina_ids,
+                    "primary_aina_id": conversation.primary_aina_id,
+                    "last_aina_id": conversation.last_aina_id,
                     "candidates": [_capability_trace_details(item) for item in candidates.values()],
                 },
             ),
         )
         if event_sink is not None:
             await event_sink({"type": "routing.started", "candidate_count": len(candidates)})
-        route_context = ModelRunContext(
-            repository=self.repository,
-            trace_id=trace_id,
-            capabilities=candidates,
-            event_sink=None,
-            record_local_trace=False,
-        )
-        route_model = LangChainChatModel(
-            client=self.llm,
-            context=route_context,
-            default_model_name=self.settings.llm_model,
-        )
-        route_message = await route_model.bind_tools(
-            [item.llm_definition() for item in candidates.values()],
-            tool_choice="auto",
-        ).ainvoke(
-            [
+        result = await self.llm.complete(
+            messages=[
                 {
                     "role": "system",
                     "content": (
                         "You are the AINA routing stage for Unibot Assistant. Inspect the conversation and the "
                         "AINA descriptions exposed as functions. Call exactly one AINA only when the user's need "
                         "clearly matches its description. Otherwise respond with exactly NO_AINA_MATCH. Do not "
-                        "answer the user's question and do not call an AINA merely because it is available."
+                        "answer the user's question and do not call an AINA merely because it is available. "
+                        "Every available AINA is included. Previously active AINAs are conversation context, not "
+                        "a routing restriction or a reason to prefer them. Use the system assistant AINA whenever "
+                        "the request is about AINA applications themselves, including discovering, viewing, "
+                        "listing, selecting, or opening applications. The document AINA is only for document files, "
+                        "folders, chapters, and document edit tasks; never use it for application discovery or "
+                        "application navigation."
                     ),
                 },
                 *[message.provider_message() for message in conversation.messages],
-            ]
+            ],
+            tools=[item.llm_definition() for item in candidates.values()],
+            tool_choice="auto",
+            event_sink=None,
         )
-        result = ai_message_result(cast(AIMessage, route_message))
         selected: Capability | None = None
         assistant_message: dict[str, Any] | None = None
         for call in result.message.get("tool_calls") or []:
@@ -865,79 +1119,40 @@ class AgentRuntime:
                 },
             ),
         )
-        resolved_system_prompt = system_prompt or await self._system_prompt()
-        messages = convert_to_messages([message.provider_message() for message in conversation.messages])
+        messages = [
+            {"role": "system", "content": system_prompt or await self._system_prompt()},
+            *[message.provider_message() for message in conversation.messages],
+        ]
         persist_from = len(messages)
         if initial_assistant is not None:
-            messages.extend(convert_to_messages([initial_assistant]))
-        model_context = ModelRunContext(
-            repository=self.repository,
-            trace_id=trace_id,
-            capabilities=capabilities,
-            event_sink=event_sink,
-            iterations=initial_iterations,
-            usage_input=initial_usage_input,
-            usage_output=initial_usage_output,
-        )
-        loop_context = AgentLoopContext(
-            runtime=self,
-            model=model_context,
-            capabilities=capabilities,
-            forced_function=forced_function,
-            max_iterations=self.settings.max_agent_iterations,
-            initial_iterations=initial_iterations,
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            tenant_id=conversation.tenant_id,
-            approved_call_ids=approved_call_ids or set(),
-            call_counts={},
-            widgets=[],
-            tool_lock=asyncio.Lock(),
-        )
-        tools = [self._langchain_tool(capability) for capability in capabilities.values()]
+            messages.append(initial_assistant)
+        state: AgentState = {
+            "messages": messages,
+            "capabilities": capabilities,
+            "tool_definitions": [item.llm_definition() for item in capabilities.values()],
+            "trace_id": trace_id,
+            "conversation_id": conversation.id,
+            "user_id": conversation.user_id,
+            "tenant_id": conversation.tenant_id,
+            "iterations": initial_iterations,
+            "max_iterations": self.settings.max_agent_iterations,
+            "forced_function": forced_function,
+            "approved_call_ids": approved_call_ids or set(),
+            "resume": resume,
+            "event_sink": event_sink,
+            "usage_input": initial_usage_input,
+            "usage_output": initial_usage_output,
+            "call_counts": {},
+            "approval": None,
+            "widgets": [],
+        }
         try:
-            if resume:
-                await self._execute_pending_calls(messages, loop_context)
-            if loop_context.approval is None:
-                model = LangChainChatModel(
-                    client=self.llm,
-                    context=model_context,
-                    default_model_name=self.settings.llm_model,
-                )
-                agent = create_agent(
-                    model,
-                    tools,
-                    system_prompt=resolved_system_prompt,
-                    middleware=[UnibotAgentMiddleware()],
-                    context_schema=AgentLoopContext,
-                    name="unibot-agent",
-                )
-                agent_config: RunnableConfig = {
-                    "run_name": "unibot-agent-loop",
-                    "tags": ["unibot", "agent"],
-                    "metadata": {
-                        "conversation_id": conversation.id,
-                        "unibot_trace_id": trace_id,
-                        "tenant_id": conversation.tenant_id,
-                    },
-                    "recursion_limit": self.settings.max_agent_iterations * 5 + 10,
-                }
-                result = cast(
-                    dict[str, Any],
-                    await agent.ainvoke(
-                        cast(Any, {"messages": messages}),
-                        config=agent_config,
-                        context=loop_context,
-                    ),
-                )
-                result_messages = cast(list[BaseMessage], result["messages"])
-            else:
-                result_messages = messages
+            result = await self._graph.ainvoke(state)
         except PlatformError:
             await self.repository.finish_trace(trace_id, "failed")
             raise
-        new_messages = [_provider_message(message) for message in result_messages[persist_from:]]
-        widgets = loop_context.widgets
+        new_messages = result["messages"][persist_from:]
+        widgets = result.get("widgets", [])
         if widgets:
             for message in reversed(new_messages):
                 if message.get("role") == "assistant" and not message.get("tool_calls"):
@@ -948,30 +1163,21 @@ class AgentRuntime:
             new_messages,
             trace_id=trace_id,
         )
-        status = loop_context.final_status
+        status = result.get("final_status", "failed")
         last_assistant = next((item for item in reversed(appended) if item.role == "assistant"), None)
-        final_ai_message = next(
-            (message for message in reversed(result_messages) if isinstance(message, AIMessage)),
-            None,
-        )
-        final_content = loop_context.final_content or (final_ai_message.text if final_ai_message else "")
-        if model_context.empty_response:
-            status = "failed"
-        if not final_content:
-            final_content = "The agent stopped without a final response."
-            status = "failed"
+        final_content = result.get("final_content", "The agent stopped without a final response.")
         await self.repository.add_trace_event(
             trace_id,
             TraceEvent(
                 kind="final.response",
                 status=status,
                 details={
-                    "iterations": model_context.iterations,
+                    "iterations": result.get("iterations", 0),
                     "message_id": last_assistant.id if last_assistant else None,
                     "content": sanitize_trace_data(final_content),
                     "content_length": len(final_content),
-                    "input_tokens": model_context.usage_input,
-                    "output_tokens": model_context.usage_output,
+                    "input_tokens": result.get("usage_input", 0),
+                    "output_tokens": result.get("usage_output", 0),
                     "widgets": [{"id": widget.id, "kind": widget.kind} for widget in widgets],
                 },
             ),
@@ -983,296 +1189,14 @@ class AgentRuntime:
             content=final_content,
             status=status,
             trace_id=trace_id,
-            iterations=model_context.iterations,
+            iterations=result.get("iterations", 0),
             usage=Usage(
-                input_tokens=model_context.usage_input,
-                output_tokens=model_context.usage_output,
+                input_tokens=result.get("usage_input", 0),
+                output_tokens=result.get("usage_output", 0),
             ),
-            approval=loop_context.approval,
+            approval=result.get("approval"),
             widgets=widgets,
         )
-
-    def _langchain_tool(self, capability: Capability) -> CapabilityTool:
-        async def invoke(runtime: ToolRuntime[AgentLoopContext], **arguments: Any) -> str:
-            context = runtime.context
-            call_id = str(runtime.tool_call_id or f"call_{uuid4().hex}")
-            async with context.tool_lock:
-                invalid_arguments = context.model.invalid_tool_arguments.pop(call_id, None)
-                if invalid_arguments is not None:
-                    return await self._capability_error(
-                        context,
-                        capability,
-                        call_id=call_id,
-                        code="INVALID_REQUEST",
-                        message=invalid_arguments,
-                    )
-                normalized_arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-                signature = hashlib.sha256(
-                    f"{capability.function_name}:{normalized_arguments}".encode()
-                ).hexdigest()
-                context.call_counts[signature] = context.call_counts.get(signature, 0) + 1
-                if context.call_counts[signature] > 1:
-                    return await self._capability_error(
-                        context,
-                        capability,
-                        call_id=call_id,
-                        code="CONFLICT",
-                        message="The same capability call already completed in this run.",
-                    )
-                return await self._execute_capability(
-                    context,
-                    capability,
-                    call_id=call_id,
-                    arguments=arguments,
-                )
-
-        return CapabilityTool(
-            coroutine=invoke,
-            name=capability.function_name,
-            description=capability.description,
-            args_schema={"type": "object", "additionalProperties": True},
-            advertised_schema=capability.input_schema,
-        )
-
-    async def _execute_pending_calls(
-        self,
-        messages: list[BaseMessage],
-        context: AgentLoopContext,
-    ) -> None:
-        assistant = next(
-            (message for message in reversed(messages) if isinstance(message, AIMessage) and message.tool_calls),
-            None,
-        )
-        if assistant is None:
-            raise PlatformError("INTERNAL_ERROR", "No assistant tool-call message is available", status_code=500)
-        tool_calls = [_langchain_tool_call_wire(call) for call in assistant.tool_calls]
-        risky_calls = []
-        risky_names = []
-        for call in tool_calls:
-            capability = context.capabilities.get((call.get("function") or {}).get("name", ""))
-            if capability and capability.requires_confirmation and call.get("id") not in context.approved_call_ids:
-                risky_calls.append(call)
-                risky_names.append(capability.display_name)
-        if risky_calls:
-            approval = ApprovalRecord(
-                id=f"approval_{uuid4().hex}",
-                conversation_id=context.conversation_id,
-                user_id=context.user_id,
-                tenant_id=context.tenant_id,
-                trace_id=context.model.trace_id,
-                tool_calls=tool_calls,
-                capability_names=risky_names,
-            )
-            await self.repository.create_approval(approval)
-            await self.repository.add_trace_event(
-                context.model.trace_id,
-                TraceEvent(
-                    kind="approval.required",
-                    status="pending",
-                    target_type="capability",
-                    details={
-                        "approval_id": approval.id,
-                        "capabilities": risky_names,
-                        "calls": [_tool_call_trace_details(call, context.capabilities) for call in risky_calls],
-                    },
-                ),
-            )
-            context.approval = approval
-            context.final_status = "approval_required"
-            context.final_content = f"Approval is required before running: {', '.join(risky_names)}."
-            return
-
-        for call in tool_calls:
-            function = call.get("function") or {}
-            name = str(function.get("name") or "")
-            call_id = str(call.get("id") or f"call_{uuid4().hex}")
-            capability = context.capabilities.get(name)
-            if capability is None:
-                content = await self._capability_error(
-                    context,
-                    None,
-                    call_id=call_id,
-                    code="RESOURCE_NOT_FOUND",
-                    message=f"Capability {name!r} is unavailable.",
-                    function_name=name,
-                )
-            else:
-                raw_arguments = function.get("arguments") or "{}"
-                try:
-                    arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                    if not isinstance(arguments, dict):
-                        raise ValueError("arguments must decode to an object")
-                except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                    content = await self._capability_error(
-                        context,
-                        capability,
-                        call_id=call_id,
-                        code="INVALID_REQUEST",
-                        message=f"Invalid JSON arguments: {exc}",
-                    )
-                else:
-                    content = await self._execute_capability(
-                        context,
-                        capability,
-                        call_id=call_id,
-                        arguments=arguments,
-                    )
-            messages.append(ToolMessage(content=content, tool_call_id=call_id, name=name))
-
-    async def _execute_capability(
-        self,
-        context: AgentLoopContext,
-        capability: Capability,
-        *,
-        call_id: str,
-        arguments: dict[str, Any],
-    ) -> str:
-        await self.repository.add_trace_event(
-            context.model.trace_id,
-            TraceEvent(
-                kind=f"{capability.kind}.requested",
-                status="started",
-                target_type=capability.kind,
-                target_id=capability.capability_id,
-                details={
-                    "call_id": call_id,
-                    "function_name": capability.function_name,
-                    "argument_fields": sorted(arguments),
-                    "arguments": sanitize_trace_data(arguments),
-                },
-            ),
-        )
-        if context.model.event_sink is not None:
-            await context.model.event_sink(
-                {"type": "tool.requested", "kind": capability.kind, "id": capability.capability_id}
-            )
-        try:
-            started = perf_counter()
-            widgets_before = len(context.widgets)
-            if capability.kind == "tool":
-                tool = cast(ToolRecord, capability.value)
-                result_payload, duration_ms = await self.gateway.invoke_tool(
-                    tool,
-                    arguments=arguments,
-                    call_id=call_id,
-                    user_id=context.user_id,
-                    tenant_id=context.tenant_id,
-                    conversation_id=context.conversation_id,
-                    trace_id=context.model.trace_id,
-                )
-            elif capability.kind == "aina":
-                aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-                response, duration_ms = await self.gateway.invoke_aina(
-                    aina.manifest,
-                    installation,
-                    arguments=arguments,
-                    call_id=call_id,
-                    conversation_id=context.conversation_id,
-                    trace_id=context.model.trace_id,
-                    available_tools=[
-                        item.capability_id for item in context.capabilities.values() if item.kind == "tool"
-                    ],
-                )
-                result_payload = response.model_dump(mode="json")
-                for output in response.outputs:
-                    if output.type == "widget":
-                        try:
-                            context.widgets.append(WidgetDefinition.model_validate(output.content))
-                        except ValueError as exc:
-                            raise PlatformError(
-                                "DEPENDENCY_FAILED",
-                                "AINA returned an invalid widget output",
-                                status_code=502,
-                                source="aina",
-                            ) from exc
-            else:
-                result_payload, produced_widgets = await invoke_builtin(
-                    self.repository,
-                    cast(str, capability.value),
-                    arguments,
-                    user_id=context.user_id,
-                    tenant_id=context.tenant_id,
-                    conversation_id=context.conversation_id,
-                    document_service=self.document_service,
-                )
-                context.widgets.extend(produced_widgets)
-                duration_ms = (perf_counter() - started) * 1000
-            content = json.dumps(result_payload, ensure_ascii=False, default=str)
-            result_size_bytes = len(content.encode("utf-8"))
-            if len(content) > 50_000:
-                content = f"{content[:50_000]}\n[tool output truncated]"
-            await self.repository.add_trace_event(
-                context.model.trace_id,
-                TraceEvent(
-                    kind=f"{capability.kind}.completed",
-                    status="completed",
-                    target_type=capability.kind,
-                    target_id=capability.capability_id,
-                    duration_ms=duration_ms,
-                    details={
-                        "call_id": call_id,
-                        "function_name": capability.function_name,
-                        "result": sanitize_trace_data(result_payload),
-                        "result_size_bytes": result_size_bytes,
-                        "widgets": [
-                            {"id": widget.id, "kind": widget.kind}
-                            for widget in context.widgets[widgets_before:]
-                        ],
-                    },
-                ),
-            )
-            if context.model.event_sink is not None:
-                await context.model.event_sink(
-                    {"type": "tool.completed", "kind": capability.kind, "id": capability.capability_id}
-                )
-            return content
-        except PlatformError as exc:
-            return await self._capability_error(
-                context,
-                capability,
-                call_id=call_id,
-                code=exc.code,
-                message=exc.message,
-            )
-
-    async def _capability_error(
-        self,
-        context: AgentLoopContext,
-        capability: Capability | None,
-        *,
-        call_id: str,
-        code: str,
-        message: str,
-        function_name: str | None = None,
-    ) -> str:
-        name = function_name or (capability.function_name if capability else "unknown")
-        payload = {
-            "error": {
-                "code": code,
-                "message": message,
-                "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
-            },
-            "instruction": "The capability did not complete. Do not claim success; retry or report the failure.",
-        }
-        await self.repository.add_trace_event(
-            context.model.trace_id,
-            TraceEvent(
-                kind=f"{capability.kind if capability else 'tool'}.failed",
-                status="failed",
-                target_type=capability.kind if capability else "capability",
-                target_id=capability.capability_id if capability else name,
-                details={
-                    "call_id": call_id,
-                    "function_name": name,
-                    "code": code,
-                    "message": sanitize_trace_data(message),
-                    "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
-                },
-            ),
-        )
-        if context.model.event_sink is not None:
-            await context.model.event_sink({"type": "error", "code": code, "source": "capability"})
-        return json.dumps(payload, ensure_ascii=False)
 
     async def _trace_aina_graph(
         self,
@@ -1335,7 +1259,7 @@ class AgentRuntime:
                     "version": manifest.aina.version,
                     "runtime": manifest.runtime.type,
                     "availability": reason,
-                    "routing_candidate": manifest.runtime.type == "remote",
+                    "routing_candidate": entrypoint is not None,
                     "entrypoint": _capability_trace_details(entrypoint) if entrypoint else None,
                     "capabilities": {
                         "skills": [
@@ -1490,7 +1414,13 @@ class AgentRuntime:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "aina_id": {"type": "string", "description": "The exact AINA identifier to open."}
+                    "aina_id": {
+                        "type": "string",
+                        "description": (
+                            "The exact AINA identifier to open. Use unibot-documents for the document "
+                            "application or document editor."
+                        ),
+                    }
                 },
                 "required": ["aina_id"],
                 "additionalProperties": False,
@@ -1595,14 +1525,16 @@ class AgentRuntime:
                 value=(aina, installation),
                 owner_aina_id=installation.aina_id,
             )
-        capabilities.update(await self._document_aina_capability(conversation))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_ASSISTANT_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_MEMORY_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_SCHEDULER_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_DOCUMENTS_ID))
         return capabilities
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         return {
             **await self._fallback_capabilities(),
             **await self._available_aina_capabilities(conversation),
-            **await self._memory_aina_capability(conversation),
         }
 
     async def _fallback_capabilities(self) -> dict[str, Capability]:
@@ -1613,101 +1545,58 @@ class AgentRuntime:
             **self._document_capabilities(),
         }
 
-    async def _document_aina_capability(self, conversation: Conversation) -> dict[str, Capability]:
-        if self.document_service is None:
+    async def _builtin_aina_capability(
+        self,
+        conversation: Conversation,
+        aina_id: str,
+    ) -> dict[str, Capability]:
+        if aina_id == UNIBOT_DOCUMENTS_ID and self.document_service is None:
             return {}
         try:
-            document_aina = await self.repository.get_aina(UNIBOT_DOCUMENTS_ID)
+            aina = await self.repository.get_aina(aina_id)
         except PlatformError:
             return {}
-        if document_aina.status != "registered":
+        if aina.status != "registered" or aina.manifest.runtime.type != "builtin":
             return {}
         installation = AinaInstallation(
             user_id=conversation.user_id,
             tenant_id=conversation.tenant_id,
-            aina_id=UNIBOT_DOCUMENTS_ID,
-            installed_version=document_aina.manifest.aina.version,
+            aina_id=aina_id,
+            installed_version=aina.manifest.aina.version,
         )
-        function_name = _function_name("aina", UNIBOT_DOCUMENTS_ID)
+        function_name = _function_name("aina", aina_id)
         capability_descriptions = [
             item.description
             for item in [
-                *document_aina.manifest.capabilities.skills,
-                *document_aina.manifest.capabilities.tools,
+                *aina.manifest.capabilities.skills,
+                *aina.manifest.capabilities.tools,
+                *aina.manifest.capabilities.ui,
             ]
         ]
+        description = aina.manifest.aina.description
+        if capability_descriptions:
+            description = f"{description}. Capabilities: {'; '.join(capability_descriptions)}"
         return {
             function_name: Capability(
                 kind="aina",
-                capability_id=UNIBOT_DOCUMENTS_ID,
+                capability_id=aina_id,
                 function_name=function_name,
-                display_name=document_aina.manifest.aina.name,
-                description=(
-                    f"{document_aina.manifest.aina.description}. "
-                    f"Capabilities: {'; '.join(capability_descriptions)}"
-                ),
+                display_name=aina.manifest.aina.name,
+                description=description,
                 input_schema={
                     "type": "object",
                     "properties": {
                         "input": {
                             "type": "string",
-                            "description": "The user's Markdown document request.",
+                            "description": "The user request or task for the AINA.",
                         }
                     },
                     "required": ["input"],
                     "additionalProperties": False,
                 },
                 requires_confirmation=False,
-                value=(document_aina, installation),
-                owner_aina_id=UNIBOT_DOCUMENTS_ID,
-            )
-        }
-
-    async def _memory_aina_capability(self, conversation: Conversation) -> dict[str, Capability]:
-        try:
-            memory_aina = await self.repository.get_aina(UNIBOT_MEMORY_ID)
-        except PlatformError:
-            return {}
-        if memory_aina.status != "registered":
-            return {}
-        installation = AinaInstallation(
-            user_id=conversation.user_id,
-            tenant_id=conversation.tenant_id,
-            aina_id=UNIBOT_MEMORY_ID,
-            installed_version=memory_aina.manifest.aina.version,
-        )
-        function_name = _function_name("aina", UNIBOT_MEMORY_ID)
-        capability_descriptions = [
-            item.description
-            for item in [
-                *memory_aina.manifest.capabilities.skills,
-                *memory_aina.manifest.capabilities.tools,
-            ]
-        ]
-        return {
-            function_name: Capability(
-                kind="aina",
-                capability_id=UNIBOT_MEMORY_ID,
-                function_name=function_name,
-                display_name=memory_aina.manifest.aina.name,
-                description=(
-                    f"{memory_aina.manifest.aina.description}. "
-                    f"Capabilities: {'; '.join(capability_descriptions)}"
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "input": {
-                            "type": "string",
-                            "description": "The user's memory request.",
-                        }
-                    },
-                    "required": ["input"],
-                    "additionalProperties": False,
-                },
-                requires_confirmation=False,
-                value=(memory_aina, installation),
-                owner_aina_id=UNIBOT_MEMORY_ID,
+                value=(aina, installation),
+                owner_aina_id=aina_id,
             )
         }
 
@@ -1719,6 +1608,8 @@ class AgentRuntime:
         if selected.kind != "aina":
             raise PlatformError("INVALID_REQUEST", "The selected capability is not an AINA")
         aina, _installation = cast(tuple[AinaRecord, AinaInstallation], selected.value)
+        if aina.manifest.aina.id == UNIBOT_ASSISTANT_ID:
+            return await self._system_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
             return self._memory_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
@@ -1841,7 +1732,11 @@ class AgentRuntime:
                 display_name=tool.name,
                 description=tool.description,
                 input_schema=tool.input_schema,
-                requires_confirmation=tool.id == DELETE_DOCUMENT_TOOL_ID,
+                requires_confirmation=tool.id in {
+                    DELETE_DOCUMENT_TOOL_ID,
+                    MERGE_EDIT_SECTION_TOOL_ID,
+                    ABANDON_EDIT_SECTION_TOOL_ID,
+                },
                 value=tool.id,
                 owner_aina_id=UNIBOT_DOCUMENTS_ID,
             )
@@ -1977,27 +1872,6 @@ def _tool_call_trace_details(
     }
 
 
-def _langchain_tool_call_wire(call: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "id": str(call.get("id") or f"call_{uuid4().hex}"),
-        "type": "function",
-        "function": {
-            "name": str(call.get("name") or ""),
-            "arguments": json.dumps(call.get("args") or {}, ensure_ascii=False),
-        },
-    }
-
-
-def _provider_message(message: BaseMessage) -> dict[str, Any]:
-    value = convert_to_openai_messages(message)
-    if not isinstance(value, dict):
-        raise TypeError("Expected one provider message")
-    value.pop("id", None)
-    if value.get("content") is None:
-        value["content"] = ""
-    return value
-
-
 def _function_name(kind: str, capability_id: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", capability_id).strip("_") or "capability"
     digest = hashlib.sha1(f"{kind}:{capability_id}".encode()).hexdigest()[:8]
@@ -2040,46 +1914,16 @@ def _normalized_route_message(
     }
 
 
-def _obvious_builtin_capability(message: str) -> str | None:
-    normalized = " ".join(message.casefold().split())
-    chinese_list_request = any(marker in normalized for marker in ("列出应用", "应用列表", "有哪些应用"))
-    chinese_aina_request = "aina" in normalized and any(marker in normalized for marker in ("列出", "列表", "有哪些"))
-    english_request = re.search(r"\b(list|show)\s+(all\s+)?(apps|applications|ainas)\b", normalized)
-    if chinese_list_request or chinese_aina_request or english_request:
-        return f"builtin:{LIST_APP_TOOL_ID}"
-    memory_request = any(
-        marker in normalized
-        for marker in (
-            "记住",
-            "记得这",
-            "忘记",
-            "删除记忆",
-            "你记得什么",
-            "你还记得",
-            "what do you remember",
-            "remember that",
-            "please remember",
-            "forget that",
-        )
-    )
-    if memory_request:
-        return f"aina:{UNIBOT_MEMORY_ID}"
-    return None
-
-
-def _looks_like_follow_up(message: str) -> bool:
-    normalized = " ".join(message.casefold().split())
-    if len(normalized) > 80:
-        return False
-    if any(
-        marker in normalized
-        for marker in ("继续", "再来", "再改", "改成", "这个", "那个", "上一", "刚才", "同样", "好的")
-    ):
-        return True
-    return re.search(
-        r"^(continue|again|do the same|make it|change it|update it|that|this|yes|ok|okay)\b",
-        normalized,
-    ) is not None
+def _with_ui_context(conversation: Conversation, ui_context: str | None) -> Conversation:
+    if not ui_context or not conversation.messages:
+        return conversation
+    messages = list(conversation.messages)
+    latest = messages[-1]
+    context_block = f"<ui_context>\n{ui_context}\n</ui_context>"
+    if context_block in latest.content:
+        return conversation
+    messages[-1] = latest.model_copy(update={"content": f"{latest.content}\n\n{context_block}"})
+    return conversation.model_copy(update={"messages": messages})
 
 
 def _memory_context_block(memories: list[MemoryRecord]) -> str:

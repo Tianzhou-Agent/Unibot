@@ -112,13 +112,6 @@ base_url=https://your-openai-compatible-api.example/v1
 api_key=your-api-key
 model=your-model
 
-# Optional LangSmith observability (disabled by default)
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=your-langsmith-api-key
-LANGSMITH_PROJECT=unibot
-# LANGSMITH_ENDPOINT=https://api.smith.langchain.com
-# LANGSMITH_TRACING_SAMPLING_RATE=1.0
-
 TZ_STORAGE_MYSQL_DSN=mysql+aiomysql://unibot:unibot@127.0.0.1:13306/unibot
 TZ_STORAGE_REDIS_DSN=redis://127.0.0.1:16379/0
 TZ_STORAGE_NAS_ROOT_PATH=../data/nas
@@ -128,7 +121,7 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 
 当前后端不依赖前端即可运行，包含：
 
-- `POST /chat`：基于 LangChain/LangGraph 的多轮 Agent Loop；
+- `POST /chat`：多轮 Agent Loop；
 - `POST /chat/stream`：SSE 文本与运行事件流；
 - `/conversations`：会话创建、读取、重命名、软删除和恢复；
 - 会话支持分类筛选与可恢复的 `run_status`，SSE 断开不会取消后台 Agent 运行；
@@ -139,10 +132,10 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - 内置 `request_clarification`：需求模糊时生成宿主 Form Widget，支持模型预填和用户提交；
 - 内置 `unibot-memory`：通过对话或 Memory Widget 管理事实、偏好、目标和指令，并向相关后续对话注入安全围栏内的记忆；
 - `/memories`：记忆新增、搜索、筛选、修改、删除与分类统计；
-- 内置 `unibot-documents`：通过对话创建、读取、编辑、追加、重命名和删除 Markdown 文档，删除操作需要确认；
-- `/documents`：Markdown 文档列表与 CRUD，文件按租户和用户隔离并持久化到 `data/nas/documents/`；
+- 内置 `unibot-documents`：通过对话创建、读取、按章节编辑、追加、重命名和删除 Markdown 文档，也可创建异步修改任务并在检视草稿后合并；不提供全文覆盖能力；
+- `/documents`：Markdown 文档列表、章节更新与文件管理，文件按租户和用户隔离并持久化到 `data/nas/documents/`；
 - `/approvals/{id}/confirm|deny`：高风险调用确认；
-- `/traces`、`/admin/summary`：本地运行状态和基础管理数据；启用 LangSmith 后会额外上报模型、工具与 Agent 调用链。
+- `/traces`、`/admin/summary`：调用链和基础管理数据。
 
 最小对话请求：
 
@@ -209,7 +202,7 @@ uv run --extra dev deepeval test run tests/evals -v
 | ----------- | --------------------------------------------------------------------- |
 | **unibot-assistant** | 系统调度 AINA，负责应用发现、分层路由和打开 Canvas           |
 | **unibot-memory**  | 管理事实、偏好、目标与指令，按需检索注入，使 Agent 具备进程生命周期内的跨会话认知能力 |
-| **unibot-documents** | NAS 持久化 Markdown 文档编辑器，支持对话工具与 Canvas 在线编辑、预览和文件管理 |
+| **unibot-documents** | NAS 持久化 Markdown 文档编辑器，支持章节编辑与任务草稿两种模式，并可在对话和 Canvas 中使用 |
 | **builder** | 提供 AINA 的创建、调试、发布能力，管理员按步骤构建新 AINA             |
 
 ## License

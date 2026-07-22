@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 
 from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.scheduler import AinaScheduler
 from tianzhou_agent_platform.api.errors import install_exception_handlers
@@ -57,6 +58,12 @@ def create_app(
         DocumentService(storage_stores.nas) if storage_stores is not None else None
     )
     resolved_llm = llm or OpenAICompatibleClient(resolved_settings)
+    document_edit_task_service = (
+        DocumentEditTaskService(resolved_document_service, resolved_repository, resolved_llm)
+        if resolved_document_service is not None
+        else None
+    )
+    document_edit_worker = DocumentEditWorker(document_edit_task_service) if document_edit_task_service else None
     gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
@@ -74,16 +81,20 @@ def create_app(
             )
             scheduler_task = asyncio.create_task(scheduler.run())
             lifespan_app.state.background_tasks.add(scheduler_task)
+            if document_edit_worker is not None:
+                document_worker_task = asyncio.create_task(document_edit_worker.run())
+                lifespan_app.state.background_tasks.add(document_worker_task)
             yield
         finally:
             scheduler.stop()
+            if document_edit_worker is not None:
+                document_edit_worker.stop()
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
             await gateway.aclose()
             if model_health_http_client is None:
                 await health_client.aclose()
-            await lifespan_app.state.agent_runtime.aclose()
             close = getattr(resolved_llm, "aclose", None)
             if close is not None:
                 await close()
@@ -101,6 +112,8 @@ def create_app(
     app.state.capability_gateway = gateway
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
+    app.state.document_edit_task_service = document_edit_task_service
+    app.state.document_edit_worker = document_edit_worker
     app.state.storage_stores = storage_stores
     app.state.storage_status = None
     app.state.agent_runtime = AgentRuntime(
@@ -109,6 +122,7 @@ def create_app(
         llm=resolved_llm,
         gateway=gateway,
         document_service=resolved_document_service,
+        document_edit_task_service=document_edit_task_service,
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler

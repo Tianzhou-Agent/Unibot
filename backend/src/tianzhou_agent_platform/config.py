@@ -53,35 +53,6 @@ class AgentSettings(BaseSettings):
         le=32,
         validation_alias=AliasChoices("UNIBOT_MAX_AGENT_ITERATIONS", "max_agent_iterations"),
     )
-    langsmith_tracing: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("UNIBOT_LANGSMITH_TRACING", "LANGSMITH_TRACING"),
-    )
-    langsmith_api_key: SecretStr | None = Field(
-        default=None,
-        validation_alias=AliasChoices("UNIBOT_LANGSMITH_API_KEY", "LANGSMITH_API_KEY"),
-    )
-    langsmith_endpoint: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("UNIBOT_LANGSMITH_ENDPOINT", "LANGSMITH_ENDPOINT"),
-    )
-    langsmith_project: str = Field(
-        default="unibot",
-        validation_alias=AliasChoices("UNIBOT_LANGSMITH_PROJECT", "LANGSMITH_PROJECT"),
-    )
-    langsmith_workspace_id: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("UNIBOT_LANGSMITH_WORKSPACE_ID", "LANGSMITH_WORKSPACE_ID"),
-    )
-    langsmith_sampling_rate: float = Field(
-        default=1.0,
-        ge=0,
-        le=1,
-        validation_alias=AliasChoices(
-            "UNIBOT_LANGSMITH_SAMPLING_RATE",
-            "LANGSMITH_TRACING_SAMPLING_RATE",
-        ),
-    )
     node_id: str = Field(
         default_factory=socket.gethostname,
         validation_alias=AliasChoices("UNIBOT_NODE_ID", "node_id"),

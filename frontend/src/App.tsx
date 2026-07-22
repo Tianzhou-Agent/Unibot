@@ -5,6 +5,7 @@ import CanvasModePage from "@/pages/CanvasModePage";
 import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
+import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/debug" element={<DebugPage />} />
         <Route path="/apps" element={<AllAppsPage />} />
+        <Route path="/schedules" element={<ScheduledAinaPage />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>
     </Routes>

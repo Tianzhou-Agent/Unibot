@@ -6,12 +6,12 @@ import {
   Check,
   Pencil,
   RotateCcw,
-  ShieldAlert,
   Trash2,
   Wrench,
   X,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -183,6 +183,13 @@ export default function ChatModePage() {
         });
       }
       notifyConversationsChanged();
+      const openAction = completed.widgets
+        .flatMap((widget) => widget.actions)
+        .find((action) => action.kind === "open_aina" && action.aina_id);
+      if (openAction?.aina_id) {
+        await openAina(openAction.aina_id, completed.conversation_id);
+        return;
+      }
       if (conversationId !== completed.conversation_id) {
         navigate(`/chat/${completed.conversation_id}`, { replace: true });
       }
@@ -270,12 +277,12 @@ export default function ChatModePage() {
     }
   }
 
-  async function openAina(ainaId: string) {
+  async function openAina(ainaId: string, targetConversationId = conversation?.id) {
     setError(null);
     try {
       const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...ACTOR,
-        conversation_id: conversation?.id,
+        conversation_id: targetConversationId,
       });
       navigate(canvas.route, { state: { canvas } });
     } catch (openError) {
@@ -493,7 +500,7 @@ function ToolCallMessage({ message }: { message: BackendMessage }) {
 }
 
 function ToolResultMessage({ message }: { message: BackendMessage }) {
-  const isError = message.content.includes('"error"');
+  const isError = toolResultIsError(message.content);
   return (
     <details className="rounded-lg border border-line bg-white px-3.5 py-2.5">
       <summary className="cursor-pointer text-[12px] font-bold text-ink-muted">
@@ -506,62 +513,21 @@ function ToolResultMessage({ message }: { message: BackendMessage }) {
   );
 }
 
+function toolResultIsError(content: string): boolean {
+  try {
+    const payload: unknown = JSON.parse(content);
+    return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "error");
+  } catch {
+    return false;
+  }
+}
+
 function ActivityBubble({ text }: { text: string }) {
   return (
     <div className="rounded-lg border border-accent-ring bg-accent-soft h-11 px-3.5 flex items-center gap-2.5">
       <span className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
       <span className="text-accent-hover text-[12.5px] font-semibold">{text}</span>
     </div>
-  );
-}
-
-function ApprovalCard({
-  approval,
-  disabled,
-  debugMode,
-  onConfirm,
-  onDeny,
-}: {
-  approval: ApprovalRecord;
-  disabled: boolean;
-  debugMode: boolean;
-  onConfirm: () => void;
-  onDeny: () => void;
-}) {
-  return (
-    <section className="rounded-xl border border-warning-ring bg-warning-soft p-4" aria-label="授权确认">
-      <div className="flex items-start gap-3">
-        <div className="w-9 h-9 rounded-lg bg-warning/15 text-warning flex items-center justify-center">
-          <ShieldAlert className="w-5 h-5" />
-        </div>
-        <div className="flex-1">
-          <h2 className="text-[14px] font-extrabold text-warning-deep">高风险操作需要确认</h2>
-          <p className="mt-1 text-[12.5px] text-warning-deep/80">
-            智能体准备运行：{approval.capability_names.join("、")}。请核对参数后决定是否继续。
-          </p>
-          {debugMode ? (
-            <div className="mt-3 space-y-2">
-              {approval.tool_calls.map((call) => (
-                <pre
-                  key={call.id}
-                  className="rounded-lg border border-warning-ring bg-white p-2.5 text-[10.5px] text-ink whitespace-pre-wrap break-all"
-                >
-                  {call.function.name}\n{formatJson(call.function.arguments)}
-                </pre>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-3 flex items-center gap-2">
-            <button type="button" disabled={disabled} onClick={onConfirm} className="btn-primary">
-              确认并执行
-            </button>
-            <button type="button" disabled={disabled} onClick={onDeny} className="btn-outline">
-              拒绝
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }
 

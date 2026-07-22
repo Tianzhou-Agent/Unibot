@@ -376,7 +376,8 @@ function AinaGrid({
               </button>
               {builtin ? (
                 <button type="button" onClick={() => onOpen(record)} className="btn-primary">
-                  <ExternalLink className="w-4 h-4" />打开画布
+                  <ExternalLink className="w-4 h-4" />
+                  {manifest.aina.id === "unibot-scheduler" ? "管理任务" : "打开画布"}
                 </button>
               ) : installed ? (
                 <>
