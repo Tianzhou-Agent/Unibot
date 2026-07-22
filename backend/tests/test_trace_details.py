@@ -14,7 +14,9 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
         llm_api_key=SecretStr("test-key"),
         llm_model="test-model",
     )
-    with TestClient(create_app(settings=settings, llm=ScriptedLLM([assistant("Hello.")]))) as client:
+    with TestClient(
+        create_app(settings=settings, llm=ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("Hello.")]))
+    ) as client:
         response = client.post("/chat", json={"message": "Hello"})
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 

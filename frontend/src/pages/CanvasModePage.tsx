@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowUp, Bot, Loader2, MessageSquareText, PanelRightOpen, Wrench } from "lucide-react";
+import { ArrowLeft, ArrowUp, Bot, Loader2, MessageSquareText, PanelRightOpen, Sparkles, Wrench } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
+import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { classNames, uid } from "@/lib/utils";
-import type { AinaCanvasResponse, BackendMessage, ChatResponse, ConversationRecord } from "@/types";
+import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext } from "@/types";
 
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 
@@ -31,15 +32,21 @@ export default function CanvasModePage() {
   const [streamText, setStreamText] = useState("");
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [recoveringRun, setRecoveringRun] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
+  const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const localRunRef = useRef(false);
 
   const loadConversation = useCallback(async (id: string) => {
-    const record = await api.get<ConversationRecord>(`/conversations/${id}`);
+    const [record, pendingApprovals] = await Promise.all([
+      api.get<ConversationRecord>(`/conversations/${id}`),
+      api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
+    ]);
     setMessages(record.messages);
+    setApproval(pendingApprovals[0] ?? null);
     if (!localRunRef.current) {
       const running = record.run_status === "running";
       setRecoveringRun(running);
@@ -98,7 +105,7 @@ export default function CanvasModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [messages, streamText, activity, sending]);
+  }, [messages, streamText, activity, approval, sending]);
 
   async function sendMessage(text: string) {
     const prompt = text.trim();
@@ -117,6 +124,7 @@ export default function CanvasModePage() {
     setStreamText("");
     setActivity(debugMode ? "正在连接 AINA…" : "正在处理，请稍候…");
     setError(null);
+    setApproval(null);
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
     try {
@@ -140,6 +148,8 @@ export default function CanvasModePage() {
         {
           message: prompt,
           conversation_id: targetConversationId,
+          preferred_aina_id: ainaId,
+          ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
           ...ACTOR,
         },
         (event: StreamEvent) => {
@@ -147,6 +157,7 @@ export default function CanvasModePage() {
           if (event.type === "tool.requested") setActivity(debugMode ? `正在调用 ${event.id}…` : "正在处理，请稍候…");
           if (event.type === "tool.completed") setActivity(debugMode ? "调用完成，正在整理结果…" : "正在整理结果…");
           if (event.type === "routing.started") setActivity(debugMode ? "正在匹配 AINA…" : "正在处理，请稍候…");
+          if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
             streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
             setError(streamFailure);
@@ -157,8 +168,16 @@ export default function CanvasModePage() {
       if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
       const completed = completion as ChatResponse;
       setLastRun(completed);
+      setApproval(completed.approval ?? null);
       setConversationId(completed.conversation_id);
       await loadConversation(completed.conversation_id);
+      const openAction = completed.widgets
+        .flatMap((widget) => widget.actions)
+        .find((action) => action.kind === "open_aina" && action.aina_id);
+      if (openAction?.aina_id) {
+        await openAina(openAction.aina_id, completed.conversation_id);
+        return;
+      }
       navigate(`/canvas/${ainaId}?conversation=${completed.conversation_id}`, {
         replace: true,
         state: canvas ? { canvas: { ...canvas, conversation_id: completed.conversation_id } } : undefined,
@@ -174,11 +193,33 @@ export default function CanvasModePage() {
     }
   }
 
-  async function openAina(targetAinaId: string) {
+  async function resolveApproval(action: "confirm" | "deny") {
+    if (!approval) return;
+    setSending(true);
+    setError(null);
+    setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
+    try {
+      if (action === "confirm") {
+        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, ACTOR);
+        setLastRun(response);
+      } else {
+        await api.post(`/approvals/${approval.id}/deny`, ACTOR);
+      }
+      setApproval(null);
+      await loadConversation(approval.conversation_id);
+    } catch (approvalError) {
+      setError(apiErrorMessage(approvalError));
+    } finally {
+      setSending(false);
+      setActivity(null);
+    }
+  }
+
+  async function openAina(targetAinaId: string, targetConversationId = conversationId) {
     try {
       const opened = await api.post<AinaCanvasResponse>(`/ainas/${targetAinaId}/open`, {
         ...ACTOR,
-        conversation_id: conversationId,
+        conversation_id: targetConversationId,
       });
       navigate(opened.route, { state: { canvas: opened } });
     } catch (openError) {
@@ -236,7 +277,12 @@ export default function CanvasModePage() {
       <div className="min-h-0 flex-1">
         {loading ? <CanvasSkeleton /> : null}
         {!loading && canvas ? (
-          <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
+          <div className={classNames(
+            "grid h-full min-h-0 grid-cols-1",
+            ainaId === "unibot-documents"
+              ? "lg:grid-cols-[minmax(250px,300px)_minmax(0,1fr)]"
+              : "lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]",
+          )}>
             <section className={classNames(
               "min-h-0 flex-col overflow-hidden bg-white lg:flex lg:border-r lg:border-line",
               mobilePane === "chat" ? "flex" : "hidden",
@@ -285,10 +331,19 @@ export default function CanvasModePage() {
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />{activity}
                   </div>
                 ) : null}
+                {approval ? (
+                  <ApprovalCard
+                    approval={approval}
+                    disabled={sending}
+                    debugMode={debugMode}
+                    onConfirm={() => void resolveApproval("confirm")}
+                    onDeny={() => void resolveApproval("deny")}
+                  />
+                ) : null}
                 {error ? <p className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">{error}</p> : null}
                 <div ref={endRef} />
               </div>
-              <CanvasComposer disabled={sending} onSend={(text) => void sendMessage(text)} />
+              <CanvasComposer disabled={sending} context={documentTaskContext} onSend={(text) => void sendMessage(text)} />
             </section>
 
             <section className={classNames(
@@ -297,12 +352,14 @@ export default function CanvasModePage() {
             )}>
               <div className="min-h-0 flex-1 overflow-hidden">
                 <MainWidgetRenderer
-                  key={`${canvas.main_widget.id}:${lastRun?.trace_id ?? "initial"}`}
+                  key={canvas.main_widget.id}
                   ainaId={canvas.aina_id}
                   widget={canvas.main_widget}
-                  disabled={sending}
+                  disabled={false}
+                  refreshToken={lastRun?.trace_id}
                   onOpenAina={(id) => void openAina(id)}
                   onPrompt={(prompt) => void sendMessage(prompt)}
+                  onDocumentTaskContextChange={setDocumentTaskContext}
                 />
               </div>
               {debugMode && lastRun ? (
@@ -362,7 +419,11 @@ function CanvasMessage({
   );
 }
 
-function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text: string) => void }) {
+function CanvasComposer({ disabled, context, onSend }: {
+  disabled: boolean;
+  context: DocumentTaskContext | null;
+  onSend: (text: string) => void;
+}) {
   const [text, setText] = useState("");
 
   function submit(event: FormEvent) {
@@ -376,6 +437,10 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
   return (
     <form onSubmit={submit} className="border-t border-line bg-white p-3">
       <div className="rounded-xl border border-line-strong p-2 focus-within:border-accent">
+        {context ? <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[9.5px] text-accent">
+          <Sparkles className="h-3 w-3 shrink-0" />
+          <span className="truncate">对话上下文：{context.taskTitle} / {context.sectionHeading}</span>
+        </div> : null}
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -387,7 +452,7 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
           }}
           disabled={disabled}
           rows={2}
-          placeholder="向当前 AINA 描述需求"
+          placeholder={context ? "描述希望 AI 如何继续修改当前章节" : "向当前 AINA 描述需求"}
           aria-label="画布消息"
           className="w-full resize-none bg-transparent px-1 text-[12.5px] outline-none placeholder:text-ink-muted"
         />
@@ -407,6 +472,20 @@ function CanvasComposer({ disabled, onSend }: { disabled: boolean; onSend: (text
       </div>
     </form>
   );
+}
+
+function documentTaskUiContext(context: DocumentTaskContext): string {
+  return [
+    "用户正在文档编辑器中检视一个章节草稿。用户提到“当前任务”或“当前章节”时，请使用以下精确上下文：",
+    `文档：${context.documentName}`,
+    `任务标题：${context.taskTitle}`,
+    `任务 ID：${context.taskId}`,
+    `任务状态：${context.taskStatus}`,
+    `章节：${context.sectionHeading}`,
+    `章节 ID：${context.sectionId}`,
+    `当前草稿版本：${context.draftRevision}`,
+    "如需继续让 AI 修改，请调用 document.edit_task.ai_revise；不要直接更新正式文档。",
+  ].join("\n");
 }
 
 function CanvasSkeleton() {

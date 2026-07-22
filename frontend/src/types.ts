@@ -419,6 +419,16 @@ export interface DocumentRecord extends DocumentSummary {
   content: string;
 }
 
+export interface DocumentFolder {
+  path: string;
+  name: string;
+}
+
+export interface DocumentTreeResponse {
+  folders: DocumentFolder[];
+  documents: DocumentSummary[];
+}
+
 export interface DocumentSectionRecord {
   name: string;
   heading: string;
@@ -426,6 +436,97 @@ export interface DocumentSectionRecord {
   occurrence: number;
   revision: string;
   content: string;
+}
+
+export interface DocumentSectionUpdateResult {
+  name: string;
+  previous_heading: string;
+  heading: string;
+  level: number;
+  occurrence: number;
+  revision: string;
+  size_bytes: number;
+  modified_at?: string | null;
+}
+
+export interface DocumentHeading {
+  index: number;
+  heading: string;
+  level: number;
+  occurrence: number;
+  line_start: number;
+  line_end: number;
+}
+
+export interface DocumentOutline {
+  name: string;
+  size_bytes: number;
+  revision: string;
+  headings: DocumentHeading[];
+}
+
+export type DocumentEditTaskStatus =
+  | "queued"
+  | "running"
+  | "reviewing"
+  | "merging"
+  | "merged"
+  | "completed"
+  | "abandoned"
+  | "conflict"
+  | "failed";
+
+export type DocumentDraftAiStatus = "queued" | "running" | "ready" | "failed";
+export type DocumentDraftReviewStatus = "pending" | "merged" | "abandoned";
+
+export interface DocumentDraftSection {
+  id: string;
+  heading: string;
+  occurrence: number;
+  level: number;
+  base_content: string;
+  draft_content: string;
+  draft_revision: number;
+  ai_status: DocumentDraftAiStatus;
+  ai_instruction?: string | null;
+  ai_base_revision: number;
+  ai_error?: string | null;
+  updated_by: "source" | "ai" | "user";
+  review_status: DocumentDraftReviewStatus;
+  resolved_at?: string | null;
+}
+
+export interface DocumentEditTask {
+  id: string;
+  document_name: string;
+  title: string;
+  description: string;
+  status: DocumentEditTaskStatus;
+  base_revision: string;
+  user_id: string;
+  tenant_id: string;
+  sections: DocumentDraftSection[];
+  version: number;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+  merged_at?: string | null;
+  abandoned_at?: string | null;
+}
+
+export interface DocumentEditTaskListResponse {
+  items: DocumentEditTask[];
+  total: number;
+}
+
+export interface DocumentTaskContext {
+  documentName: string;
+  taskId: string;
+  taskTitle: string;
+  taskStatus: DocumentEditTaskStatus;
+  sectionId: string;
+  sectionHeading: string;
+  draftRevision: number;
 }
 
 export interface DocumentListResponse {

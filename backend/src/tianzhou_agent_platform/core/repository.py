@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
+from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -42,6 +43,7 @@ MODEL_PROVIDERS_RESOURCE = "model_providers"
 SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
 SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
+DOCUMENT_EDIT_TASKS_RESOURCE = "document_edit_tasks"
 
 
 class InMemoryRepository:
@@ -65,6 +67,7 @@ class InMemoryRepository:
         self._model_providers: dict[str, ModelProviderRecord] = {}
         self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
         self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
+        self._document_edit_tasks: dict[str, DocumentEditTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -277,6 +280,68 @@ class InMemoryRepository:
             self._scheduled_aina_tasks[task.id] = task
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
         return self._copy(task)
+
+    async def create_document_edit_task(self, task: DocumentEditTask) -> DocumentEditTask:
+        async with self._lock:
+            self._document_edit_tasks[task.id] = task
+            await self._save_record(DOCUMENT_EDIT_TASKS_RESOURCE, task.id, task)
+        return self._copy(task)
+
+    async def get_document_edit_task(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentEditTask:
+        async with self._lock:
+            task = self._document_edit_tasks.get(task_id)
+            if task is None:
+                raise not_found("Document edit task", task_id)
+            if task.user_id != user_id or task.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "Document edit task ownership does not match the caller",
+                    status_code=403,
+                )
+            return self._copy(task)
+
+    async def list_document_edit_tasks(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        document_name: str | None = None,
+    ) -> list[DocumentEditTask]:
+        async with self._lock:
+            values = [
+                self._copy(item)
+                for item in self._document_edit_tasks.values()
+                if (user_id is None or item.user_id == user_id)
+                and (tenant_id is None or item.tenant_id == tenant_id)
+                and (document_name is None or item.document_name == document_name)
+            ]
+        return sorted(values, key=lambda item: item.created_at, reverse=True)
+
+    async def put_document_edit_task(
+        self,
+        task: DocumentEditTask,
+        *,
+        expected_version: int,
+    ) -> DocumentEditTask:
+        async with self._lock:
+            current = self._document_edit_tasks.get(task.id)
+            if current is None:
+                raise not_found("Document edit task", task.id)
+            if current.version != expected_version:
+                raise conflict("Document edit task changed. Reload it before retrying.")
+            updated = task.model_copy(
+                update={"version": expected_version + 1, "updated_at": datetime.now(UTC)},
+                deep=True,
+            )
+            self._document_edit_tasks[task.id] = updated
+            await self._save_record(DOCUMENT_EDIT_TASKS_RESOURCE, task.id, updated)
+        return self._copy(updated)
 
     async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask:
         async with self._lock:
@@ -893,12 +958,25 @@ class InMemoryRepository:
             return self._copy(approval)
 
     async def cancel_pending_approvals(self, conversation_id: str) -> None:
+        cancelled: list[ApprovalRecord] = []
         async with self._lock:
             for approval in self._approvals.values():
                 if approval.conversation_id == conversation_id and approval.status == "pending":
                     approval.status = "denied"
                     approval.resolved_at = datetime.now(UTC)
                     await self._save_record(APPROVALS_RESOURCE, approval.id, approval)
+                    if approval.trace_id in self._traces:
+                        cancelled.append(approval)
+        for approval in cancelled:
+            await self.add_trace_event(
+                approval.trace_id,
+                TraceEvent(
+                    kind="approval.cancelled",
+                    status="completed",
+                    details={"approval_id": approval.id},
+                ),
+            )
+            await self.finish_trace(approval.trace_id, "completed")
 
 
 def _installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:

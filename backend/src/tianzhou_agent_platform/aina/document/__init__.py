@@ -4,7 +4,6 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentRecord,
     DocumentRename,
     DocumentSummary,
-    DocumentUpdate,
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
 
@@ -15,5 +14,4 @@ __all__ = [
     "DocumentRename",
     "DocumentService",
     "DocumentSummary",
-    "DocumentUpdate",
 ]
