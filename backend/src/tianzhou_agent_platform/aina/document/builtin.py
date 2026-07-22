@@ -37,7 +37,8 @@ READ_EDIT_TASK_TOOL_ID = "document.edit_task.read"
 UPDATE_DRAFT_TOOL_ID = "document.edit_task.update_draft"
 AI_REVISE_DRAFT_TOOL_ID = "document.edit_task.ai_revise"
 RETRY_EDIT_TASK_TOOL_ID = "document.edit_task.retry"
-MERGE_EDIT_TASK_TOOL_ID = "document.edit_task.merge"
+MERGE_EDIT_SECTION_TOOL_ID = "document.edit_task.merge_section"
+ABANDON_EDIT_SECTION_TOOL_ID = "document.edit_task.abandon_section"
 DOCUMENT_EDIT_TASK_TOOL_IDS = {
     CREATE_EDIT_TASK_TOOL_ID,
     LIST_EDIT_TASKS_TOOL_ID,
@@ -45,7 +46,8 @@ DOCUMENT_EDIT_TASK_TOOL_IDS = {
     UPDATE_DRAFT_TOOL_ID,
     AI_REVISE_DRAFT_TOOL_ID,
     RETRY_EDIT_TASK_TOOL_ID,
-    MERGE_EDIT_TASK_TOOL_ID,
+    MERGE_EDIT_SECTION_TOOL_ID,
+    ABANDON_EDIT_SECTION_TOOL_ID,
 }
 DOCUMENT_TOOL_IDS = {
     LIST_DOCUMENTS_TOOL_ID,
@@ -209,7 +211,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
             description=(
                 "Create an asynchronous reviewed edit task for one or more non-overlapping sections. "
                 "Use document.outline first to obtain exact heading and occurrence values. The formal document "
-                "is not changed until document.edit_task.merge is confirmed."
+                "is not changed until a reviewed section is explicitly merged."
             ),
             input_schema={
                 "type": "object",
@@ -310,16 +312,27 @@ def document_tool_capabilities() -> list[AinaCapability]:
             },
         ),
         AinaCapability(
-            id=MERGE_EDIT_TASK_TOOL_ID,
-            name="合并文档修改任务",
+            id=MERGE_EDIT_SECTION_TOOL_ID,
+            name="合入章节草稿",
             description=(
-                "Merge every reviewed draft in a task into the formal document. Only call after the user explicitly "
-                "chooses to merge; the platform will request confirmation before changing the document."
+                "Merge one reviewed section draft into the formal document. Only call after the user explicitly "
+                "chooses to merge that section; the platform will request confirmation before changing the document."
             ),
             input_schema={
                 "type": "object",
-                "properties": {"task_id": {"type": "string"}},
-                "required": ["task_id"],
+                "properties": {"task_id": {"type": "string"}, "section_id": {"type": "string"}},
+                "required": ["task_id", "section_id"],
+                "additionalProperties": False,
+            },
+        ),
+        AinaCapability(
+            id=ABANDON_EDIT_SECTION_TOOL_ID,
+            name="放弃章节草稿",
+            description="Abandon one reviewed section draft without changing the formal document.",
+            input_schema={
+                "type": "object",
+                "properties": {"task_id": {"type": "string"}, "section_id": {"type": "string"}},
+                "required": ["task_id", "section_id"],
                 "additionalProperties": False,
             },
         ),
@@ -356,8 +369,9 @@ def unibot_documents_record() -> AinaRecord:
                             "asynchronous and must be reviewed. "
                             "Use document.edit_task.read or list to report progress, update_draft for user-authored "
                             "draft changes, ai_revise for requested AI changes, and retry after failures. Only use "
-                            "document.edit_task.merge after the user explicitly chooses to merge; never claim the "
-                            "formal document changed before merge completes. When the user "
+                            "document.edit_task.merge_section after the user explicitly chooses to merge that "
+                            "chapter, or abandon_section when they reject it. Never claim the formal document "
+                            "changed before a section merge completes. When the user "
                             "wants to view the outline, "
                             "browse chapters, or choose a section to read, use document.browse. It attaches an "
                             "interactive chapter widget, so keep the text response to one short sentence and never "
@@ -567,8 +581,20 @@ async def invoke_document_edit_task_tool(
         )
     elif tool_id == RETRY_EDIT_TASK_TOOL_ID:
         task = await service.retry_failed(task_id, user_id=user_id, tenant_id=tenant_id)
-    elif tool_id == MERGE_EDIT_TASK_TOOL_ID:
-        task = await service.merge_task(task_id, user_id=user_id, tenant_id=tenant_id)
+    elif tool_id == MERGE_EDIT_SECTION_TOOL_ID:
+        task = await service.merge_section(
+            task_id,
+            _required_string(arguments, "section_id", tool_id),
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+    elif tool_id == ABANDON_EDIT_SECTION_TOOL_ID:
+        task = await service.abandon_section(
+            task_id,
+            _required_string(arguments, "section_id", tool_id),
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
     else:
         raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown document edit task tool {tool_id!r}", status_code=404)
     return {"task": task.model_dump(mode="json")}, []

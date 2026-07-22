@@ -155,6 +155,56 @@ def test_edit_task_generates_reviewable_drafts_and_merges_once(tmp_path: Path) -
     assert "Old two." not in document
 
 
+def test_edit_task_sections_can_be_merged_or_abandoned_independently(tmp_path: Path) -> None:
+    original = "# Guide\n\n## One\n\nOld one.\n\n## Two\n\nOld two.\n\n## Three\n\nOld three.\n"
+    llm = ScriptedLLM([
+        _draft("## One\n\nAI one."),
+        _draft("## Two\n\nAI two."),
+        _draft("## Three\n\nAI three."),
+    ])
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": original})
+        created = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={
+                "description": "Rewrite both",
+                "sections": [{"heading": "One"}, {"heading": "Two"}, {"heading": "Three"}],
+            },
+        ).json()
+        task = _wait_for_review(client, created["id"])
+        first, second, third = task["sections"]
+
+        merged = client.post(
+            f"/document-edit-tasks/{task['id']}/sections/{first['id']}/merge",
+            json={},
+        )
+        merged_second = client.post(
+            f"/document-edit-tasks/{task['id']}/sections/{second['id']}/merge",
+            json={},
+        )
+        abandoned = client.post(
+            f"/document-edit-tasks/{task['id']}/sections/{third['id']}/abandon",
+            json={},
+        )
+        document = client.get("/documents/guide.md").json()["content"]
+
+    assert merged.status_code == 200
+    assert merged.json()["status"] == "reviewing"
+    assert merged.json()["sections"][0]["review_status"] == "merged"
+    assert merged_second.status_code == 200
+    assert merged_second.json()["status"] == "reviewing"
+    assert merged_second.json()["sections"][1]["review_status"] == "merged"
+    assert abandoned.status_code == 200
+    assert abandoned.json()["status"] == "completed"
+    assert abandoned.json()["sections"][2]["review_status"] == "abandoned"
+    assert "AI one." in document
+    assert "Old one." not in document
+    assert "AI two." in document
+    assert "Old two." not in document
+    assert "Old three." in document
+    assert "AI three." not in document
+
+
 def test_edit_task_rejects_overlapping_sections(tmp_path: Path) -> None:
     llm = ScriptedLLM([])
     with TestClient(_app(tmp_path, llm)) as client:
@@ -242,7 +292,8 @@ def test_existing_document_only_exposes_section_edit_and_reviewed_task_modes(tmp
         "document.edit_task.update_draft",
         "document.edit_task.ai_revise",
         "document.edit_task.retry",
-        "document.edit_task.merge",
+        "document.edit_task.merge_section",
+        "document.edit_task.abandon_section",
     } <= tool_ids
 
 

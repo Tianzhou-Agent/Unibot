@@ -96,6 +96,40 @@ def create_document_task_router() -> APIRouter:
         )
 
     @router.post(
+        "/document-edit-tasks/{task_id}/sections/{section_id}/merge",
+        response_model=DocumentEditTask,
+    )
+    async def merge_section(
+        task_id: str,
+        section_id: str,
+        payload: DocumentEditTaskActor,
+        request: Request,
+    ) -> DocumentEditTask:
+        return await document_edit_tasks(request).merge_section(
+            task_id,
+            section_id,
+            user_id=payload.user_id,
+            tenant_id=payload.tenant_id,
+        )
+
+    @router.post(
+        "/document-edit-tasks/{task_id}/sections/{section_id}/abandon",
+        response_model=DocumentEditTask,
+    )
+    async def abandon_section(
+        task_id: str,
+        section_id: str,
+        payload: DocumentEditTaskActor,
+        request: Request,
+    ) -> DocumentEditTask:
+        return await document_edit_tasks(request).abandon_section(
+            task_id,
+            section_id,
+            user_id=payload.user_id,
+            tenant_id=payload.tenant_id,
+        )
+
+    @router.post(
         "/document-edit-tasks/{task_id}/retry",
         response_model=DocumentEditTask,
         status_code=status.HTTP_202_ACCEPTED,

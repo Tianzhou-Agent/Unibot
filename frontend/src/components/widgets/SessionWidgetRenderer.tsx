@@ -104,14 +104,14 @@ function SessionAppList({
   onOpenAina?: (ainaId: string) => void;
 }) {
   return (
-    <div className="grid gap-2.5 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-2">
       {widget.apps.map((app) => (
         <button
           key={app.aina_id}
           type="button"
           disabled={disabled}
           onClick={() => onOpenAina?.(app.aina_id)}
-          className="group flex min-h-[96px] items-start gap-3 rounded-lg border border-line bg-app-soft p-3 text-left transition hover:border-accent-ring hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-60"
+          className="group flex min-h-[82px] w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-lg border border-line bg-app-soft p-2.5 text-left transition hover:border-accent-ring hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-60"
           aria-label={`打开 ${app.name}`}
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-accent shadow-sm">
@@ -119,12 +119,10 @@ function SessionAppList({
           </span>
           <span className="min-w-0 flex-1">
             <strong className="block truncate text-[13px] text-ink">{app.name}</strong>
-            <span className="mt-1 line-clamp-2 block text-[10.5px] leading-relaxed text-ink-muted">{app.description}</span>
-            <span className="mt-2 flex items-center gap-1.5 font-mono text-[9.5px] text-ink-subtle">
-              {app.aina_id}
-              <ArrowRight className="ml-auto h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-            </span>
+            <span className="mt-0.5 line-clamp-2 block text-[10.5px] leading-[1.45] text-ink-muted">{app.description}</span>
+            <span className="mt-1 block truncate font-mono text-[9.5px] text-ink-subtle" title={app.aina_id}>{app.aina_id}</span>
           </span>
+          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
         </button>
       ))}
       {!widget.apps.length ? <p className="col-span-full rounded-lg border border-dashed border-line py-8 text-center text-[12px] text-ink-muted">当前没有可用的 AINA 应用。</p> : null}

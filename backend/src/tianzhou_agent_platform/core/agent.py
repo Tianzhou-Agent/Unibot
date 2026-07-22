@@ -21,12 +21,14 @@ from tianzhou_agent_platform.aina.builtin import (
     UPDATE_TOOL_ID,
     UNIBOT_ASSISTANT_ID,
     UNIBOT_MEMORY_ID,
+    UNIBOT_SCHEDULER_ID,
     invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
+    ABANDON_EDIT_SECTION_TOOL_ID,
     CREATE_EDIT_TASK_TOOL_ID,
     DELETE_DOCUMENT_TOOL_ID,
-    MERGE_EDIT_TASK_TOOL_ID,
+    MERGE_EDIT_SECTION_TOOL_ID,
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
@@ -618,15 +620,15 @@ class AgentRuntime:
                 ),
             )
             conversation = await self.repository.get_conversation(conversation.id)
-            obvious_capability = _obvious_builtin_capability(request.message)
-            requested_capability = request.capability or obvious_capability
-            requested_source = (
-                "explicit_capability"
-                if request.capability is not None
-                else "deterministic_capability"
-                if obvious_capability is not None
-                else None
-            )
+            if request.ui_context:
+                messages = list(conversation.messages)
+                latest = messages[-1]
+                messages[-1] = latest.model_copy(
+                    update={"content": f"{latest.content}\n\n<ui_context>\n{request.ui_context}\n</ui_context>"}
+                )
+                conversation = conversation.model_copy(update={"messages": messages})
+            requested_capability = request.capability
+            requested_source = "explicit_capability" if request.capability is not None else None
             runtime_model = await self.repository.get_default_model_runtime(
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
@@ -784,55 +786,11 @@ class AgentRuntime:
                 direct=True,
             )
 
-        sticky_aina_id = conversation.last_aina_id if _looks_like_follow_up(latest_user_message) else None
-        primary_aina_id = (
-            conversation.primary_aina_id
-            if sticky_aina_id is None and len(conversation.active_aina_ids) == 1
-            else None
-        )
-        deterministic_aina_id = sticky_aina_id or primary_aina_id
-        if deterministic_aina_id is not None:
-            deterministic_selected = next(
-                (
-                    capability
-                    for capability in all_capabilities.values()
-                    if capability.kind == "aina" and capability.capability_id == deterministic_aina_id
-                ),
-                None,
-            )
-            if deterministic_selected is not None:
-                conversation = await self.repository.bind_conversation_aina(
-                    conversation.id,
-                    deterministic_selected.capability_id,
-                    mark_used=True,
-                )
-                await self._record_scope_resolution(
-                    trace_id,
-                    conversation,
-                    selected=deterministic_selected,
-                    source="sticky_aina" if sticky_aina_id is not None else "primary_aina",
-                    router_model_called=False,
-                    requested_capability=None,
-                    preferred_aina_id=None,
-                )
-                return await self._run_selected_aina(
-                    conversation=conversation,
-                    trace_id=trace_id,
-                    selected=deterministic_selected,
-                    memory_context=memory_context,
-                    event_sink=event_sink,
-                    direct=True,
-                )
-
-        if conversation.active_aina_ids:
-            active_ids = set(conversation.active_aina_ids)
-            aina_candidates = {
-                function_name: capability
-                for function_name, capability in all_capabilities.items()
-                if capability.kind == "aina" and capability.capability_id in active_ids
-            }
-        else:
-            aina_candidates = await self._available_aina_capabilities(conversation)
+        aina_candidates = {
+            function_name: capability
+            for function_name, capability in all_capabilities.items()
+            if capability.kind == "aina"
+        }
         if aina_candidates:
             route = await self._route_to_aina(
                 conversation=conversation,
@@ -974,6 +932,10 @@ class AgentRuntime:
                 target_type="aina",
                 details={
                     "candidate_count": len(candidates),
+                    "candidate_scope": "all_available",
+                    "active_aina_ids": conversation.active_aina_ids,
+                    "primary_aina_id": conversation.primary_aina_id,
+                    "last_aina_id": conversation.last_aina_id,
                     "candidates": [_capability_trace_details(item) for item in candidates.values()],
                 },
             ),
@@ -988,7 +950,13 @@ class AgentRuntime:
                         "You are the AINA routing stage for Unibot Assistant. Inspect the conversation and the "
                         "AINA descriptions exposed as functions. Call exactly one AINA only when the user's need "
                         "clearly matches its description. Otherwise respond with exactly NO_AINA_MATCH. Do not "
-                        "answer the user's question and do not call an AINA merely because it is available."
+                        "answer the user's question and do not call an AINA merely because it is available. "
+                        "Every available AINA is included. Previously active AINAs are conversation context, not "
+                        "a routing restriction or a reason to prefer them. Use the system assistant AINA whenever "
+                        "the request is about AINA applications themselves, including discovering, viewing, "
+                        "listing, selecting, or opening applications. The document AINA is only for document files, "
+                        "folders, chapters, and document edit tasks; never use it for application discovery or "
+                        "application navigation."
                     ),
                 },
                 *[message.provider_message() for message in conversation.messages],
@@ -1286,7 +1254,7 @@ class AgentRuntime:
                     "version": manifest.aina.version,
                     "runtime": manifest.runtime.type,
                     "availability": reason,
-                    "routing_candidate": manifest.runtime.type == "remote",
+                    "routing_candidate": entrypoint is not None,
                     "entrypoint": _capability_trace_details(entrypoint) if entrypoint else None,
                     "capabilities": {
                         "skills": [
@@ -1552,14 +1520,16 @@ class AgentRuntime:
                 value=(aina, installation),
                 owner_aina_id=installation.aina_id,
             )
-        capabilities.update(await self._document_aina_capability(conversation))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_ASSISTANT_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_MEMORY_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_SCHEDULER_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_DOCUMENTS_ID))
         return capabilities
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         return {
             **await self._fallback_capabilities(),
             **await self._available_aina_capabilities(conversation),
-            **await self._memory_aina_capability(conversation),
         }
 
     async def _fallback_capabilities(self) -> dict[str, Capability]:
@@ -1570,101 +1540,58 @@ class AgentRuntime:
             **self._document_capabilities(),
         }
 
-    async def _document_aina_capability(self, conversation: Conversation) -> dict[str, Capability]:
-        if self.document_service is None:
+    async def _builtin_aina_capability(
+        self,
+        conversation: Conversation,
+        aina_id: str,
+    ) -> dict[str, Capability]:
+        if aina_id == UNIBOT_DOCUMENTS_ID and self.document_service is None:
             return {}
         try:
-            document_aina = await self.repository.get_aina(UNIBOT_DOCUMENTS_ID)
+            aina = await self.repository.get_aina(aina_id)
         except PlatformError:
             return {}
-        if document_aina.status != "registered":
+        if aina.status != "registered" or aina.manifest.runtime.type != "builtin":
             return {}
         installation = AinaInstallation(
             user_id=conversation.user_id,
             tenant_id=conversation.tenant_id,
-            aina_id=UNIBOT_DOCUMENTS_ID,
-            installed_version=document_aina.manifest.aina.version,
+            aina_id=aina_id,
+            installed_version=aina.manifest.aina.version,
         )
-        function_name = _function_name("aina", UNIBOT_DOCUMENTS_ID)
+        function_name = _function_name("aina", aina_id)
         capability_descriptions = [
             item.description
             for item in [
-                *document_aina.manifest.capabilities.skills,
-                *document_aina.manifest.capabilities.tools,
+                *aina.manifest.capabilities.skills,
+                *aina.manifest.capabilities.tools,
+                *aina.manifest.capabilities.ui,
             ]
         ]
+        description = aina.manifest.aina.description
+        if capability_descriptions:
+            description = f"{description}. Capabilities: {'; '.join(capability_descriptions)}"
         return {
             function_name: Capability(
                 kind="aina",
-                capability_id=UNIBOT_DOCUMENTS_ID,
+                capability_id=aina_id,
                 function_name=function_name,
-                display_name=document_aina.manifest.aina.name,
-                description=(
-                    f"{document_aina.manifest.aina.description}. "
-                    f"Capabilities: {'; '.join(capability_descriptions)}"
-                ),
+                display_name=aina.manifest.aina.name,
+                description=description,
                 input_schema={
                     "type": "object",
                     "properties": {
                         "input": {
                             "type": "string",
-                            "description": "The user's Markdown document request.",
+                            "description": "The user request or task for the AINA.",
                         }
                     },
                     "required": ["input"],
                     "additionalProperties": False,
                 },
                 requires_confirmation=False,
-                value=(document_aina, installation),
-                owner_aina_id=UNIBOT_DOCUMENTS_ID,
-            )
-        }
-
-    async def _memory_aina_capability(self, conversation: Conversation) -> dict[str, Capability]:
-        try:
-            memory_aina = await self.repository.get_aina(UNIBOT_MEMORY_ID)
-        except PlatformError:
-            return {}
-        if memory_aina.status != "registered":
-            return {}
-        installation = AinaInstallation(
-            user_id=conversation.user_id,
-            tenant_id=conversation.tenant_id,
-            aina_id=UNIBOT_MEMORY_ID,
-            installed_version=memory_aina.manifest.aina.version,
-        )
-        function_name = _function_name("aina", UNIBOT_MEMORY_ID)
-        capability_descriptions = [
-            item.description
-            for item in [
-                *memory_aina.manifest.capabilities.skills,
-                *memory_aina.manifest.capabilities.tools,
-            ]
-        ]
-        return {
-            function_name: Capability(
-                kind="aina",
-                capability_id=UNIBOT_MEMORY_ID,
-                function_name=function_name,
-                display_name=memory_aina.manifest.aina.name,
-                description=(
-                    f"{memory_aina.manifest.aina.description}. "
-                    f"Capabilities: {'; '.join(capability_descriptions)}"
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "input": {
-                            "type": "string",
-                            "description": "The user's memory request.",
-                        }
-                    },
-                    "required": ["input"],
-                    "additionalProperties": False,
-                },
-                requires_confirmation=False,
-                value=(memory_aina, installation),
-                owner_aina_id=UNIBOT_MEMORY_ID,
+                value=(aina, installation),
+                owner_aina_id=aina_id,
             )
         }
 
@@ -1676,6 +1603,8 @@ class AgentRuntime:
         if selected.kind != "aina":
             raise PlatformError("INVALID_REQUEST", "The selected capability is not an AINA")
         aina, _installation = cast(tuple[AinaRecord, AinaInstallation], selected.value)
+        if aina.manifest.aina.id == UNIBOT_ASSISTANT_ID:
+            return await self._system_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
             return self._memory_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
@@ -1798,7 +1727,11 @@ class AgentRuntime:
                 display_name=tool.name,
                 description=tool.description,
                 input_schema=tool.input_schema,
-                requires_confirmation=tool.id in {DELETE_DOCUMENT_TOOL_ID, MERGE_EDIT_TASK_TOOL_ID},
+                requires_confirmation=tool.id in {
+                    DELETE_DOCUMENT_TOOL_ID,
+                    MERGE_EDIT_SECTION_TOOL_ID,
+                    ABANDON_EDIT_SECTION_TOOL_ID,
+                },
                 value=tool.id,
                 owner_aina_id=UNIBOT_DOCUMENTS_ID,
             )
@@ -1974,54 +1907,6 @@ def _normalized_route_message(
             }
         ],
     }
-
-
-def _obvious_builtin_capability(message: str) -> str | None:
-    normalized = " ".join(message.casefold().split())
-    open_document_app = (
-        any(marker in normalized for marker in ("打开", "进入"))
-        and any(marker in normalized for marker in ("文档应用", "文档编辑器", "unibot-documents"))
-    ) or re.search(r"\b(open|enter)\s+(the\s+)?(document app|document editor|unibot-documents)\b", normalized)
-    if open_document_app:
-        return f"builtin:{OPEN_AINA_TOOL_ID}"
-    chinese_list_request = any(marker in normalized for marker in ("列出应用", "应用列表", "有哪些应用"))
-    chinese_aina_request = "aina" in normalized and any(marker in normalized for marker in ("列出", "列表", "有哪些"))
-    english_request = re.search(r"\b(list|show)\s+(all\s+)?(apps|applications|ainas)\b", normalized)
-    if chinese_list_request or chinese_aina_request or english_request:
-        return f"builtin:{LIST_APP_TOOL_ID}"
-    memory_request = any(
-        marker in normalized
-        for marker in (
-            "记住",
-            "记得这",
-            "忘记",
-            "删除记忆",
-            "你记得什么",
-            "你还记得",
-            "what do you remember",
-            "remember that",
-            "please remember",
-            "forget that",
-        )
-    )
-    if memory_request:
-        return f"aina:{UNIBOT_MEMORY_ID}"
-    return None
-
-
-def _looks_like_follow_up(message: str) -> bool:
-    normalized = " ".join(message.casefold().split())
-    if len(normalized) > 80:
-        return False
-    if any(
-        marker in normalized
-        for marker in ("继续", "再来", "再改", "改成", "这个", "那个", "上一", "刚才", "同样", "好的")
-    ):
-        return True
-    return re.search(
-        r"^(continue|again|do the same|make it|change it|update it|that|this|yes|ok|okay)\b",
-        normalized,
-    ) is not None
 
 
 def _memory_context_block(memories: list[MemoryRecord]) -> str:

@@ -471,10 +471,13 @@ export type DocumentEditTaskStatus =
   | "reviewing"
   | "merging"
   | "merged"
+  | "completed"
+  | "abandoned"
   | "conflict"
   | "failed";
 
 export type DocumentDraftAiStatus = "queued" | "running" | "ready" | "failed";
+export type DocumentDraftReviewStatus = "pending" | "merged" | "abandoned";
 
 export interface DocumentDraftSection {
   id: string;
@@ -489,6 +492,8 @@ export interface DocumentDraftSection {
   ai_base_revision: number;
   ai_error?: string | null;
   updated_by: "source" | "ai" | "user";
+  review_status: DocumentDraftReviewStatus;
+  resolved_at?: string | null;
 }
 
 export interface DocumentEditTask {
@@ -506,11 +511,22 @@ export interface DocumentEditTask {
   created_at: string;
   updated_at: string;
   merged_at?: string | null;
+  abandoned_at?: string | null;
 }
 
 export interface DocumentEditTaskListResponse {
   items: DocumentEditTask[];
   total: number;
+}
+
+export interface DocumentTaskContext {
+  documentName: string;
+  taskId: string;
+  taskTitle: string;
+  taskStatus: DocumentEditTaskStatus;
+  sectionId: string;
+  sectionHeading: string;
+  draftRevision: number;
 }
 
 export interface DocumentListResponse {

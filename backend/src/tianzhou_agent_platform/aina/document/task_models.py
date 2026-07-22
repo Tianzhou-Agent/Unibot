@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 
@@ -14,10 +14,13 @@ DocumentEditTaskStatus = Literal[
     "reviewing",
     "merging",
     "merged",
+    "completed",
+    "abandoned",
     "conflict",
     "failed",
 ]
 DraftAiStatus = Literal["queued", "running", "ready", "failed"]
+DraftReviewStatus = Literal["pending", "merged", "abandoned"]
 
 
 class DocumentSectionSelection(StrictModel):
@@ -61,6 +64,8 @@ class DocumentDraftSection(StrictModel):
     ai_base_revision: int = 0
     ai_error: str | None = None
     updated_by: Literal["source", "ai", "user"] = "source"
+    review_status: DraftReviewStatus = "pending"
+    resolved_at: datetime | None = None
 
 
 class DocumentEditTask(StrictModel):
@@ -78,6 +83,21 @@ class DocumentEditTask(StrictModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     merged_at: datetime | None = None
+    abandoned_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def migrate_legacy_section_review_status(self) -> "DocumentEditTask":
+        if self.status not in {"merged", "abandoned"}:
+            return self
+        if any(item.review_status != "pending" for item in self.sections):
+            return self
+        review_status = "merged" if self.status == "merged" else "abandoned"
+        resolved_at = self.merged_at if self.status == "merged" else self.abandoned_at
+        self.sections = [
+            item.model_copy(update={"review_status": review_status, "resolved_at": resolved_at})
+            for item in self.sections
+        ]
+        return self
 
 
 class DocumentEditTaskListResponse(StrictModel):
