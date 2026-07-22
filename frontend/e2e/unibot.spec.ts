@@ -280,6 +280,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         created_at: NOW,
         updated_at: NOW,
         merged_at: null,
+        abandoned_at: null,
         sections: [{
           id: "draft-section-e2e",
           heading: "简介",
@@ -293,6 +294,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           ai_base_revision: 0,
           ai_error: null,
           updated_by: "ai",
+          review_status: "pending",
+          resolved_at: null,
         }],
       };
       state.documentTasks = [task];
@@ -307,11 +310,23 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       section.updated_by = "user";
       return json(route, task);
     }
-    if (method === "POST" && path === "/document-edit-tasks/document-edit-e2e/merge") {
+    if (method === "POST" && path === "/document-edit-tasks/document-edit-e2e/sections/draft-section-e2e/merge") {
       const task = state.documentTasks[0];
+      const section = (task.sections as JsonObject[])[0];
       task.status = "merged";
       task.merged_at = NOW;
-      state.documentContent = `# 使用指南\n\n${((task.sections as JsonObject[])[0]).draft_content as string}\n`;
+      section.review_status = "merged";
+      section.resolved_at = NOW;
+      state.documentContent = `# 使用指南\n\n${section.draft_content as string}\n`;
+      return json(route, task);
+    }
+    if (method === "POST" && path === "/document-edit-tasks/document-edit-e2e/sections/draft-section-e2e/abandon") {
+      const task = state.documentTasks[0];
+      const section = (task.sections as JsonObject[])[0];
+      task.status = "abandoned";
+      task.abandoned_at = NOW;
+      section.review_status = "abandoned";
+      section.resolved_at = NOW;
       return json(route, task);
     }
     if (method === "GET" && /^\/documents\/[^/]+\/sections$/.test(path)) {
@@ -411,15 +426,20 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
 
   await page.getByRole("button", { name: "任务 0" }).click();
   await expect(page.getByText("修改任务", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "新建", exact: true }).click();
+  await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
   await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
   await page.getByRole("checkbox", { name: "简介" }).check();
   await page.getByRole("button", { name: "创建并执行" }).click();
 
   await expect(page.getByText("AI 草稿。", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "放弃本章节" })).toBeVisible();
+  await expect(page.getByPlaceholder("描述希望 AI 如何继续修改当前章节")).toBeVisible();
+  await expect(page.getByPlaceholder("让 AI 继续修改当前章节…")).toHaveCount(0);
   await page.getByRole("textbox", { name: "章节草稿" }).fill("## 简介\n\n用户检视后的内容。");
   await page.getByRole("button", { name: "保存草稿" }).click();
-  await page.getByRole("button", { name: "合并全部" }).click();
+  await page.getByRole("button", { name: "合入本章节" }).click();
+  await expect(page.getByText("只会将当前章节的草稿写入正式文档，任务中的其他章节仍保持待检视状态。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "合入本章节", exact: true }).last().click();
   await page.getByRole("button", { name: "编辑", exact: true }).click();
 
   await expect(page.getByText("用户检视后的内容。", { exact: true })).toBeVisible();
@@ -439,8 +459,9 @@ test("FE-E2E-009B 文档 Canvas 展示嵌套文件树和全文章节导航", asy
   await page.getByRole("button", { name: "章节", exact: true }).click();
   await expect(page.getByText("章节导航", { exact: true })).toBeVisible();
 
+  await page.getByRole("button", { name: "新建文件夹", exact: true }).click();
   await page.getByRole("textbox", { name: "新文件夹名称" }).fill("Archive");
-  await page.getByRole("button", { name: "创建文件夹" }).click();
+  await page.getByRole("button", { name: "确认创建" }).click();
   await expect(page.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
 });
 
@@ -455,6 +476,23 @@ test("FE-E2E-009C 全文编辑器拒绝跨章节保存", async ({ page }) => {
 
   await expect(page.getByText(/只能保存“简介”章节/)).toBeVisible();
   expect(state.documentContent).toContain("# 使用指南");
+  expect(state.documentContent).toContain("旧内容");
+});
+
+test("FE-E2E-009D 放弃任务草稿不会更新文档", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/canvas/unibot-documents");
+
+  await page.getByRole("button", { name: "任务 0" }).click();
+  await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
+  await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
+  await page.getByRole("checkbox", { name: "简介" }).check();
+  await page.getByRole("button", { name: "创建并执行" }).click();
+  await page.getByRole("button", { name: "放弃本章节" }).click();
+
+  await expect(page.getByText("原文不会被修改；任务中的其他章节不受影响。", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "放弃本章节", exact: true }).last().click();
+  await expect(page.getByText("此任务的所有章节均已放弃，文档原文未发生变化。", { exact: true })).toBeVisible();
   expect(state.documentContent).toContain("旧内容");
 });
 
@@ -703,15 +741,42 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
     id: "unibot-app-list",
     kind: "app_list",
     title: "AINA 应用",
-    description: "当前共有 1 个可用应用。",
+    description: "当前共有 4 个可用应用。",
     markdown: null,
     fields: [],
     actions: [],
     apps: [
       {
+        aina_id: "unibot-assistant",
+        name: "Unibot Assistant",
+        description: "发现、选择并打开可用的 AINA 应用。",
+        version: "1.0.0",
+        publisher: "Unibot",
+        installed: true,
+        has_main_widget: true,
+      },
+      {
+        aina_id: "unibot-documents",
+        name: "文档编辑器",
+        description: "创建、读取和编辑 Markdown 文档。",
+        version: "1.0.0",
+        publisher: "Unibot",
+        installed: true,
+        has_main_widget: true,
+      },
+      {
         aina_id: "unibot-memory",
         name: "Unibot Memory",
         description: "管理长期记忆。",
+        version: "1.0.0",
+        publisher: "Unibot",
+        installed: true,
+        has_main_widget: true,
+      },
+      {
+        aina_id: "unibot-scheduler",
+        name: "定时任务 AINA",
+        description: "通过固定间隔或 Cron 表达式调度远程 AINA。",
         version: "1.0.0",
         publisher: "Unibot",
         installed: true,
@@ -735,9 +800,20 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
       }),
     ],
   });
-  await page.goto("/chat/conv-e2e-1");
+  await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
 
-  await page.getByRole("button", { name: "打开 Unibot Memory" }).click();
+  const assistantApp = page.getByRole("button", { name: "打开 Unibot Assistant" });
+  const documentApp = page.getByRole("button", { name: "打开 文档编辑器" });
+  const memoryApp = page.getByRole("button", { name: "打开 Unibot Memory" });
+  await expect(assistantApp).toBeVisible();
+  await expect(documentApp).toBeVisible();
+  await expect(memoryApp).toBeVisible();
+  const assistantBox = await assistantApp.boundingBox();
+  const documentBox = await documentApp.boundingBox();
+  expect(assistantBox?.width).toBeGreaterThan(200);
+  expect(documentBox?.y).toBeGreaterThan((assistantBox?.y ?? 0) + (assistantBox?.height ?? 0));
+
+  await memoryApp.click();
 
   await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-e2e-1$/);
   await expect(page.getByRole("heading", { name: "Unibot Memory", exact: true }).first()).toBeVisible();

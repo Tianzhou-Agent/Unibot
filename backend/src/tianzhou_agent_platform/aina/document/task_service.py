@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from tianzhou_agent_platform.aina.document.service import (
     MAX_DOCUMENT_BYTES,
     DocumentService,
+    _document_revision,
     _preferred_newline,
     _validate_section_replacement,
 )
@@ -13,6 +14,7 @@ from tianzhou_agent_platform.aina.document.task_models import (
     DocumentDraftSection,
     DocumentEditTask,
     DocumentEditTaskCreate,
+    DocumentEditTaskStatus,
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.llm import LLMClient
@@ -154,6 +156,7 @@ class DocumentEditTaskService:
         task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
         self._require_reviewing(task)
         section = _find_draft_section(task, section_id)
+        _require_pending_section(section)
         if section.draft_revision != expected_draft_revision:
             raise conflict("The draft changed. Reload it before saving your edit.")
         normalized, _ = _validate_section_replacement(
@@ -188,6 +191,7 @@ class DocumentEditTaskService:
         task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
         self._require_reviewing(task)
         section = _find_draft_section(task, section_id)
+        _require_pending_section(section)
         if section.draft_revision != expected_draft_revision:
             raise conflict("The draft changed. Reload it before requesting another AI revision.")
         if section.ai_status in {"queued", "running"}:
@@ -222,7 +226,7 @@ class DocumentEditTaskService:
                         "ai_error": None,
                     }
                 )
-                if item.ai_status == "failed"
+                if item.ai_status == "failed" and item.review_status == "pending"
                 else item
             )
             for item in task.sections
@@ -235,7 +239,10 @@ class DocumentEditTaskService:
     async def merge_task(self, task_id: str, *, user_id: str, tenant_id: str) -> DocumentEditTask:
         task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
         self._require_reviewing(task)
-        if any(item.ai_status != "ready" for item in task.sections):
+        pending_sections = [item for item in task.sections if item.review_status == "pending"]
+        if not pending_sections:
+            raise conflict("This task has no pending sections to merge")
+        if any(item.ai_status != "ready" for item in pending_sections):
             raise conflict("Every section must be ready before the task can be merged")
         merging = await self.repository.put_document_edit_task(
             task.model_copy(update={"status": "merging", "error": None}),
@@ -253,7 +260,7 @@ class DocumentEditTaskService:
         try:
             await self.documents.merge_sections(
                 merging.document_name,
-                [(item.heading, item.occurrence, item.draft_content) for item in merging.sections],
+                [(item.heading, item.occurrence, item.draft_content) for item in pending_sections],
                 merging.base_revision,
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -275,9 +282,118 @@ class DocumentEditTaskService:
         finally:
             await self._release_merge_lock(lock_key)
         latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        resolved_at = datetime.now(UTC)
+        sections = [
+            item.model_copy(update={"review_status": "merged", "resolved_at": resolved_at})
+            if item.review_status == "pending"
+            else item
+            for item in latest.sections
+        ]
         return await self.repository.put_document_edit_task(
-            latest.model_copy(update={"status": "merged", "merged_at": datetime.now(UTC), "error": None}),
+            latest.model_copy(update={"status": _resolved_task_status(sections), "sections": sections, "merged_at": resolved_at, "error": None}),
             expected_version=latest.version,
+        )
+
+    async def merge_section(
+        self,
+        task_id: str,
+        section_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentEditTask:
+        task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        self._require_reviewing(task)
+        section = _find_draft_section(task, section_id)
+        _require_pending_section(section)
+        if section.ai_status != "ready":
+            raise conflict("Only a ready section can be merged")
+        merging = await self.repository.put_document_edit_task(
+            task.model_copy(update={"status": "merging", "error": None}),
+            expected_version=task.version,
+        )
+        lock_key = f"{tenant_id}:{user_id}:{merging.document_name}"
+        acquired = await self._acquire_merge_lock(lock_key)
+        if not acquired:
+            latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+            await self.repository.put_document_edit_task(
+                latest.model_copy(update={"status": "reviewing"}),
+                expected_version=latest.version,
+            )
+            raise conflict("Another merge is already updating this document")
+        try:
+            document = await self.documents.merge_sections(
+                merging.document_name,
+                [(section.heading, section.occurrence, section.draft_content)],
+                merging.base_revision,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+        except StorageValidationError as exc:
+            latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+            await self.repository.put_document_edit_task(
+                latest.model_copy(update={"status": "conflict", "error": str(exc)}),
+                expected_version=latest.version,
+            )
+            raise conflict(str(exc)) from exc
+        except Exception as exc:
+            latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+            await self.repository.put_document_edit_task(
+                latest.model_copy(update={"status": "failed", "error": str(exc)}),
+                expected_version=latest.version,
+            )
+            raise
+        finally:
+            await self._release_merge_lock(lock_key)
+        latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        resolved_at = datetime.now(UTC)
+        resolved = _find_draft_section(latest, section_id).model_copy(
+            update={"review_status": "merged", "resolved_at": resolved_at}
+        )
+        updated = _replace_draft_section(latest, resolved)
+        sections = updated.sections
+        return await self.repository.put_document_edit_task(
+            updated.model_copy(
+                update={
+                    "status": _resolved_task_status(sections),
+                    "base_revision": _document_revision(document.content),
+                    "merged_at": resolved_at if not _has_pending_sections(sections) else None,
+                    "error": None,
+                }
+            ),
+            expected_version=latest.version,
+        )
+
+    async def abandon_section(
+        self,
+        task_id: str,
+        section_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentEditTask:
+        task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        if task.status not in {"reviewing", "failed", "conflict"}:
+            raise conflict("Only a reviewable, failed, or conflicted section can be abandoned")
+        section = _find_draft_section(task, section_id)
+        _require_pending_section(section)
+        resolved_at = datetime.now(UTC)
+        updated = _replace_draft_section(
+            task,
+            section.model_copy(update={"review_status": "abandoned", "resolved_at": resolved_at}),
+        )
+        sections = updated.sections
+        status = _resolved_task_status(sections, pending_status=task.status)
+        return await self.repository.put_document_edit_task(
+            updated.model_copy(
+                update={
+                    "status": status,
+                    "abandoned_at": resolved_at if status == "abandoned" else None,
+                    "merged_at": resolved_at if status == "completed" else task.merged_at,
+                    "error": None if not _has_pending_sections(sections) else task.error,
+                }
+            ),
+            expected_version=task.version,
         )
 
     async def _acquire_merge_lock(self, key: str) -> bool:
@@ -551,6 +667,30 @@ def _replace_draft_section(task: DocumentEditTask, section: DocumentDraftSection
         },
         deep=True,
     )
+
+
+def _require_pending_section(section: DocumentDraftSection) -> None:
+    if section.review_status != "pending":
+        raise conflict("This section has already been resolved")
+
+
+def _has_pending_sections(sections: list[DocumentDraftSection]) -> bool:
+    return any(item.review_status == "pending" for item in sections)
+
+
+def _resolved_task_status(
+    sections: list[DocumentDraftSection],
+    *,
+    pending_status: DocumentEditTaskStatus = "reviewing",
+) -> DocumentEditTaskStatus:
+    if _has_pending_sections(sections):
+        return pending_status
+    resolved = {item.review_status for item in sections}
+    if resolved == {"merged"}:
+        return "merged"
+    if resolved == {"abandoned"}:
+        return "abandoned"
+    return "completed"
 
 
 def _validate_draft_size(content: str) -> None:

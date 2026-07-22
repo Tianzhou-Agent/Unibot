@@ -202,7 +202,7 @@ def test_document_aina_chat_creates_reviewed_edit_task_without_changing_source(t
     assert sum(event["kind"] == "model.completed" for event in trace["events"]) == 2
 
 
-def test_document_aina_merge_task_requires_confirmation(tmp_path: Path) -> None:
+def test_document_aina_merge_section_requires_confirmation(tmp_path: Path) -> None:
     original = "# Guide\n\n## Background\n\nOld background.\n"
     llm = ScriptedLLM(
         [
@@ -224,18 +224,19 @@ def test_document_aina_merge_task_requires_confirmation(tmp_path: Path) -> None:
             if task["status"] in {"reviewing", "failed"}:
                 break
             time.sleep(0.05)
+        section_id = task["sections"][0]["id"]
         llm.responses.extend(
             [
                 call_first_tool(
-                    prefix="builtin_document_edit_task_merge_",
-                    arguments=f'{{"task_id":"{task_id}"}}',
+                    prefix="builtin_document_edit_task_merge_section_",
+                    arguments=f'{{"task_id":"{task_id}","section_id":"{section_id}"}}',
                 ),
-                assistant("The reviewed task was merged."),
+                assistant("The reviewed section was merged."),
             ]
         )
         pending = client.post(
             "/chat",
-            json={"message": "Merge the reviewed task", "capability": "aina:unibot-documents"},
+            json={"message": "Merge the reviewed section", "capability": "aina:unibot-documents"},
         )
         before_confirm = client.get("/documents/guide.md").json()["content"]
         confirmed = client.post(f"/approvals/{pending.json()['approval']['id']}/confirm", json={})
@@ -340,8 +341,17 @@ def test_conversation_alternates_preferred_ainas_without_router_model(tmp_path: 
     assert resolution["details"]["router_model_called"] is False
 
 
-def test_short_follow_up_reuses_last_aina_without_router_model(tmp_path: Path) -> None:
-    llm = ScriptedLLM([assistant("Started."), assistant("Continued.")])
+def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            assistant("Started."),
+            call_first_tool(
+                prefix="aina_unibot-documents_",
+                arguments='{"input":"Continue"}',
+            ),
+            assistant("Continued."),
+        ]
+    )
     with TestClient(_app(tmp_path, llm)) as client:
         conversation = client.post("/conversations", json={"title": "Sticky AINA"}).json()
         first = client.post(
@@ -360,15 +370,27 @@ def test_short_follow_up_reuses_last_aina_without_router_model(tmp_path: Path) -
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 3
+    assert len(llm.calls[1]["tools"]) == 4
+    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[1]["tools"])
+    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
+    assert requested["details"]["last_aina_id"] == "unibot-documents"
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-documents"
-    assert resolution["details"]["source"] == "sticky_aina"
-    assert resolution["details"]["router_model_called"] is False
+    assert resolution["details"]["source"] == "model_router"
+    assert resolution["details"]["router_model_called"] is True
 
 
-def test_single_active_primary_aina_bypasses_router_model(tmp_path: Path) -> None:
-    llm = ScriptedLLM([assistant("Handled by the primary document AINA.")])
+def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-documents_",
+                arguments='{"input":"Edit the introduction"}',
+            ),
+            assistant("Handled by the primary document AINA."),
+        ]
+    )
     with TestClient(_app(tmp_path, llm)) as client:
         conversation = client.post(
             "/conversations",
@@ -385,11 +407,15 @@ def test_single_active_primary_aina_bypasses_router_model(tmp_path: Path) -> Non
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
     assert response.status_code == 200
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2
+    assert len(llm.calls[0]["tools"]) == 4
+    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
+    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
+    assert requested["details"]["primary_aina_id"] == "unibot-documents"
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-documents"
-    assert resolution["details"]["source"] == "primary_aina"
-    assert resolution["details"]["router_model_called"] is False
+    assert resolution["details"]["source"] == "model_router"
+    assert resolution["details"]["router_model_called"] is True
 
 
 def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) -> None:
@@ -421,7 +447,7 @@ def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) ->
     assert response.status_code == 200
     assert len(llm.calls) == 2
     assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
-    assert len(llm.calls[0]["tools"]) == 2
+    assert len(llm.calls[0]["tools"]) == 4
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-memory"
     assert resolution["details"]["source"] == "model_router"

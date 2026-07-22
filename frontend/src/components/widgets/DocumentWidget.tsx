@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  ArrowLeft,
   Bot,
   Check,
   ChevronDown,
@@ -40,6 +41,7 @@ import type {
   DocumentRecord,
   DocumentSectionUpdateResult,
   DocumentSummary,
+  DocumentTaskContext,
   DocumentTreeResponse,
 } from "@/types";
 
@@ -55,7 +57,10 @@ interface ConfirmRequest {
   resolve: (confirmed: boolean) => void;
 }
 
-export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
+export function DocumentWidget({ disabled = false, onTaskContextChange }: {
+  disabled?: boolean;
+  onTaskContextChange?: (context: DocumentTaskContext | null) => void;
+}) {
   const [items, setItems] = useState<DocumentSummary[]>([]);
   const [folders, setFolders] = useState<DocumentFolder[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -74,7 +79,6 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
   const [taskDescription, setTaskDescription] = useState("");
   const [selectedHeadingIndexes, setSelectedHeadingIndexes] = useState<Set<number>>(new Set());
   const [draftContent, setDraftContent] = useState("");
-  const [aiInstruction, setAiInstruction] = useState("");
   const [creatingEntry, setCreatingEntry] = useState<"document" | "folder" | null>(null);
   const [createValue, setCreateValue] = useState("");
   const [renamingItem, setRenamingItem] = useState<{ kind: "document" | "folder"; path: string } | null>(null);
@@ -136,6 +140,24 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     setDraftContent(activeSection.draft_content);
   }, [activeSection?.id, activeSection?.draft_revision]);
 
+  useEffect(() => {
+    if (mode !== "tasks" || creatingTask || !selectedName || !activeTask || !activeSection
+      || activeSection.review_status !== "pending") {
+      onTaskContextChange?.(null);
+      return;
+    }
+    onTaskContextChange?.({
+      documentName: selectedName,
+      taskId: activeTask.id,
+      taskTitle: activeTask.title,
+      taskStatus: activeTask.status,
+      sectionId: activeSection.id,
+      sectionHeading: activeSection.heading,
+      draftRevision: activeSection.draft_revision,
+    });
+    return () => onTaskContextChange?.(null);
+  }, [activeSection, activeTask, creatingTask, mode, onTaskContextChange, selectedName]);
+
   async function refreshDocuments(preferredName?: string | null) {
     setLoading(true);
     try {
@@ -179,8 +201,8 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
       setContent(document.content);
       setSavedContent(document.content);
       setTasks(taskList.items);
-      setActiveTask(taskList.items[0] ?? null);
-      setActiveSectionId(taskList.items[0]?.sections[0]?.id ?? null);
+      setActiveTask(null);
+      setActiveSectionId(null);
       setMode("edit");
       setCreatingTask(false);
       setRenamingItem(null);
@@ -404,10 +426,6 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     }
     setMode(nextMode);
     setCreatingTask(false);
-    if (nextMode === "tasks" && !activeTask && tasks.length) {
-      setActiveTask(tasks[0]);
-      setActiveSectionId(tasks[0].sections[0]?.id ?? null);
-    }
   }
 
   async function createEditTask() {
@@ -484,28 +502,6 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     }
   }
 
-  async function reviseWithAi() {
-    if (!activeTask || !activeSection || !aiInstruction.trim()) return;
-    setSaving(true);
-    try {
-      const task = await api.post<DocumentEditTask>(
-        `/document-edit-tasks/${activeTask.id}/sections/${activeSection.id}/ai-revise`,
-        {
-          ...ACTOR,
-          instruction: aiInstruction.trim(),
-          expected_draft_revision: activeSection.draft_revision,
-        },
-      );
-      setAiInstruction("");
-      replaceTask(task);
-      setError(null);
-    } catch (revisionError) {
-      setError(apiErrorMessage(revisionError));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function retryTask() {
     if (!activeTask) return;
     setSaving(true);
@@ -519,11 +515,19 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     }
   }
 
-  async function mergeTask() {
-    if (!activeTask || !selectedName) return;
+  async function mergeSection() {
+    if (!activeTask || !activeSection || !selectedName) return;
+    if (!(await requestConfirm({
+      title: `合入“${activeSection.heading}”章节？`,
+      message: "只会将当前章节的草稿写入正式文档，任务中的其他章节仍保持待检视状态。",
+      confirmLabel: "合入本章节",
+    }))) return;
     setSaving(true);
     try {
-      const task = await api.post<DocumentEditTask>(`/document-edit-tasks/${activeTask.id}/merge`, ACTOR);
+      const task = await api.post<DocumentEditTask>(
+        `/document-edit-tasks/${activeTask.id}/sections/${activeSection.id}/merge`,
+        ACTOR,
+      );
       replaceTask(task);
       const path = documentApiPath(selectedName);
       const [document, nextOutline] = await Promise.all([
@@ -543,6 +547,28 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
     } catch (mergeError) {
       setError(apiErrorMessage(mergeError));
       await refreshTasks(selectedName, activeTask.id);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function abandonSection() {
+    if (!activeTask || !activeSection) return;
+    if (!(await requestConfirm({
+      title: `放弃“${activeSection.heading}”章节草稿？`,
+      message: "当前章节将标记为已放弃，原文不会被修改；任务中的其他章节不受影响。",
+      confirmLabel: "放弃本章节",
+      danger: true,
+    }))) return;
+    setSaving(true);
+    try {
+      replaceTask(await api.post<DocumentEditTask>(
+        `/document-edit-tasks/${activeTask.id}/sections/${activeSection.id}/abandon`,
+        ACTOR,
+      ));
+      setError(null);
+    } catch (abandonError) {
+      setError(apiErrorMessage(abandonError));
     } finally {
       setSaving(false);
     }
@@ -675,12 +701,13 @@ export function DocumentWidget({ disabled = false }: { disabled?: boolean }) {
             <TaskWorkspace tasks={tasks} activeTask={activeTask} activeSection={activeSection}
               activeSectionId={activeSectionId} creating={creatingTask} outline={outline}
               description={taskDescription} selected={selectedHeadingIndexes} draftContent={draftContent}
-              aiInstruction={aiInstruction} saving={saving} disabled={disabled}
+              saving={saving} disabled={disabled}
               onCreateStart={() => setCreatingTask(true)} onCreateCancel={() => setCreatingTask(false)}
               onOpenTask={openTask} onSection={setActiveSectionId} onDescription={setTaskDescription}
               onToggle={toggleHeading} isHeadingDisabled={headingDisabled} onCreate={() => void createEditTask()}
-              onDraft={setDraftContent} onInstruction={setAiInstruction} onSave={() => void saveDraft()}
-              onRevise={() => void reviseWithAi()} onRetry={() => void retryTask()} onMerge={() => void mergeTask()} />
+              onDraft={setDraftContent} onSave={() => void saveDraft()} onRetry={() => void retryTask()}
+              onMerge={() => void mergeSection()} onAbandon={() => void abandonSection()}
+              onBack={() => { setActiveTask(null); setActiveSectionId(null); }} />
           ) : null}
         </div>
       </section>
@@ -762,79 +789,48 @@ function DocumentEditor({ content, dirty, saving, disabled, mode, outline, headi
 }
 
 function TaskWorkspace({ tasks, activeTask, activeSection, activeSectionId, creating, outline, description, selected,
-  draftContent, aiInstruction, saving, disabled, onCreateStart, onCreateCancel, onOpenTask, onSection,
-  onDescription, onToggle, isHeadingDisabled, onCreate, onDraft, onInstruction, onSave, onRevise, onRetry, onMerge }: {
+  draftContent, saving, disabled, onCreateStart, onCreateCancel, onOpenTask, onSection,
+  onDescription, onToggle, isHeadingDisabled, onCreate, onDraft, onSave, onRetry, onMerge, onAbandon, onBack }: {
   tasks: DocumentEditTask[]; activeTask: DocumentEditTask | null; activeSection: DocumentDraftSection | null;
   activeSectionId: string | null; creating: boolean; outline: DocumentOutline | null; description: string;
-  selected: Set<number>; draftContent: string; aiInstruction: string; saving: boolean; disabled: boolean;
+  selected: Set<number>; draftContent: string; saving: boolean; disabled: boolean;
   onCreateStart: () => void; onCreateCancel: () => void; onOpenTask: (task: DocumentEditTask) => void;
   onSection: (id: string) => void; onDescription: (value: string) => void; onToggle: (heading: DocumentHeading) => void;
   isHeadingDisabled: (heading: DocumentHeading) => boolean; onCreate: () => void; onDraft: (value: string) => void;
-  onInstruction: (value: string) => void; onSave: () => void; onRevise: () => void; onRetry: () => void; onMerge: () => void;
+  onSave: () => void; onRetry: () => void; onMerge: () => void; onAbandon: () => void; onBack: () => void;
 }) {
-  return <div className="flex h-full min-h-0 flex-col">
-    <header className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-2">
-      <h3 className="shrink-0 text-[11.5px] font-extrabold text-ink">修改任务</h3>
-      <TaskSelect tasks={tasks} activeTask={creating ? null : activeTask} onOpenTask={onOpenTask} />
-      {activeTask && !creating ? <span className={statusBadge(activeTask.status)}>{taskStatusLabel(activeTask.status)}</span> : null}
-      <button type="button" className="btn-primary ml-auto h-8 text-[10.5px]" onClick={onCreateStart}>
-        <Plus className="h-3.5 w-3.5" />新建任务
-      </button>
-    </header>
-    {activeTask && !creating ? (
-      <div className="flex items-center gap-1.5 overflow-x-auto border-b border-line bg-white px-3 py-2" aria-label="任务章节">
-        {activeTask.sections.map((section) => (
-          <button key={section.id} type="button" onClick={() => onSection(section.id)}
-            className={classNames("flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold transition",
-              activeSectionId === section.id ? "border-accent-ring bg-accent-soft text-accent" : "border-line bg-white text-ink-muted hover:bg-app-soft")}>
-            {section.ai_status === "queued" || section.ai_status === "running" ? <Loader2 className="h-3 w-3 animate-spin" />
-              : section.ai_status === "failed" ? <X className="h-3 w-3 text-danger" /> : <Check className="h-3 w-3 text-success-deep" />}
-            <span className="max-w-44 truncate">{section.heading}</span>
-          </button>
-        ))}
-      </div>
-    ) : null}
-    <section className="min-h-0 flex-1 bg-white">
-      {creating ? <TaskCreator outline={outline} description={description} selected={selected} saving={saving} disabled={disabled}
-        onDescription={onDescription} onToggle={onToggle} isDisabled={isHeadingDisabled} onCancel={onCreateCancel} onCreate={onCreate} /> : null}
-      {!creating && activeTask ? <TaskReview task={activeTask} section={activeSection} draftContent={draftContent}
-        aiInstruction={aiInstruction} saving={saving} disabled={disabled} onDraft={onDraft} onInstruction={onInstruction}
-        onSave={onSave} onRevise={onRevise} onRetry={onRetry} onMerge={onMerge} /> : null}
-      {!creating && !activeTask ? <div className="flex h-full flex-col items-center justify-center text-center text-ink-muted">
-        <FileText className="h-7 w-7 text-ink-subtle" /><p className="mt-2 text-[11px] font-semibold">选择任务或新建修改任务</p>
-        <button type="button" className="btn-primary mt-3 h-8 text-[10.5px]" onClick={onCreateStart}><Plus className="h-3.5 w-3.5" />新建任务</button>
-      </div> : null}
-    </section>
-  </div>;
-}
-
-function TaskSelect({ tasks, activeTask, onOpenTask }: {
-  tasks: DocumentEditTask[];
-  activeTask: DocumentEditTask | null;
-  onOpenTask: (task: DocumentEditTask) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return <span className="relative min-w-0">
-    <button type="button" onClick={() => setOpen((current) => !current)} disabled={!tasks.length}
-      className="flex h-8 min-w-0 items-center gap-1.5 rounded-md border border-line bg-white px-2.5 text-[11px] font-semibold text-ink transition hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-50"
-      aria-label="选择任务" aria-expanded={open}>
-      {activeTask ? <><TaskIcon task={activeTask} /><span className="max-w-56 truncate">{activeTask.title}</span></>
-        : <span className="text-ink-muted">{tasks.length ? "选择任务" : "暂无任务"}</span>}
-      <ChevronDown className={classNames("h-3.5 w-3.5 shrink-0 text-ink-subtle transition", open && "rotate-180")} />
-    </button>
-    {open ? <>
-      <span className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} />
-      <span className="absolute left-0 top-full z-40 mt-1 block max-h-72 w-72 overflow-y-auto rounded-lg border border-line bg-white p-1 shadow-xl">
-        {tasks.map((task) => <button key={task.id} type="button" onClick={() => { onOpenTask(task); setOpen(false); }}
-          className={classNames("mb-0.5 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left",
-            activeTask?.id === task.id ? "bg-accent-soft text-accent" : "text-ink-muted hover:bg-app-soft")}>
+  return <div className="h-full min-h-0 bg-white">
+    {creating ? <section className="h-full min-h-0">
+      <TaskCreator outline={outline} description={description} selected={selected} saving={saving} disabled={disabled}
+        onDescription={onDescription} onToggle={onToggle} isDisabled={isHeadingDisabled} onCancel={onCreateCancel} onCreate={onCreate} />
+    </section> : null}
+    {!creating && activeTask ? <TaskReview task={activeTask} section={activeSection} draftContent={draftContent}
+      activeSectionId={activeSectionId} saving={saving} disabled={disabled} onSection={onSection} onDraft={onDraft}
+      onSave={onSave} onRetry={onRetry} onMerge={onMerge} onAbandon={onAbandon} onBack={onBack} /> : null}
+    {!creating && !activeTask ? <section className="flex h-full min-h-0 flex-col bg-app-soft">
+      <header className="flex items-center gap-2 border-b border-line bg-white px-3 py-2">
+        <div className="min-w-0 flex-1"><h3 className="text-[12px] font-extrabold text-ink">修改任务</h3>
+          <p className="mt-0.5 text-[9px] text-ink-muted">选择一个任务检视草稿，或创建新的章节修改任务</p></div>
+        <button type="button" className="btn-primary h-8 text-[10.5px]" onClick={onCreateStart} aria-label="新建修改任务">
+          <Plus className="h-3.5 w-3.5" />新建任务
+        </button>
+      </header>
+      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 gap-2 overflow-y-auto p-3 xl:grid-cols-2" aria-label="修改任务列表">
+        {tasks.map((task) => <button key={task.id} type="button" onClick={() => onOpenTask(task)}
+          className="flex items-start gap-2 rounded-lg border border-line bg-white p-3 text-left transition hover:border-accent-ring hover:shadow-sm">
           <TaskIcon task={task} />
-          <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{task.title}</strong>
-            <span className="block text-[8.5px]">{task.sections.length} 章 · {taskStatusLabel(task.status)}</span></span>
+          <span className="min-w-0 flex-1"><span className="flex items-start gap-2"><strong className="min-w-0 flex-1 truncate text-[11px] text-ink">{task.title}</strong>
+            <span className={statusBadge(task.status)}>{taskStatusLabel(task.status)}</span></span>
+            <span className="mt-1 block line-clamp-2 text-[9.5px] leading-4 text-ink-muted">{task.description}</span>
+            <span className="mt-2 block text-[8.5px] text-ink-subtle">{task.sections.length} 个章节 · 更新于 {formatDate(task.updated_at)}</span></span>
         </button>)}
-      </span>
-    </> : null}
-  </span>;
+        {!tasks.length ? <div className="col-span-full flex min-h-56 flex-col items-center justify-center text-center text-ink-muted">
+          <FileText className="h-7 w-7 text-ink-subtle" /><p className="mt-2 text-[11px] font-semibold">还没有修改任务</p>
+          <button type="button" className="btn-primary mt-3 h-8 text-[10.5px]" onClick={onCreateStart}><Plus className="h-3.5 w-3.5" />创建修改任务</button>
+        </div> : null}
+      </div>
+    </section> : null}
+  </div>;
 }
 
 function TaskCreator({ outline, description, selected, saving, disabled, onDescription, onToggle, isDisabled, onCancel, onCreate }: {
@@ -867,48 +863,79 @@ function TaskCreator({ outline, description, selected, saving, disabled, onDescr
   </div>;
 }
 
-function TaskReview({ task, section, draftContent, aiInstruction, saving, disabled, onDraft, onInstruction, onSave, onRevise, onRetry, onMerge }: {
-  task: DocumentEditTask; section: DocumentDraftSection | null; draftContent: string; aiInstruction: string;
-  saving: boolean; disabled: boolean; onDraft: (value: string) => void; onInstruction: (value: string) => void;
-  onSave: () => void; onRevise: () => void; onRetry: () => void; onMerge: () => void;
+function TaskReview({ task, section, activeSectionId, draftContent, saving, disabled, onSection, onDraft,
+  onSave, onRetry, onMerge, onAbandon, onBack }: {
+  task: DocumentEditTask; section: DocumentDraftSection | null; activeSectionId: string | null; draftContent: string;
+  saving: boolean; disabled: boolean; onSection: (id: string) => void; onDraft: (value: string) => void;
+  onSave: () => void; onRetry: () => void; onMerge: () => void; onAbandon: () => void; onBack: () => void;
 }) {
   const sectionBusy = section?.ai_status === "queued" || section?.ai_status === "running";
-  const editable = task.status === "reviewing" && !sectionBusy;
-  const mergeable = task.status === "reviewing" && task.sections.every((item) => item.ai_status === "ready");
+  const sectionPending = section?.review_status === "pending";
+  const editable = task.status === "reviewing" && sectionPending && !sectionBusy;
+  const draftDirty = Boolean(section && draftContent !== section.draft_content);
+  const mergeable = task.status === "reviewing" && sectionPending && section?.ai_status === "ready";
+  const abandonable = sectionPending && (task.status === "reviewing" || task.status === "failed" || task.status === "conflict");
+  const closed = task.status === "merged" || task.status === "completed" || task.status === "abandoned";
+  const resolvedCount = task.sections.filter((item) => item.review_status !== "pending").length;
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-2">
-      <div className="min-w-0 flex-1"><h3 className="truncate text-[11px] font-bold text-ink">{task.description}</h3>
-        <p className="mt-0.5 text-[9px] text-ink-muted">{section ? `当前章节：${section.heading}` : "选择章节进行检视"}</p></div>
-      {task.sections.some((item) => item.ai_status === "failed") && task.status !== "conflict" ? <button type="button" className="btn-outline h-8 text-[10px]" onClick={onRetry} disabled={saving}>
+      <button type="button" onClick={onBack} aria-label="返回任务列表" title="返回任务列表"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-white text-ink-muted hover:text-ink">
+        <ArrowLeft className="h-3.5 w-3.5" />
+      </button>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-[11.5px] font-extrabold text-ink">{task.title}</h3>
+        <span className={statusBadge(task.status)}>{taskStatusLabel(task.status)}</span></div>
+        <p className="mt-0.5 truncate text-[9px] text-ink-muted">{task.description} · 已处理 {resolvedCount}/{task.sections.length}</p></div>
+      {task.sections.some((item) => item.review_status === "pending" && item.ai_status === "failed") && task.status !== "conflict" ? <button type="button" className="btn-outline h-8 text-[10px]" onClick={onRetry} disabled={saving}>
         <RotateCcw className="h-3.5 w-3.5" />重试</button> : null}
-      {mergeable ? <button type="button" className="btn-primary h-8 text-[10.5px]" onClick={onMerge} disabled={saving || disabled}>
-        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}合并全部</button> : null}
+      {abandonable ? <button type="button" className="btn-outline h-8 border-danger-ring text-[10px] text-danger-deep hover:bg-danger-soft" onClick={onAbandon} disabled={saving || disabled}>
+        <Trash2 className="h-3.5 w-3.5" />放弃本章节</button> : null}
+      {mergeable && !draftDirty ? <button type="button" className="btn-primary h-8 text-[10.5px]" onClick={onMerge} disabled={saving || disabled}
+        title="只合入当前章节">
+        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}合入本章节</button> : null}
     </header>
+    {closed ? <div className={classNames("border-b px-3 py-2 text-[10px]",
+      task.status === "merged" || task.status === "completed" ? "border-success-ring bg-success-soft text-success-deep" : "border-line bg-app-soft text-ink-muted")}>
+      {task.status === "merged" ? "此任务的所有章节均已合入文档。" : task.status === "completed" ? "此任务的章节已分别完成合入或放弃。" : "此任务的所有章节均已放弃，文档原文未发生变化。"}
+    </div> : null}
     {task.error ? <p className="border-b border-danger-ring bg-danger-soft px-3 py-2 text-[10px] text-danger-deep">{task.error}</p> : null}
-    {section ? <div className="grid min-h-0 flex-1 grid-rows-2">
-      <div className="flex min-h-0 flex-col border-b border-line bg-app-soft">
-        <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">原文快照</label><span className="text-[8.5px] text-ink-subtle">{section.heading}</span></div>
-        <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap p-3 font-mono text-[11px] leading-5 text-ink-muted">{section.base_content}</pre>
-      </div>
-      <div className="flex min-h-0 flex-col">
-        <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">检视草稿</label><span className="text-[8.5px] text-ink-subtle">版本 {section.draft_revision} · {section.updated_by}</span></div>
-        <textarea value={draftContent} onChange={(event) => onDraft(event.target.value)} disabled={!editable || saving} spellCheck={false}
-          aria-label="章节草稿" className="min-h-[180px] flex-1 resize-none p-3 font-mono text-[11px] leading-5 text-ink outline-none disabled:bg-app-soft" />
-        {section.ai_error ? <p className="border-t border-danger-ring bg-danger-soft px-3 py-1.5 text-[9.5px] text-danger-deep">{section.ai_error}</p> : null}
-        <div className="border-t border-line p-2.5">
-          <div className="flex flex-wrap gap-2"><input value={aiInstruction} onChange={(event) => onInstruction(event.target.value)} disabled={sectionBusy || saving}
-            placeholder="让 AI 继续修改当前章节…" aria-label="AI 修改要求" className="input-soft min-w-[180px] flex-1 text-[10.5px]" />
-            <button type="button" className="btn-outline h-8 text-[10px]" disabled={!editable || saving || draftContent === section.draft_content} onClick={onSave}><Save className="h-3.5 w-3.5" />保存草稿</button>
-            <button type="button" className="btn-primary h-8 text-[10px]" disabled={disabled || saving || sectionBusy || !aiInstruction.trim()} onClick={onRevise}>
-              {sectionBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}AI 修改</button></div>
+    <div className="grid min-h-0 flex-1 grid-cols-[145px_minmax(0,1fr)]">
+      <aside className="min-h-0 overflow-y-auto border-r border-line bg-app-soft p-1.5" aria-label="任务章节">
+        <p className="px-1.5 pb-1.5 pt-1 text-[9px] font-bold text-ink-subtle">任务章节 · {task.sections.length}</p>
+        {task.sections.map((item) => <button key={item.id} type="button" onClick={() => onSection(item.id)}
+          className={classNames("mb-1 flex w-full items-start gap-1.5 rounded-md px-2 py-2 text-left text-[10px] transition",
+            activeSectionId === item.id ? "bg-white font-bold text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
+          {item.review_status === "merged" ? <FileCheck2 className="mt-0.5 h-3 w-3 shrink-0 text-success-deep" />
+            : item.review_status === "abandoned" ? <X className="mt-0.5 h-3 w-3 shrink-0 text-ink-subtle" />
+              : item.ai_status === "queued" || item.ai_status === "running" ? <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+                : item.ai_status === "failed" ? <X className="mt-0.5 h-3 w-3 shrink-0 text-danger" /> : <Check className="mt-0.5 h-3 w-3 shrink-0 text-success-deep" />}
+          <span className="min-w-0 flex-1 truncate">{item.heading}</span>
+        </button>)}
+      </aside>
+      {section ? <div className="grid min-h-0 grid-rows-2">
+        <div className="flex min-h-0 flex-col border-b border-line bg-app-soft">
+          <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">原文快照</label><span className="truncate text-[8.5px] text-ink-subtle">{section.heading}</span></div>
+          <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap p-3 font-mono text-[11px] leading-5 text-ink-muted">{section.base_content}</pre>
         </div>
-      </div>
-    </div> : <div className="flex h-full items-center justify-center text-[11px] text-ink-muted">选择任务章节进行检视</div>}
+        <div className="flex min-h-0 flex-col">
+          <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">检视草稿</label><span className="text-[8.5px] text-ink-subtle">版本 {section.draft_revision} · {section.updated_by}</span></div>
+          <textarea value={draftContent} onChange={(event) => onDraft(event.target.value)} disabled={!editable || saving} spellCheck={false}
+            aria-label="章节草稿" className="min-h-[150px] flex-1 resize-none p-3 font-mono text-[11px] leading-5 text-ink outline-none disabled:bg-app-soft" />
+          {section.ai_error ? <p className="border-t border-danger-ring bg-danger-soft px-3 py-1.5 text-[9.5px] text-danger-deep">{section.ai_error}</p> : null}
+          <div className="flex items-center gap-2 border-t border-line px-3 py-2">
+            <p className="min-w-0 flex-1 text-[9px] text-ink-muted">{section.review_status === "merged" ? "此章节草稿已合入正式文档。"
+              : section.review_status === "abandoned" ? "此章节草稿已放弃，原文未修改。"
+                : <><Sparkles className="mr-1 inline h-3 w-3 text-accent" />需要 AI 继续调整？请在左侧对话中描述要求。</>}</p>
+            <button type="button" className="btn-outline h-8 shrink-0 text-[10px]" disabled={!editable || saving || draftContent === section.draft_content} onClick={onSave}><Save className="h-3.5 w-3.5" />保存草稿</button>
+          </div>
+        </div>
+      </div> : <div className="flex h-full items-center justify-center text-[11px] text-ink-muted">选择章节进行检视</div>}
+    </div>
   </div>;
 }
 
 function TaskIcon({ task }: { task: DocumentEditTask }) {
-  if (task.status === "merged") return <FileCheck2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-deep" />;
+  if (task.status === "merged" || task.status === "completed") return <FileCheck2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-deep" />;
   if (taskPending(task)) return <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-accent" />;
   return <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />;
 }
@@ -948,7 +975,7 @@ function DocumentTree({ node, depth, selectedName, selectedFolder, expanded, ren
       const open = expanded.has(folder.path);
       const isRenaming = renaming?.kind === "folder" && renaming.path === folder.path;
       return <div key={folder.path}>
-        <div role="button" tabIndex={0} onClick={() => onFolder(folder.path)}
+        <div role="button" tabIndex={0} aria-label={folder.name} onClick={() => onFolder(folder.path)}
           onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onFolder(folder.path); } }}
           style={indent}
           className={classNames("group mb-0.5 flex w-full cursor-pointer items-center gap-1 rounded py-1.5 pr-1 text-left text-[10.5px]",
@@ -968,7 +995,7 @@ function DocumentTree({ node, depth, selectedName, selectedFolder, expanded, ren
     })}
     {node.documents.map((document) => {
       const isRenaming = renaming?.kind === "document" && renaming.path === document.name;
-      return <div key={document.name} role="button" tabIndex={0} onClick={() => onDocument(document.name)}
+      return <div key={document.name} role="button" tabIndex={0} aria-label={baseName(document.name)} onClick={() => onDocument(document.name)}
         onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onDocument(document.name); } }}
         style={indent}
         className={classNames("group mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded py-1.5 pr-1 text-left",
@@ -1127,7 +1154,7 @@ function editableDocumentHeadings(outline: DocumentOutline): DocumentHeading[] {
 }
 
 function taskPending(task: DocumentEditTask): boolean { return task.status === "queued" || task.status === "running" || task.status === "merging" || task.sections.some((item) => item.ai_status === "queued" || item.ai_status === "running"); }
-function taskStatusLabel(status: DocumentEditTask["status"]): string { return ({ queued: "排队中", running: "AI 修改中", reviewing: "待检视", merging: "合并中", merged: "已合并", conflict: "存在冲突", failed: "执行失败" })[status]; }
-function statusBadge(status: DocumentEditTask["status"]): string { return classNames("rounded px-1.5 py-0.5 text-[8.5px] font-bold", status === "merged" ? "bg-success-soft text-success-deep" : status === "conflict" || status === "failed" ? "bg-danger-soft text-danger-deep" : status === "reviewing" ? "bg-warning-soft text-warning-deep" : "bg-accent-soft text-accent"); }
+function taskStatusLabel(status: DocumentEditTask["status"]): string { return ({ queued: "排队中", running: "AI 修改中", reviewing: "待检视", merging: "章节合入中", merged: "全部已合入", completed: "已处理", abandoned: "全部已放弃", conflict: "存在冲突", failed: "执行失败" })[status]; }
+function statusBadge(status: DocumentEditTask["status"]): string { return classNames("rounded px-1.5 py-0.5 text-[8.5px] font-bold", status === "merged" || status === "completed" ? "bg-success-soft text-success-deep" : status === "conflict" || status === "failed" ? "bg-danger-soft text-danger-deep" : status === "reviewing" ? "bg-warning-soft text-warning-deep" : status === "abandoned" ? "bg-app-soft text-ink-muted" : "bg-accent-soft text-accent"); }
 function formatBytes(value: number): string { return value < 1024 ? `${value} B` : `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`; }
 function formatDate(value: string): string { return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
