@@ -16,6 +16,7 @@ export function MainWidgetRenderer({
   onOpenAina,
   onPrompt,
   onDocumentTaskContextChange,
+  refreshToken,
 }: {
   ainaId: string;
   widget: WidgetDefinition;
@@ -23,9 +24,10 @@ export function MainWidgetRenderer({
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
   onDocumentTaskContextChange?: (context: DocumentTaskContext | null) => void;
+  refreshToken?: string | null;
 }) {
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
-  if (widget.kind === "document") return <DocumentWidget disabled={disabled} onTaskContextChange={onDocumentTaskContextChange} />;
+  if (widget.kind === "document") return <DocumentWidget disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   if (ainaId === "unibot-assistant") {
     return <AssistantMainWidget widget={widget} disabled={disabled} onOpenAina={onOpenAina} />;

@@ -620,13 +620,6 @@ class AgentRuntime:
                 ),
             )
             conversation = await self.repository.get_conversation(conversation.id)
-            if request.ui_context:
-                messages = list(conversation.messages)
-                latest = messages[-1]
-                messages[-1] = latest.model_copy(
-                    update={"content": f"{latest.content}\n\n<ui_context>\n{request.ui_context}\n</ui_context>"}
-                )
-                conversation = conversation.model_copy(update={"messages": messages})
             requested_capability = request.capability
             requested_source = "explicit_capability" if request.capability is not None else None
             runtime_model = await self.repository.get_default_model_runtime(
@@ -640,6 +633,7 @@ class AgentRuntime:
                     requested_capability=requested_capability,
                     requested_source=requested_source,
                     preferred_aina_id=request.preferred_aina_id,
+                    ui_context=request.ui_context,
                     event_sink=event_sink,
                 )
         except PlatformError as exc:
@@ -704,8 +698,10 @@ class AgentRuntime:
         requested_capability: str | None,
         requested_source: str | None,
         preferred_aina_id: str | None,
+        ui_context: str | None,
         event_sink: EventSink | None,
     ) -> ChatResponse:
+        conversation = _with_ui_context(conversation, ui_context)
         latest_user_message = conversation.messages[-1].content
         memory_context = await self._memory_context(conversation, latest_user_message)
         all_capabilities = await self._available_capabilities(conversation)
@@ -715,10 +711,13 @@ class AgentRuntime:
                 raise PlatformError("INVALID_REQUEST", "The forced capability could not be resolved")
             selected = all_capabilities[forced_function]
             if selected.kind == "aina":
-                conversation = await self.repository.bind_conversation_aina(
-                    conversation.id,
-                    selected.capability_id,
-                    mark_used=True,
+                conversation = _with_ui_context(
+                    await self.repository.bind_conversation_aina(
+                        conversation.id,
+                        selected.capability_id,
+                        mark_used=True,
+                    ),
+                    ui_context,
                 )
                 await self._record_scope_resolution(
                     trace_id,
@@ -763,10 +762,13 @@ class AgentRuntime:
             if preferred_function is None:
                 raise PlatformError("INVALID_REQUEST", "The preferred AINA could not be resolved")
             selected = all_capabilities[preferred_function]
-            conversation = await self.repository.bind_conversation_aina(
-                conversation.id,
-                selected.capability_id,
-                mark_used=True,
+            conversation = _with_ui_context(
+                await self.repository.bind_conversation_aina(
+                    conversation.id,
+                    selected.capability_id,
+                    mark_used=True,
+                ),
+                ui_context,
             )
             await self._record_scope_resolution(
                 trace_id,
@@ -799,10 +801,13 @@ class AgentRuntime:
                 event_sink=event_sink,
             )
             if route.capability is not None and route.assistant_message is not None:
-                conversation = await self.repository.bind_conversation_aina(
-                    conversation.id,
-                    route.capability.capability_id,
-                    mark_used=True,
+                conversation = _with_ui_context(
+                    await self.repository.bind_conversation_aina(
+                        conversation.id,
+                        route.capability.capability_id,
+                        mark_used=True,
+                    ),
+                    ui_context,
                 )
                 await self._record_scope_resolution(
                     trace_id,
@@ -1907,6 +1912,18 @@ def _normalized_route_message(
             }
         ],
     }
+
+
+def _with_ui_context(conversation: Conversation, ui_context: str | None) -> Conversation:
+    if not ui_context or not conversation.messages:
+        return conversation
+    messages = list(conversation.messages)
+    latest = messages[-1]
+    context_block = f"<ui_context>\n{ui_context}\n</ui_context>"
+    if context_block in latest.content:
+        return conversation
+    messages[-1] = latest.model_copy(update={"content": f"{latest.content}\n\n{context_block}"})
+    return conversation.model_copy(update={"messages": messages})
 
 
 def _memory_context_block(memories: list[MemoryRecord]) -> str:

@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
-import { api, apiErrorMessage } from "@/lib/api";
+import { api, ApiError, apiErrorMessage } from "@/lib/api";
 import { documentApiPath } from "@/lib/documentPaths";
 import { classNames } from "@/lib/utils";
 import type {
@@ -57,8 +57,9 @@ interface ConfirmRequest {
   resolve: (confirmed: boolean) => void;
 }
 
-export function DocumentWidget({ disabled = false, onTaskContextChange }: {
+export function DocumentWidget({ disabled = false, refreshToken, onTaskContextChange }: {
   disabled?: boolean;
+  refreshToken?: string | null;
   onTaskContextChange?: (context: DocumentTaskContext | null) => void;
 }) {
   const [items, setItems] = useState<DocumentSummary[]>([]);
@@ -87,6 +88,7 @@ export function DocumentWidget({ disabled = false, onTaskContextChange }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const appliedRefreshToken = useRef<string | null>(null);
 
   function requestConfirm(options: { title: string; message: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
     return new Promise((resolve) => {
@@ -129,7 +131,13 @@ export function DocumentWidget({ disabled = false, onTaskContextChange }: {
     if (!selectedName || !hasPendingWork) return;
     const timer = window.setInterval(() => void refreshTasks(selectedName, activeTask?.id), 800);
     return () => window.clearInterval(timer);
-  }, [activeTask?.id, hasPendingWork, selectedName]);
+  }, [activeSectionId, activeTask?.id, draftContent, hasPendingWork, selectedName]);
+
+  useEffect(() => {
+    if (!refreshToken || !selectedName || appliedRefreshToken.current === refreshToken) return;
+    appliedRefreshToken.current = refreshToken;
+    void syncFromConversation(selectedName);
+  }, [refreshToken, selectedName]);
 
   useEffect(() => {
     if (!activeSection) {
@@ -141,8 +149,7 @@ export function DocumentWidget({ disabled = false, onTaskContextChange }: {
   }, [activeSection?.id, activeSection?.draft_revision]);
 
   useEffect(() => {
-    if (mode !== "tasks" || creatingTask || !selectedName || !activeTask || !activeSection
-      || activeSection.review_status !== "pending") {
+    if (mode !== "tasks" || creatingTask || !selectedName || !activeTask || !activeSection) {
       onTaskContextChange?.(null);
       return;
     }
@@ -156,7 +163,19 @@ export function DocumentWidget({ disabled = false, onTaskContextChange }: {
       draftRevision: activeSection.draft_revision,
     });
     return () => onTaskContextChange?.(null);
-  }, [activeSection, activeTask, creatingTask, mode, onTaskContextChange, selectedName]);
+  }, [
+    activeSection?.draft_revision,
+    activeSection?.heading,
+    activeSection?.id,
+    activeSection?.review_status,
+    activeTask?.id,
+    activeTask?.status,
+    activeTask?.title,
+    creatingTask,
+    mode,
+    onTaskContextChange,
+    selectedName,
+  ]);
 
   async function refreshDocuments(preferredName?: string | null) {
     setLoading(true);
@@ -228,7 +247,40 @@ export function DocumentWidget({ disabled = false, onTaskContextChange }: {
       const taskId = activeTaskId ?? activeTask?.id;
       if (taskId) {
         const updated = response.items.find((item) => item.id === taskId);
-        if (updated) setActiveTask(updated);
+        if (updated) {
+          setActiveTask((current) => preserveUnsavedDraft(current, updated, activeSectionId, draftContent));
+        }
+      }
+    } catch (loadError) {
+      setError(apiErrorMessage(loadError));
+    }
+  }
+
+  async function syncFromConversation(name: string) {
+    try {
+      const actorQuery = new URLSearchParams(ACTOR);
+      const path = documentApiPath(name);
+      const [tree, taskList, document, nextOutline] = await Promise.all([
+        api.get<DocumentTreeResponse>(`/documents/tree?${actorQuery}`),
+        api.get<DocumentEditTaskListResponse>(`/documents/${path}/edit-tasks?${actorQuery}`),
+        dirty ? Promise.resolve(null) : api.get<DocumentRecord>(`/documents/${path}?${actorQuery}`),
+        dirty ? Promise.resolve(null) : api.get<DocumentOutline>(`/documents/${path}/outline?${actorQuery}`),
+      ]);
+      setItems(tree.documents);
+      setFolders(tree.folders);
+      setTasks(taskList.items);
+      setActiveTask((current) => {
+        if (!current) return null;
+        const updated = taskList.items.find((item) => item.id === current.id);
+        return updated ? preserveUnsavedDraft(current, updated, activeSectionId, draftContent) : current;
+      });
+      if (document && nextOutline) {
+        setContent(document.content);
+        setSavedContent(document.content);
+        setOutline(nextOutline);
+        setEditHeadingIndex((current) => nextOutline.headings.some((heading) => heading.index === current)
+          ? current
+          : editableDocumentHeadings(nextOutline)[0]?.index ?? null);
       }
     } catch (loadError) {
       setError(apiErrorMessage(loadError));
@@ -545,7 +597,8 @@ export function DocumentWidget({ disabled = false, onTaskContextChange }: {
       await refreshListOnly();
       setError(null);
     } catch (mergeError) {
-      setError(apiErrorMessage(mergeError));
+      if (mergeError instanceof ApiError && mergeError.status === 409) setError(null);
+      else setError(apiErrorMessage(mergeError));
       await refreshTasks(selectedName, activeTask.id);
     } finally {
       setSaving(false);
@@ -869,6 +922,7 @@ function TaskReview({ task, section, activeSectionId, draftContent, saving, disa
   saving: boolean; disabled: boolean; onSection: (id: string) => void; onDraft: (value: string) => void;
   onSave: () => void; onRetry: () => void; onMerge: () => void; onAbandon: () => void; onBack: () => void;
 }) {
+  const [reviewView, setReviewView] = useState<"diff" | "edit">("diff");
   const sectionBusy = section?.ai_status === "queued" || section?.ai_status === "running";
   const sectionPending = section?.review_status === "pending";
   const editable = task.status === "reviewing" && sectionPending && !sectionBusy;
@@ -877,6 +931,8 @@ function TaskReview({ task, section, activeSectionId, draftContent, saving, disa
   const abandonable = sectionPending && (task.status === "reviewing" || task.status === "failed" || task.status === "conflict");
   const closed = task.status === "merged" || task.status === "completed" || task.status === "abandoned";
   const resolvedCount = task.sections.filter((item) => item.review_status !== "pending").length;
+  const lineDiff = useMemo(() => buildLineDiff(section?.base_content ?? "", draftContent), [draftContent, section?.base_content]);
+  useEffect(() => setReviewView("diff"), [section?.id]);
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-2">
       <button type="button" onClick={onBack} aria-label="返回任务列表" title="返回任务列表"
@@ -912,26 +968,112 @@ function TaskReview({ task, section, activeSectionId, draftContent, saving, disa
           <span className="min-w-0 flex-1 truncate">{item.heading}</span>
         </button>)}
       </aside>
-      {section ? <div className="grid min-h-0 grid-rows-2">
-        <div className="flex min-h-0 flex-col border-b border-line bg-app-soft">
-          <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">原文快照</label><span className="truncate text-[8.5px] text-ink-subtle">{section.heading}</span></div>
-          <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap p-3 font-mono text-[11px] leading-5 text-ink-muted">{section.base_content}</pre>
-        </div>
-        <div className="flex min-h-0 flex-col">
-          <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">检视草稿</label><span className="text-[8.5px] text-ink-subtle">版本 {section.draft_revision} · {section.updated_by}</span></div>
-          <textarea value={draftContent} onChange={(event) => onDraft(event.target.value)} disabled={!editable || saving} spellCheck={false}
-            aria-label="章节草稿" className="min-h-[150px] flex-1 resize-none p-3 font-mono text-[11px] leading-5 text-ink outline-none disabled:bg-app-soft" />
-          {section.ai_error ? <p className="border-t border-danger-ring bg-danger-soft px-3 py-1.5 text-[9.5px] text-danger-deep">{section.ai_error}</p> : null}
-          <div className="flex items-center gap-2 border-t border-line px-3 py-2">
-            <p className="min-w-0 flex-1 text-[9px] text-ink-muted">{section.review_status === "merged" ? "此章节草稿已合入正式文档。"
-              : section.review_status === "abandoned" ? "此章节草稿已放弃，原文未修改。"
-                : <><Sparkles className="mr-1 inline h-3 w-3 text-accent" />需要 AI 继续调整？请在左侧对话中描述要求。</>}</p>
-            <button type="button" className="btn-outline h-8 shrink-0 text-[10px]" disabled={!editable || saving || draftContent === section.draft_content} onClick={onSave}><Save className="h-3.5 w-3.5" />保存草稿</button>
+      {section ? <div className="flex min-h-0 flex-col">
+        <div className="flex items-center gap-2 border-b border-line bg-white px-3 py-1.5">
+          <div className="flex rounded-md bg-app-soft p-0.5" role="group" aria-label="章节检视方式">
+            <button type="button" onClick={() => setReviewView("diff")} aria-pressed={reviewView === "diff"}
+              className={classNames("rounded px-2 py-1 text-[9.5px] font-bold", reviewView === "diff" ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:text-ink")}>差异</button>
+            <button type="button" onClick={() => setReviewView("edit")} aria-pressed={reviewView === "edit"}
+              className={classNames("rounded px-2 py-1 text-[9.5px] font-bold", reviewView === "edit" ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:text-ink")}>对照编辑</button>
           </div>
+          <span className="min-w-0 flex-1 truncate text-[8.5px] text-ink-subtle">{section.heading} · 版本 {section.draft_revision} · {section.updated_by}</span>
+          <span className="shrink-0 font-mono text-[9px] text-success-deep">+{lineDiff.additions}</span>
+          <span className="shrink-0 font-mono text-[9px] text-danger-deep">-{lineDiff.deletions}</span>
+        </div>
+        <div className="min-h-0 flex-1">
+          {reviewView === "diff" ? <SectionDiff diff={lineDiff} /> : <div className="grid h-full min-h-0 grid-rows-2">
+            <div className="flex min-h-0 flex-col border-b border-line bg-app-soft">
+              <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">原文快照</label><span className="truncate text-[8.5px] text-ink-subtle">{section.heading}</span></div>
+              <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-[11px] leading-5 text-ink-muted">{section.base_content}</pre>
+            </div>
+            <div className="flex min-h-0 flex-col">
+              <div className="flex items-center justify-between border-b border-line px-3 py-1.5"><label className="text-[10px] font-bold text-ink-muted">检视草稿</label><span className="text-[8.5px] text-ink-subtle">版本 {section.draft_revision} · {section.updated_by}</span></div>
+              <textarea value={draftContent} onChange={(event) => onDraft(event.target.value)} disabled={!editable || saving} spellCheck={false}
+                aria-label="章节草稿" className="min-h-[150px] flex-1 resize-none p-3 font-mono text-[11px] leading-5 text-ink outline-none disabled:bg-app-soft" />
+            </div>
+          </div>}
+        </div>
+        {section.ai_error ? <p className="border-t border-danger-ring bg-danger-soft px-3 py-1.5 text-[9.5px] text-danger-deep">{section.ai_error}</p> : null}
+        <div className="flex items-center gap-2 border-t border-line px-3 py-2">
+          <p className="min-w-0 flex-1 text-[9px] text-ink-muted">{section.review_status === "merged" ? "此章节草稿已合入正式文档。"
+            : section.review_status === "abandoned" ? "此章节草稿已放弃，原文未修改。"
+              : <><Sparkles className="mr-1 inline h-3 w-3 text-accent" />需要 AI 继续调整？请在左侧对话中描述要求。</>}</p>
+          <button type="button" className="btn-outline h-8 shrink-0 text-[10px]" disabled={!editable || saving || draftContent === section.draft_content} onClick={onSave}><Save className="h-3.5 w-3.5" />保存草稿</button>
         </div>
       </div> : <div className="flex h-full items-center justify-center text-[11px] text-ink-muted">选择章节进行检视</div>}
     </div>
   </div>;
+}
+
+type LineDiffKind = "context" | "addition" | "deletion";
+
+interface LineDiffRow {
+  kind: LineDiffKind;
+  text: string;
+  oldLine: number | null;
+  newLine: number | null;
+}
+
+interface LineDiffResult {
+  rows: LineDiffRow[];
+  additions: number;
+  deletions: number;
+}
+
+function SectionDiff({ diff }: { diff: LineDiffResult }) {
+  return <div className="h-full min-h-0 overflow-auto bg-white font-mono text-[10.5px] leading-5" aria-label="章节差异">
+    <div className="sticky top-0 z-10 grid min-w-max grid-cols-[42px_42px_22px_minmax(480px,1fr)] border-b border-line bg-app-soft text-[8.5px] text-ink-subtle">
+      <span className="px-2 text-right">原</span><span className="border-l border-line px-2 text-right">新</span><span className="border-l border-line" />
+      <span className="px-2">内容</span>
+    </div>
+    {diff.rows.map((row, index) => <div key={`${index}:${row.kind}`}
+      className={classNames("grid min-w-max grid-cols-[42px_42px_22px_minmax(480px,1fr)]",
+        row.kind === "addition" ? "bg-success-soft" : row.kind === "deletion" ? "bg-danger-soft" : "hover:bg-app-soft/60")}>
+      <span className="select-none px-2 text-right text-ink-subtle">{row.oldLine ?? ""}</span>
+      <span className="select-none border-l border-line/70 px-2 text-right text-ink-subtle">{row.newLine ?? ""}</span>
+      <span className={classNames("select-none border-l border-line/70 text-center font-bold",
+        row.kind === "addition" ? "text-success-deep" : row.kind === "deletion" ? "text-danger-deep" : "text-ink-subtle")}>
+        {row.kind === "addition" ? "+" : row.kind === "deletion" ? "−" : " "}
+      </span>
+      <span className="whitespace-pre px-2 text-ink">{row.text || " "}</span>
+    </div>)}
+  </div>;
+}
+
+function buildLineDiff(original: string, draft: string): LineDiffResult {
+  const oldLines = original.split("\n");
+  const newLines = draft.split("\n");
+  const lengths = Array.from({ length: oldLines.length + 1 }, () => new Uint32Array(newLines.length + 1));
+  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex -= 1) {
+      lengths[oldIndex][newIndex] = oldLines[oldIndex] === newLines[newIndex]
+        ? lengths[oldIndex + 1][newIndex + 1] + 1
+        : Math.max(lengths[oldIndex + 1][newIndex], lengths[oldIndex][newIndex + 1]);
+    }
+  }
+
+  const rows: LineDiffRow[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  let additions = 0;
+  let deletions = 0;
+  while (oldIndex < oldLines.length || newIndex < newLines.length) {
+    if (oldIndex < oldLines.length && newIndex < newLines.length && oldLines[oldIndex] === newLines[newIndex]) {
+      rows.push({ kind: "context", text: oldLines[oldIndex], oldLine: oldIndex + 1, newLine: newIndex + 1 });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (oldIndex < oldLines.length
+      && (newIndex >= newLines.length || lengths[oldIndex + 1][newIndex] >= lengths[oldIndex][newIndex + 1])) {
+      rows.push({ kind: "deletion", text: oldLines[oldIndex], oldLine: oldIndex + 1, newLine: null });
+      deletions += 1;
+      oldIndex += 1;
+    } else {
+      rows.push({ kind: "addition", text: newLines[newIndex], oldLine: null, newLine: newIndex + 1 });
+      additions += 1;
+      newIndex += 1;
+    }
+  }
+  return { rows, additions, deletions };
 }
 
 function TaskIcon({ task }: { task: DocumentEditTask }) {
@@ -1151,6 +1293,21 @@ function editableDocumentHeadings(outline: DocumentOutline): DocumentHeading[] {
   if (outline.headings.length <= 1) return outline.headings;
   return outline.headings.filter((heading) => !outline.headings.every((item) =>
     heading.line_start <= item.line_start && heading.line_end >= item.line_end));
+}
+
+function preserveUnsavedDraft(
+  current: DocumentEditTask | null,
+  updated: DocumentEditTask,
+  activeSectionId: string | null,
+  draftContent: string,
+): DocumentEditTask {
+  if (!current || current.id !== updated.id || !activeSectionId) return updated;
+  const localSection = current.sections.find((item) => item.id === activeSectionId);
+  if (!localSection || draftContent === localSection.draft_content) return updated;
+  return {
+    ...updated,
+    sections: updated.sections.map((item) => item.id === activeSectionId ? localSection : item),
+  };
 }
 
 function taskPending(task: DocumentEditTask): boolean { return task.status === "queued" || task.status === "running" || task.status === "merging" || task.sections.some((item) => item.ai_status === "queued" || item.ai_status === "running"); }
