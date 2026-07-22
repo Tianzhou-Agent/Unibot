@@ -1,6 +1,7 @@
 from time import perf_counter
 
 import httpx
+import openai
 from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.api.dependencies import repository, settings
@@ -13,8 +14,8 @@ from tianzhou_agent_platform.core.model_settings import (
     ModelProviderView,
     ModelSettingsResponse,
     provider_view,
-    chat_completions_url,
 )
+from tianzhou_agent_platform.core.llm import create_openai_chat_model
 
 
 def create_model_settings_router() -> APIRouter:
@@ -118,29 +119,20 @@ def create_model_settings_router() -> APIRouter:
             from tianzhou_agent_platform.core.errors import not_found
 
             raise not_found("Model", model_id)
-        headers = {"Content-Type": "application/json"}
-        if provider.api_key:
-            headers["Authorization"] = f"Bearer {provider.api_key}"
         started = perf_counter()
         error: str | None = None
         try:
             client: httpx.AsyncClient = request.app.state.model_health_http_client
-            response = await client.post(
-                    chat_completions_url(provider.base_url),
-                    headers=headers,
-                    json={
-                        "model": model.model,
-                        "messages": [{"role": "user", "content": "Reply with OK."}],
-                        "max_tokens": 1,
-                        "stream": False,
-                    },
-                    timeout=provider.timeout_seconds,
+            chat_model = create_openai_chat_model(
+                model=model.model,
+                api_key=provider.api_key,
+                base_url=provider.base_url,
+                timeout_seconds=provider.timeout_seconds,
+                client=client,
+                max_completion_tokens=1,
             )
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data.get("choices"), list) or not data["choices"]:
-                raise ValueError("Provider response did not contain choices")
-        except (httpx.HTTPError, ValueError) as exc:
+            await chat_model.ainvoke([{"role": "user", "content": "Reply with OK."}])
+        except (openai.OpenAIError, ValueError) as exc:
             error = str(exc)
         return ModelHealthResult(
             status="unhealthy" if error else "healthy",

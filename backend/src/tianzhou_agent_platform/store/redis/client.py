@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from typing import Any
 
 from redis import asyncio as redis_async
@@ -100,6 +103,56 @@ class RedisStore:
         except RedisError as exc:
             raise self._map_redis_error(exc) from exc
         return WriteResult(written=bool(written))
+
+    @asynccontextmanager
+    async def lease(
+        self,
+        namespace: str,
+        key: str,
+        *,
+        ttl_seconds: int,
+    ) -> AsyncIterator[bool]:
+        """Acquire an ownership-safe redis-py lock and renew it while in use."""
+
+        ttl = self._ttl(ttl_seconds)
+        if ttl is None:
+            raise StorageValidationError("Redis lock TTL must be provided")
+        lock = self._client.lock(
+            self._redis_key(namespace, key),
+            timeout=ttl,
+            blocking=False,
+        )
+        try:
+            acquired = bool(await lock.acquire(blocking=False))
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        if not acquired:
+            yield False
+            return
+
+        stop_renewal = asyncio.Event()
+
+        async def renew() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(stop_renewal.wait(), timeout=max(1.0, ttl / 3))
+                    return
+                except TimeoutError:
+                    try:
+                        await lock.extend(ttl, replace_ttl=True)
+                    except RedisError:
+                        return
+
+        renewal_task = asyncio.create_task(renew())
+        try:
+            yield True
+        finally:
+            stop_renewal.set()
+            await renewal_task
+            try:
+                await lock.release()
+            except RedisError:
+                pass
 
     async def close(self) -> None:
         close = getattr(self._client, "aclose", None) or getattr(self._client, "close", None)

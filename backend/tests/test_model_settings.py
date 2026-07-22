@@ -131,7 +131,22 @@ def test_model_health_check_reports_latency_and_uses_selected_model() -> None:
 
     async def provider(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chat-health",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "team-fast",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "OK"},
+                    }
+                ],
+            },
+        )
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
     with TestClient(create_app(settings=_settings(), model_health_http_client=http_client)) as client:

@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import asyncio
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
+from a2a import types as a2a_types
+from a2a.client import A2ACardResolver, A2AClientError, ClientCallContext, ClientConfig, ClientFactory
+from google.protobuf.json_format import MessageToDict, ParseDict  # type: ignore[import-untyped]
+from google.protobuf.struct_pb2 import Struct, Value  # type: ignore[import-untyped]
 
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaInstallation,
     AinaInvokeRequest,
     AinaInvokeResponse,
     AinaManifest,
+    AinaOutput,
 )
 from tianzhou_agent_platform.aina.security.models import Authentication
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -57,6 +62,23 @@ class RemoteCapabilityGateway:
                 source="aina",
             )
         endpoint = str(manifest.runtime.endpoint).rstrip("/")
+        if manifest.runtime.protocol == "a2a":
+            card = await self._resolve_a2a_card(manifest)
+            result = {
+                "status": "healthy",
+                "protocol": "a2a",
+                "agent_card": MessageToDict(card, preserving_proto_field_name=True),
+            }
+            if manifest.health_check is not None:
+                result["health"] = await self._request_json(
+                    "GET",
+                    str(manifest.health_check),
+                    authentication=manifest.authentication,
+                    timeout=self.settings.capability_timeout_seconds,
+                    retries=0,
+                    source="aina",
+                )
+            return result
         describe = await self._request_json(
             "GET",
             f"{endpoint}/describe",
@@ -145,6 +167,15 @@ class RemoteCapabilityGateway:
                 status_code=400,
                 source="aina",
             )
+        if manifest.runtime.protocol == "a2a":
+            return await self._invoke_a2a(
+                manifest,
+                installation,
+                arguments=arguments,
+                call_id=call_id,
+                conversation_id=conversation_id,
+                trace_id=trace_id,
+            )
         missing_permissions = set(manifest.permissions) - set(installation.granted_permissions)
         if missing_permissions:
             raise PlatformError(
@@ -185,6 +216,136 @@ class RemoteCapabilityGateway:
                 status_code=502,
                 source="aina",
             ) from exc
+        return response, (perf_counter() - started) * 1000
+
+    async def _resolve_a2a_card(self, manifest: AinaManifest) -> a2a_types.AgentCard:
+        if manifest.runtime.type != "remote":
+            raise PlatformError(
+                "INVALID_REQUEST",
+                "A built-in AINA does not have an A2A Agent Card",
+                status_code=400,
+                source="aina",
+            )
+        resolver = A2ACardResolver(
+            httpx_client=self._client,
+            base_url=str(manifest.runtime.endpoint).rstrip("/"),
+        )
+        try:
+            return await resolver.get_agent_card(
+                http_kwargs={
+                    "headers": self._headers(manifest.authentication),
+                    "timeout": self.settings.capability_timeout_seconds,
+                }
+            )
+        except (A2AClientError, httpx.HTTPError, ValueError) as exc:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "The remote A2A Agent Card could not be resolved",
+                status_code=502,
+                retryable=True,
+                source="aina",
+            ) from exc
+
+    async def _invoke_a2a(
+        self,
+        manifest: AinaManifest,
+        installation: AinaInstallation,
+        *,
+        arguments: dict[str, Any],
+        call_id: str,
+        conversation_id: str,
+        trace_id: str,
+    ) -> tuple[AinaInvokeResponse, float]:
+        if manifest.runtime.type != "remote":
+            raise PlatformError(
+                "INVALID_REQUEST",
+                "A built-in AINA cannot be invoked through A2A",
+                status_code=400,
+                source="aina",
+            )
+        missing_permissions = set(manifest.permissions) - set(installation.granted_permissions)
+        if missing_permissions:
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                f"AINA is missing grants: {', '.join(sorted(missing_permissions))}",
+                status_code=403,
+                source="aina",
+            )
+        card = await self._resolve_a2a_card(manifest)
+        client = ClientFactory(
+            ClientConfig(
+                streaming=manifest.runtime.streaming,
+                httpx_client=self._client,
+                accepted_output_modes=["text/plain", "application/json"],
+            )
+        ).create(card)
+        data = ParseDict(arguments, Value())
+        metadata = ParseDict(
+            {
+                "user_id": installation.user_id,
+                "tenant_id": installation.tenant_id,
+                "trace_id": trace_id,
+                "permissions": installation.granted_permissions,
+            },
+            Struct(),
+        )
+        request = a2a_types.SendMessageRequest(
+            tenant=installation.tenant_id,
+            message=a2a_types.Message(
+                message_id=call_id or f"req_{uuid4().hex}",
+                context_id=conversation_id,
+                role=a2a_types.Role.ROLE_USER,
+                parts=[a2a_types.Part(data=data, media_type="application/json")],
+                metadata=metadata,
+            ),
+            configuration=a2a_types.SendMessageConfiguration(
+                accepted_output_modes=["text/plain", "application/json"],
+                return_immediately=manifest.runtime.async_tasks,
+            ),
+        )
+        context = ClientCallContext(
+            service_parameters=self._headers(manifest.authentication),
+            timeout=self.settings.capability_timeout_seconds,
+        )
+        started = perf_counter()
+        final_state = a2a_types.TaskState.TASK_STATE_COMPLETED
+        outputs: list[AinaOutput] = []
+        last_payload: dict[str, Any] | None = None
+        try:
+            async for event in client.send_message(request, context=context):
+                last_payload = MessageToDict(event, preserving_proto_field_name=True)
+                payload_kind = event.WhichOneof("payload")
+                if payload_kind == "task":
+                    final_state = event.task.status.state
+                    outputs.extend(_a2a_artifact_outputs(event.task.artifacts))
+                    if event.task.status.HasField("message"):
+                        outputs.extend(_a2a_message_outputs(event.task.status.message))
+                elif payload_kind == "message":
+                    outputs.extend(_a2a_message_outputs(event.message))
+                elif payload_kind == "status_update":
+                    final_state = event.status_update.status.state
+                    if event.status_update.status.HasField("message"):
+                        outputs.extend(_a2a_message_outputs(event.status_update.status.message))
+                elif payload_kind == "artifact_update":
+                    outputs.extend(_a2a_artifact_outputs([event.artifact_update.artifact]))
+        except (A2AClientError, httpx.HTTPError, ValueError) as exc:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "The remote A2A agent invocation failed",
+                status_code=502,
+                retryable=True,
+                source="aina",
+            ) from exc
+
+        status = _aina_status_from_a2a(final_state)
+        if status == "completed" and not outputs:
+            outputs.append(AinaOutput(type="a2a.task", content=last_payload or {}))
+        response = AinaInvokeResponse(
+            request_id=request.message.message_id,
+            status=status,
+            outputs=outputs,
+            trace_id=trace_id,
+        )
         return response, (perf_counter() - started) * 1000
 
     async def _request_json(
@@ -256,3 +417,45 @@ class RemoteCapabilityGateway:
                     source=source,
                 ) from exc
         raise AssertionError("unreachable")
+
+
+def _a2a_message_outputs(message: a2a_types.Message) -> list[AinaOutput]:
+    return [_a2a_part_output(part) for part in message.parts]
+
+
+def _a2a_artifact_outputs(artifacts: Any) -> list[AinaOutput]:
+    return [_a2a_part_output(part) for artifact in artifacts for part in artifact.parts]
+
+
+def _a2a_part_output(part: a2a_types.Part) -> AinaOutput:
+    content_kind = part.WhichOneof("content")
+    if content_kind == "text":
+        return AinaOutput(type=part.media_type or "text", content=part.text)
+    if content_kind == "data":
+        return AinaOutput(
+            type=part.media_type or "json",
+            content=MessageToDict(part.data, preserving_proto_field_name=True),
+        )
+    if content_kind == "url":
+        return AinaOutput(type=part.media_type or "url", content=part.url)
+    if content_kind == "raw":
+        return AinaOutput(
+            type=part.media_type or "binary",
+            content=MessageToDict(part, preserving_proto_field_name=True).get("raw", ""),
+        )
+    return AinaOutput(
+        type="a2a.part",
+        content=MessageToDict(part, preserving_proto_field_name=True),
+    )
+
+
+def _aina_status_from_a2a(
+    state: int,
+) -> Literal["completed", "failed", "input_required", "approval_required"]:
+    if state == a2a_types.TaskState.TASK_STATE_COMPLETED:
+        return "completed"
+    if state == a2a_types.TaskState.TASK_STATE_INPUT_REQUIRED:
+        return "input_required"
+    if state == a2a_types.TaskState.TASK_STATE_AUTH_REQUIRED:
+        return "approval_required"
+    return "failed"

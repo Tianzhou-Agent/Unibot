@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
+from apscheduler.triggers.interval import IntervalTrigger  # type: ignore[import-untyped]
+from croniter import croniter  # type: ignore[import-untyped]
 from pydantic import Field, field_validator, model_validator
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
@@ -37,7 +41,7 @@ class ScheduledAinaTaskCreate(StrictModel):
     @classmethod
     def validate_cron(cls, value: str | None) -> str | None:
         if value is not None:
-            _parse_cron(value)
+            _validate_cron(value)
         return value
 
     @field_validator("timezone")
@@ -67,7 +71,7 @@ class ScheduledAinaTaskUpdate(StrictModel):
     @classmethod
     def validate_cron(cls, value: str | None) -> str | None:
         if value is not None:
-            _parse_cron(value)
+            _validate_cron(value)
         return value
 
     @field_validator("timezone")
@@ -116,7 +120,7 @@ class ScheduledAinaTask(StrictModel):
         if self.schedule_type == "cron":
             if self.cron_expression is None:
                 raise ValueError("cron_expression is required for cron schedules")
-            _parse_cron(self.cron_expression)
+            _validate_cron(self.cron_expression)
         return self
 
 
@@ -139,32 +143,6 @@ class ScheduledAinaExecution(StrictModel):
     duration_ms: float | None = None
 
 
-@dataclass(frozen=True)
-class _CronSchedule:
-    minute: set[int]
-    hour: set[int]
-    day: set[int]
-    month: set[int]
-    weekday: set[int]
-    day_wildcard: bool
-    weekday_wildcard: bool
-
-    def matches(self, candidate: datetime) -> bool:
-        cron_weekday = (candidate.weekday() + 1) % 7
-        day_matches = candidate.day in self.day
-        weekday_matches = cron_weekday in self.weekday
-        if not self.day_wildcard and not self.weekday_wildcard:
-            calendar_matches = day_matches or weekday_matches
-        else:
-            calendar_matches = day_matches and weekday_matches
-        return (
-            candidate.minute in self.minute
-            and candidate.hour in self.hour
-            and candidate.month in self.month
-            and calendar_matches
-        )
-
-
 def next_scheduled_run(task: ScheduledAinaTask, *, after: datetime | None = None) -> datetime:
     current = after or datetime.now(UTC)
     if current.tzinfo is None:
@@ -173,14 +151,11 @@ def next_scheduled_run(task: ScheduledAinaTask, *, after: datetime | None = None
         return current.astimezone(UTC) + timedelta(seconds=task.interval_seconds)
     if task.cron_expression is None:  # guarded by model validation
         raise ValueError("cron_expression is required for cron schedules")
-    schedule = _parse_cron(task.cron_expression)
     zone = _timezone(task.timezone)
-    candidate = current.astimezone(zone).replace(second=0, microsecond=0) + timedelta(minutes=1)
-    for _ in range(366 * 24 * 60 * 5):
-        if schedule.matches(candidate):
-            return candidate.astimezone(UTC)
-        candidate += timedelta(minutes=1)
-    raise ValueError("Cron expression has no matching time in the next five years")
+    next_run = cast(datetime, croniter(task.cron_expression, current.astimezone(zone)).get_next(datetime))
+    if next_run.tzinfo is None:
+        next_run = next_run.replace(tzinfo=zone)
+    return next_run.astimezone(UTC)
 
 
 def _timezone(value: str) -> ZoneInfo:
@@ -190,61 +165,9 @@ def _timezone(value: str) -> ZoneInfo:
         raise ValueError(f"Unknown timezone: {value}") from exc
 
 
-def _parse_cron(expression: str) -> _CronSchedule:
-    fields = expression.strip().split()
-    if len(fields) != 5:
-        raise ValueError("Cron expression must contain five fields: minute hour day month weekday")
-    minute = _parse_cron_field(fields[0], 0, 59, "minute")
-    hour = _parse_cron_field(fields[1], 0, 23, "hour")
-    day = _parse_cron_field(fields[2], 1, 31, "day")
-    month = _parse_cron_field(fields[3], 1, 12, "month")
-    weekday = _parse_cron_field(fields[4], 0, 7, "weekday")
-    if 7 in weekday:
-        weekday.remove(7)
-        weekday.add(0)
-    return _CronSchedule(
-        minute=minute,
-        hour=hour,
-        day=day,
-        month=month,
-        weekday=weekday,
-        day_wildcard=fields[2] == "*",
-        weekday_wildcard=fields[4] == "*",
-    )
-
-
-def _parse_cron_field(value: str, minimum: int, maximum: int, label: str) -> set[int]:
-    result: set[int] = set()
-    for item in value.split(","):
-        base, separator, step_text = item.partition("/")
-        if separator:
-            try:
-                step = int(step_text)
-            except ValueError as exc:
-                raise ValueError(f"Invalid {label} step: {step_text}") from exc
-            if step <= 0:
-                raise ValueError(f"Invalid {label} step: {step_text}")
-        else:
-            step = 1
-        if base == "*":
-            start, end = minimum, maximum
-        elif "-" in base:
-            start_text, end_text = base.split("-", 1)
-            try:
-                start, end = int(start_text), int(end_text)
-            except ValueError as exc:
-                raise ValueError(f"Invalid {label} range: {base}") from exc
-        else:
-            try:
-                start = end = int(base)
-            except ValueError as exc:
-                raise ValueError(f"Invalid {label} value: {base}") from exc
-        if start < minimum or end > maximum or start > end:
-            raise ValueError(f"Invalid {label} range: {base}")
-        result.update(range(start, end + 1, step))
-    if not result:
-        raise ValueError(f"Cron {label} field cannot be empty")
-    return result
+def _validate_cron(expression: str) -> None:
+    if len(expression.strip().split()) != 5 or not croniter.is_valid(expression):
+        raise ValueError("Cron expression must be a valid five-field crontab expression")
 
 
 class AinaScheduler:
@@ -262,17 +185,27 @@ class AinaScheduler:
         self.poll_seconds = poll_seconds
         self._stop = asyncio.Event()
         self._local_claims: set[str] = set()
+        self._driver: AsyncIOScheduler | None = None
 
     def stop(self) -> None:
         self._stop.set()
 
     async def run(self) -> None:
-        while not self._stop.is_set():
-            await self.tick()
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.poll_seconds)
-            except TimeoutError:
-                pass
+        self._driver = AsyncIOScheduler(timezone=UTC)
+        self._driver.add_job(
+            self.tick,
+            trigger=IntervalTrigger(seconds=self.poll_seconds, timezone=UTC),
+            id=f"aina-scheduler-poll-{self.node_id}",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(UTC),
+        )
+        self._driver.start()
+        try:
+            await self._stop.wait()
+        finally:
+            self._driver.shutdown(wait=True)
+            self._driver = None
 
     async def tick(self, *, now: datetime | None = None) -> None:
         current = now or datetime.now(UTC)
@@ -280,24 +213,33 @@ class AinaScheduler:
             if not task.enabled or task.next_run_at > current:
                 continue
             claim_id = f"{task.id}:{task.next_run_at.isoformat()}"
-            if not await self._claim(claim_id, task.interval_seconds):
-                continue
-            await self._execute(
-                task,
-                current,
+            async with self._lease(
+                "aina-schedule-lease",
                 claim_id,
-                trigger="scheduled",
-                advance_schedule=True,
-            )
+                ttl_seconds=max(60, task.interval_seconds),
+            ) as acquired:
+                if not acquired:
+                    continue
+                await self._execute(
+                    task,
+                    current,
+                    claim_id,
+                    trigger="scheduled",
+                    advance_schedule=True,
+                )
 
     async def run_now(
         self, task_id: str, *, input_override: dict[str, Any] | None = None
     ) -> ScheduledAinaTask:
         task = await self.repository.get_scheduled_aina_task(task_id)
         claim_id = f"debug:{task_id}:{uuid4().hex}"
-        if not await self._claim_manual(task_id):
-            raise conflict("This scheduled AINA task is already running")
-        try:
+        async with self._lease(
+            "aina-schedule-debug",
+            task_id,
+            ttl_seconds=15 * 60,
+        ) as acquired:
+            if not acquired:
+                raise conflict("This scheduled AINA task is already running")
             return await self._execute(
                 task,
                 datetime.now(UTC),
@@ -306,8 +248,31 @@ class AinaScheduler:
                 advance_schedule=False,
                 input_override=input_override,
             )
+
+    @asynccontextmanager
+    async def _lease(
+        self,
+        namespace: str,
+        key: str,
+        *,
+        ttl_seconds: int,
+    ) -> AsyncIterator[bool]:
+        stores = getattr(self.repository, "stores", None)
+        if stores is not None and hasattr(stores.redis, "lease"):
+            async with stores.redis.lease(namespace, key, ttl_seconds=ttl_seconds) as acquired:
+                yield acquired
+            return
+
+        if namespace == "aina-schedule-debug":
+            acquired = await self._claim_manual(key)
+        else:
+            acquired = await self._claim(key, ttl_seconds)
+        try:
+            yield acquired
         finally:
-            await self._release_manual(task_id)
+            if acquired and stores is None:
+                self._local_claims.discard(key)
+                self._local_claims.discard(f"debug:{key}")
 
     async def _claim(self, claim_id: str, interval_seconds: int) -> bool:
         stores = getattr(self.repository, "stores", None)
@@ -318,7 +283,7 @@ class AinaScheduler:
                 {"node_id": self.node_id},
                 ttl_seconds=max(60, interval_seconds),
             )
-            return result.written
+            return cast(bool, result.written)
         if claim_id in self._local_claims:
             return False
         self._local_claims.add(claim_id)
@@ -333,18 +298,12 @@ class AinaScheduler:
                 {"node_id": self.node_id},
                 ttl_seconds=15 * 60,
             )
-            return result.written
+            return cast(bool, result.written)
         claim_id = f"debug:{task_id}"
         if claim_id in self._local_claims:
             return False
         self._local_claims.add(claim_id)
         return True
-
-    async def _release_manual(self, task_id: str) -> None:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None:
-            await stores.redis.delete("aina-schedule-debug", task_id)
-        self._local_claims.discard(f"debug:{task_id}")
 
     async def _execute(
         self,

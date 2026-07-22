@@ -113,12 +113,13 @@ class AinaRoute:
 
 
 class AgentRuntime:
-    """Bounded OpenAI tool-calling loop adapted from Hermes's core turn shape.
+    """Bounded LangChain tool-calling loop orchestrated by a LangGraph state graph.
 
-    The MVP keeps the useful invariants from Hermes: persistable OpenAI-wire
-    messages, a hard iteration budget, a tool result for every tool call,
-    invalid-argument recovery through the model, and capability failure
-    isolation. LangGraph supplies the model -> tools -> model state machine.
+    LangChain supplies the provider/tool-call abstraction, while LangGraph
+    supplies the model -> tools -> model state machine. The platform keeps its
+    product invariants: persistable wire messages, a hard iteration budget, a
+    tool result for every call, approval recovery, Trace events, and capability
+    failure isolation.
     """
 
     def __init__(
