@@ -224,6 +224,7 @@ def test_invalid_aina_protocol_response_is_returned_to_model() -> None:
 def test_empty_model_response_marks_run_failed() -> None:
     llm = ScriptedLLM(
         [
+            assistant("NO_AINA_MATCH"),
             LLMResult(
                 message={"role": "assistant", "content": ""},
                 finish_reason="stop",

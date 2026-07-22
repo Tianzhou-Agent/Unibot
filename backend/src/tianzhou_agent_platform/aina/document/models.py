@@ -11,16 +11,32 @@ class DocumentActor(StrictModel):
 
 
 class DocumentCreate(DocumentActor):
-    name: str = Field(min_length=1, max_length=160)
+    name: str = Field(min_length=1, max_length=512)
     content: str = Field(default="", max_length=1_048_576)
 
 
-class DocumentUpdate(DocumentActor):
-    content: str = Field(max_length=1_048_576)
+class DocumentSectionUpdate(DocumentActor):
+    heading: str = Field(min_length=1)
+    occurrence: int = Field(default=1, ge=1)
+    section_content: str = Field(max_length=1_048_576)
+    expected_revision: str = Field(min_length=1)
 
 
 class DocumentRename(DocumentActor):
-    new_name: str = Field(min_length=1, max_length=160)
+    new_name: str = Field(min_length=1, max_length=512)
+
+
+class DocumentFolderCreate(DocumentActor):
+    path: str = Field(min_length=1, max_length=512)
+
+
+class DocumentFolderRename(DocumentActor):
+    new_path: str = Field(min_length=1, max_length=512)
+
+
+class DocumentFolder(StrictModel):
+    path: str
+    name: str
 
 
 class DocumentSummary(StrictModel):
@@ -72,3 +88,8 @@ class DocumentSectionUpdateResult(StrictModel):
 class DocumentListResponse(StrictModel):
     items: list[DocumentSummary]
     total: int
+
+
+class DocumentTreeResponse(StrictModel):
+    folders: list[DocumentFolder]
+    documents: list[DocumentSummary]

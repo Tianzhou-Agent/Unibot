@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
-import type { WidgetActionDefinition, WidgetDefinition } from "@/types";
+import type { DocumentTaskContext, WidgetActionDefinition, WidgetDefinition } from "@/types";
 import { AssistantMainWidget } from "./AssistantMainWidget";
 import { DocumentWidget } from "./DocumentWidget";
 import { MemoryMainWidget } from "./MemoryMainWidget";
@@ -15,15 +15,19 @@ export function MainWidgetRenderer({
   disabled = false,
   onOpenAina,
   onPrompt,
+  onDocumentTaskContextChange,
+  refreshToken,
 }: {
   ainaId: string;
   widget: WidgetDefinition;
   disabled?: boolean;
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
+  onDocumentTaskContextChange?: (context: DocumentTaskContext | null) => void;
+  refreshToken?: string | null;
 }) {
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
-  if (widget.kind === "document") return <DocumentWidget disabled={disabled} />;
+  if (widget.kind === "document") return <DocumentWidget disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   if (ainaId === "unibot-assistant") {
     return <AssistantMainWidget widget={widget} disabled={disabled} onOpenAina={onOpenAina} />;

@@ -9,6 +9,11 @@ from tianzhou_agent_platform.core.base import StrictModel, Usage, utc_now
 
 class ChatRequest(StrictModel):
     message: str = Field(min_length=1)
+    ui_context: str | None = Field(
+        default=None,
+        max_length=4_000,
+        description="Transient UI context for the current request; it is not persisted as conversation content.",
+    )
     conversation_id: str | None = None
     user_id: str = "anonymous"
     tenant_id: str = "default"
