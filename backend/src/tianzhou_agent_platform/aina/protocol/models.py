@@ -24,6 +24,7 @@ class AinaIdentity(StrictModel):
 class RemoteRuntimeDefinition(StrictModel):
     type: Literal["remote"] = "remote"
     endpoint: AnyHttpUrl
+    protocol: Literal["aina", "a2a"] = "aina"
     streaming: bool = False
     async_tasks: bool = False
 

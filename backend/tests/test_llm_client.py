@@ -143,3 +143,49 @@ async def test_named_tool_choice_uses_non_streaming_request_with_event_sink() ->
     assert requests[0]["stream"] is False
     assert result.message["tool_calls"][0]["function"]["name"] == "list_app"
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_langchain_streaming_emits_message_deltas() -> None:
+    async def provider(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=(
+                'data: {"id":"chat-1","object":"chat.completion.chunk","created":1,'
+                '"model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},'
+                '"finish_reason":null}]}\n\n'
+                'data: {"id":"chat-1","object":"chat.completion.chunk","created":1,'
+                '"model":"test-model","choices":[{"index":0,"delta":{"content":" world"},'
+                '"finish_reason":"stop"}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+        )
+
+    settings = AgentSettings(
+        _env_file=None,
+        llm_base_url="https://provider.invalid/v1",
+        llm_api_key="test-key",
+        llm_model="test-model",
+    )
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    client = OpenAICompatibleClient(settings, http_client)
+    events: list[dict[str, Any]] = []
+
+    async def sink(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    result = await client.complete(
+        messages=[{"role": "user", "content": "Say hello"}],
+        tools=[],
+        event_sink=sink,
+    )
+    await http_client.aclose()
+
+    assert result.message["content"] == "Hello world"
+    assert events == [
+        {"type": "message.delta", "delta": "Hello"},
+        {"type": "message.delta", "delta": " world"},
+    ]
