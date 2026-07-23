@@ -68,6 +68,41 @@ def test_document_aina_opens_editor_and_crud_persists_to_nas(tmp_path: Path) -> 
     assert not (tmp_path / "documents" / "t-default" / "u-anonymous" / "notes.md").exists()
 
 
+def test_document_section_changes_update_multiple_units_atomically(tmp_path: Path) -> None:
+    content = "Preface.\n\n# Guide\n\nRoot body.\n\n## One\n\nOld one.\n\n## Two\n\nOld two.\n"
+    with TestClient(_app(tmp_path)) as client:
+        client.post("/documents", json={"name": "guide", "content": content})
+        revision = client.get("/documents/guide.md/outline").json()["revision"]
+        updated = client.put(
+            "/documents/guide.md/section-changes",
+            json={
+                "expected_revision": revision,
+                "content": (
+                    "Updated preface.\n\n# Handbook\n\nUpdated root.\n\n"
+                    "## One\n\nUpdated one.\n\n### Detail\n\nNew detail.\n\n"
+                    "## Two\n\nOld two.\n"
+                ),
+            },
+        )
+        stale = client.put(
+            "/documents/guide.md/section-changes",
+            json={
+                "expected_revision": revision,
+                "content": "## Two\n\nStale update.\n",
+            },
+        )
+        loaded = client.get("/documents/guide.md").json()
+
+    assert updated.status_code == 200
+    assert updated.json()["updated_sections"] == ["Handbook", "One", "Detail", "Two"]
+    assert stale.status_code == 422
+    assert loaded["content"] == (
+        "Updated preface.\n\n# Handbook\n\nUpdated root.\n\n"
+        "## One\n\nUpdated one.\n\n### Detail\n\nNew detail.\n\n"
+        "## Two\n\nOld two.\n"
+    )
+
+
 def test_document_api_isolates_actors_and_rejects_non_markdown_names(tmp_path: Path) -> None:
     with TestClient(_app(tmp_path)) as client:
         created = client.post(

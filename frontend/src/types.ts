@@ -449,6 +449,14 @@ export interface DocumentSectionUpdateResult {
   modified_at?: string | null;
 }
 
+export interface DocumentSectionsUpdateResult {
+  name: string;
+  revision: string;
+  updated_sections: string[];
+  size_bytes: number;
+  modified_at?: string | null;
+}
+
 export interface DocumentHeading {
   index: number;
   heading: string;
@@ -474,9 +482,10 @@ export type DocumentEditTaskStatus =
   | "completed"
   | "abandoned"
   | "conflict"
-  | "failed";
+  | "failed"
+  | "deleted";
 
-export type DocumentDraftAiStatus = "queued" | "running" | "ready" | "failed";
+export type DocumentDraftAiStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 export type DocumentDraftReviewStatus = "pending" | "merged" | "abandoned";
 
 export interface DocumentDraftSection {
@@ -494,6 +503,7 @@ export interface DocumentDraftSection {
   updated_by: "source" | "ai" | "user";
   review_status: DocumentDraftReviewStatus;
   resolved_at?: string | null;
+  result_revision?: string | null;
 }
 
 export interface DocumentEditTask {
@@ -506,12 +516,15 @@ export interface DocumentEditTask {
   user_id: string;
   tenant_id: string;
   sections: DocumentDraftSection[];
+  attempt_count: number;
   version: number;
   error?: string | null;
   created_at: string;
   updated_at: string;
   merged_at?: string | null;
   abandoned_at?: string | null;
+  completed_at?: string | null;
+  deleted_at?: string | null;
 }
 
 export interface DocumentEditTaskListResponse {

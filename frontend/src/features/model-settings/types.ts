@@ -40,6 +40,13 @@ export interface ModelHealthResult {
   error?: string | null;
 }
 
+export interface ModelDiscoveryResponse {
+  models: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
 export interface ModelProviderPayload {
   user_id: string;
   tenant_id: string;

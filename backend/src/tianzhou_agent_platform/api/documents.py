@@ -10,6 +10,8 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentRecord,
     DocumentRename,
     DocumentSection,
+    DocumentSectionsUpdate,
+    DocumentSectionsUpdateResult,
     DocumentSectionUpdate,
     DocumentSectionUpdateResult,
     DocumentTreeResponse,
@@ -128,6 +130,20 @@ def create_document_router() -> APIRouter:
             payload.heading,
             payload.occurrence,
             payload.section_content,
+            payload.expected_revision,
+            user_id=payload.user_id,
+            tenant_id=payload.tenant_id,
+        )
+
+    @router.put("/{name:path}/section-changes", response_model=DocumentSectionsUpdateResult)
+    async def update_document_sections(
+        name: str,
+        payload: DocumentSectionsUpdate,
+        request: Request,
+    ) -> DocumentSectionsUpdateResult:
+        return await documents(request).update_sections(
+            name,
+            payload.content,
             payload.expected_revision,
             user_id=payload.user_id,
             tenant_id=payload.tenant_id,

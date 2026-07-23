@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Plus, Trash2, X } from "lucide-react";
-import type { ModelProvider, ModelProviderPayload, ProviderType } from "@/features/model-settings/types";
+import { KeyRound, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import type {
+  ModelDiscoveryResponse,
+  ModelProvider,
+  ModelProviderPayload,
+  ProviderType,
+} from "@/features/model-settings/types";
+import { api, apiErrorMessage } from "@/lib/api";
+
+const MAX_MODELS = 50;
 
 const PROVIDERS: Array<{
   type: ProviderType;
@@ -44,6 +52,8 @@ export function ProviderEditor({
   const [models, setModels] = useState<ModelDraft[]>(
     provider?.models.map((model) => ({ ...model, key: model.id })) ?? [emptyModel()],
   );
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryFeedback, setDiscoveryFeedback] = useState<{ error: boolean; message: string } | null>(null);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -64,6 +74,56 @@ export function ProviderEditor({
 
   function updateModel(key: string, changes: Partial<ModelDraft>) {
     setModels((current) => current.map((model) => (model.key === key ? { ...model, ...changes } : model)));
+  }
+
+  async function discoverModels() {
+    if (!baseUrl.trim()) {
+      setDiscoveryFeedback({ error: true, message: "请先填写 Provider 的 Base URL。" });
+      return;
+    }
+    setDiscovering(true);
+    setDiscoveryFeedback(null);
+    try {
+      const response = await api.post<ModelDiscoveryResponse>("/model-settings/providers/discover-models", {
+        ...(provider ? { provider_id: provider.id } : {}),
+        user_id: "anonymous",
+        tenant_id: "default",
+        base_url: baseUrl.trim(),
+        api_key: apiKey,
+        timeout_seconds: timeoutSeconds,
+      });
+      const retained = models.filter((model) => model.id || model.name.trim() || model.model.trim());
+      const existing = new Set(retained.map((model) => model.model.trim().toLowerCase()).filter(Boolean));
+      const additions = response.models.filter((model) => {
+        const normalized = model.id.trim().toLowerCase();
+        if (!normalized || existing.has(normalized)) return false;
+        existing.add(normalized);
+        return true;
+      });
+      const imported = additions.slice(0, Math.max(0, MAX_MODELS - retained.length));
+      if (imported.length > 0) {
+        setModels([
+          ...retained,
+          ...imported.map((model) => ({ ...emptyModel(), name: model.name, model: model.id })),
+        ]);
+      }
+      if (response.models.length === 0) {
+        setDiscoveryFeedback({ error: false, message: "Provider 的 /models 接口未返回模型，可继续手动添加。" });
+      } else if (imported.length < additions.length) {
+        setDiscoveryFeedback({
+          error: false,
+          message: `已获取 ${response.models.length} 个模型，受 ${MAX_MODELS} 个上限限制，本次添加 ${imported.length} 个。`,
+        });
+      } else if (imported.length === 0) {
+        setDiscoveryFeedback({ error: false, message: "模型列表已是最新，未发现需要添加的新模型。" });
+      } else {
+        setDiscoveryFeedback({ error: false, message: `已从 Provider 自动添加 ${imported.length} 个模型。` });
+      }
+    } catch (discoverError) {
+      setDiscoveryFeedback({ error: true, message: apiErrorMessage(discoverError) });
+    } finally {
+      setDiscovering(false);
+    }
   }
 
   async function submit(event: React.FormEvent) {
@@ -134,13 +194,21 @@ export function ProviderEditor({
           <div className="mt-6 flex items-center border-b border-line pb-2">
             <div>
               <h3 className="text-[13px] font-extrabold text-ink">模型</h3>
-              <p className="text-[11px] text-ink-muted">模型 ID 必须与 Provider 接口接收的 model 参数一致。</p>
+              <p className="text-[11px] text-ink-muted">可从 Provider 的 /models 自动获取，也可手动填写模型 ID。</p>
             </div>
             <div className="flex-1" />
-            <button type="button" onClick={() => setModels((current) => [...current, emptyModel()])} className="btn-outline h-8 text-[11.5px]">
+            <button type="button" onClick={() => void discoverModels()} disabled={discovering || saving} className="btn-outline mr-2 h-8 text-[11.5px] disabled:opacity-50">
+              <RefreshCw className={`h-3.5 w-3.5 ${discovering ? "animate-spin" : ""}`} />{discovering ? "获取中" : "自动获取"}
+            </button>
+            <button type="button" onClick={() => setModels((current) => [...current, emptyModel()])} disabled={models.length >= MAX_MODELS} className="btn-outline h-8 text-[11.5px] disabled:opacity-50">
               <Plus className="h-3.5 w-3.5" />添加模型
             </button>
           </div>
+          {discoveryFeedback ? (
+            <p className={`border-b border-line px-1 py-2 text-[11px] ${discoveryFeedback.error ? "text-danger-deep" : "text-success-deep"}`}>
+              {discoveryFeedback.message}
+            </p>
+          ) : null}
           <div className="divide-y divide-line">
             {models.map((model, index) => (
               <div key={model.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-end gap-3 py-3">

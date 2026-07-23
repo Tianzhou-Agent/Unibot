@@ -13,6 +13,7 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentRecord,
     DocumentSection,
     DocumentSectionUpdateResult,
+    DocumentSectionsUpdateResult,
     DocumentSummary,
 )
 from tianzhou_agent_platform.store.errors import StoragePolicyViolationError, StorageValidationError
@@ -295,6 +296,35 @@ class DocumentService:
             tenant_id=tenant_id,
         )
 
+    async def update_sections(
+        self,
+        name: str,
+        content: str,
+        expected_revision: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentSectionsUpdateResult:
+        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        if _document_revision(current.content) != expected_revision:
+            raise StorageValidationError(
+                "Document revision changed. Review the latest document before saving."
+            )
+        updated_sections = _changed_direct_section_headings(current.content, content)
+        updated = await self.update_document(
+            current.name,
+            content,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        return DocumentSectionsUpdateResult(
+            name=updated.name,
+            revision=_document_revision(updated.content),
+            updated_sections=updated_sections,
+            size_bytes=updated.size_bytes,
+            modified_at=updated.modified_at,
+        )
+
     async def append_document(
         self,
         name: str,
@@ -505,6 +535,36 @@ def _validate_section_replacement(section_content: str, *, target_level: int, ne
     if newline != "\n":
         normalized = normalized.replace("\n", newline)
     return normalized, first.heading
+
+
+def _changed_direct_section_headings(original: str, updated: str) -> list[str]:
+    original_blocks = _direct_section_blocks(original)
+    updated_blocks = _direct_section_blocks(updated)
+    if not updated_blocks:
+        raise StorageValidationError("A Markdown document must contain at least one heading")
+    if len(original_blocks) != len(updated_blocks):
+        return [section.heading for section, _ in updated_blocks]
+    return [
+        updated_section.heading
+        for (original_section, original_content), (updated_section, updated_content) in zip(
+            original_blocks,
+            updated_blocks,
+        )
+        if original_section.level != updated_section.level or original_content != updated_content
+    ]
+
+
+def _direct_section_blocks(content: str) -> list[tuple[_MarkdownSection, str]]:
+    lines = content.splitlines(keepends=True)
+    sections = _markdown_sections(content)
+    blocks: list[tuple[_MarkdownSection, str]] = []
+    for index, section in enumerate(sections):
+        start_index = 0 if index == 0 else section.start_index
+        end_index = (
+            sections[index + 1].start_index if index + 1 < len(sections) else len(lines)
+        )
+        blocks.append((section, "".join(lines[start_index:end_index])))
+    return blocks
 
 
 def _preferred_newline(content: str) -> str:

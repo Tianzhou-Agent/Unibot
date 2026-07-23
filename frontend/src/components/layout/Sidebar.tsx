@@ -163,9 +163,7 @@ export function Sidebar() {
 function Brand() {
   return (
     <NavLink to="/chat" className="flex items-center justify-center gap-2.5 md:justify-start" aria-label="Unibot 首页">
-      <div className="w-8 h-8 rounded-lg bg-sidebar-active flex items-center justify-center shadow-soft">
-        <Logo className="w-4 h-4 text-white" />
-      </div>
+      <img src="/unibot-icon-v2.png" alt="" className="h-8 w-8 rounded-lg shadow-soft" />
       <div className="hidden md:block">
         <div className="text-ink-inverse text-[15px] font-extrabold tracking-tight">Unibot</div>
         <div className="text-[10px] text-ink-onDarkMuted">智能体运行平台</div>
@@ -329,13 +327,5 @@ function FooterButton({ to, label, icon }: { to: string; label: string; icon: Re
     >
       {icon}
     </NavLink>
-  );
-}
-
-function Logo({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M4 18V6h16v3H8v2.5h10V14H8v4z" fill="currentColor" />
-    </svg>
   );
 }

@@ -137,11 +137,12 @@ class DocumentEditTaskService:
         tenant_id: str,
     ) -> list[DocumentEditTask]:
         document = await self.documents.get_document(name, user_id=user_id, tenant_id=tenant_id)
-        return await self.repository.list_document_edit_tasks(
+        tasks = await self.repository.list_document_edit_tasks(
             user_id=user_id,
             tenant_id=tenant_id,
             document_name=document.name,
         )
+        return [task for task in tasks if task.status != "deleted"]
 
     async def update_draft(
         self,
@@ -205,6 +206,8 @@ class DocumentEditTaskService:
             }
         )
         updated = _replace_draft_section(task, updated_section)
+        if task.status == "failed":
+            updated = updated.model_copy(update={"status": "queued", "error": None})
         return await self.repository.put_document_edit_task(updated, expected_version=task.version)
 
     async def retry_failed(
@@ -233,7 +236,15 @@ class DocumentEditTaskService:
         ]
         if not any(item.ai_status == "queued" for item in sections):
             raise conflict("This task has no failed sections to retry")
-        updated = task.model_copy(update={"status": "queued", "sections": sections, "error": None}, deep=True)
+        updated = task.model_copy(
+            update={
+                "status": "queued",
+                "sections": sections,
+                "attempt_count": task.attempt_count + 1,
+                "error": None,
+            },
+            deep=True,
+        )
         return await self.repository.put_document_edit_task(updated, expected_version=task.version)
 
     async def merge_task(self, task_id: str, *, user_id: str, tenant_id: str) -> DocumentEditTask:
@@ -258,7 +269,7 @@ class DocumentEditTaskService:
             )
             raise conflict("Another merge is already updating this document")
         try:
-            await self.documents.merge_sections(
+            document = await self.documents.merge_sections(
                 merging.document_name,
                 [(item.heading, item.occurrence, item.draft_content) for item in pending_sections],
                 merging.base_revision,
@@ -284,13 +295,29 @@ class DocumentEditTaskService:
         latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
         resolved_at = datetime.now(UTC)
         sections = [
-            item.model_copy(update={"review_status": "merged", "resolved_at": resolved_at})
+            item.model_copy(
+                update={
+                    "review_status": "merged",
+                    "resolved_at": resolved_at,
+                    "result_revision": _document_revision(document.content),
+                }
+            )
             if item.review_status == "pending"
             else item
             for item in latest.sections
         ]
+        status = _resolved_task_status(sections)
         return await self.repository.put_document_edit_task(
-            latest.model_copy(update={"status": _resolved_task_status(sections), "sections": sections, "merged_at": resolved_at, "error": None}),
+            latest.model_copy(
+                update={
+                    "status": status,
+                    "sections": sections,
+                    "base_revision": _document_revision(document.content),
+                    "merged_at": resolved_at,
+                    "completed_at": resolved_at if _is_terminal_status(status) else None,
+                    "error": None,
+                }
+            ),
             expected_version=latest.version,
         )
 
@@ -348,16 +375,22 @@ class DocumentEditTaskService:
         latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
         resolved_at = datetime.now(UTC)
         resolved = _find_draft_section(latest, section_id).model_copy(
-            update={"review_status": "merged", "resolved_at": resolved_at}
+            update={
+                "review_status": "merged",
+                "resolved_at": resolved_at,
+                "result_revision": _document_revision(document.content),
+            }
         )
         updated = _replace_draft_section(latest, resolved)
         sections = updated.sections
+        status = _resolved_task_status(sections)
         return await self.repository.put_document_edit_task(
             updated.model_copy(
                 update={
-                    "status": _resolved_task_status(sections),
+                    "status": status,
                     "base_revision": _document_revision(document.content),
                     "merged_at": resolved_at if not _has_pending_sections(sections) else None,
+                    "completed_at": resolved_at if _is_terminal_status(status) else None,
                     "error": None,
                 }
             ),
@@ -390,8 +423,91 @@ class DocumentEditTaskService:
                     "status": status,
                     "abandoned_at": resolved_at if status == "abandoned" else None,
                     "merged_at": resolved_at if status == "completed" else task.merged_at,
+                    "completed_at": resolved_at if _is_terminal_status(status) else None,
                     "error": None if not _has_pending_sections(sections) else task.error,
                 }
+            ),
+            expected_version=task.version,
+        )
+
+    async def abandon_task(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentEditTask:
+        task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        if _is_terminal_status(task.status) or task.status == "deleted":
+            raise conflict("A completed or deleted task cannot be abandoned")
+        if not _has_pending_sections(task.sections):
+            raise conflict("This task has no pending sections to abandon")
+        resolved_at = datetime.now(UTC)
+        sections = [
+            (
+                item.model_copy(
+                    update={
+                        "ai_status": (
+                            "cancelled"
+                            if item.ai_status in {"queued", "running"}
+                            else item.ai_status
+                        ),
+                        "review_status": "abandoned",
+                        "resolved_at": resolved_at,
+                    }
+                )
+                if item.review_status == "pending"
+                else item
+            )
+            for item in task.sections
+        ]
+        status = _resolved_task_status(sections)
+        return await self.repository.put_document_edit_task(
+            task.model_copy(
+                update={
+                    "status": status,
+                    "sections": sections,
+                    "abandoned_at": resolved_at,
+                    "completed_at": resolved_at,
+                    "error": None,
+                },
+                deep=True,
+            ),
+            expected_version=task.version,
+        )
+
+    async def delete_task(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> None:
+        task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        if _is_terminal_status(task.status):
+            raise conflict("Completed tasks are immutable history and cannot be deleted")
+        if any(item.review_status == "merged" for item in task.sections):
+            raise conflict("A task with merged sections cannot be deleted")
+        if task.status == "deleted":
+            return
+        deleted_at = datetime.now(UTC)
+        sections = [
+            (
+                item.model_copy(update={"ai_status": "cancelled"})
+                if item.review_status == "pending" and item.ai_status in {"queued", "running"}
+                else item
+            )
+            for item in task.sections
+        ]
+        await self.repository.put_document_edit_task(
+            task.model_copy(
+                update={
+                    "status": "deleted",
+                    "sections": sections,
+                    "deleted_at": deleted_at,
+                    "error": None,
+                },
+                deep=True,
             ),
             expected_version=task.version,
         )
@@ -423,8 +539,8 @@ class DocumentEditTaskService:
 
     @staticmethod
     def _require_reviewing(task: DocumentEditTask) -> None:
-        if task.status != "reviewing":
-            raise conflict("Only a task awaiting review can be edited or merged")
+        if task.status not in {"reviewing", "failed"}:
+            raise conflict("Only a reviewable or failed task can be edited or merged")
 
 
 class DocumentEditWorker:
@@ -498,8 +614,16 @@ class DocumentEditWorker:
                 tenant_id=task.tenant_id,
             )
             if latest.status == "running":
+                next_status: DocumentEditTaskStatus = (
+                    "failed"
+                    if any(
+                        item.review_status == "pending" and item.ai_status == "failed"
+                        for item in latest.sections
+                    )
+                    else "reviewing"
+                )
                 await self.service.repository.put_document_edit_task(
-                    latest.model_copy(update={"status": "reviewing"}),
+                    latest.model_copy(update={"status": next_status}),
                     expected_version=latest.version,
                 )
         except Exception as exc:
@@ -684,6 +808,11 @@ def _resolved_task_status(
     pending_status: DocumentEditTaskStatus = "reviewing",
 ) -> DocumentEditTaskStatus:
     if _has_pending_sections(sections):
+        if pending_status == "reviewing" and any(
+            item.review_status == "pending" and item.ai_status == "failed"
+            for item in sections
+        ):
+            return "failed"
         return pending_status
     resolved = {item.review_status for item in sections}
     if resolved == {"merged"}:
@@ -691,6 +820,10 @@ def _resolved_task_status(
     if resolved == {"abandoned"}:
         return "abandoned"
     return "completed"
+
+
+def _is_terminal_status(status: DocumentEditTaskStatus) -> bool:
+    return status in {"merged", "completed"}
 
 
 def _validate_draft_size(content: str) -> None:

@@ -18,8 +18,9 @@ DocumentEditTaskStatus = Literal[
     "abandoned",
     "conflict",
     "failed",
+    "deleted",
 ]
-DraftAiStatus = Literal["queued", "running", "ready", "failed"]
+DraftAiStatus = Literal["queued", "running", "ready", "failed", "cancelled"]
 DraftReviewStatus = Literal["pending", "merged", "abandoned"]
 
 
@@ -66,6 +67,7 @@ class DocumentDraftSection(StrictModel):
     updated_by: Literal["source", "ai", "user"] = "source"
     review_status: DraftReviewStatus = "pending"
     resolved_at: datetime | None = None
+    result_revision: str | None = None
 
 
 class DocumentEditTask(StrictModel):
@@ -78,15 +80,20 @@ class DocumentEditTask(StrictModel):
     user_id: str
     tenant_id: str
     sections: list[DocumentDraftSection]
+    attempt_count: int = Field(default=1, ge=1)
     version: int = 1
     error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     merged_at: datetime | None = None
     abandoned_at: datetime | None = None
+    completed_at: datetime | None = None
+    deleted_at: datetime | None = None
 
     @model_validator(mode="after")
     def migrate_legacy_section_review_status(self) -> "DocumentEditTask":
+        if self.status in {"merged", "completed", "abandoned"} and self.completed_at is None:
+            self.completed_at = self.merged_at or self.abandoned_at or self.updated_at
         if self.status not in {"merged", "abandoned"}:
             return self
         if any(item.review_status != "pending" for item in self.sections):

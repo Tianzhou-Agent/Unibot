@@ -22,6 +22,11 @@ class DocumentSectionUpdate(DocumentActor):
     expected_revision: str = Field(min_length=1)
 
 
+class DocumentSectionsUpdate(DocumentActor):
+    content: str = Field(max_length=1_048_576)
+    expected_revision: str = Field(min_length=1)
+
+
 class DocumentRename(DocumentActor):
     new_name: str = Field(min_length=1, max_length=512)
 
@@ -81,6 +86,14 @@ class DocumentSectionUpdateResult(StrictModel):
     level: int
     occurrence: int
     revision: str
+    size_bytes: int
+    modified_at: datetime | None = None
+
+
+class DocumentSectionsUpdateResult(StrictModel):
+    name: str
+    revision: str
+    updated_sections: list[str]
     size_bytes: int
     modified_at: datetime | None = None
 

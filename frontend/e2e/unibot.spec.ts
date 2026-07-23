@@ -43,6 +43,47 @@ function conversation(overrides: JsonObject = {}): JsonObject {
   };
 }
 
+function documentTask(overrides: JsonObject = {}, sectionOverrides: JsonObject = {}): JsonObject {
+  return {
+    id: "document-edit-e2e",
+    document_name: "guide.md",
+    title: "润色简介",
+    description: "润色简介",
+    status: "reviewing",
+    base_revision: "revision-e2e",
+    user_id: "anonymous",
+    tenant_id: "default",
+    attempt_count: 1,
+    version: 2,
+    error: null,
+    created_at: NOW,
+    updated_at: NOW,
+    merged_at: null,
+    abandoned_at: null,
+    completed_at: null,
+    deleted_at: null,
+    sections: [{
+      id: "draft-section-e2e",
+      heading: "简介",
+      occurrence: 1,
+      level: 2,
+      base_content: "## 简介\n\n旧内容。\n",
+      draft_content: "## 简介\n\nAI 草稿。",
+      draft_revision: 1,
+      ai_status: "ready",
+      ai_instruction: null,
+      ai_base_revision: 0,
+      ai_error: null,
+      updated_by: "ai",
+      review_status: "pending",
+      resolved_at: null,
+      result_revision: null,
+      ...sectionOverrides,
+    }],
+    ...overrides,
+  };
+}
+
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
@@ -255,6 +296,17 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         modified_at: NOW,
       });
     }
+    if (method === "PUT" && path === `${documentPath}/section-changes`) {
+      const payload = request.postDataJSON() as JsonObject;
+      state.documentContent = payload.content as string;
+      return json(route, {
+        name: state.documentName,
+        revision: "revision-e2e-updated",
+        updated_sections: ["使用指南", "简介"],
+        size_bytes: state.documentContent.length,
+        modified_at: NOW,
+      });
+    }
     if (method === "GET" && path === `${documentPath}/outline`) {
       return json(route, {
         name: state.documentName,
@@ -280,12 +332,15 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         base_revision: "revision-e2e",
         user_id: "anonymous",
         tenant_id: "default",
+        attempt_count: 1,
         version: 2,
         error: null,
         created_at: NOW,
         updated_at: NOW,
         merged_at: null,
         abandoned_at: null,
+        completed_at: null,
+        deleted_at: null,
         sections: [{
           id: "draft-section-e2e",
           heading: "简介",
@@ -301,6 +356,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           updated_by: "ai",
           review_status: "pending",
           resolved_at: null,
+          result_revision: null,
         }],
       };
       state.documentTasks = [task];
@@ -325,8 +381,10 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       }
       task.status = "merged";
       task.merged_at = NOW;
+      task.completed_at = NOW;
       section.review_status = "merged";
       section.resolved_at = NOW;
+      section.result_revision = "revision-e2e-merged";
       state.documentContent = `# 使用指南\n\n${section.draft_content as string}\n`;
       return json(route, task);
     }
@@ -335,9 +393,43 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       const section = (task.sections as JsonObject[])[0];
       task.status = "abandoned";
       task.abandoned_at = NOW;
+      task.completed_at = NOW;
       section.review_status = "abandoned";
       section.resolved_at = NOW;
       return json(route, task);
+    }
+    if (method === "POST" && /^\/document-edit-tasks\/[^/]+\/retry$/.test(path)) {
+      const taskId = path.split("/")[2];
+      const task = state.documentTasks.find((item) => item.id === taskId);
+      if (!task) return json(route, { error: { user_message: "Task not found" } }, 404);
+      task.status = "queued";
+      task.error = null;
+      task.attempt_count = Number(task.attempt_count ?? 1) + 1;
+      for (const section of task.sections as JsonObject[]) {
+        if (section.review_status === "pending" && section.ai_status === "failed") section.ai_status = "queued";
+      }
+      return json(route, task, 202);
+    }
+    if (method === "POST" && /^\/document-edit-tasks\/[^/]+\/abandon$/.test(path)) {
+      const taskId = path.split("/")[2];
+      const task = state.documentTasks.find((item) => item.id === taskId);
+      if (!task) return json(route, { error: { user_message: "Task not found" } }, 404);
+      const sections = task.sections as JsonObject[];
+      for (const section of sections) {
+        if (section.review_status === "pending") {
+          section.review_status = "abandoned";
+          section.resolved_at = NOW;
+        }
+      }
+      task.status = sections.some((section) => section.review_status === "merged") ? "completed" : "abandoned";
+      task.abandoned_at = NOW;
+      task.completed_at = NOW;
+      return json(route, task);
+    }
+    if (method === "DELETE" && /^\/document-edit-tasks\/[^/]+$/.test(path)) {
+      const taskId = path.split("/")[2];
+      state.documentTasks = state.documentTasks.filter((task) => task.id !== taskId);
+      return route.fulfill({ status: 204 });
     }
     if (method === "GET" && /^\/documents\/[^/]+\/sections$/.test(path)) {
       const heading = url.searchParams.get("heading") ?? "未命名章节";
@@ -374,6 +466,14 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
               model: activeModel.model,
             }
           : { source: "environment", provider_name: "环境变量", model_name: "env-model", model: "env-model" },
+      });
+    }
+    if (method === "POST" && path === "/model-settings/providers/discover-models") {
+      return json(route, {
+        models: [
+          { id: "team-fast", name: "快速模型" },
+          { id: "team-coder", name: "代码模型" },
+        ],
       });
     }
     if (method === "POST" && /^\/model-settings\/providers\/[^/]+\/models\/[^/]+\/default$/.test(path)) {
@@ -431,11 +531,11 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
   await expect(page.getByText("章节导航", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toHaveValue(/# 使用指南/);
   await page.getByRole("textbox", { name: "全文 Markdown 编辑器" }).fill("# 使用指南\n\n## 简介\n\n章节编辑后的内容。\n");
-  await page.getByRole("button", { name: "保存当前章节" }).click();
+  await page.getByRole("button", { name: "保存文档" }).click();
   await expect(page.getByText("章节编辑后的内容。", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "任务 0" }).click();
-  await expect(page.getByText("修改任务", { exact: true })).toBeVisible();
+  await expect(page.getByText("文档变更任务", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
   await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
   await page.getByRole("checkbox", { name: "简介" }).check();
@@ -450,7 +550,11 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
   await expect(page.getByPlaceholder("让 AI 继续修改当前章节…")).toHaveCount(0);
   await page.getByRole("button", { name: "对照编辑", exact: true }).click();
   await page.getByRole("textbox", { name: "章节草稿" }).fill("## 简介\n\n用户检视后的内容。");
+  await expect(page.getByRole("button", { name: "合入本章节", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存草稿", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "保存草稿" }).click();
+  await expect(page.getByRole("button", { name: "保存草稿", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "合入本章节", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "合入本章节" }).click();
   await expect(page.getByText("只会将当前章节的草稿写入正式文档，任务中的其他章节仍保持待检视状态。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "合入本章节", exact: true }).last().click();
@@ -479,21 +583,24 @@ test("FE-E2E-009B 文档 Canvas 展示嵌套文件树和全文章节导航", asy
   await expect(page.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
 });
 
-test("FE-E2E-009C 全文编辑器拒绝跨章节保存", async ({ page }) => {
+test("FE-E2E-009C 全文编辑器自动保存多个章节和章节外内容", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/canvas/unibot-documents");
 
   await page.getByRole("textbox", { name: "全文 Markdown 编辑器" }).fill(
-    "# 被修改的根标题\n\n## 简介\n\n同时修改多个范围。\n",
+    "保存后的说明。\n\n# 被修改的根标题\n\n## 简介\n\n同时修改多个范围。\n",
   );
-  await page.getByRole("button", { name: "保存当前章节" }).click();
+  await page.getByRole("button", { name: "保存文档" }).click();
 
-  await expect(page.getByText(/只能保存“简介”章节/)).toBeVisible();
-  expect(state.documentContent).toContain("# 使用指南");
-  expect(state.documentContent).toContain("旧内容");
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toHaveValue(
+    "保存后的说明。\n\n# 被修改的根标题\n\n## 简介\n\n同时修改多个范围。\n",
+  );
+  expect(state.documentContent).toContain("保存后的说明");
+  expect(state.documentContent).toContain("# 被修改的根标题");
+  expect(state.documentContent).toContain("同时修改多个范围");
 });
 
-test("FE-E2E-009D 放弃任务草稿不会更新文档", async ({ page }) => {
+test("FE-E2E-009D 零合入任务结束后归入失败记录", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/canvas/unibot-documents");
 
@@ -502,11 +609,12 @@ test("FE-E2E-009D 放弃任务草稿不会更新文档", async ({ page }) => {
   await page.getByPlaceholder("描述希望 AI 如何修改所选章节…").fill("润色简介");
   await page.getByRole("checkbox", { name: "简介" }).check();
   await page.getByRole("button", { name: "创建并执行" }).click();
-  await page.getByRole("button", { name: "放弃本章节" }).click();
+  await page.getByRole("button", { name: "结束任务", exact: true }).click();
 
-  await expect(page.getByText("原文不会被修改；任务中的其他章节不受影响。", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "放弃本章节", exact: true }).last().click();
-  await expect(page.getByText("此任务的所有章节均已放弃，文档原文未发生变化。", { exact: true })).toBeVisible();
+  await expect(page.getByText("所有未处理的章节草稿都将放弃，正式文档不会改变；任务随后归入失败记录。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "结束并放弃剩余改动", exact: true }).click();
+  await expect(page.getByText("此任务未产生任何合入，已归入失败记录。可以查看详情或删除记录。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除任务", exact: true })).toBeVisible();
   expect(state.documentContent).toContain("旧内容");
 });
 
@@ -523,7 +631,7 @@ test("FE-E2E-009E 章节合入冲突只展示一次任务错误", async ({ page 
   await page.getByRole("button", { name: "合入本章节", exact: true }).last().click();
 
   await expect(page.getByText("Document revision changed. Review the latest document before merging.", { exact: true })).toHaveCount(1);
-  await expect(page.getByText("存在冲突", { exact: true })).toBeVisible();
+  await expect(page.getByText("合入失败", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文", async ({ page }) => {
@@ -551,6 +659,90 @@ test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文",
   expect(state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
   expect(state.lastStreamPayload?.ui_context).toContain("任务 ID：document-edit-e2e");
   expect(state.lastStreamPayload?.ui_context).toContain("章节 ID：draft-section-e2e");
+});
+
+test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", async ({ page }) => {
+  await installMockApi(page, {
+    documentTasks: [
+      documentTask({
+        id: "task-failed",
+        title: "失败任务",
+        description: "重新生成失败章节",
+        status: "failed",
+        attempt_count: 2,
+        error: "Model request failed",
+      }, {
+        id: "section-failed",
+        ai_status: "failed",
+        ai_error: "Model request failed",
+      }),
+      documentTask({
+        id: "task-abandoned",
+        title: "未合入任务",
+        description: "用户结束且没有产生合入",
+        status: "abandoned",
+        completed_at: NOW,
+        abandoned_at: NOW,
+      }, {
+        id: "section-abandoned",
+        review_status: "abandoned",
+        resolved_at: NOW,
+      }),
+      documentTask({
+        id: "task-history",
+        title: "历史任务",
+        description: "已经完成的变更",
+        status: "merged",
+        completed_at: NOW,
+        merged_at: NOW,
+      }, {
+        id: "section-history",
+        review_status: "merged",
+        resolved_at: NOW,
+        result_revision: "8ab9d4c",
+      }),
+    ],
+  });
+  await page.goto("/canvas/unibot-documents");
+
+  await page.getByRole("button", { name: "任务 3", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^进行中\s*0$/ })).toBeVisible();
+  await page.getByRole("button", { name: /^失败\s*2$/ }).click();
+  await expect(page.getByText("task-fai", { exact: true })).toBeVisible();
+  await expect(page.getByText("task-aba", { exact: true })).toBeVisible();
+  await page.getByText("失败任务", { exact: true }).click();
+  await expect(page.getByLabel("修改任务列表")).toBeVisible();
+  await page.getByRole("button", { name: "复制任务 ID task-fai", exact: true }).click();
+  await expect(page.getByRole("button", { name: "已复制任务 ID task-fai", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "查看任务 失败任务", exact: true }).click();
+  await expect(page.getByRole("button", { name: "重试未完成", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除任务", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "删除任务", exact: true }).click();
+  await page.getByRole("button", { name: "删除任务", exact: true }).last().click();
+  await page.getByRole("button", { name: "查看任务 未合入任务", exact: true }).click();
+  await expect(page.getByText("此任务未产生任何合入，已归入失败记录。可以查看详情或删除记录。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除任务", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "返回任务列表", exact: true }).click();
+
+  await page.getByRole("button", { name: /^历史\s*1$/ }).click();
+  const history = page.getByLabel("合入历史");
+  await expect(history.getByText("2026年7月12日的合入", { exact: true })).toBeVisible();
+  await expect(history.getByText("task-his", { exact: true })).toBeVisible();
+  await expect(history.getByText("合入于 12:00", { exact: true })).toBeVisible();
+  await expect(history.getByText("已经完成的变更", { exact: true })).toHaveCount(0);
+  await expect(history.getByText("全部已合入", { exact: true })).toHaveCount(0);
+  await expect(history.getByText("<>", { exact: true })).toHaveCount(1);
+  await expect(history.getByText("anonymous", { exact: true })).toHaveCount(0);
+  await history.getByText("历史任务", { exact: true }).click();
+  await expect(history).toBeVisible();
+  await history.getByRole("button", { name: "复制任务 ID task-his", exact: true }).click();
+  await expect(history.getByRole("button", { name: "已复制任务 ID task-his", exact: true })).toBeVisible();
+  await history.getByRole("button", { name: "查看任务 历史任务", exact: true }).click();
+  await expect(page.getByText(/所有章节均已合入文档，记录已锁定/)).toBeVisible();
+  await expect(page.getByText(/文档 revision 8ab9d4c/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除任务", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "重试未完成", exact: true })).toHaveCount(0);
 });
 
 test("FE-E2E-002 重命名、分类、删除并恢复会话", async ({ page }) => {
@@ -771,6 +963,12 @@ test("FE-E2E-004B 区分应用、设置和 Debug，并切换默认模型", async
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   await expect(page.getByLabel("Provider 团队模型服务").getByText("快速模型", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Provider 团队模型服务").getByText("推理模型", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "编辑 团队模型服务", exact: true }).click();
+  await page.getByRole("button", { name: "自动获取", exact: true }).click();
+  await expect(page.getByText("已从 Provider 自动添加 1 个模型。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "模型 3 ID", exact: true })).toHaveValue("team-coder");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.getByRole("button", { name: "设为默认" }).click();
   await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();

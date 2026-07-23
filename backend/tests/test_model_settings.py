@@ -80,6 +80,73 @@ def test_model_settings_support_multiple_models_and_mask_secrets() -> None:
     assert updated.json()["has_api_key"] is True
 
 
+def test_model_discovery_reads_openai_compatible_models_and_reuses_saved_key() -> None:
+    requests: list[httpx.Request] = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"id": "team-fast", "object": "model"},
+                    {"id": "team-reasoning", "display_name": "Team Reasoning"},
+                    {"id": "team-fast"},
+                ],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    with TestClient(create_app(settings=_settings(), model_health_http_client=http_client)) as client:
+        created = client.post("/model-settings/providers", json=_provider_payload()).json()
+        response = client.post(
+            "/model-settings/providers/discover-models",
+            json={
+                "provider_id": created["id"],
+                "base_url": "https://user-provider.invalid/v1/",
+                "api_key": "",
+                "timeout_seconds": 45,
+            },
+        )
+
+    asyncio.run(http_client.aclose())
+    assert response.status_code == 200
+    assert response.json() == {
+        "models": [
+            {"id": "team-fast", "name": "team-fast"},
+            {"id": "team-reasoning", "name": "Team Reasoning"},
+        ]
+    }
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].url == httpx.URL("https://user-provider.invalid/v1/models")
+    assert requests[0].headers["Authorization"] == "Bearer user-secret-key-value"
+
+
+def test_model_discovery_keeps_manual_flow_when_models_endpoint_is_missing() -> None:
+    requests: list[httpx.Request] = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(404)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    with TestClient(create_app(settings=_settings(), model_health_http_client=http_client)) as client:
+        response = client.post(
+            "/model-settings/providers/discover-models",
+            json={
+                "base_url": "https://user-provider.invalid/v1",
+                "api_key": "new-provider-key",
+            },
+        )
+
+    asyncio.run(http_client.aclose())
+    assert response.status_code == 502
+    assert response.json()["error"]["user_message"] == "该 Provider 未提供可用的 /models 接口，请继续手动添加模型。"
+    assert requests[0].headers["Authorization"] == "Bearer new-provider-key"
+
+
 def test_agent_uses_the_users_selected_model_configuration() -> None:
     requests: list[httpx.Request] = []
 

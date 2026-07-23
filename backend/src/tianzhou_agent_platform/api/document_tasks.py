@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.aina.document.task_models import (
     DocumentDraftAiRevision,
@@ -144,6 +144,38 @@ def create_document_task_router() -> APIRouter:
             user_id=payload.user_id,
             tenant_id=payload.tenant_id,
         )
+
+    @router.post(
+        "/document-edit-tasks/{task_id}/abandon",
+        response_model=DocumentEditTask,
+    )
+    async def abandon_task(
+        task_id: str,
+        payload: DocumentEditTaskActor,
+        request: Request,
+    ) -> DocumentEditTask:
+        return await document_edit_tasks(request).abandon_task(
+            task_id,
+            user_id=payload.user_id,
+            tenant_id=payload.tenant_id,
+        )
+
+    @router.delete(
+        "/document-edit-tasks/{task_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_task(
+        task_id: str,
+        request: Request,
+        user_id: str = Query(default="anonymous"),
+        tenant_id: str = Query(default="default"),
+    ) -> Response:
+        await document_edit_tasks(request).delete_task(
+            task_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post(
         "/document-edit-tasks/{task_id}/merge",

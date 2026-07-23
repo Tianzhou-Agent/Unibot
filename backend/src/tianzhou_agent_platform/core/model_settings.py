@@ -62,6 +62,33 @@ class ModelProviderUpdate(ModelProviderCreate):
     api_key: str | None = Field(default=None, max_length=1000)
 
 
+class ModelDiscoveryRequest(StrictModel):
+    provider_id: str | None = None
+    user_id: str = "anonymous"
+    tenant_id: str = "default"
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: str | None = Field(default=None, max_length=1000)
+    timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Provider base URL must be an HTTP or HTTPS URL")
+        return normalized
+
+
+class DiscoveredModel(StrictModel):
+    id: str
+    name: str
+
+
+class ModelDiscoveryResponse(StrictModel):
+    models: list[DiscoveredModel]
+
+
 class ModelDefinition(StrictModel):
     id: str
     name: str
@@ -161,6 +188,15 @@ def chat_completions_url(base_url: str) -> str:
     if normalized.endswith("/chat/completions"):
         return normalized
     return f"{normalized}/chat/completions"
+
+
+def models_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        normalized = normalized.removesuffix("/chat/completions")
+    if normalized.endswith("/models"):
+        return normalized
+    return f"{normalized}/models"
 
 
 def mask_api_key(api_key: str) -> str:
