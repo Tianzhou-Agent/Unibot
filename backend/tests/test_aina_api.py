@@ -151,6 +151,7 @@ def test_builtin_aina_manifests_expose_skill_prompts_and_tool_inputs() -> None:
 
     assistant = records["unibot-assistant"]
     assistant_tools = {item["id"]: item for item in assistant["capabilities"]["tools"]}
+    assert assistant_tools["describe_aina"]["input_schema"]["required"] == ["aina_id"]
     assert assistant_tools["open_aina"]["input_schema"]["required"] == ["aina_id"]
     clarification = assistant_tools["request_clarification"]["input_schema"]
     assert clarification["required"] == ["title", "fields"]

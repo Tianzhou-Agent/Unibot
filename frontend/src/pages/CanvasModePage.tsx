@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowUp, Bot, Loader2, MessageSquareText, PanelRightOpen, Sp
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
+import { ModelSelector } from "@/components/chat/ModelSelector";
 import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
@@ -280,8 +281,8 @@ export default function CanvasModePage() {
           <div className={classNames(
             "grid h-full min-h-0 grid-cols-1",
             ainaId === "unibot-documents"
-              ? "lg:grid-cols-[minmax(250px,300px)_minmax(0,1fr)]"
-              : "lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]",
+              ? "lg:grid-cols-[minmax(280px,320px)_minmax(0,1fr)]"
+              : "lg:grid-cols-[minmax(320px,360px)_minmax(0,1fr)]",
           )}>
             <section className={classNames(
               "min-h-0 flex-col overflow-hidden bg-white lg:flex lg:border-r lg:border-line",
@@ -456,7 +457,8 @@ function CanvasComposer({ disabled, context, onSend }: {
           aria-label="画布消息"
           className="w-full resize-none bg-transparent px-1 text-[12.5px] outline-none placeholder:text-ink-muted"
         />
-        <div className="mt-1 flex justify-end">
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <ModelSelector disabled={disabled} />
           <button
             type="submit"
             disabled={disabled || !text.trim()}
@@ -490,7 +492,7 @@ function documentTaskUiContext(context: DocumentTaskContext): string {
 
 function CanvasSkeleton() {
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[380px_1fr]">
+    <div className="grid h-full grid-cols-1 lg:grid-cols-[360px_1fr]">
       <div className="animate-pulse border-r border-line bg-line/60" />
       <div className="animate-pulse bg-line/60" />
     </div>

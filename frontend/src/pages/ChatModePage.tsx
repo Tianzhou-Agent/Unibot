@@ -13,6 +13,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
+import { ModelSelector } from "@/components/chat/ModelSelector";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
@@ -592,7 +593,8 @@ function ChatComposer({
           aria-label="消息"
           className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
         />
-        <div className="mt-2 flex justify-end">
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <ModelSelector disabled={disabled} />
           <button
             type="submit"
             disabled={disabled || !text.trim()}

@@ -19,9 +19,15 @@ from tianzhou_agent_platform.core.repository import InMemoryRepository
 
 UNIBOT_ASSISTANT_ID = "unibot-assistant"
 LIST_APP_TOOL_ID = "list_app"
+DESCRIBE_AINA_TOOL_ID = "describe_aina"
 OPEN_AINA_TOOL_ID = "open_aina"
 REQUEST_CLARIFICATION_TOOL_ID = "request_clarification"
-UNIBOT_TOOL_IDS = {LIST_APP_TOOL_ID, OPEN_AINA_TOOL_ID, REQUEST_CLARIFICATION_TOOL_ID}
+UNIBOT_TOOL_IDS = {
+    LIST_APP_TOOL_ID,
+    DESCRIBE_AINA_TOOL_ID,
+    OPEN_AINA_TOOL_ID,
+    REQUEST_CLARIFICATION_TOOL_ID,
+}
 
 
 def unibot_assistant_record() -> AinaRecord:
@@ -41,10 +47,29 @@ def unibot_assistant_record() -> AinaRecord:
                     AinaCapability(
                         id=LIST_APP_TOOL_ID,
                         name="列出应用",
-                        description="以组件形式列出当前用户可用的全部 AINA 应用。",
+                        description=(
+                            "仅当用户希望发现或选择应用时，以组件形式列出全部可用 AINA；"
+                            "查看已知应用详情时不要调用。"
+                        ),
                         input_schema={
                             "type": "object",
                             "properties": {},
+                            "additionalProperties": False,
+                        },
+                    ),
+                    AinaCapability(
+                        id=DESCRIBE_AINA_TOOL_ID,
+                        name="查看 AINA 详情",
+                        description="只读查看指定 AINA 的真实 Skill、Tool 和 UI 声明，不打开应用或切换画布。",
+                        input_schema={
+                            "type": "object",
+                            "properties": {
+                                "aina_id": {
+                                    "type": "string",
+                                    "description": "需要查看详情的 AINA ID 或准确应用名称。",
+                                }
+                            },
+                            "required": ["aina_id"],
                             "additionalProperties": False,
                         },
                     ),
@@ -257,6 +282,47 @@ async def open_aina(
     )
 
 
+async def describe_aina(
+    repository: InMemoryRepository,
+    aina_id: str,
+    *,
+    user_id: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
+    selected = next((item for item in apps if item.aina_id == aina_id), None)
+    if selected is None:
+        name_matches = [item for item in apps if item.name.casefold() == aina_id.casefold()]
+        selected = name_matches[0] if len(name_matches) == 1 else None
+    if selected is None:
+        raise PlatformError("RESOURCE_NOT_FOUND", "The selected AINA is not available", status_code=404)
+    record = await repository.get_aina(selected.aina_id)
+    manifest = record.manifest
+    return {
+        "aina_id": selected.aina_id,
+        "name": manifest.aina.name,
+        "description": manifest.aina.description,
+        "version": manifest.aina.version,
+        "skills": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "description": item.description,
+                "instructions": item.instructions,
+            }
+            for item in manifest.capabilities.skills
+        ],
+        "tools": [
+            {"id": item.id, "name": item.name, "description": item.description}
+            for item in manifest.capabilities.tools
+        ],
+        "ui": [
+            {"id": item.id, "kind": item.kind, "description": item.description}
+            for item in manifest.capabilities.ui
+        ],
+    }
+
+
 async def invoke_unibot_tool(
     repository: InMemoryRepository,
     tool_id: str,
@@ -269,6 +335,16 @@ async def invoke_unibot_tool(
     if tool_id == LIST_APP_TOOL_ID:
         widget = await list_app_widget(repository, user_id=user_id, tenant_id=tenant_id)
         return {"count": len(widget.apps), "aina_ids": [item.aina_id for item in widget.apps]}, [widget]
+    if tool_id == DESCRIBE_AINA_TOOL_ID:
+        aina_id = str(arguments.get("aina_id") or "").strip()
+        if not aina_id:
+            raise PlatformError("INVALID_REQUEST", "describe_aina requires aina_id")
+        return await describe_aina(
+            repository,
+            aina_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        ), []
     if tool_id == OPEN_AINA_TOOL_ID:
         aina_id = str(arguments.get("aina_id") or "").strip()
         if not aina_id:

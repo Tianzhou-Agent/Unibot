@@ -28,11 +28,13 @@ from tianzhou_agent_platform.aina.schedule.builtin import (
     unibot_scheduler_record,
 )
 from tianzhou_agent_platform.aina.unibot.builtin import (
+    DESCRIBE_AINA_TOOL_ID,
     LIST_APP_TOOL_ID,
     OPEN_AINA_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
     UNIBOT_ASSISTANT_ID,
     UNIBOT_TOOL_IDS,
+    describe_aina,
     invoke_unibot_tool,
     list_app_widget,
     open_aina,
@@ -165,6 +167,7 @@ def _document_storage_error(
 
 __all__ = [
     "BUILTIN_AINA_IDS",
+    "DESCRIBE_AINA_TOOL_ID",
     "DOCUMENT_TOOL_IDS",
     "FORGET_TOOL_ID",
     "LIST_APP_TOOL_ID",
@@ -178,6 +181,7 @@ __all__ = [
     "UNIBOT_MEMORY_ID",
     "UNIBOT_SCHEDULER_ID",
     "ensure_unibot_assistant",
+    "describe_aina",
     "invoke_builtin",
     "list_app_widget",
     "open_aina",

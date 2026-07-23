@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bug, Check, LayoutGrid, MessageSquarePlus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bug, Check, LayoutGrid, MessageSquarePlus, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
@@ -88,9 +88,10 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-16 md:w-[248px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
-      <div className="px-3 md:px-4 pt-4 pb-3">
+    <aside className="w-16 md:w-[220px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
+      <div className="flex flex-col items-center gap-2 px-3 pt-4 pb-3 md:flex-row md:justify-between md:px-4">
         <Brand />
+        <NewConversationMenu onSelect={startConversation} />
       </div>
 
       <div className="hidden px-4 pb-2 md:block">
@@ -105,17 +106,6 @@ export function Sidebar() {
             className="flex-1 min-w-0 bg-transparent text-[12.5px] placeholder:text-ink-onDarkMuted/70 text-ink-inverse outline-none"
           />
         </label>
-      </div>
-
-      <div className="px-3 pb-3 md:px-4">
-        <button
-          type="button"
-          onClick={startConversation}
-          className="w-full flex items-center justify-center gap-1.5 h-9 rounded-lg bg-accent hover:bg-accent-hover text-white text-[0px] md:text-[13px] font-semibold transition-colors"
-        >
-          <MessageSquarePlus className="w-4 h-4" />
-          新建对话
-        </button>
       </div>
 
       <div className="hidden px-4 pb-2 md:flex items-center gap-2">
@@ -181,6 +171,65 @@ function Brand() {
         <div className="text-[10px] text-ink-onDarkMuted">智能体运行平台</div>
       </div>
     </NavLink>
+  );
+}
+
+function NewConversationMenu({ onSelect }: { onSelect: () => void }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="新建"
+        title="新建"
+        className="flex h-8 w-8 items-center justify-center rounded-lg border border-sidebar-border text-ink-onDark transition-colors hover:border-accent hover:bg-sidebar-hover hover:text-white"
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="新建菜单"
+          className="absolute left-1/2 top-full z-40 mt-1.5 w-36 -translate-x-1/2 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-card md:left-auto md:right-0 md:translate-x-0"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onSelect();
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-ink transition-colors hover:bg-app-soft"
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5 text-ink-muted" />
+            新建对话
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -269,15 +318,16 @@ function FooterButton({ to, label, icon }: { to: string; label: string; icon: Re
   return (
     <NavLink
       to={to}
+      aria-label={label}
+      title={label}
       className={({ isActive }) =>
         classNames(
-          "h-10 rounded-lg flex items-center justify-center gap-1.5 text-[0px] md:text-[11px] font-semibold transition-colors",
+          "h-10 rounded-lg flex items-center justify-center transition-colors",
           isActive ? "bg-sidebar-active text-white" : "text-ink-onDark hover:bg-sidebar-hover",
         )
       }
     >
       {icon}
-      {label}
     </NavLink>
   );
 }

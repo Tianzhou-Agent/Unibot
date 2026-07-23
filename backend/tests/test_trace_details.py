@@ -27,6 +27,7 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
     assert graph["excluded"] == []
     available = {item["id"]: item for item in graph["available"]}
     assert {item["id"] for item in available["unibot-assistant"]["capabilities"]["tools"]} == {
+        "describe_aina",
         "list_app",
         "open_aina",
         "request_clarification",
@@ -39,6 +40,7 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
     }
     scope = {item["aina_id"]: item["capabilities"] for item in discovery["model_scope"]["by_aina"]}
     assert {item["id"] for item in scope["unibot-assistant"]} == {
+        "describe_aina",
         "list_app",
         "open_aina",
         "request_clarification",

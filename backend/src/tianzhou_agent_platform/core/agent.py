@@ -12,6 +12,7 @@ from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 
 from tianzhou_agent_platform.aina.builtin import (
+    DESCRIBE_AINA_TOOL_ID,
     FORGET_TOOL_ID,
     LIST_APP_TOOL_ID,
     OPEN_AINA_TOOL_ID,
@@ -401,6 +402,8 @@ class AgentRuntime:
             )
             try:
                 call_started = perf_counter()
+                if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_AINA_TOOL_ID}:
+                    widgets = [widget for widget in widgets if widget.kind != "app_list"]
                 widgets_before = len(widgets)
                 if capability.kind == "tool":
                     tool = cast(ToolRecord, capability.value)
@@ -1333,6 +1336,8 @@ class AgentRuntime:
                     f"{scope_guidance}"
                 ),
             ]
+            if manifest.aina.id == UNIBOT_ASSISTANT_ID:
+                sections.append(_unibot_assistant_guidance())
             if aina_skills:
                 sections.append(f"AINA skills:\n{aina_skills}")
             if tools:
@@ -1346,18 +1351,7 @@ class AgentRuntime:
         platform_skills = [item for item in await self.repository.list_skills() if item.status == "published"]
         sections = [
             self.settings.system_prompt,
-            (
-                "You are Unibot Assistant, the system AINA. Use list_app whenever the user asks to list or "
-                "discover applications. Use open_aina when the user asks to enter a specific AINA. If no "
-                "system skill or tool is needed, answer as an ordinary conversation. After open_aina, only "
-                "confirm that the requested AINA is ready and let the navigation widget carry its details. "
-                "When essential details are missing and guessing would change the result, call "
-                "request_clarification to show a "
-                "host-rendered form. Prefill any values already known from the conversation. Memory tools stay "
-                "available across turns so historical tool calls remain valid. Call memory.remember only when "
-                "the user explicitly asks to remember something or clearly supplies a durable personal fact "
-                "during an ongoing memory-collection exchange; never store transient chat or inferred facts."
-            ),
+            _unibot_assistant_guidance(),
         ]
         if platform_skills:
             guidance = "\n".join(
@@ -1399,10 +1393,38 @@ class AgentRuntime:
             capability_id=LIST_APP_TOOL_ID,
             function_name=list_function,
             display_name="List applications",
-            description="List all AINA applications available to the current user in an interactive widget.",
+            description=(
+                "List all AINA applications in an interactive widget only when the user wants to discover or "
+                "choose among applications. Do not use it to resolve a named AINA before describe_aina."
+            ),
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
             requires_confirmation=False,
             value=LIST_APP_TOOL_ID,
+            owner_aina_id=UNIBOT_ASSISTANT_ID,
+        )
+        describe_function = _function_name("builtin", DESCRIBE_AINA_TOOL_ID)
+        capabilities[describe_function] = Capability(
+            kind="builtin",
+            capability_id=DESCRIBE_AINA_TOOL_ID,
+            function_name=describe_function,
+            display_name="Describe AINA",
+            description=(
+                "Read the declared skills, tools, UI, and metadata of one AINA without opening it or navigating "
+                "to its canvas. Use this for questions about what an AINA is or can do."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "aina_id": {
+                        "type": "string",
+                        "description": "The exact AINA identifier or display name to inspect without opening it.",
+                    }
+                },
+                "required": ["aina_id"],
+                "additionalProperties": False,
+            },
+            requires_confirmation=False,
+            value=DESCRIBE_AINA_TOOL_ID,
             owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         open_function = _function_name("builtin", OPEN_AINA_TOOL_ID)
@@ -1913,6 +1935,22 @@ def _normalized_route_message(
             }
         ],
     }
+
+
+def _unibot_assistant_guidance() -> str:
+    return (
+        "You are Unibot Assistant, the system AINA. Use list_app whenever the user asks to list or discover "
+        "applications. Use describe_aina directly for read-only questions about a named AINA's details, skills, "
+        "tools, UI, or capabilities; it accepts an exact ID or display name, so do not call list_app first unless "
+        "the target AINA is unknown or ambiguous. Use open_aina only when the user asks to enter, open, or start using a specific "
+        "AINA; never open an AINA merely to inspect or explain it. If no system skill or tool is needed, answer "
+        "as an ordinary conversation. After open_aina, only confirm that the requested AINA is ready and let the "
+        "navigation widget carry its details. When essential details are missing and guessing would change the "
+        "result, call request_clarification to show a host-rendered form. Prefill any values already known from "
+        "the conversation. Memory tools stay available across turns so historical tool calls remain valid. Call "
+        "memory.remember only when the user explicitly asks to remember something or clearly supplies a durable "
+        "personal fact during an ongoing memory-collection exchange; never store transient chat or inferred facts."
+    )
 
 
 def _with_ui_context(conversation: Conversation, ui_context: str | None) -> Conversation:

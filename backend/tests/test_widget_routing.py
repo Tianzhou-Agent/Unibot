@@ -167,6 +167,51 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
 
 
+def test_describe_aina_returns_real_skills_without_opening_canvas(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-assistant_",
+                arguments='{"input":"查看文档编辑器的 Skill"}',
+            ),
+            call_first_tool(prefix="builtin_list_app_"),
+            call_first_tool(
+                prefix="builtin_describe_aina_",
+                arguments='{"aina_id":"文档编辑器"}',
+            ),
+            assistant("文档编辑器声明了 Markdown 文档管理 Skill。"),
+        ]
+    )
+    with TestClient(
+        create_app(
+            settings=_settings(),
+            llm=llm,
+            document_service=DocumentService(NasStore(tmp_path)),
+        )
+    ) as client:
+        response = client.post("/chat", json={"message": "查看文档编辑器的 Skill"})
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["widgets"] == []
+    tool_result = llm.calls[3]["messages"][-1]["content"]
+    assert "markdown-document-management" in tool_result
+    assert "Markdown 文档管理" in tool_result
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "describe_aina"
+        for event in trace["events"]
+    )
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "list_app"
+        for event in trace["events"]
+    )
+    assert not any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "open_aina"
+        for event in trace["events"]
+    )
+    assert "do not call list_app first unless the target AINA is unknown or ambiguous" in llm.calls[1]["messages"][0]["content"]
+
+
 def test_open_assistant_returns_a_dedicated_main_widget() -> None:
     with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
         response = client.post("/ainas/unibot-assistant/open", json={})
