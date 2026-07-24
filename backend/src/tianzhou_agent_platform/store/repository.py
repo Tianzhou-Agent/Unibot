@@ -9,7 +9,7 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceRecord
+from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import conflict
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
@@ -20,6 +20,7 @@ from tianzhou_agent_platform.core.repository import (
     CONVERSATIONS_RESOURCE,
     DOCUMENT_EDIT_TASKS_RESOURCE,
     INSTALLATIONS_RESOURCE,
+    LLM_CALLS_RESOURCE,
     MEMORIES_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
     SCHEDULED_AINA_TASKS_RESOURCE,
@@ -54,6 +55,7 @@ repository_tables = {
         SKILLS_RESOURCE,
         AINAS_RESOURCE,
         INSTALLATIONS_RESOURCE,
+        LLM_CALLS_RESOURCE,
         TRACES_RESOURCE,
         APPROVALS_RESOURCE,
         MODEL_PROVIDERS_RESOURCE,
@@ -80,6 +82,7 @@ class PersistentRepository(InMemoryRepository):
         ainas = await self._load_models(AINAS_RESOURCE, AinaRecord)
         installations = await self._load_models(INSTALLATIONS_RESOURCE, AinaInstallation)
         traces = await self._load_models(TRACES_RESOURCE, TraceRecord)
+        llm_calls = await self._load_models(LLM_CALLS_RESOURCE, LLMCallRecord)
         approvals = await self._load_models(APPROVALS_RESOURCE, ApprovalRecord)
         model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
         scheduled_tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
@@ -99,6 +102,7 @@ class PersistentRepository(InMemoryRepository):
                 (item.tenant_id, item.user_id, item.aina_id): item for item in installations
             }
             self._traces = {item.trace_id: item for item in traces}
+            self._llm_calls = {item.call_id: item for item in llm_calls}
             self._approvals = {item.id: item for item in approvals}
             self._model_providers = {item.id: item for item in model_providers}
             self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}

@@ -57,7 +57,10 @@ def create_app(
     resolved_document_service = document_service or (
         DocumentService(storage_stores.nas) if storage_stores is not None else None
     )
-    resolved_llm = llm or OpenAICompatibleClient(resolved_settings)
+    resolved_llm = llm or OpenAICompatibleClient(
+        resolved_settings,
+        call_sink=resolved_repository.upsert_llm_call,
+    )
     document_edit_task_service = (
         DocumentEditTaskService(resolved_document_service, resolved_repository, resolved_llm)
         if resolved_document_service is not None

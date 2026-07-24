@@ -728,6 +728,8 @@ class DocumentEditWorker:
                     "type": "function",
                     "function": {"name": "submit_document_section_draft"},
                 },
+                context_type="document_edit_task",
+                context_id=task.id,
             )
         calls = result.message.get("tool_calls") or []
         if len(calls) != 1:

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
 import openai
@@ -12,10 +17,13 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import current_model_runtime
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
+LLMCallSink = Callable[[LLMCallRecord], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -34,16 +42,26 @@ class LLMClient(Protocol):
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
+        trace_id: str | None = None,
+        context_type: str | None = None,
+        context_id: str | None = None,
     ) -> LLMResult: ...
 
 
 class OpenAICompatibleClient:
     """LangChain adapter that preserves the platform's provider-neutral LLM port."""
 
-    def __init__(self, settings: AgentSettings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: AgentSettings,
+        client: httpx.AsyncClient | None = None,
+        *,
+        call_sink: LLMCallSink | None = None,
+    ) -> None:
         self.settings = settings
         self._client = client or httpx.AsyncClient()
         self._owns_client = client is None
+        self._call_sink = call_sink
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -84,6 +102,9 @@ class OpenAICompatibleClient:
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
+        trace_id: str | None = None,
+        context_type: str | None = None,
+        context_id: str | None = None,
     ) -> LLMResult:
         # Several OpenAI-compatible providers reject named tool_choice while
         # streaming. Forced tool turns have no user-facing text, so keep them
@@ -94,28 +115,86 @@ class OpenAICompatibleClient:
                 tools=tools,
                 tool_choice=tool_choice,
                 event_sink=event_sink,
+                trace_id=trace_id,
+                context_type=context_type,
+                context_id=context_id,
             )
-        return await self._invoke_with_fallback(messages, tools, tool_choice)
+        return await self._invoke_with_fallback(
+            messages,
+            tools,
+            tool_choice,
+            trace_id=trace_id,
+            context_type=context_type,
+            context_id=context_id,
+        )
 
     async def _invoke_with_fallback(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None,
+        *,
+        trace_id: str | None,
+        context_type: str | None,
+        context_id: str | None,
     ) -> LLMResult:
         try:
-            message = await self._bound_model(tools, tool_choice).ainvoke(messages)
+            return await self._invoke_once(
+                messages,
+                tools,
+                tool_choice,
+                trace_id=trace_id,
+                context_type=context_type,
+                context_id=context_id,
+            )
         except openai.BadRequestError as exc:
             if _tool_choice_name(tool_choice) is None or "tool_choice" not in str(exc).lower():
                 raise _map_openai_error(exc) from exc
             fallback_messages = _add_forced_tool_instruction(messages, _tool_choice_name(tool_choice))
             try:
-                message = await self._bound_model(tools, None).ainvoke(fallback_messages)
+                return await self._invoke_once(
+                    fallback_messages,
+                    tools,
+                    None,
+                    trace_id=trace_id,
+                    context_type=context_type,
+                    context_id=context_id,
+                )
             except openai.OpenAIError as fallback_exc:
                 raise _map_openai_error(fallback_exc) from fallback_exc
         except openai.OpenAIError as exc:
             raise _map_openai_error(exc) from exc
-        return _result_from_message(message)
+
+    async def _invoke_once(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None,
+        *,
+        trace_id: str | None,
+        context_type: str | None,
+        context_id: str | None,
+    ) -> LLMResult:
+        call, started = await self._start_call(
+            messages,
+            tools,
+            tool_choice,
+            stream=False,
+            trace_id=trace_id,
+            context_type=context_type,
+            context_id=context_id,
+        )
+        try:
+            message = await self._bound_model(tools, tool_choice).ainvoke(messages)
+        except openai.OpenAIError as exc:
+            await self._fail_call(call, started, exc)
+            raise
+        except Exception as exc:
+            await self._fail_call(call, started, exc)
+            raise
+        result = _result_from_message(message)
+        await self._complete_call(call, started, result)
+        return result
 
     async def _stream_complete(
         self,
@@ -124,7 +203,19 @@ class OpenAICompatibleClient:
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None,
         event_sink: EventSink,
+        trace_id: str | None,
+        context_type: str | None,
+        context_id: str | None,
     ) -> LLMResult:
+        call, started = await self._start_call(
+            messages,
+            tools,
+            tool_choice,
+            stream=True,
+            trace_id=trace_id,
+            context_type=context_type,
+            context_id=context_id,
+        )
         aggregate: AIMessageChunk | None = None
         try:
             async for chunk in self._bound_model(tools, tool_choice).astream(messages):
@@ -133,15 +224,105 @@ class OpenAICompatibleClient:
                 if delta:
                     await event_sink({"type": "message.delta", "delta": delta})
         except openai.OpenAIError as exc:
+            await self._fail_call(call, started, exc)
             raise _map_openai_error(exc) from exc
+        except Exception as exc:
+            await self._fail_call(call, started, exc)
+            raise
         if aggregate is None:
-            raise PlatformError(
+            error = PlatformError(
                 "DEPENDENCY_FAILED",
                 "The model provider returned an empty stream",
                 status_code=502,
                 source="model",
             )
-        return _result_from_message(aggregate)
+            await self._fail_call(call, started, error)
+            raise error
+        result = _result_from_message(aggregate)
+        await self._complete_call(call, started, result)
+        return result
+
+    async def _start_call(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None,
+        *,
+        stream: bool,
+        trace_id: str | None,
+        context_type: str | None,
+        context_id: str | None,
+    ) -> tuple[LLMCallRecord, float]:
+        endpoint, model = self._request_target()
+        request: dict[str, Any] = {
+            "model": model,
+            "messages": deepcopy(messages),
+            "stream": stream,
+        }
+        if tools:
+            request["tools"] = deepcopy(tools)
+        if tool_choice is not None:
+            request["tool_choice"] = deepcopy(tool_choice)
+        call = LLMCallRecord(
+            call_id=f"llm_{uuid4().hex}",
+            trace_id=trace_id,
+            context_type=context_type,
+            context_id=context_id,
+            endpoint=endpoint,
+            model=model,
+            request=request,
+        )
+        await self._record_call(call)
+        return call, perf_counter()
+
+    async def _complete_call(self, call: LLMCallRecord, started: float, result: LLMResult) -> None:
+        completed_at = datetime.now(UTC)
+        completed = call.model_copy(
+            update={
+                "status": "completed",
+                "response": _response_from_result(call.model, result),
+                "duration_ms": (perf_counter() - started) * 1000,
+                "completed_at": completed_at,
+            }
+        )
+        await self._record_call(completed)
+
+    async def _fail_call(self, call: LLMCallRecord, started: float, exc: Exception) -> None:
+        completed_at = datetime.now(UTC)
+        failed = call.model_copy(
+            update={
+                "status": "failed",
+                "response": _response_from_error(exc),
+                "duration_ms": (perf_counter() - started) * 1000,
+                "error": str(exc),
+                "completed_at": completed_at,
+            }
+        )
+        await self._record_call(failed)
+
+    async def _record_call(self, call: LLMCallRecord) -> None:
+        if self._call_sink is None:
+            return
+        try:
+            await self._call_sink(call)
+        except Exception:
+            logger.exception("Could not persist LLM call %s", call.call_id)
+
+    def _request_target(self) -> tuple[str, str]:
+        runtime_model = current_model_runtime()
+        base_url = runtime_model.base_url if runtime_model else self.settings.llm_base_url
+        model = runtime_model.model if runtime_model else self.settings.llm_model
+        if not base_url or not model:
+            raise PlatformError(
+                code="INVALID_REQUEST",
+                message="The LLM provider is not configured",
+                status_code=503,
+                source="model",
+                user_message="The language model is not configured for this service.",
+            )
+        normalized = base_url.rstrip("/")
+        endpoint = normalized if normalized.endswith("/chat/completions") else f"{normalized}/chat/completions"
+        return endpoint, model
 
     def _bound_model(
         self,
@@ -181,6 +362,45 @@ def _result_from_message(message: AIMessage | AIMessageChunk) -> LLMResult:
         output_tokens=int(usage.get("output_tokens") or 0),
         finish_reason=str(message.response_metadata.get("finish_reason") or "") or None,
     )
+
+
+def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
+    return {
+        "object": "chat.completion",
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": deepcopy(result.message),
+                "finish_reason": result.finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": result.input_tokens,
+            "completion_tokens": result.output_tokens,
+            "total_tokens": result.input_tokens + result.output_tokens,
+        },
+    }
+
+
+def _response_from_error(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, openai.APIStatusError):
+        response: dict[str, Any] = {"status_code": exc.status_code}
+        try:
+            body = exc.response.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            body = exc.response.text
+        response["body"] = body
+        return response
+    if isinstance(exc, PlatformError):
+        return {
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "source": exc.source,
+            }
+        }
+    return {"error": {"type": type(exc).__name__, "message": str(exc)}}
 
 
 def _message_text(content: Any) -> str:

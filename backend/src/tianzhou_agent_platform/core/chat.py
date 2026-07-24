@@ -78,6 +78,22 @@ class TraceRecord(StrictModel):
     completed_at: datetime | None = None
 
 
+class LLMCallRecord(StrictModel):
+    call_id: str
+    trace_id: str | None = None
+    context_type: str | None = None
+    context_id: str | None = None
+    endpoint: str
+    model: str
+    status: Literal["running", "completed", "failed"] = "running"
+    request: dict[str, Any]
+    response: dict[str, Any] | None = None
+    duration_ms: float | None = None
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+
+
 class StandardError(StrictModel):
     code: str
     message: str

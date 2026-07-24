@@ -20,7 +20,7 @@ from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
 )
-from tianzhou_agent_platform.core.chat import ApprovalRecord, TraceEvent, TraceRecord
+from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.model_settings import (
@@ -38,6 +38,7 @@ SKILLS_RESOURCE = "skills"
 AINAS_RESOURCE = "ainas"
 INSTALLATIONS_RESOURCE = "installations"
 TRACES_RESOURCE = "traces"
+LLM_CALLS_RESOURCE = "llm_calls"
 APPROVALS_RESOURCE = "approvals"
 MODEL_PROVIDERS_RESOURCE = "model_providers"
 SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
@@ -62,6 +63,7 @@ class InMemoryRepository:
         self._ainas: dict[str, AinaRecord] = {}
         self._installations: dict[tuple[str, str, str], AinaInstallation] = {}
         self._traces: dict[str, TraceRecord] = {}
+        self._llm_calls: dict[str, LLMCallRecord] = {}
         self._approvals: dict[str, ApprovalRecord] = {}
         self._memories: dict[str, MemoryRecord] = {}
         self._model_providers: dict[str, ModelProviderRecord] = {}
@@ -914,6 +916,20 @@ class InMemoryRepository:
                 if (user_id is None or item.user_id == user_id) and (tenant_id is None or item.tenant_id == tenant_id)
             ]
         return sorted(traces, key=lambda item: item.created_at, reverse=True)
+
+    async def upsert_llm_call(self, call: LLMCallRecord) -> None:
+        async with self._lock:
+            self._llm_calls[call.call_id] = call
+            await self._save_record(LLM_CALLS_RESOURCE, call.call_id, call)
+
+    async def list_llm_calls(self, *, limit: int = 200) -> list[LLMCallRecord]:
+        async with self._lock:
+            calls = [self._copy(item) for item in self._llm_calls.values()]
+        return sorted(calls, key=lambda item: item.created_at, reverse=True)[:limit]
+
+    async def count_llm_calls(self) -> int:
+        async with self._lock:
+            return len(self._llm_calls)
 
     async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
         async with self._lock:

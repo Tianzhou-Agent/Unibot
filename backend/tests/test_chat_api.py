@@ -163,8 +163,11 @@ class BlockingLLM:
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
+        trace_id: str | None = None,
+        context_type: str | None = None,
+        context_id: str | None = None,
     ) -> LLMResult:
-        del messages, tools, tool_choice
+        del messages, tools, tool_choice, trace_id, context_type, context_id
         self.started.set()
         while not self.release.is_set():
             await asyncio.sleep(0.01)

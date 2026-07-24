@@ -208,6 +208,9 @@ class AgentRuntime:
                 tools=state["tool_definitions"],
                 tool_choice=tool_choice,
                 event_sink=state.get("event_sink"),
+                trace_id=state["trace_id"],
+                context_type="conversation",
+                context_id=state["conversation_id"],
             )
         except PlatformError as exc:
             await self.repository.add_trace_event(
@@ -973,6 +976,9 @@ class AgentRuntime:
             tools=[item.llm_definition() for item in candidates.values()],
             tool_choice="auto",
             event_sink=None,
+            trace_id=trace_id,
+            context_type="conversation",
+            context_id=conversation.id,
         )
         selected: Capability | None = None
         assistant_message: dict[str, Any] | None = None

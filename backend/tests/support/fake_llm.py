@@ -18,11 +18,17 @@ class ScriptedLLM:
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
+        trace_id: str | None = None,
+        context_type: str | None = None,
+        context_id: str | None = None,
     ) -> LLMResult:
         call = {
             "messages": [dict(message) for message in messages],
             "tools": tools,
             "tool_choice": tool_choice,
+            "trace_id": trace_id,
+            "context_type": context_type,
+            "context_id": context_id,
         }
         self.calls.append(call)
         if not self.responses:

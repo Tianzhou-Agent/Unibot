@@ -7,12 +7,17 @@ import httpx
 import pytest
 
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.llm import OpenAICompatibleClient
 
 
 @pytest.mark.asyncio
 async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
     requests: list[dict[str, Any]] = []
+    recorded_calls: dict[str, LLMCallRecord] = {}
+
+    async def record_call(call: LLMCallRecord) -> None:
+        recorded_calls[call.call_id] = call
 
     async def provider(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
@@ -51,7 +56,7 @@ async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
         llm_model="thinking-model",
     )
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client)
+    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
     result = await client.complete(
         messages=[
             {"role": "system", "content": "You are helpful."},
@@ -76,6 +81,18 @@ async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
     assert "tool_choice" not in requests[1]
     assert "explicitly selected function demo_add" in requests[1]["messages"][0]["content"]
     assert result.message["tool_calls"][0]["function"]["name"] == "demo_add"
+    assert [call.status for call in recorded_calls.values()] == ["failed", "completed"]
+    failed, completed = recorded_calls.values()
+    assert failed.endpoint == "https://provider.invalid/v1/chat/completions"
+    assert failed.response == {
+        "status_code": 400,
+        "body": {"error": {"message": "Thinking mode does not support this tool_choice"}},
+    }
+    assert completed.request["messages"][0]["content"].endswith(
+        "Call that function before answering the user."
+    )
+    assert completed.response is not None
+    assert completed.response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "demo_add"
 
 
 @pytest.mark.asyncio
@@ -147,6 +164,11 @@ async def test_named_tool_choice_uses_non_streaming_request_with_event_sink() ->
 
 @pytest.mark.asyncio
 async def test_langchain_streaming_emits_message_deltas() -> None:
+    recorded_calls: dict[str, LLMCallRecord] = {}
+
+    async def record_call(call: LLMCallRecord) -> None:
+        recorded_calls[call.call_id] = call
+
     async def provider(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         assert payload["stream"] is True
@@ -171,7 +193,7 @@ async def test_langchain_streaming_emits_message_deltas() -> None:
         llm_model="test-model",
     )
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client)
+    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
     events: list[dict[str, Any]] = []
 
     async def sink(event: dict[str, Any]) -> None:
@@ -189,3 +211,10 @@ async def test_langchain_streaming_emits_message_deltas() -> None:
         {"type": "message.delta", "delta": "Hello"},
         {"type": "message.delta", "delta": " world"},
     ]
+    recorded = next(iter(recorded_calls.values()))
+    assert recorded.status == "completed"
+    assert recorded.request["stream"] is True
+    assert recorded.response is not None
+    assert recorded.response["choices"][0]["message"]["content"] == "Hello world"
+    result.message["widgets"] = [{"id": "document-outline", "kind": "document_outline"}]
+    assert "widgets" not in recorded.response["choices"][0]["message"]

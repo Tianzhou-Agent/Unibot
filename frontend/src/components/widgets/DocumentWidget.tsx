@@ -845,9 +845,9 @@ function DocumentEditor({ content, dirty, saving, disabled, mode, outline, headi
           <ModeButton active={mode === "split"} label="分栏" onClick={() => onMode("split")}><Columns2 className="h-3.5 w-3.5" /></ModeButton>
           <ModeButton active={mode === "preview"} label="仅预览" onClick={() => onMode("preview")}><Eye className="h-3.5 w-3.5" /></ModeButton>
         </div>
-        <button type="button" className="btn-primary ml-auto h-8 text-[10.5px]" onClick={onSave}
-          disabled={disabled || saving || !dirty}>
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}保存文档
+        <button type="button" className="btn-primary ml-auto h-8 w-8 px-0" onClick={onSave}
+          disabled={disabled || saving || !dirty} aria-label="保存文档" title="保存文档">
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
         </button>
       </div>
       <div className={classNames("grid min-h-0 flex-1", mode === "split" && "grid-rows-2 xl:grid-cols-2 xl:grid-rows-1")}>
@@ -975,37 +975,32 @@ function TaskWorkspace({ tasks, activeTask, activeSection, activeSectionId, crea
                   {copiedTaskId === task.id ? <Check className="h-3.5 w-3.5 text-success-deep" /> : <Copy className="h-3.5 w-3.5" />}
                 </button>
                 <button type="button" onClick={() => onOpenTask(task)} aria-label={`查看任务 ${task.title}`}
-                  className="shrink-0 rounded border border-line px-1 py-0.5 font-mono text-[9px] text-ink-muted hover:border-accent-ring hover:text-accent">
+                  className="shrink-0 px-1 py-0.5 font-mono text-[9px] text-ink-muted hover:text-accent">
                   {"<>"}
                 </button>
               </div>;
             })}
           </div>
-        </section>) : <div className="grid auto-rows-min grid-cols-1 gap-2">
-          {visibleTasks.map((task) => <div key={task.id}
-            className="flex items-start gap-2 rounded-lg border border-line bg-white p-3 text-left transition hover:border-accent-ring hover:shadow-sm">
-            <TaskIcon task={task} />
-            <span className="min-w-0 flex-1"><span className="flex items-start gap-2"><strong className="min-w-0 flex-1 truncate text-[11px] text-ink">{task.title}</strong>
-              <span className={statusBadge(task.status)}>{taskStatusLabel(task.status)}</span></span>
-              <span className="mt-1 block line-clamp-2 text-[9.5px] leading-4 text-ink-muted">{task.description}</span>
-              <span className="mt-2 flex items-center gap-2 text-[8.5px] text-ink-subtle">
-                <span className="font-mono" title={task.id}>{shortTaskId(task.id)}</span>
-                <button type="button" onClick={() => void copyTaskId(task.id)}
-                  aria-label={`${copiedTaskId === task.id ? "已复制" : "复制"}任务 ID ${shortTaskId(task.id)}`}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-muted hover:bg-app-soft hover:text-ink">
-                  {copiedTaskId === task.id ? <Check className="h-3.5 w-3.5 text-success-deep" /> : <Copy className="h-3.5 w-3.5" />}
-                </button>
-                <span>
-                已处理 {task.sections.filter((section) => section.review_status !== "pending").length}/{task.sections.length}
-                {" · "}第 {task.attempt_count ?? 1} 次执行{" · "}{task.completed_at ? `结束于 ${formatDate(task.completed_at)}` : `更新于 ${formatDate(task.updated_at)}`}
-                </span>
-                <button type="button" onClick={() => onOpenTask(task)} aria-label={`查看任务 ${task.title}`}
-                  className="ml-auto shrink-0 rounded border border-line px-1 py-0.5 font-mono text-[9px] text-ink-muted hover:border-accent-ring hover:text-accent">
-                  {"<>"}
-                </button>
-              </span></span>
+        </section>) : visibleTasks.length ? <div className="overflow-hidden rounded-lg border border-line bg-white">
+          {visibleTasks.map((task, index) => <div key={task.id}
+            className={classNames("flex items-center gap-3 px-3 py-3 transition hover:bg-app-soft",
+              index > 0 && "border-t border-line")}>
+            <button type="button" onClick={() => onOpenTask(task)} aria-label={`查看任务 ${task.title}`}
+              className="min-w-0 flex-1 text-left">
+              <strong className="block truncate text-[11px] text-ink">{task.title}</strong>
+              <span className="mt-0.5 block text-[8.5px] text-ink-subtle">
+                {task.completed_at ? `结束于 ${formatDate(task.completed_at)}` : `更新于 ${formatDate(task.updated_at)}`}
+              </span>
+            </button>
+            <span className={statusBadge(task.status)}>{taskStatusLabel(task.status)}</span>
+            <span className="shrink-0 font-mono text-[9px] text-ink-muted" title={task.id}>{shortTaskId(task.id)}</span>
+            <button type="button" onClick={() => void copyTaskId(task.id)}
+              aria-label={`${copiedTaskId === task.id ? "已复制" : "复制"}任务 ID ${shortTaskId(task.id)}`}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-muted hover:bg-white hover:text-ink">
+              {copiedTaskId === task.id ? <Check className="h-3.5 w-3.5 text-success-deep" /> : <Copy className="h-3.5 w-3.5" />}
+            </button>
           </div>)}
-        </div>}
+        </div> : null}
         {!visibleTasks.length ? <div className="col-span-full flex min-h-56 flex-col items-center justify-center text-center text-ink-muted">
           <FileText className="h-7 w-7 text-ink-subtle" /><p className="mt-2 text-[11px] font-semibold">{documentTaskEmptyLabel(bucket)}</p>
           {bucket === "active" ? <button type="button" className="btn-primary mt-3 h-8 text-[10.5px]" onClick={onCreateStart}><Plus className="h-3.5 w-3.5" />创建修改任务</button> : null}
@@ -1219,13 +1214,6 @@ function buildLineDiff(original: string, draft: string): LineDiffResult {
     }
   }
   return { rows, additions, deletions };
-}
-
-function TaskIcon({ task }: { task: DocumentEditTask }) {
-  if (task.status === "merged" || task.status === "completed") return <FileCheck2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-deep" />;
-  if (task.status === "failed" || task.status === "conflict" || task.status === "abandoned") return <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />;
-  if (taskPending(task)) return <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-accent" />;
-  return <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />;
 }
 
 function EmptyDocument() { return <div className="flex h-full min-h-72 flex-col items-center justify-center text-center text-ink-muted"><FileText className="h-8 w-8 text-ink-subtle" /><p className="mt-2 text-[11.5px] font-semibold">新建或选择一个 Markdown 文档</p></div>; }

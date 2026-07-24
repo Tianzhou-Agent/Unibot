@@ -568,6 +568,22 @@ export interface TraceRecord {
   completed_at?: string | null;
 }
 
+export interface LLMCallRecord {
+  call_id: string;
+  trace_id?: string | null;
+  context_type?: string | null;
+  context_id?: string | null;
+  endpoint: string;
+  model: string;
+  status: "running" | "completed" | "failed";
+  request: Record<string, unknown>;
+  response?: Record<string, unknown> | null;
+  duration_ms?: number | null;
+  error?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
 export interface AdminSummary {
   conversations: number;
   tools: number;
@@ -575,6 +591,7 @@ export interface AdminSummary {
   ainas: number;
   installations: number;
   traces: number;
+  llm_calls: number;
   memories: number;
 }
 

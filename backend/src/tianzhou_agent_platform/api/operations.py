@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request
 
 from tianzhou_agent_platform.api.dependencies import repository, runtime
-from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, TraceRecord
+from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, LLMCallRecord, TraceRecord
 
 
 def create_operations_router() -> APIRouter:
@@ -64,16 +64,21 @@ def create_operations_router() -> APIRouter:
     async def get_trace(trace_id: str, request: Request) -> TraceRecord:
         return await repository(request).get_trace(trace_id)
 
+    @router.get("/llm-calls", response_model=list[LLMCallRecord])
+    async def list_llm_calls(request: Request, limit: int = 200) -> list[LLMCallRecord]:
+        return await repository(request).list_llm_calls(limit=max(1, min(limit, 500)))
+
     @router.get("/admin/summary")
     async def admin_summary(request: Request) -> dict[str, int]:
         data_repository = repository(request)
-        conversations, tools, skills, ainas, installations, traces = await asyncio.gather(
+        conversations, tools, skills, ainas, installations, traces, llm_call_count = await asyncio.gather(
             data_repository.list_conversations(),
             data_repository.list_tools(),
             data_repository.list_skills(),
             data_repository.list_ainas(),
             data_repository.list_installations(),
             data_repository.list_traces(),
+            data_repository.count_llm_calls(),
         )
         memories = await data_repository.list_memories(user_id="anonymous", tenant_id="default")
         return {
@@ -83,6 +88,7 @@ def create_operations_router() -> APIRouter:
             "ainas": len(ainas),
             "installations": len(installations),
             "traces": len(traces),
+            "llm_calls": llm_call_count,
             "memories": len(memories),
         }
 

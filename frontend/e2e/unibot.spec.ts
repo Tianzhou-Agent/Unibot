@@ -487,7 +487,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     }
     if (method === "GET" && path === "/health") return json(route, { status: "ok" });
     if (method === "GET" && path === "/admin/summary") {
-      return json(route, { conversations: 2, tools: 1, skills: 1, ainas: 2, installations: 1, traces: 1, memories: 3 });
+      return json(route, { conversations: 2, tools: 1, skills: 1, ainas: 2, installations: 1, traces: 1, llm_calls: 1, memories: 3 });
     }
     if (method === "GET" && path === "/traces") {
       return json(route, [
@@ -498,6 +498,32 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           tenant_id: "default",
           status: "completed",
           events: [{ timestamp: NOW, kind: "agent.completed", status: "completed", details: {} }],
+          created_at: NOW,
+          completed_at: NOW,
+        },
+      ]);
+    }
+    if (method === "GET" && path === "/llm-calls") {
+      return json(route, [
+        {
+          call_id: "llm-e2e-1",
+          trace_id: "trace-e2e-1",
+          context_type: "conversation",
+          context_id: "conv-e2e-1",
+          endpoint: "https://provider.example/v1/chat/completions",
+          model: "debug-model",
+          status: "completed",
+          request: {
+            model: "debug-model",
+            messages: [{ role: "user", content: "排查模型调用" }],
+            stream: true,
+          },
+          response: {
+            object: "chat.completion",
+            choices: [{ index: 0, message: { role: "assistant", content: "模型返回正常" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 90, completion_tokens: 30, total_tokens: 120 },
+          },
+          duration_ms: 128.5,
           created_at: NOW,
           completed_at: NOW,
         },
@@ -526,7 +552,7 @@ test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ pag
   await installMockApi(page);
   await page.goto("/canvas/unibot-documents");
 
-  await expect(page.getByText("全文编辑", { exact: true })).toBeVisible();
+  await expect(page.getByText("全文编辑", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "章节", exact: true }).click();
   await expect(page.getByText("章节导航", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toHaveValue(/# 使用指南/);
@@ -665,6 +691,14 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
   await installMockApi(page, {
     documentTasks: [
       documentTask({
+        id: "task-active",
+        title: "进行中任务",
+        description: "等待用户检视",
+        status: "reviewing",
+      }, {
+        id: "section-active",
+      }),
+      documentTask({
         id: "task-failed",
         title: "失败任务",
         description: "重新生成失败章节",
@@ -705,13 +739,20 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
   });
   await page.goto("/canvas/unibot-documents");
 
-  await page.getByRole("button", { name: "任务 3", exact: true }).click();
-  await expect(page.getByRole("button", { name: /^进行中\s*0$/ })).toBeVisible();
+  await page.getByRole("button", { name: "任务 4", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^进行中\s*1$/ })).toBeVisible();
+  const activeTasks = page.getByLabel("修改任务列表");
+  await expect(activeTasks.getByText("task-act", { exact: true })).toBeVisible();
+  await expect(activeTasks.getByText(/更新于/)).toBeVisible();
+  await expect(activeTasks.getByText("<>", { exact: true })).toHaveCount(0);
+  await activeTasks.getByRole("button", { name: "查看任务 进行中任务", exact: true }).click();
+  await expect(page.getByRole("button", { name: "返回任务列表", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "返回任务列表", exact: true }).click();
   await page.getByRole("button", { name: /^失败\s*2$/ }).click();
+  const failedTasks = page.getByLabel("修改任务列表");
   await expect(page.getByText("task-fai", { exact: true })).toBeVisible();
   await expect(page.getByText("task-aba", { exact: true })).toBeVisible();
-  await page.getByText("失败任务", { exact: true }).click();
-  await expect(page.getByLabel("修改任务列表")).toBeVisible();
+  await expect(failedTasks.getByText("<>", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "复制任务 ID task-fai", exact: true }).click();
   await expect(page.getByRole("button", { name: "已复制任务 ID task-fai", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "查看任务 失败任务", exact: true }).click();
@@ -856,7 +897,8 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
 });
 
 test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
-  await installMockApi(page);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/debug");
 
   await expect(page.getByText("后端在线", { exact: true })).toBeVisible();
@@ -864,8 +906,34 @@ test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "调试模式已关闭" })).toBeVisible();
   await page.getByRole("button", { name: "调试模式已关闭" }).click();
 
-  await expect(page.getByRole("heading", { name: "调用记录", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "调用链", exact: true })).toBeVisible();
   await expect(page.getByText("trace-e2e-1", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "复制 Trace ID trace-e2e-1", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
+  await page.getByRole("button", { name: "模型请求", exact: true }).click();
+  await expect(page.getByRole("button", { name: /已有会话 1 次 conv-e2e-1/ })).toBeVisible();
+  const modelRequestList = page.getByLabel("模型请求列表");
+  await expect(modelRequestList.getByText("模型总耗时 129 ms", { exact: true })).toBeVisible();
+  await expect(modelRequestList.getByText("总 Token 120", { exact: true })).toBeVisible();
+  await expect(modelRequestList.getByText("输出速率 233.5 Output Token/s", { exact: true })).toBeVisible();
+  await expect(modelRequestList.getByText("120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();
+  await expect(page.getByText("conv-e2e-1", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "复制 Conversation ID conv-e2e-1", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
+  await expect(page.getByText("llm-e2e-1", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "复制 Trace ID", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
+  const requestJson = page.getByLabel("模型请求 JSON");
+  await expect(requestJson).toContainText("排查模型调用");
+  await expect(requestJson.locator("pre")).toHaveClass(/whitespace-pre-wrap/);
+  await expect(requestJson.locator("span.text-sky-300").filter({ hasText: "\"messages\"" })).toBeVisible();
+  const requestMessage = requestJson.locator("span.text-emerald-300").filter({ hasText: "\"排查模型调用\"" });
+  await expect(requestMessage).toBeVisible();
+  await requestJson.getByRole("button", { name: "折叠 messages", exact: true }).click();
+  await expect(requestJson.getByRole("button", { name: "展开 messages", exact: true })).toBeVisible();
+  await expect(requestMessage).toHaveCount(0);
+  await page.getByRole("button", { name: "响应", exact: true }).click();
+  await expect(page.getByLabel("模型响应 JSON")).toContainText("模型返回正常");
 });
 
 test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ page }) => {
