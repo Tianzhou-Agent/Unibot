@@ -40,9 +40,8 @@ export default function DebugPage() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<string | null>(requestedTrace);
   const [selectedLlmCall, setSelectedLlmCall] = useState<string | null>(null);
-  const [recordView, setRecordView] = useState<"traces" | "llm">("traces");
+  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("trace");
   const [expandedTraceGroups, setExpandedTraceGroups] = useState<Set<string>>(new Set());
-  const [expandedLlmCallGroups, setExpandedLlmCallGroups] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -61,11 +60,6 @@ export default function DebugPage() {
       setTraces(traceData);
       setLlmCalls(llmCallData);
       setConversations(conversationData);
-      setSelectedLlmCall((current) => (
-        current && llmCallData.some((call) => call.call_id === current)
-          ? current
-          : llmCallData[0]?.call_id ?? null
-      ));
       setError(null);
       if (requestedTrace && traceData.some((trace) => trace.trace_id === requestedTrace)) {
         setSelectedTrace(requestedTrace);
@@ -86,25 +80,23 @@ export default function DebugPage() {
     () => traces.find((trace) => trace.trace_id === selectedTrace) ?? null,
     [selectedTrace, traces],
   );
+  const selectedTraceCalls = useMemo(
+    () => llmCalls
+      .filter((call) => call.trace_id === selected?.trace_id)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at)),
+    [llmCalls, selected?.trace_id],
+  );
   const selectedCall = useMemo(
-    () => llmCalls.find((call) => call.call_id === selectedLlmCall) ?? null,
-    [llmCalls, selectedLlmCall],
+    () => selectedTraceCalls.find((call) => call.call_id === selectedLlmCall) ?? null,
+    [selectedLlmCall, selectedTraceCalls],
   );
   const conversationsById = useMemo(
     () => new Map(conversations.map((conversation) => [conversation.id, conversation])),
     [conversations],
   );
-  const tracesById = useMemo(
-    () => new Map(traces.map((trace) => [trace.trace_id, trace])),
-    [traces],
-  );
   const traceGroups = useMemo(
     () => groupTracesByConversation(traces, conversationsById),
     [conversationsById, traces],
-  );
-  const llmCallGroups = useMemo(
-    () => groupLlmCallsByConversation(llmCalls, tracesById, conversationsById),
-    [conversationsById, llmCalls, tracesById],
   );
 
   useEffect(() => {
@@ -120,18 +112,21 @@ export default function DebugPage() {
   }, [selectedTrace, traceGroups, traces]);
 
   useEffect(() => {
-    const selectedRecord = llmCalls.find((call) => call.call_id === selectedLlmCall);
-    const groupKey = selectedRecord
-      ? traceGroupKey(llmCallConversationId(selectedRecord, tracesById))
-      : llmCallGroups[0]?.key;
-    if (!groupKey) return;
-    setExpandedLlmCallGroups((current) => {
-      if (current.has(groupKey) || (!selectedRecord && current.size > 0)) return current;
-      const next = new Set(current);
-      next.add(groupKey);
-      return next;
-    });
-  }, [llmCallGroups, llmCalls, selectedLlmCall, tracesById]);
+    setTraceDetailView("trace");
+  }, [selectedTrace]);
+
+  useEffect(() => {
+    if (selectedTraceCalls.length === 0) {
+      setSelectedLlmCall(null);
+      setTraceDetailView("trace");
+      return;
+    }
+    setSelectedLlmCall((current) => (
+      current && selectedTraceCalls.some((call) => call.call_id === current)
+        ? current
+        : selectedTraceCalls[0].call_id
+    ));
+  }, [selectedTraceCalls]);
 
   const selectedConversationTitle = selected?.conversation_id
     ? conversationsById.get(selected.conversation_id)?.title ?? "已删除或不可用的会话"
@@ -186,34 +181,12 @@ export default function DebugPage() {
           {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:grid-rows-1 xl:gap-4">
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
               <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
-                <div className="flex rounded-lg border border-line bg-app-soft p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setRecordView("traces")}
-                    className={classNames(
-                      "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-bold",
-                      recordView === "traces" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-                    )}
-                  >
-                    <Activity className="h-3.5 w-3.5" />调用链
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRecordView("llm")}
-                    className={classNames(
-                      "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-bold",
-                      recordView === "llm" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-                    )}
-                  >
-                    <Braces className="h-3.5 w-3.5" />模型请求
-                  </button>
-                </div>
-                <span className="ml-auto text-[11.5px] text-ink-muted">
-                  {recordView === "traces" ? `${traces.length} 条 Trace` : `${llmCalls.length} 次请求`}
-                </span>
+                <Activity className="h-3.5 w-3.5 text-accent" />
+                <span className="text-[12px] font-bold text-ink">调用记录</span>
+                <span className="ml-auto text-[11.5px] text-ink-muted">{traces.length} 条 Trace</span>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto" aria-label={recordView === "traces" ? "Trace 列表" : "模型请求列表"}>
-                {recordView === "traces" ? traces.length === 0 ? (
+              <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Trace 列表">
+                {traces.length === 0 ? (
                   <div className="py-20 text-center text-[12px] text-ink-muted">完成一次对话后，调用记录会显示在这里。</div>
                 ) : (
                   traceGroups.map((group) => (
@@ -231,36 +204,22 @@ export default function DebugPage() {
                       onSelectTrace={setSelectedTrace}
                     />
                   ))
-                ) : llmCalls.length === 0 ? (
-                  <div className="py-20 text-center text-[12px] text-ink-muted">发起模型请求后，入参与模型原始返回值会显示在这里。</div>
-                ) : (
-                  llmCallGroups.map((group) => (
-                    <ConversationLLMCallGroup
-                      key={group.key}
-                      group={group}
-                      expanded={expandedLlmCallGroups.has(group.key)}
-                      selectedCall={selectedLlmCall}
-                      onToggle={() => setExpandedLlmCallGroups((current) => {
-                        const next = new Set(current);
-                        if (next.has(group.key)) next.delete(group.key);
-                        else next.add(group.key);
-                        return next;
-                      })}
-                      onSelectCall={setSelectedLlmCall}
-                    />
-                  ))
                 )}
               </div>
             </div>
 
             <div className="min-h-0 overflow-hidden rounded-xl border border-line bg-white shadow-card">
-              {recordView === "traces"
-                ? selected
-                  ? <TraceDetail trace={selected} conversationTitle={selectedConversationTitle} />
-                  : <NoTraceSelected />
-                : selectedCall
-                  ? <LLMCallDetail call={selectedCall} />
-                  : <NoLLMCallSelected />}
+              {selected ? (
+                <TraceDetail
+                  trace={selected}
+                  conversationTitle={selectedConversationTitle}
+                  calls={selectedTraceCalls}
+                  selectedCall={selectedCall}
+                  view={traceDetailView}
+                  onViewChange={setTraceDetailView}
+                  onSelectCall={setSelectedLlmCall}
+                />
+              ) : <NoTraceSelected />}
             </div>
           </section> : (
             <section className="rounded-xl border border-line bg-white px-6 py-16 text-center shadow-card" aria-label="调试模式说明">
@@ -311,13 +270,6 @@ interface ConversationTraceGroupData {
   conversationId: string | null;
   title: string;
   traces: TraceRecord[];
-}
-
-interface ConversationLLMCallGroupData {
-  key: string;
-  conversationId: string | null;
-  title: string;
-  calls: LLMCallRecord[];
 }
 
 function ConversationTraceGroup({
@@ -390,86 +342,6 @@ function ConversationTraceGroup({
   );
 }
 
-function ConversationLLMCallGroup({
-  group,
-  expanded,
-  selectedCall,
-  onToggle,
-  onSelectCall,
-}: {
-  group: ConversationLLMCallGroupData;
-  expanded: boolean;
-  selectedCall: string | null;
-  onToggle: () => void;
-  onSelectCall: (callId: string) => void;
-}) {
-  const containsSelected = group.calls.some((call) => call.call_id === selectedCall);
-  const performance = summarizeLlmCalls(group.calls);
-  return (
-    <section className="border-b border-line last:border-b-0">
-      <div className="relative">
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          className={classNames(
-            "flex w-full items-start gap-2.5 px-4 py-3 pr-11 text-left transition-colors hover:bg-app-soft",
-            containsSelected && "bg-accent-soft/60",
-          )}
-        >
-          <span className={classNames(
-            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-            containsSelected ? "bg-white text-accent shadow-sm" : "bg-app-soft text-ink-muted",
-          )}>
-            <Braces className="h-3.5 w-3.5" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">
-              <strong className="min-w-0 flex-1 truncate text-[13px] text-ink">{group.title}</strong>
-              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10.5px] font-bold text-ink-muted shadow-sm">
-                {group.calls.length} 次
-              </span>
-            </span>
-            <span className="mt-1 block truncate pr-7 font-mono text-[11px] text-ink-subtle">
-              {group.conversationId ?? "无 Conversation ID"}
-            </span>
-            <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10.5px] text-ink-muted">
-              <span>模型总耗时 {formatDuration(performance.totalDurationMs)}</span>
-              <span>·</span>
-              <span>总 Token {formatTokenCount(performance.totalTokens)}</span>
-              <span>·</span>
-              <span>输出速率 {formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
-            </span>
-          </span>
-          {expanded
-            ? <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-accent" />
-            : <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-ink-subtle" />}
-        </button>
-        {group.conversationId ? (
-          <CopyIdButton
-            value={group.conversationId}
-            label={`复制 Conversation ID ${group.conversationId}`}
-            compact
-            className="absolute right-10 top-9"
-          />
-        ) : null}
-      </div>
-      {expanded ? (
-        <div className="border-t border-line bg-white">
-          {group.calls.map((call) => (
-            <LLMCallRow
-              key={call.call_id}
-              call={call}
-              active={call.call_id === selectedCall}
-              onClick={() => onSelectCall(call.call_id)}
-            />
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
 function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: boolean; onClick: () => void }) {
   return (
     <div className="relative">
@@ -508,7 +380,7 @@ function LLMCallRow({ call, active, onClick }: { call: LLMCallRecord; active: bo
       type="button"
       onClick={onClick}
       className={classNames(
-        "w-full border-b border-l-2 border-b-line py-3 pl-[50px] pr-4 text-left transition-colors last:border-b-0",
+        "w-full border-b border-l-2 border-b-line px-3 py-3 text-left transition-colors last:border-b-0",
         active ? "border-l-accent bg-accent-soft" : "border-l-transparent hover:bg-app-soft",
       )}
     >
@@ -815,13 +687,30 @@ function isJsonComposite(value: unknown): value is Record<string, unknown> | unk
   return value !== null && typeof value === "object";
 }
 
-function TraceDetail({ trace, conversationTitle }: { trace: TraceRecord; conversationTitle: string }) {
+function TraceDetail({
+  trace,
+  conversationTitle,
+  calls,
+  selectedCall,
+  view,
+  onViewChange,
+  onSelectCall,
+}: {
+  trace: TraceRecord;
+  conversationTitle: string;
+  calls: LLMCallRecord[];
+  selectedCall: LLMCallRecord | null;
+  view: "trace" | "llm";
+  onViewChange: (view: "trace" | "llm") => void;
+  onSelectCall: (callId: string) => void;
+}) {
+  const performance = summarizeLlmCalls(calls);
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-4 py-3 border-b border-line bg-app-soft">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
         <div className="flex items-center gap-2">
           <TraceStatus status={trace.status} />
-          <h2 className="font-mono text-[12.5px] font-bold text-ink break-all">{trace.trace_id}</h2>
+          <h2 className="min-w-0 flex-1 break-all font-mono text-[12.5px] font-bold text-ink">{trace.trace_id}</h2>
           <CopyIdButton value={trace.trace_id} label="复制 Trace ID" />
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-muted">
@@ -836,13 +725,66 @@ function TraceDetail({ trace, conversationTitle }: { trace: TraceRecord; convers
           <span>开始：{new Date(trace.created_at).toLocaleString("zh-CN")}</span>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4" aria-label="Trace 事件">
-        <div className="space-y-0">
-          {trace.events.map((event, index) => (
-            <EventRow key={`${event.timestamp}-${index}`} event={event} last={index === trace.events.length - 1} />
-          ))}
+      {calls.length > 0 ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
+          <div className="flex rounded-lg bg-app-soft p-0.5">
+            <button
+              type="button"
+              onClick={() => onViewChange("trace")}
+              className={classNames(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold",
+                view === "trace" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+              )}
+            >
+              <Activity className="h-3.5 w-3.5" />调用链
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewChange("llm")}
+              className={classNames(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold",
+                view === "llm" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+              )}
+            >
+              <Braces className="h-3.5 w-3.5" />模型请求 {calls.length}
+            </button>
+          </div>
+          {view === "llm" ? (
+            <span className="ml-auto hidden text-[11px] text-ink-subtle xl:block">
+              总耗时 {formatDuration(performance.totalDurationMs)}
+              {" · "}
+              {formatTokenCount(performance.totalTokens)} Token
+              {" · "}
+              {formatOutputTokenRate(performance.outputTokensPerSecond)}
+            </span>
+          ) : null}
         </div>
-      </div>
+      ) : null}
+      {view === "trace" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto p-4" aria-label="Trace 事件">
+          <div className="space-y-0">
+            {trace.events.map((event, index) => (
+              <EventRow key={`${event.timestamp}-${index}`} event={event} last={index === trace.events.length - 1} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.55fr)_minmax(0,1.45fr)] lg:grid-cols-[minmax(230px,0.65fr)_minmax(0,1.35fr)] lg:grid-rows-1">
+          <div className="min-h-0 overflow-y-auto border-b border-line lg:border-b-0 lg:border-r" aria-label="当前 Trace 的模型请求">
+            {calls.map((call) => (
+              <LLMCallRow
+                key={call.call_id}
+                call={call}
+                active={call.call_id === selectedCall?.call_id}
+                onClick={() => onSelectCall(call.call_id)}
+              />
+            ))}
+          </div>
+          <div className="min-h-0 overflow-hidden">
+            {selectedCall ? <LLMCallDetail call={selectedCall} /> : <NoLLMCallSelected />}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -904,47 +846,6 @@ function groupTracesByConversation(
       traces: [...group.traces].sort((left, right) => right.created_at.localeCompare(left.created_at)),
     }))
     .sort((left, right) => right.traces[0].created_at.localeCompare(left.traces[0].created_at));
-}
-
-function llmCallConversationId(
-  call: LLMCallRecord,
-  tracesById: Map<string, TraceRecord>,
-): string | null {
-  if (call.trace_id) {
-    const traceConversationId = tracesById.get(call.trace_id)?.conversation_id;
-    if (traceConversationId) return traceConversationId;
-  }
-  return call.context_type === "conversation" ? call.context_id ?? null : null;
-}
-
-function groupLlmCallsByConversation(
-  calls: LLMCallRecord[],
-  tracesById: Map<string, TraceRecord>,
-  conversationsById: Map<string, ConversationRecord>,
-): ConversationLLMCallGroupData[] {
-  const groups = new Map<string, ConversationLLMCallGroupData>();
-  for (const call of calls) {
-    const conversationId = llmCallConversationId(call, tracesById);
-    const key = traceGroupKey(conversationId);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.calls.push(call);
-      continue;
-    }
-    const conversation = conversationId ? conversationsById.get(conversationId) : null;
-    groups.set(key, {
-      key,
-      conversationId,
-      title: conversation?.title.trim() || (conversationId ? "已删除或不可用的会话" : "未关联会话"),
-      calls: [call],
-    });
-  }
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      calls: [...group.calls].sort((left, right) => right.created_at.localeCompare(left.created_at)),
-    }))
-    .sort((left, right) => right.calls[0].created_at.localeCompare(left.calls[0].created_at));
 }
 
 interface DiscoveryCapability {
