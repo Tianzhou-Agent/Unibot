@@ -178,7 +178,7 @@ export default function DebugPage() {
             {debugMode ? <SummaryCard icon={<Braces />} label="模型请求" value={summary?.llm_calls} tone="slate" /> : null}
           </section>
 
-          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:grid-rows-1 xl:gap-4">
+          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] xl:grid-rows-1 xl:gap-4">
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
               <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
                 <Activity className="h-3.5 w-3.5 text-accent" />
@@ -769,7 +769,7 @@ function TraceDetail({
           </div>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.55fr)_minmax(0,1.45fr)] lg:grid-cols-[minmax(230px,0.65fr)_minmax(0,1.35fr)] lg:grid-rows-1">
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.55fr)_minmax(0,1.45fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
           <div className="min-h-0 overflow-y-auto border-b border-line lg:border-b-0 lg:border-r" aria-label="当前 Trace 的模型请求">
             {calls.map((call) => (
               <LLMCallRow
