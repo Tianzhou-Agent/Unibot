@@ -5,7 +5,7 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   workers: 1,
-  timeout: 20_000,
+  timeout: 30_000,
   expect: { timeout: 5_000 },
   outputDir: "e2e-results/artifacts",
   reporter: [
@@ -16,6 +16,9 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:5173",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+      : undefined,
   },
   webServer: {
     command: "node ./node_modules/vite/bin/vite.js --host 127.0.0.1",

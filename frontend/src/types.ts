@@ -409,6 +409,44 @@ export interface AinaCanvasResponse {
   main_widget: WidgetDefinition;
 }
 
+export type SandboxStatus = "provisioning" | "ready" | "busy" | "stopped" | "error";
+export type SandboxExecutionStatus = "running" | "succeeded" | "failed" | "timed_out";
+export type SandboxExecutionLanguage = "python" | "bash" | "shell" | "node";
+
+export interface SandboxRecord {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  image: string;
+  driver: "local" | "kubernetes";
+  status: SandboxStatus;
+  runtime_name: string;
+  workspace: string;
+  endpoint?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_activity_at: string;
+}
+
+export interface SandboxExecution {
+  id: string;
+  sandbox_id: string;
+  user_id: string;
+  tenant_id: string;
+  language: SandboxExecutionLanguage;
+  script: string;
+  working_directory: string;
+  status: SandboxExecutionStatus;
+  stdout: string;
+  stderr: string;
+  exit_code?: number | null;
+  duration_ms?: number | null;
+  truncated: boolean;
+  started_at: string;
+  finished_at?: string | null;
+}
+
 export interface DocumentSummary {
   name: string;
   size_bytes: number;

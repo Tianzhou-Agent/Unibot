@@ -1,0 +1,12 @@
+# Single-node K3s development profile. It uses the same CRD, operator and
+# runtime contract as production; only capacity and image loading differ.
+operator:
+  image:
+    pullPolicy: IfNotPresent
+
+sandbox:
+  storageClassName: local-path
+  workspaceSize: 5Gi
+
+networkPolicy:
+  allowInternetEgress: true

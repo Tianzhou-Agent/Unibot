@@ -166,8 +166,14 @@ async def _available_apps(
 ) -> list[WidgetApp]:
     from tianzhou_agent_platform.aina.document.builtin import UNIBOT_DOCUMENTS_ID
     from tianzhou_agent_platform.aina.memory.builtin import UNIBOT_MEMORY_ID
+    from tianzhou_agent_platform.aina.code_runner.builtin import UNIBOT_CODE_RUNNER_ID
 
-    builtin_aina_ids = {UNIBOT_ASSISTANT_ID, UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID}
+    builtin_aina_ids = {
+        UNIBOT_ASSISTANT_ID,
+        UNIBOT_MEMORY_ID,
+        UNIBOT_DOCUMENTS_ID,
+        UNIBOT_CODE_RUNNER_ID,
+    }
     installations = {
         item.aina_id: item
         for item in await repository.list_installations(tenant_id=tenant_id, user_id=user_id)

@@ -22,6 +22,8 @@ from tianzhou_agent_platform.core.repository import (
     INSTALLATIONS_RESOURCE,
     MEMORIES_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
+    SANDBOXES_RESOURCE,
+    SANDBOX_EXECUTIONS_RESOURCE,
     SCHEDULED_AINA_TASKS_RESOURCE,
     SCHEDULED_AINA_EXECUTIONS_RESOURCE,
     SKILLS_RESOURCE,
@@ -31,6 +33,7 @@ from tianzhou_agent_platform.core.repository import (
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.models import StoreQuery
+from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
 repository_metadata = MetaData()
 
@@ -60,6 +63,8 @@ repository_tables = {
         SCHEDULED_AINA_TASKS_RESOURCE,
         SCHEDULED_AINA_EXECUTIONS_RESOURCE,
         DOCUMENT_EDIT_TASKS_RESOURCE,
+        SANDBOXES_RESOURCE,
+        SANDBOX_EXECUTIONS_RESOURCE,
     )
 }
 
@@ -88,6 +93,8 @@ class PersistentRepository(InMemoryRepository):
             ScheduledAinaExecution,
         )
         document_edit_tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
+        sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
+        sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -106,6 +113,38 @@ class PersistentRepository(InMemoryRepository):
                 item.id: item for item in scheduled_executions
             }
             self._document_edit_tasks = {item.id: item for item in document_edit_tasks}
+            self._sandboxes = {item.id: item for item in sandboxes}
+            self._sandbox_executions = {item.id: item for item in sandbox_executions}
+
+    async def get_sandbox_for_actor(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
+        sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
+        async with self._lock:
+            self._sandboxes = {item.id: item for item in sandboxes}
+        return await super().get_sandbox_for_actor(user_id=user_id, tenant_id=tenant_id)
+
+    async def list_sandbox_executions(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        limit: int = 50,
+    ) -> list[SandboxExecution]:
+        executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
+        async with self._lock:
+            self._sandbox_executions = {item.id: item for item in executions}
+        return await super().list_sandbox_executions(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            limit=limit,
+        )
+
+    async def remove_sandbox(self, sandbox_id: str) -> None:
+        sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
+        executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
+        async with self._lock:
+            self._sandboxes = {item.id: item for item in sandboxes}
+            self._sandbox_executions = {item.id: item for item in executions}
+        await super().remove_sandbox(sandbox_id)
 
     async def get_document_edit_task(
         self,

@@ -153,6 +153,7 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert widget["kind"] == "app_list"
     assert [item["aina_id"] for item in widget["apps"]] == [
         "unibot-assistant",
+        "unibot-code-runner",
         "unibot-memory",
         "unibot-scheduler",
     ]
@@ -161,6 +162,7 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert llm.calls[0]["tool_choice"] == "auto"
     assert {item["function"]["name"].split("_")[1] for item in llm.calls[0]["tools"]} == {
         "unibot-assistant",
+        "unibot-code-runner",
         "unibot-memory",
         "unibot-scheduler",
     }
@@ -347,7 +349,7 @@ def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_pat
 
     assert response.status_code == 200
     assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
-    assert len(llm.calls[0]["tools"]) == 4
+    assert len(llm.calls[0]["tools"]) == 5
     assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[1]["tools"])
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["details"]["source"] == "model_router"
@@ -385,15 +387,17 @@ def test_application_discovery_routes_across_all_ainas_from_document_context(tmp
     assert response.status_code == 200
     assert {item["aina_id"] for item in response.json()["widgets"][0]["apps"]} == {
         "unibot-assistant",
+        "unibot-code-runner",
         "unibot-documents",
         "unibot-memory",
         "unibot-scheduler",
     }
     requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
     assert requested["details"]["candidate_scope"] == "all_available"
-    assert requested["details"]["candidate_count"] == 4
+    assert requested["details"]["candidate_count"] == 5
     assert {item["id"] for item in requested["details"]["candidates"]} == {
         "unibot-assistant",
+        "unibot-code-runner",
         "unibot-documents",
         "unibot-memory",
         "unibot-scheduler",
@@ -429,7 +433,7 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    assert len(llm.calls[0]["tools"]) == 4
+    assert len(llm.calls[0]["tools"]) == 5
     assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
     scoped_names = [item["function"]["name"] for item in llm.calls[1]["tools"]]
     assert any(name.startswith("aina_") for name in scoped_names)
@@ -447,7 +451,7 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
     remote_aina = next(
         item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
     )
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 1}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 1,

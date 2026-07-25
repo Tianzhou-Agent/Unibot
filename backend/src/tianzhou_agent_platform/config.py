@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import socket
+from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,6 +57,47 @@ class AgentSettings(BaseSettings):
     node_id: str = Field(
         default_factory=socket.gethostname,
         validation_alias=AliasChoices("UNIBOT_NODE_ID", "node_id"),
+    )
+    sandbox_driver: Literal["local", "kubernetes"] = Field(
+        default="local",
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_DRIVER", "sandbox_driver"),
+    )
+    sandbox_workspace_root: Path = Field(
+        default=_BACKEND_ROOT.parent / "data" / "sandboxes",
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_WORKSPACE_ROOT", "sandbox_workspace_root"),
+    )
+    sandbox_default_image: str = Field(
+        default="unibot/sandboxd:latest",
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_DEFAULT_IMAGE", "sandbox_default_image"),
+    )
+    sandbox_output_limit_bytes: int = Field(
+        default=1_000_000,
+        ge=1_024,
+        le=10_000_000,
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_OUTPUT_LIMIT_BYTES", "sandbox_output_limit_bytes"),
+    )
+    sandbox_kubernetes_api_url: str = Field(
+        default="https://kubernetes.default.svc",
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_KUBERNETES_API_URL", "sandbox_kubernetes_api_url"),
+    )
+    sandbox_kubernetes_namespace: str = Field(
+        default="unibot-sandboxes",
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_KUBERNETES_NAMESPACE", "sandbox_kubernetes_namespace"),
+    )
+    sandbox_kubernetes_token_file: Path = Field(
+        default=Path("/var/run/secrets/kubernetes.io/serviceaccount/token"),
+        validation_alias=AliasChoices(
+            "UNIBOT_SANDBOX_KUBERNETES_TOKEN_FILE",
+            "sandbox_kubernetes_token_file",
+        ),
+    )
+    sandbox_kubernetes_ca_file: Path = Field(
+        default=Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"),
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_KUBERNETES_CA_FILE", "sandbox_kubernetes_ca_file"),
+    )
+    sandbox_runtime_class: str = Field(
+        default="gvisor",
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_RUNTIME_CLASS", "sandbox_runtime_class"),
     )
     system_prompt: str = Field(
         default=(

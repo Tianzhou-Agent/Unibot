@@ -8,6 +8,7 @@ from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskS
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.sandbox.service import SandboxService
 
 
 def repository(request: Request) -> InMemoryRepository:
@@ -24,6 +25,10 @@ def runtime(request: Request) -> AgentRuntime:
 
 def gateway(request: Request) -> RemoteCapabilityGateway:
     return cast(RemoteCapabilityGateway, request.app.state.capability_gateway)
+
+
+def sandboxes(request: Request) -> SandboxService:
+    return cast(SandboxService, request.app.state.sandbox_service)
 
 
 def documents(request: Request) -> DocumentService:

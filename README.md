@@ -26,6 +26,7 @@ Unibot 由两层能力构成：
 | **记忆扩展**        | 跨会话持续认知，异步固化 + 预加载                  |
 | **文件附件**        | 文件上传、签名 URL、                               |
 | **多 LLM Provider** | 支持多LLM Provider配置，用户级隔离                 |
+| **用户代码沙箱**    | Code Runner AINA、每用户持久工作区、本地/K3s 双驱动与 gVisor 隔离 |
 
 ## 项目结构
 
@@ -136,6 +137,8 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - `/documents`：Markdown 文档列表、章节更新与文件管理，文件按租户和用户隔离并持久化到 `data/nas/documents/`；
 - `/approvals/{id}/confirm|deny`：高风险调用确认；
 - `/traces`、`/admin/summary`：调用链和基础管理数据。
+- 内置 `unibot-code-runner`：在每用户独立沙箱中执行 Python、Bash 和 Node.js，查看输入输出与历史，并停止或重置环境；
+- `/sandboxes`：沙箱初始化、脚本执行、执行历史、停止和重置；完整部署说明见 [`docs/sandbox-platform.md`](docs/sandbox-platform.md)。
 
 最小对话请求：
 

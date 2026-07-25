@@ -20,6 +20,8 @@ interface MockState {
   documentMergeConflict: boolean;
   lastStreamPayload: JsonObject | null;
   streamWidgets: JsonObject[];
+  sandbox: JsonObject | null;
+  sandboxExecutions: JsonObject[];
 }
 
 function conversation(overrides: JsonObject = {}): JsonObject {
@@ -64,6 +66,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     documentMergeConflict: initial.documentMergeConflict ?? false,
     lastStreamPayload: null,
     streamWidgets: initial.streamWidgets ?? [],
+    sandbox: initial.sandbox ?? null,
+    sandboxExecutions: initial.sandboxExecutions ?? [],
   };
 
   await page.route("**/api/**", async (route) => {
@@ -71,6 +75,61 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\/api/, "");
     const method = request.method();
+
+    if (method === "POST" && path === "/sandboxes/ensure") {
+      state.sandbox ??= {
+        id: "sandbox-e2e",
+        user_id: "anonymous",
+        tenant_id: "default",
+        image: "unibot/python-sandbox:3.12",
+        driver: "kubernetes",
+        status: "ready",
+        runtime_name: "unibot-e2e",
+        workspace: "/workspace",
+        endpoint: "unibot-e2e.unibot-sandboxes.svc",
+        last_error: null,
+        created_at: NOW,
+        updated_at: NOW,
+        last_activity_at: NOW,
+      };
+      state.sandbox.status = "ready";
+      return json(route, state.sandbox);
+    }
+    if (method === "GET" && path === "/sandboxes/executions") {
+      return json(route, state.sandboxExecutions);
+    }
+    if (method === "POST" && path === "/sandboxes/execute") {
+      const payload = request.postDataJSON() as JsonObject;
+      const execution = {
+        id: `execution-e2e-${state.sandboxExecutions.length + 1}`,
+        sandbox_id: "sandbox-e2e",
+        user_id: "anonymous",
+        tenant_id: "default",
+        language: payload.language,
+        script: payload.script,
+        working_directory: payload.working_directory ?? ".",
+        status: "succeeded",
+        stdout: "sandbox-e2e-ready\n",
+        stderr: "",
+        exit_code: 0,
+        duration_ms: 42,
+        truncated: false,
+        started_at: NOW,
+        finished_at: NOW,
+      };
+      state.sandboxExecutions.unshift(execution);
+      return json(route, execution);
+    }
+    if (method === "POST" && path === "/sandboxes/stop") {
+      if (!state.sandbox) return json(route, { error: { message: "Sandbox not found" } }, 404);
+      state.sandbox.status = "stopped";
+      return json(route, state.sandbox);
+    }
+    if (method === "DELETE" && path === "/sandboxes/current") {
+      state.sandbox = null;
+      state.sandboxExecutions = [];
+      return route.fulfill({ status: 204, body: "" });
+    }
 
     if (method === "GET" && path === "/conversations") {
       return json(route, state.conversations.filter((item) => item.status !== "deleted"));
