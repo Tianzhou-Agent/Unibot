@@ -845,24 +845,23 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
   await expect(page.getByRole("button", { name: "重试未完成", exact: true })).toHaveCount(0);
 });
 
-test("FE-E2E-002 重命名、分类、删除并恢复会话", async ({ page }) => {
+test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
 
   await expect(page.getByRole("heading", { name: "已有会话" })).toBeVisible();
-  await page.getByRole("button", { name: "重命名对话", exact: true }).click();
+  const conversationList = page.getByRole("navigation", { name: "对话列表" });
+  await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
+  await page.getByRole("button", { name: "重命名", exact: true }).click();
   await page.getByLabel("对话标题").fill("重命名后的会话");
-  await page.getByRole("button", { name: "保存" }).click();
-  await expect(page.getByRole("heading", { name: "重命名后的会话" })).toBeVisible();
+  await page.getByLabel("对话标题").press("Enter");
+  await expect(conversationList.getByText("重命名后的会话", { exact: true })).toBeVisible();
 
-  await page.getByLabel("会话分类").selectOption("work");
-  await expect(page.getByLabel("会话分类")).toHaveValue("work");
-  await page.getByRole("button", { name: "删除对话", exact: true }).click();
-  await page.getByRole("button", { name: "确认删除", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "“重命名后的会话”已删除" })).toBeVisible();
-
-  await page.getByRole("button", { name: "恢复对话" }).click();
-  await expect(page.getByRole("heading", { name: "重命名后的会话", exact: true })).toBeVisible();
+  await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await conversationList.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(conversationList.getByText("重命名后的会话", { exact: true })).toHaveCount(0);
 });
 
 test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
@@ -963,25 +962,24 @@ test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
   await expect(page.getByText("后端在线", { exact: true })).toBeVisible();
   await expect(page.getByLabel("运行统计").getByText("3", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "调试模式已关闭" })).toBeVisible();
-  await page.getByRole("button", { name: "调试模式已关闭" }).click();
+  await page.getByRole("button", { name: "开启", exact: true }).click();
 
-  await expect(page.getByRole("button", { name: "调用链", exact: true })).toBeVisible();
   await expect(page.getByText("trace-e2e-1", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "复制 Trace ID trace-e2e-1", exact: true }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
-  await page.getByRole("button", { name: "模型请求", exact: true }).click();
-  await expect(page.getByRole("button", { name: /已有会话 1 次 conv-e2e-1/ })).toBeVisible();
-  const modelRequestList = page.getByLabel("模型请求列表");
-  await expect(modelRequestList.getByText("模型总耗时 129 ms", { exact: true })).toBeVisible();
-  await expect(modelRequestList.getByText("总 Token 120", { exact: true })).toBeVisible();
-  await expect(modelRequestList.getByText("输出速率 233.5 Output Token/s", { exact: true })).toBeVisible();
-  await expect(modelRequestList.getByText("120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();
-  await expect(page.getByText("conv-e2e-1", { exact: true })).toBeVisible();
+  await page.getByText("trace-e2e-1", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "调用链", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "模型请求 1", exact: true }).click();
+  await expect(page.getByRole("button", { name: "已有会话 1 Trace conv-e2e-1", exact: true })).toBeVisible();
+  const modelRequestList = page.getByLabel("当前 Trace 的模型请求");
+  await expect(modelRequestList.getByRole("button", {
+    name: "成功 debug-model 129 ms 120 Token · 233.5 Output Token/s",
+    exact: true,
+  })).toBeVisible();
+  await expect(page.getByText("总耗时 129 ms · 120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "复制 Conversation ID conv-e2e-1", exact: true }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
-  await expect(page.getByText("llm-e2e-1", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "复制 Trace ID", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
+  await expect(page.getByRole("heading", { name: "llm-e2e-1", exact: true })).toBeVisible();
   const requestJson = page.getByLabel("模型请求 JSON");
   await expect(requestJson).toContainText("排查模型调用");
   await expect(requestJson.locator("pre")).toHaveClass(/whitespace-pre-wrap/);
@@ -1088,8 +1086,10 @@ test("FE-E2E-004B 区分应用、设置和 Debug，并切换默认模型", async
   await expect(page.getByRole("link", { name: "设置", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Debug", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
-  await expect(page.getByLabel("Provider 团队模型服务").getByText("快速模型", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Provider 团队模型服务").getByText("推理模型", { exact: true })).toBeVisible();
+  const providerSection = page.getByLabel("Provider 团队模型服务");
+  await providerSection.getByRole("heading", { name: "团队模型服务", exact: true }).click();
+  await expect(providerSection.getByText("快速模型", { exact: true })).toBeVisible();
+  await expect(providerSection.getByText("推理模型", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "编辑 团队模型服务", exact: true }).click();
   await page.getByRole("button", { name: "自动获取", exact: true }).click();
@@ -1099,7 +1099,7 @@ test("FE-E2E-004B 区分应用、设置和 Debug，并切换默认模型", async
 
   await page.getByRole("button", { name: "设为默认" }).click();
   await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();
-  await expect(page.getByText("快速模型", { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("当前模型").getByText("快速模型", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Debug", exact: true }).click();
   await expect(page).toHaveURL(/\/debug$/);

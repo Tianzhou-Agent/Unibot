@@ -318,6 +318,7 @@ function ConversationLink({
               <div className="mt-1 flex items-center gap-1" onClick={(e) => e.preventDefault()}>
                 <input
                   value={titleDraft}
+                  aria-label="对话标题"
                   onChange={(e) => setTitleDraft(e.target.value)}
                   className="flex-1 min-w-0 rounded bg-sidebar-surface border border-sidebar-border px-2 py-0.5 text-[12px] text-ink-onDark outline-none focus:border-accent"
                   autoFocus
