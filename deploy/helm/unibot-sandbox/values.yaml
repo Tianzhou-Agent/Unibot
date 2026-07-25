@@ -1,0 +1,40 @@
+operator:
+  image:
+    repository: unibot/sandbox-operator
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+sandbox:
+  image:
+    repository: unibot/sandboxd
+    tag: latest
+  runtimeClassName: gvisor
+  storageClassName: longhorn
+  workspaceSize: 20Gi
+
+backend:
+  namespace: unibot
+  serviceAccountName: unibot-backend
+
+runtimeClass:
+  create: true
+  name: gvisor
+  handler: runsc
+
+networkPolicy:
+  enabled: true
+  allowInternetEgress: true
+  additionalEgressCidrs: []
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,85 @@
+---
+- name: Provision K3s nodes for Unibot user sandboxes
+  hosts: k3s_servers
+  become: true
+  vars:
+    k3s_install_url: https://get.k3s.io
+    gvisor_key_url: https://gvisor.dev/archive.key
+    gvisor_deb_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else ansible_architecture }}"
+    gvisor_repository: "deb [arch={{ gvisor_deb_arch }} signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main"
+  tasks:
+    - name: Require a Debian-family host
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: "This playbook currently supports Debian and Ubuntu K3s nodes."
+
+    - name: Install provisioning dependencies
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gpg
+        state: present
+        update_cache: true
+
+    - name: Download the gVisor repository key
+      ansible.builtin.get_url:
+        url: "{{ gvisor_key_url }}"
+        dest: /tmp/gvisor-archive.key
+        mode: "0644"
+
+    - name: Install the gVisor repository keyring
+      ansible.builtin.command:
+        cmd: gpg --dearmor --yes --output /usr/share/keyrings/gvisor-archive-keyring.gpg /tmp/gvisor-archive.key
+      changed_when: true
+
+    - name: Configure the gVisor apt repository
+      ansible.builtin.apt_repository:
+        repo: "{{ gvisor_repository }}"
+        filename: gvisor
+        state: present
+
+    - name: Install runsc
+      ansible.builtin.apt:
+        name: runsc
+        state: present
+        update_cache: true
+      notify: Restart K3s
+
+    - name: Download the K3s installer
+      ansible.builtin.get_url:
+        url: "{{ k3s_install_url }}"
+        dest: /usr/local/src/install-k3s.sh
+        mode: "0755"
+
+    - name: Install K3s
+      ansible.builtin.command:
+        cmd: "/usr/local/src/install-k3s.sh server {{ k3s_server_args | default('--disable traefik') }}"
+        creates: /usr/local/bin/k3s
+
+    - name: Enable and start K3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        enabled: true
+        state: started
+
+    - name: Wait for the Kubernetes API
+      ansible.builtin.command:
+        cmd: k3s kubectl get nodes
+      register: k3s_nodes
+      retries: 30
+      delay: 2
+      until: k3s_nodes.rc == 0
+      changed_when: false
+
+    - name: Verify that K3s detected runsc
+      ansible.builtin.command:
+        cmd: grep -q 'runsc' /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+      changed_when: false
+
+  handlers:
+    - name: Restart K3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        state: restarted

@@ -1,0 +1,11 @@
+The UserSandbox CRD and operator are installed.
+
+Backend settings:
+  UNIBOT_SANDBOX_DRIVER=kubernetes
+  UNIBOT_SANDBOX_KUBERNETES_NAMESPACE={{ .Release.Namespace }}
+  UNIBOT_SANDBOX_RUNTIME_CLASS={{ .Values.runtimeClass.name }}
+  UNIBOT_SANDBOX_DEFAULT_IMAGE={{ .Values.sandbox.image.repository }}:{{ .Values.sandbox.image.tag }}
+
+Verify:
+  kubectl get runtimeclass {{ .Values.runtimeClass.name }}
+  kubectl get usersandboxes -n {{ .Release.Namespace }}

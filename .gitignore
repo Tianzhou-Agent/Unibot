@@ -1,4 +1,6 @@
 .pnpm-store/
+__pycache__/
+*.py[cod]
 backend/.e2e-venv/
 backend/.e2e-results/
 frontend/e2e-results/
@@ -7,3 +9,4 @@ frontend/test-results/
 frontend/frontend-run.log
 .env
 /data/nas/
+/data/sandboxes/

@@ -28,6 +28,8 @@ from tianzhou_agent_platform.store.runtime_check import (
     runtime_check_table,
 )
 from tianzhou_agent_platform.store.settings import StorageSettings
+from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
+from tianzhou_agent_platform.sandbox.service import SandboxService
 
 
 def create_app(
@@ -39,6 +41,7 @@ def create_app(
     capability_http_client: httpx.AsyncClient | None = None,
     model_health_http_client: httpx.AsyncClient | None = None,
     document_service: DocumentService | None = None,
+    sandbox_service: SandboxService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
     storage_stores: StorageStores | None = None
@@ -70,6 +73,10 @@ def create_app(
     gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
+    resolved_sandbox_service = sandbox_service or create_sandbox_service(
+        resolved_settings,
+        resolved_repository,
+    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -96,6 +103,7 @@ def create_app(
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
             await gateway.aclose()
+            await resolved_sandbox_service.aclose()
             if model_health_http_client is None:
                 await health_client.aclose()
             close = getattr(resolved_llm, "aclose", None)
@@ -126,9 +134,11 @@ def create_app(
         gateway=gateway,
         document_service=resolved_document_service,
         document_edit_task_service=document_edit_task_service,
+        sandbox_service=resolved_sandbox_service,
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
+    app.state.sandbox_service = resolved_sandbox_service
 
     @app.middleware("http")
     async def attach_trace_id(request: Request, call_next):  # type: ignore[no-untyped-def]

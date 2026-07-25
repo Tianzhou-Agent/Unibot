@@ -19,6 +19,7 @@ navigation. A row is complete only when every applicable layer is automated.
 | Retry and loop bounds | `test_timeout_retries_then_returns_retryable_error_to_model`, repeated-call and iteration-limit tests | `StepEfficiencyMetric` runs where the Judge can distinguish optional steps from mandatory runtime protocol | Run summary covered by FE-E2E-004 | Transport retries are bounded, an identical successful call executes once per run, and model iterations never exceed configuration. |
 | Streaming, recovery, and trace | streaming/running-state tests in `test_chat_api.py`; detailed event, AINA ownership graph, exclusion reason, and redaction tests in `test_trace_details.py` and `test_widget_routing.py` | Every DeepEval case loads and evaluates the real trace | FE-E2E-001, FE-E2E-004, FE-E2E-005 | SSE completes, refresh recovers state, and trace records sanitized input, AINA-to-capability relationships, model scope, calls, results, usage, and final status. |
 | Persistent MySQL/Redis/NAS | `tests/store`, including opt-in `test_storage_e2e.py` | Real evaluations use the running persistent backend | Browser reload paths above | Repository recreation restores records; Redis and NAS enforce storage contracts. |
+| Per-user script sandbox | `test_sandbox_api.py`, `test_sandboxd.py`, `test_kubernetes_sandbox_driver.py` | Not applicable: execution is deterministic | FE-E2E-009 | Workspace persists across runs, actor history is isolated, timeout/output contracts hold, and stop/reset have distinct lifecycle semantics. |
 
 ## Commands
 

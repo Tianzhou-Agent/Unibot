@@ -8,6 +8,7 @@ import { DocumentWidget } from "./DocumentWidget";
 import { MemoryMainWidget } from "./MemoryMainWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
 import { ScheduledAinaMainWidget } from "@/pages/ScheduledAinaPage";
+import { CodeRunnerMainWidget } from "./CodeRunnerMainWidget";
 
 export function MainWidgetRenderer({
   ainaId,
@@ -27,6 +28,7 @@ export function MainWidgetRenderer({
   refreshToken?: string | null;
 }) {
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
+  if (ainaId === "unibot-code-runner") return <CodeRunnerMainWidget />;
   if (widget.kind === "document") return <DocumentWidget disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   if (ainaId === "unibot-assistant") {

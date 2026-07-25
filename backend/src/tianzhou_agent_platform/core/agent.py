@@ -23,6 +23,7 @@ from tianzhou_agent_platform.aina.builtin import (
     UNIBOT_ASSISTANT_ID,
     UNIBOT_MEMORY_ID,
     UNIBOT_SCHEDULER_ID,
+    UNIBOT_CODE_RUNNER_ID,
     invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
@@ -35,6 +36,7 @@ from tianzhou_agent_platform.aina.document.builtin import (
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
+from tianzhou_agent_platform.aina.code_runner.builtin import code_runner_tool_capabilities
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
@@ -49,6 +51,7 @@ from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
 from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
+from tianzhou_agent_platform.sandbox.service import SandboxService
 
 _HIGH_RISK_MARKERS = (
     "send",
@@ -137,6 +140,7 @@ class AgentRuntime:
         gateway: RemoteCapabilityGateway,
         document_service: DocumentService | None = None,
         document_edit_task_service: DocumentEditTaskService | None = None,
+        sandbox_service: SandboxService | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -144,6 +148,7 @@ class AgentRuntime:
         self.gateway = gateway
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
+        self.sandbox_service = sandbox_service
         graph = StateGraph(AgentState)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
@@ -453,6 +458,7 @@ class AgentRuntime:
                         conversation_id=state["conversation_id"],
                         document_service=self.document_service,
                         document_edit_task_service=self.document_edit_task_service,
+                        sandbox_service=self.sandbox_service,
                     )
                     widgets.extend(produced_widgets)
                     duration_ms = (perf_counter() - call_started) * 1000
@@ -1558,6 +1564,7 @@ class AgentRuntime:
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_MEMORY_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_SCHEDULER_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_DOCUMENTS_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_CODE_RUNNER_ID))
         return capabilities
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
@@ -1572,6 +1579,7 @@ class AgentRuntime:
             **await self._system_capabilities(),
             **self._memory_capabilities(),
             **self._document_capabilities(),
+            **self._sandbox_capabilities(),
         }
 
     async def _builtin_aina_capability(
@@ -1643,6 +1651,8 @@ class AgentRuntime:
             return self._memory_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
             return {**self._document_capabilities(), **self._memory_capabilities()}, aina
+        if aina.manifest.aina.id == UNIBOT_CODE_RUNNER_ID:
+            return self._sandbox_capabilities(), aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected}
         if declared_tool_ids:
@@ -1768,6 +1778,25 @@ class AgentRuntime:
                 },
                 value=tool.id,
                 owner_aina_id=UNIBOT_DOCUMENTS_ID,
+            )
+        return capabilities
+
+    def _sandbox_capabilities(self) -> dict[str, Capability]:
+        if self.sandbox_service is None:
+            return {}
+        capabilities: dict[str, Capability] = {}
+        for tool in code_runner_tool_capabilities():
+            function_name = _function_name("builtin", tool.id)
+            capabilities[function_name] = Capability(
+                kind="builtin",
+                capability_id=tool.id,
+                function_name=function_name,
+                display_name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+                requires_confirmation=True,
+                value=tool.id,
+                owner_aina_id=UNIBOT_CODE_RUNNER_ID,
             )
         return capabilities
 

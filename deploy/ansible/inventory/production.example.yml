@@ -1,0 +1,17 @@
+all:
+  children:
+    k3s_servers:
+      hosts:
+        unibot-server-1:
+          ansible_host: 10.0.0.11
+          k3s_server_args: "--cluster-init --disable traefik"
+        unibot-server-2:
+          ansible_host: 10.0.0.12
+          k3s_server_args: "--server https://10.0.0.11:6443 --token {{ vault_k3s_token }} --disable traefik"
+        unibot-server-3:
+          ansible_host: 10.0.0.13
+          k3s_server_args: "--server https://10.0.0.11:6443 --token {{ vault_k3s_token }} --disable traefik"
+  vars:
+    # Define vault_k3s_token in Ansible Vault. For a new cluster, provision the
+    # first server before joining the remaining servers.
+    vault_k3s_token: "replace-with-ansible-vault-value"

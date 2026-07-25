@@ -1,0 +1,22 @@
+# HA K3s production profile. Override immutable image tags in the release
+# pipeline; do not deploy "latest" in production.
+operator:
+  # Kubernetes restarts the operator after failure. Keep one active reconciler;
+  # running multiple Kopf instances requires explicit peering configuration.
+  replicas: 1
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+sandbox:
+  storageClassName: longhorn
+  workspaceSize: 20Gi
+
+networkPolicy:
+  allowInternetEgress: true

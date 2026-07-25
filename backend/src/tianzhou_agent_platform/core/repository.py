@@ -30,6 +30,7 @@ from tianzhou_agent_platform.core.model_settings import (
     ModelProviderUpdate,
     ModelRuntimeConfig,
 )
+from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
 CONVERSATIONS_RESOURCE = "conversations"
 MEMORIES_RESOURCE = "memories"
@@ -45,6 +46,8 @@ SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
 SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
 DOCUMENT_EDIT_TASKS_RESOURCE = "document_edit_tasks"
+SANDBOXES_RESOURCE = "sandboxes"
+SANDBOX_EXECUTIONS_RESOURCE = "sandbox_executions"
 
 
 class InMemoryRepository:
@@ -70,6 +73,8 @@ class InMemoryRepository:
         self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
         self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
         self._document_edit_tasks: dict[str, DocumentEditTask] = {}
+        self._sandboxes: dict[str, SandboxRecord] = {}
+        self._sandbox_executions: dict[str, SandboxExecution] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -282,6 +287,72 @@ class InMemoryRepository:
             self._scheduled_aina_tasks[task.id] = task
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
         return self._copy(task)
+
+    async def put_sandbox(self, sandbox: SandboxRecord) -> SandboxRecord:
+        async with self._lock:
+            existing = next(
+                (
+                    item
+                    for item in self._sandboxes.values()
+                    if item.user_id == sandbox.user_id
+                    and item.tenant_id == sandbox.tenant_id
+                    and item.id != sandbox.id
+                ),
+                None,
+            )
+            if existing is not None:
+                raise conflict("The user already owns a sandbox")
+            self._sandboxes[sandbox.id] = sandbox
+            await self._save_record(SANDBOXES_RESOURCE, sandbox.id, sandbox)
+            return self._copy(sandbox)
+
+    async def get_sandbox_for_actor(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
+        async with self._lock:
+            sandbox = next(
+                (
+                    item
+                    for item in self._sandboxes.values()
+                    if item.user_id == user_id and item.tenant_id == tenant_id
+                ),
+                None,
+            )
+            if sandbox is None:
+                raise not_found("Sandbox", f"{tenant_id}/{user_id}")
+            return self._copy(sandbox)
+
+    async def put_sandbox_execution(self, execution: SandboxExecution) -> SandboxExecution:
+        async with self._lock:
+            self._sandbox_executions[execution.id] = execution
+            await self._save_record(SANDBOX_EXECUTIONS_RESOURCE, execution.id, execution)
+            return self._copy(execution)
+
+    async def list_sandbox_executions(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        limit: int = 50,
+    ) -> list[SandboxExecution]:
+        async with self._lock:
+            values = [
+                self._copy(item)
+                for item in self._sandbox_executions.values()
+                if item.user_id == user_id and item.tenant_id == tenant_id
+            ]
+        return sorted(values, key=lambda item: item.started_at, reverse=True)[:limit]
+
+    async def remove_sandbox(self, sandbox_id: str) -> None:
+        async with self._lock:
+            sandbox = self._sandboxes.pop(sandbox_id, None)
+            if sandbox is None:
+                raise not_found("Sandbox", sandbox_id)
+            await self._delete_record(SANDBOXES_RESOURCE, sandbox_id)
+            execution_ids = [
+                item.id for item in self._sandbox_executions.values() if item.sandbox_id == sandbox_id
+            ]
+            for execution_id in execution_ids:
+                del self._sandbox_executions[execution_id]
+                await self._delete_record(SANDBOX_EXECUTIONS_RESOURCE, execution_id)
 
     async def create_document_edit_task(self, task: DocumentEditTask) -> DocumentEditTask:
         async with self._lock:

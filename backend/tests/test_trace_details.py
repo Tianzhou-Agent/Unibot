@@ -22,8 +22,8 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
 
     discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
     graph = discovery["aina_graph"]
-    assert graph["available_count"] == 3
-    assert graph["counts"] == {"builtin_aina": 3, "remote_aina": 0}
+    assert graph["available_count"] == 4
+    assert graph["counts"] == {"builtin_aina": 4, "remote_aina": 0}
     assert graph["excluded"] == []
     available = {item["id"]: item for item in graph["available"]}
     assert {item["id"] for item in available["unibot-assistant"]["capabilities"]["tools"]} == {
@@ -37,6 +37,11 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
         "memory.recall",
         "memory.update",
         "memory.forget",
+    }
+    assert {item["id"] for item in available["unibot-code-runner"]["capabilities"]["tools"]} == {
+        "sandbox.run_python",
+        "sandbox.run_bash",
+        "sandbox.run_node",
     }
     scope = {item["aina_id"]: item["capabilities"] for item in discovery["model_scope"]["by_aina"]}
     assert {item["id"] for item in scope["unibot-assistant"]} == {
