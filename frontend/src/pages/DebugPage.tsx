@@ -40,7 +40,7 @@ export default function DebugPage() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<string | null>(requestedTrace);
   const [selectedLlmCall, setSelectedLlmCall] = useState<string | null>(null);
-  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("trace");
+  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("llm");
   const [expandedTraceGroups, setExpandedTraceGroups] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -112,13 +112,13 @@ export default function DebugPage() {
   }, [selectedTrace, traceGroups, traces]);
 
   useEffect(() => {
-    setTraceDetailView("trace");
+    setTraceDetailView("llm");
   }, [selectedTrace]);
 
   useEffect(() => {
     if (selectedTraceCalls.length === 0) {
       setSelectedLlmCall(null);
-      setTraceDetailView("trace");
+      setTraceDetailView("llm");
       return;
     }
     setSelectedLlmCall((current) => (
@@ -142,14 +142,28 @@ export default function DebugPage() {
         }}
         actions={
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setDebugMode(!debugMode)}
-              aria-pressed={debugMode}
-              className={classNames("h-8 rounded-lg border px-3 text-[13px] font-bold", debugMode ? "border-accent bg-accent-soft text-accent" : "border-line bg-white text-ink-muted")}
-            >
-              <Bug className="mr-1.5 inline h-3.5 w-3.5" />调试模式{debugMode ? "已开启" : "已关闭"}
-            </button>
+            <div className="flex rounded-lg bg-app-soft p-0.5">
+              <button
+                type="button"
+                onClick={() => setDebugMode(false)}
+                className={classNames(
+                  "rounded-md px-3 py-1.5 text-[12px] font-bold",
+                  !debugMode ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+                )}
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                onClick={() => setDebugMode(true)}
+                className={classNames(
+                  "rounded-md px-3 py-1.5 text-[12px] font-bold",
+                  debugMode ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+                )}
+              >
+                开启
+              </button>
+            </div>
             <button type="button" onClick={() => void load()} disabled={refreshing} className="btn-outline h-8">
               <RefreshCw className={classNames("w-3.5 h-3.5", refreshing && "animate-spin")} />刷新
             </button>
@@ -178,8 +192,8 @@ export default function DebugPage() {
             {debugMode ? <SummaryCard icon={<Braces />} label="模型请求" value={summary?.llm_calls} tone="slate" /> : null}
           </section>
 
-          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] xl:grid-rows-1 xl:gap-4">
-            <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-white shadow-card">
+          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line xl:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] xl:grid-rows-1">
+            <div className="flex min-h-0 flex-col overflow-hidden">
               <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
                 <Activity className="h-3.5 w-3.5 text-accent" />
                 <span className="text-[12px] font-bold text-ink">调用记录</span>
@@ -208,7 +222,7 @@ export default function DebugPage() {
               </div>
             </div>
 
-            <div className="min-h-0 overflow-hidden rounded-xl border border-line bg-white shadow-card">
+            <div className="min-h-0 overflow-hidden">
               {selected ? (
                 <TraceDetail
                   trace={selected}
@@ -222,7 +236,7 @@ export default function DebugPage() {
               ) : <NoTraceSelected />}
             </div>
           </section> : (
-            <section className="rounded-xl border border-line bg-white px-6 py-16 text-center shadow-card" aria-label="调试模式说明">
+            <section className="px-6 py-16 text-center" aria-label="调试模式说明">
               <Bug className="mx-auto h-8 w-8 text-ink-subtle" />
               <h2 className="mt-3 text-[15px] font-extrabold text-ink">调试模式已关闭</h2>
               <p className="mx-auto mt-2 max-w-lg text-[12px] leading-relaxed text-ink-muted">
@@ -391,18 +405,10 @@ function LLMCallRow({ call, active, onClick }: { call: LLMCallRecord; active: bo
           <span className="shrink-0 font-mono text-[11px] text-ink-subtle">{formatDuration(call.duration_ms)}</span>
         ) : null}
       </div>
-      <div className="mt-1.5 truncate font-mono text-[11px] text-ink-muted">{call.endpoint}</div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-subtle">
-        <span>{new Date(call.created_at).toLocaleString("zh-CN")}</span>
-        {call.context_type ? (
-          <>
-            <span>·</span>
-            <span className="truncate">{llmContextLabel(call)}</span>
-          </>
-        ) : null}
-        <span className="ml-auto shrink-0 font-mono text-ink-muted">
-          {formatTokenCount(performance.totalTokens)} Token · {formatOutputTokenRate(performance.outputTokensPerSecond)}
-        </span>
+      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-subtle">
+        <span className="font-mono">{formatTokenCount(performance.totalTokens)} Token</span>
+        <span>·</span>
+        <span className="font-mono">{formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
       </div>
     </button>
   );
@@ -464,7 +470,7 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
       <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
         <div className="flex items-center gap-2">
           <LLMCallStatus status={call.status} />
-          <h2 className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-bold text-ink">{call.call_id}</h2>
+          <h2 className="min-w-0 truncate font-mono text-[12.5px] font-bold text-ink">{call.call_id}</h2>
           <CopyIdButton value={call.call_id} label="复制模型调用 ID" />
         </div>
         <div className="mt-2 grid gap-1 text-[11.5px] text-ink-muted sm:grid-cols-2">
@@ -480,13 +486,15 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
           </span>
           <span>输出速率：{formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate">上下文：{llmContextLabel(call)}</span>
+            <span className="shrink-0">会话 ID：</span>
+            <span className="truncate font-mono">{conversationId ?? "—"}</span>
             {conversationId ? (
               <CopyIdButton value={conversationId} label="复制 Conversation ID" compact />
             ) : null}
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate">Trace：<span className="font-mono">{call.trace_id ?? "—"}</span></span>
+            <span className="shrink-0">Trace ID：</span>
+            <span className="truncate font-mono">{call.trace_id ?? "—"}</span>
             {call.trace_id ? <CopyIdButton value={call.trace_id} label="复制 Trace ID" compact /> : null}
           </span>
         </div>
@@ -710,19 +718,29 @@ function TraceDetail({
       <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
         <div className="flex items-center gap-2">
           <TraceStatus status={trace.status} />
-          <h2 className="min-w-0 flex-1 break-all font-mono text-[12.5px] font-bold text-ink">{trace.trace_id}</h2>
+          <h2 className="min-w-0 truncate font-mono text-[12.5px] font-bold text-ink">{trace.trace_id}</h2>
           <CopyIdButton value={trace.trace_id} label="复制 Trace ID" />
         </div>
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-muted">
-          <span>会话：{conversationTitle}</span>
-          <span className="flex items-center gap-1.5 font-mono">
-            {trace.conversation_id ?? "—"}
+        <div className="mt-2 grid gap-x-4 gap-y-1 text-[12px] text-ink-muted sm:grid-cols-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0">会话：</span>
+            <span className="truncate font-medium text-ink">{conversationTitle}</span>
+          </div>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0">会话 ID：</span>
+            <span className="truncate font-mono">{trace.conversation_id ?? "—"}</span>
             {trace.conversation_id ? (
               <CopyIdButton value={trace.conversation_id} label="复制 Conversation ID" compact />
             ) : null}
-          </span>
-          <span>主体：{trace.tenant_id}/{trace.user_id}</span>
-          <span>开始：{new Date(trace.created_at).toLocaleString("zh-CN")}</span>
+          </div>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0">主体：</span>
+            <span className="truncate font-mono">{trace.tenant_id}/{trace.user_id}</span>
+          </div>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0">开始：</span>
+            <span className="truncate">{new Date(trace.created_at).toLocaleString("zh-CN")}</span>
+          </div>
         </div>
       </div>
       {calls.length > 0 ? (
@@ -730,23 +748,23 @@ function TraceDetail({
           <div className="flex rounded-lg bg-app-soft p-0.5">
             <button
               type="button"
-              onClick={() => onViewChange("trace")}
-              className={classNames(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold",
-                view === "trace" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-              )}
-            >
-              <Activity className="h-3.5 w-3.5" />调用链
-            </button>
-            <button
-              type="button"
               onClick={() => onViewChange("llm")}
               className={classNames(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold",
+                "rounded-md px-3 py-1.5 text-[12px] font-bold",
                 view === "llm" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
               )}
             >
-              <Braces className="h-3.5 w-3.5" />模型请求 {calls.length}
+              模型请求 {calls.length}
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewChange("trace")}
+              className={classNames(
+                "rounded-md px-3 py-1.5 text-[12px] font-bold",
+                view === "trace" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+              )}
+            >
+              调用链
             </button>
           </div>
           {view === "llm" ? (
@@ -792,6 +810,8 @@ function TraceDetail({
 function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
   const failed = event.status === "failed";
   const discovery = event.kind === "capability.discovery" ? parseCapabilityDiscovery(event.details) : null;
+  const hasDetail = Boolean(event.target_id || discovery || Object.keys(event.details).length);
+  const [collapsed, setCollapsed] = useState(true);
   return (
     <div className="grid grid-cols-[20px_1fr] gap-2">
       <div className="flex flex-col items-center">
@@ -799,16 +819,27 @@ function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
         {!last ? <span className="w-px flex-1 min-h-10 bg-line" /> : null}
       </div>
       <div className="pb-4">
-        <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => hasDetail && setCollapsed((c) => !c)}
+          className={classNames("flex items-center gap-2 w-full text-left", hasDetail && "cursor-pointer")}
+        >
+          {hasDetail ? (
+            collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-accent" />
+          ) : <span className="w-3.5 shrink-0" />}
           <span className="text-[13px] font-bold text-ink">{event.kind}</span>
           <span className={classNames("rounded px-1.5 py-0.5 text-[10.5px] font-bold", failed ? "bg-danger-soft text-danger" : "bg-app-soft text-ink-muted")}>{eventStatusLabel(event.status)}</span>
           {event.duration_ms != null ? <span className="ml-auto text-[11px] text-ink-subtle">{event.duration_ms.toFixed(1)} ms</span> : null}
-        </div>
-        {event.target_id ? <div className="mt-1 font-mono text-[11px] text-ink-muted break-all">{event.target_type}:{event.target_id}</div> : null}
-        {discovery ? (
-          <CapabilityDiscoveryView details={discovery} />
-        ) : Object.keys(event.details).length ? (
-          <pre className="mt-1.5 rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all text-[11px] leading-relaxed text-ink-muted">{JSON.stringify(event.details, null, 2)}</pre>
+        </button>
+        {!collapsed && hasDetail ? (
+          <div className="mt-1.5">
+            {event.target_id ? <div className="font-mono text-[11px] text-ink-muted break-all">{event.target_type}:{event.target_id}</div> : null}
+            {discovery ? (
+              <CapabilityDiscoveryView details={discovery} />
+            ) : Object.keys(event.details).length ? (
+              <pre className="mt-1.5 rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all text-[11px] leading-relaxed text-ink-muted">{JSON.stringify(event.details, null, 2)}</pre>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
@@ -1140,11 +1171,6 @@ function formatOutputTokenRate(value: number | null): string {
   return `${value < 1 ? value.toFixed(2) : value.toFixed(1)} Output Token/s`;
 }
 
-function llmContextLabel(call: LLMCallRecord): string {
-  if (call.context_type === "conversation") return call.context_id ? `会话 ${call.context_id}` : "会话";
-  if (call.context_type === "document_edit_task") return call.context_id ? `文档任务 ${call.context_id}` : "文档任务";
-  return call.context_id ?? "未关联";
-}
 
 function NoTraceSelected() {
   return (

@@ -1,5 +1,6 @@
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bug, Check, LayoutGrid, MessageSquarePlus, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
+import { Bug, Check, LayoutGrid, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
@@ -88,7 +89,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-16 md:w-[220px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
+    <aside className="relative z-20 w-16 md:w-[220px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
       <div className="flex flex-col items-center gap-2 px-3 pt-4 pb-3 md:flex-row md:justify-between md:px-4">
         <Brand />
         <NewConversationMenu onSelect={startConversation} />
@@ -117,42 +118,44 @@ export function Sidebar() {
         </span>
       </div>
 
-      <nav className="hidden md:block flex-1 min-h-0 overflow-y-auto px-3 pb-4 space-y-4" aria-label="对话列表">
-        {loading ? <SkeletonList /> : null}
-        {!loading && error ? (
-          <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-[11.5px] text-red-200">
-            <p>无法连接后端</p>
-            <button type="button" onClick={() => void load()} className="mt-2 font-bold underline">
-              重试
-            </button>
-          </div>
-        ) : null}
-        {!loading && !error && filtered.length === 0 ? (
-          <div className="px-2 py-8 text-center text-[11.5px] text-ink-onDarkMuted">
-            {query ? "没有匹配的对话" : "还没有对话"}
-          </div>
-        ) : null}
-        {grouped.map(([category, records]) => (
-          <section key={category} aria-label={`${conversationCategoryLabel(category)}会话`}>
-            <div className="mb-1.5 flex items-center gap-2 px-1.5 text-[10px] font-bold text-ink-onDarkMuted">
-              <span>{conversationCategoryLabel(category)}</span>
-              <span className="ml-auto rounded-full bg-white/5 px-1.5 py-0.5">{records.length}</span>
+      <nav className="hidden md:flex flex-col flex-1 min-h-0 px-3 pb-4" aria-label="对话列表">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+          {loading ? <SkeletonList /> : null}
+          {!loading && error ? (
+            <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-[11.5px] text-red-200">
+              <p>无法连接后端</p>
+              <button type="button" onClick={() => void load()} className="mt-2 font-bold underline">
+                重试
+              </button>
             </div>
-            <div className="space-y-1.5">
-              {records.map((conversation) => (
-                <ConversationLink
-                  key={conversation.id}
-                  conversation={conversation}
-                  confirmingDelete={pendingDelete === conversation.id}
-                  deleting={deleting}
-                  onRequestDelete={() => setPendingDelete(conversation.id)}
-                  onCancelDelete={() => setPendingDelete(null)}
-                  onConfirmDelete={() => void deleteConversation(conversation.id)}
-                />
-              ))}
+          ) : null}
+          {!loading && !error && filtered.length === 0 ? (
+            <div className="px-2 py-8 text-center text-[11.5px] text-ink-onDarkMuted">
+              {query ? "没有匹配的对话" : "还没有对话"}
             </div>
-          </section>
-        ))}
+          ) : null}
+          {grouped.map(([category, records]) => (
+            <section key={category} aria-label={`${conversationCategoryLabel(category)}会话`}>
+              <div className="mb-1.5 flex items-center gap-2 px-1.5 text-[10px] font-bold text-ink-onDarkMuted">
+                <span>{conversationCategoryLabel(category)}</span>
+                <span className="ml-auto rounded-full bg-white/5 px-1.5 py-0.5">{records.length}</span>
+              </div>
+              <div className="space-y-1.5">
+                {records.map((conversation) => (
+                  <ConversationLink
+                    key={conversation.id}
+                    conversation={conversation}
+                    confirmingDelete={pendingDelete === conversation.id}
+                    deleting={deleting}
+                    onRequestDelete={() => setPendingDelete(conversation.id)}
+                    onCancelDelete={() => setPendingDelete(null)}
+                    onConfirmDelete={() => void deleteConversation(conversation.id)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       </nav>
 
       <FooterUtility />
@@ -174,31 +177,32 @@ function Brand() {
 
 function NewConversationMenu({ onSelect }: { onSelect: () => void }) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    function onPointerDown(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setOpen(false);
     }
-    document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onEscape);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onEscape);
-    };
+    return () => document.removeEventListener("keydown", onEscape);
   }, [open]);
 
+  function toggleMenu() {
+    if (!open) {
+      const rect = btnRef.current?.getBoundingClientRect();
+      if (rect) setMenuPos({ top: rect.bottom + 2, left: rect.right + 2 });
+    }
+    setOpen((c) => !c);
+  }
+
   return (
-    <div ref={containerRef} className="relative">
+    <div className="relative">
       <button
+        ref={btnRef}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggleMenu}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="新建"
@@ -207,26 +211,33 @@ function NewConversationMenu({ onSelect }: { onSelect: () => void }) {
       >
         <Plus className="h-4 w-4" />
       </button>
-      {open ? (
-        <div
-          role="menu"
-          aria-label="新建菜单"
-          className="absolute left-1/2 top-full z-40 mt-1.5 w-36 -translate-x-1/2 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-card md:left-auto md:right-0 md:translate-x-0"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onSelect();
-            }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-ink transition-colors hover:bg-app-soft"
-          >
-            <MessageSquarePlus className="h-3.5 w-3.5 text-ink-muted" />
-            新建对话
-          </button>
-        </div>
-      ) : null}
+      {open && menuPos
+        ? createPortal(
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+              <div
+                role="menu"
+                aria-label="新建菜单"
+                className="fixed z-50 w-36 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-card"
+                style={{ top: menuPos.top, left: menuPos.left }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onSelect();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-ink transition-colors hover:bg-app-soft"
+                >
+                  <MessageSquarePlus className="h-3.5 w-3.5 text-ink-muted" />
+                  新建对话
+                </button>
+              </div>
+            </>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -248,36 +259,83 @@ function ConversationLink({
 }) {
   const preview = conversation.messages.at(-1)?.content || "等待第一条消息";
   const title = conversation.title === "New conversation" ? "新对话" : conversation.title;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(title);
+  const menuBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+
+  function openMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    const rect = menuBtnRef.current?.getBoundingClientRect();
+    if (rect) setMenuPos({ top: rect.bottom + 2, left: rect.right + 2 });
+    setMenuOpen(true);
+  }
+
+  async function saveTitle() {
+    if (!titleDraft.trim()) return;
+    try {
+      await api.patch(`/conversations/${conversation.id}`, { title: titleDraft.trim() });
+      setRenaming(false);
+      notifyConversationsChanged();
+    } catch {
+      // ignore
+    }
+  }
+
   return (
-    <div className="relative">
+    <div
+      className="relative group"
+    >
       <NavLink
         to={`/chat/${conversation.id}`}
         className={({ isActive }) => classNames(
-          "block rounded-lg border px-3 py-2.5 pr-9 transition-colors",
+          "block rounded-lg border px-3 py-2.5 transition-colors",
           isActive ? "bg-sidebar-active border-transparent" : "bg-sidebar-bg border-sidebar-border hover:bg-sidebar-hover",
         )}
       >
         {({ isActive }) => (
           <>
-            <div className="truncate text-[12.5px] font-semibold text-ink-onDark">{title}</div>
-            <div className={classNames("mt-1 truncate text-[10.5px]", isActive ? "text-white/75" : "text-ink-onDarkMuted/70")}>{preview}</div>
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <span className={classNames("h-1.5 w-1.5 rounded-full", conversation.run_status === "running" ? "animate-pulse bg-warning" : isActive ? "bg-white" : "bg-success")} />
-              <span className={classNames("text-[10px]", isActive ? "text-white/80" : "text-ink-onDarkMuted")}>
-                {conversation.run_status === "running" ? "运行中" : timeAgo(conversation.updated_at)}
-              </span>
+            <div className="flex items-center gap-1.5">
+              <span className={classNames("h-1.5 w-1.5 shrink-0 rounded-full", conversation.run_status === "running" ? "animate-pulse bg-warning" : isActive ? "bg-white" : "bg-success")} />
+              <div className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ink-onDark">{renaming ? "" : title}</div>
+              <div className="relative ml-auto flex h-5 shrink-0 items-center justify-end">
+                <span className={classNames("text-[10px] group-hover:invisible", isActive ? "text-white/70" : "text-ink-onDarkMuted")}>
+                  {timeAgo(conversation.updated_at)}
+                </span>
+                <button
+                  ref={menuBtnRef}
+                  type="button"
+                  onClick={openMenu}
+                  className={classNames("absolute right-0 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded transition-opacity", menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                  aria-label="更多操作"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5 text-ink-onDark hover:text-white" />
+                </button>
+              </div>
             </div>
+            {renaming ? (
+              <div className="mt-1 flex items-center gap-1" onClick={(e) => e.preventDefault()}>
+                <input
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  className="flex-1 min-w-0 rounded bg-sidebar-surface border border-sidebar-border px-2 py-0.5 text-[12px] text-ink-onDark outline-none focus:border-accent"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); void saveTitle(); }
+                    if (e.key === "Escape") { e.preventDefault(); setRenaming(false); }
+                  }}
+                />
+                <button type="button" onClick={() => void saveTitle()} className="rounded p-0.5 text-success hover:bg-white/10"><Check className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => setRenaming(false)} className="rounded p-0.5 text-ink-onDarkMuted hover:bg-white/10"><X className="h-3.5 w-3.5" /></button>
+              </div>
+            ) : (
+              <div className={classNames("mt-1 truncate text-[10.5px]", isActive ? "text-white/75" : "text-ink-onDarkMuted/70")}>{preview}</div>
+            )}
           </>
         )}
       </NavLink>
-      <button
-        type="button"
-        onClick={onRequestDelete}
-        aria-label={`删除对话 ${title}`}
-        className="absolute right-2 top-2 rounded p-1 text-ink-onDarkMuted hover:bg-white/10 hover:text-red-200"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+
       {confirmingDelete ? (
         <div className="mt-1 flex items-center gap-1 rounded-lg border border-danger/30 bg-danger/10 px-2 py-1.5 text-[10px] text-red-100">
           <span>确认删除？</span><span className="flex-1" />
@@ -285,6 +343,34 @@ function ConversationLink({
           <button type="button" onClick={onConfirmDelete} disabled={deleting} aria-label={`确认删除 ${title}`}><Check className="h-3.5 w-3.5" /></button>
         </div>
       ) : null}
+
+      {menuOpen && menuPos
+        ? createPortal(
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+              <div
+                className="fixed z-50 w-32 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-card"
+                style={{ top: menuPos.top, left: menuPos.left }}
+              >
+                <button
+                  type="button"
+                  onClick={() => { setMenuOpen(false); setRenaming(true); setTitleDraft(title); }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-ink hover:bg-app-soft"
+                >
+                  <Pencil className="h-3.5 w-3.5" />重命名
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMenuOpen(false); onRequestDelete(); }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-danger hover:bg-danger-soft"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />删除
+                </button>
+              </div>
+            </>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

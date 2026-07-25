@@ -4,7 +4,6 @@ import {
   ArrowUp,
   Bot,
   Check,
-  Pencil,
   RotateCcw,
   Trash2,
   Wrench,
@@ -18,7 +17,6 @@ import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
-import { CONVERSATION_CATEGORIES } from "@/lib/conversationCategories";
 import { useDebugMode } from "@/lib/debugMode";
 import { classNames, uid } from "@/lib/utils";
 import type {
@@ -243,17 +241,6 @@ export default function ChatModePage() {
     }
   }
 
-  async function saveCategory(category: string) {
-    if (!conversation) return;
-    try {
-      const updated = await api.patch<ConversationRecord>(`/conversations/${conversation.id}`, { category });
-      setConversation(updated);
-      notifyConversationsChanged();
-    } catch (categoryError) {
-      setError(apiErrorMessage(categoryError));
-    }
-  }
-
   async function deleteConversation() {
     if (!conversation) return;
     try {
@@ -308,44 +295,7 @@ export default function ChatModePage() {
       <Topbar
         title={title}
         badge={badge}
-        actions={
-          conversation && !deleted ? (
-            <div className="flex items-center gap-1.5">
-              <select
-                value={conversation.category}
-                onChange={(event) => void saveCategory(event.target.value)}
-                disabled={sending}
-                aria-label="会话分类"
-                className="h-8 rounded-lg border border-line bg-white px-2.5 text-[11.5px] font-semibold text-ink outline-none focus:border-accent"
-              >
-                {CONVERSATION_CATEGORIES.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => {
-                  setRenaming(true);
-                  setTitleDraft(title);
-                }}
-                className="btn-outline h-8 text-[12px]"
-                aria-label="重命名对话"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-                重命名
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                className="btn-danger-outline h-8 text-[12px]"
-                aria-label="删除对话"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                删除
-              </button>
-            </div>
-          ) : null
-        }
+        actions={null}
       />
 
       {renaming ? (
@@ -380,10 +330,9 @@ export default function ChatModePage() {
         </div>
       ) : null}
 
-      <div className="flex-1 min-h-0 p-3">
-        <div className="h-full rounded-xl border border-line bg-white flex flex-col overflow-hidden shadow-card">
-          <div className="flex-1 min-h-0 overflow-y-auto bg-app-bg px-5 py-5" aria-live="polite">
-            <div className="max-w-4xl mx-auto space-y-3">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5" aria-live="polite">
+          <div className="max-w-4xl mx-auto space-y-3">
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
@@ -433,7 +382,6 @@ export default function ChatModePage() {
             />
           ) : null}
         </div>
-      </div>
     </div>
   );
 }

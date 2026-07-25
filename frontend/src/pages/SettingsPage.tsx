@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock3,
   KeyRound,
   Pencil,
@@ -247,9 +249,15 @@ function ProviderSection({
   health: Record<string, ModelHealthResult>;
   onCheckHealth: (modelId: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(true);
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white shadow-card" aria-label={`Provider ${provider.name}`}>
-      <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full flex-wrap items-center gap-3 border-b border-line px-4 py-3 text-left"
+      >
+        {collapsed ? <ChevronRight className="h-4 w-4 shrink-0 text-ink-subtle" /> : <ChevronDown className="h-4 w-4 shrink-0 text-accent" />}
         <div className="flex h-8 w-8 items-center justify-center rounded bg-app-soft text-ink-muted"><Server className="h-4 w-4" /></div>
         <div className="min-w-40">
           <div className="flex items-center gap-2">
@@ -263,51 +271,55 @@ function ProviderSection({
           <span className="flex items-center gap-1"><KeyRound className="h-3 w-3" />{provider.api_key_masked}</span>
           <span className="flex items-center gap-1"><Clock3 className="h-3 w-3" />{provider.timeout_seconds}s</span>
         </div>
-        <button type="button" onClick={onEdit} className="btn-ghost h-8 w-8 p-0" aria-label={`编辑 ${provider.name}`} title="编辑 Provider"><Pencil className="h-3.5 w-3.5" /></button>
-        <button type="button" onClick={onRequestDelete} className="btn-ghost h-8 w-8 p-0 text-danger" aria-label={`删除 ${provider.name}`} title="删除 Provider"><Trash2 className="h-3.5 w-3.5" /></button>
-      </div>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} className="btn-ghost h-8 w-8 p-0" aria-label={`编辑 ${provider.name}`} title="编辑 Provider"><Pencil className="h-3.5 w-3.5" /></button>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onRequestDelete(); }} className="btn-ghost h-8 w-8 p-0 text-danger" aria-label={`删除 ${provider.name}`} title="删除 Provider"><Trash2 className="h-3.5 w-3.5" /></button>
+      </button>
 
-      {confirmingDelete ? (
-        <div className="flex items-center gap-2 border-b border-danger-ring bg-danger-soft px-4 py-2 text-[11.5px] text-danger-deep">
-          <span>删除后该 Provider 的全部模型配置将不可恢复。</span><span className="flex-1" />
-          <button type="button" onClick={onCancelDelete} disabled={busyModel === provider.id} className="btn-ghost h-7 px-2"><X className="h-3.5 w-3.5" />取消</button>
-          <button type="button" onClick={onDelete} disabled={busyModel === provider.id} className="btn-danger-outline h-7 px-2"><Trash2 className="h-3.5 w-3.5" />确认删除</button>
-        </div>
-      ) : null}
-
-      <div className="divide-y divide-line">
-        {provider.models.map((model) => {
-          const isActive = model.id === activeModelId;
-          const modelStatus = health[model.id];
-          return (
-            <div key={model.id} className={classNames("grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5", isActive && "bg-success-soft/60")}>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[12.5px] font-bold text-ink">{model.name}</span>
-                  {isActive ? <span className="flex items-center gap-1 text-[10px] font-bold text-success-deep"><CheckCircle2 className="h-3 w-3" />默认</span> : null}
-                  {!model.enabled ? <span className="text-[10px] font-bold text-ink-subtle">已停用</span> : null}
-                </div>
-                <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-muted">{model.model}</p>
-                {modelStatus ? (
-                  <p className={classNames("mt-1 text-[10.5px] font-semibold", modelStatus.status === "healthy" ? "text-success-deep" : "text-danger-deep")}>
-                    {modelStatus.status === "healthy" ? `健康 · ${modelStatus.latency_ms} ms` : `异常 · ${modelStatus.error ?? "检测失败"}`}
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={() => onCheckHealth(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:opacity-40">
-                  <RefreshCw className={classNames("h-3.5 w-3.5", busyModel === model.id && "animate-spin")} />健康检测
-                </button>
-              {!isActive ? (
-                <button type="button" onClick={() => onSetDefault(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-40">
-                  <Check className="h-3.5 w-3.5" />设为默认
-                </button>
-              ) : null}
-              </div>
+      {!collapsed ? (
+        <>
+          {confirmingDelete ? (
+            <div className="flex items-center gap-2 border-b border-danger-ring bg-danger-soft px-4 py-2 text-[11.5px] text-danger-deep">
+              <span>删除后该 Provider 的全部模型配置将不可恢复。</span><span className="flex-1" />
+              <button type="button" onClick={onCancelDelete} disabled={busyModel === provider.id} className="btn-ghost h-7 px-2"><X className="h-3.5 w-3.5" />取消</button>
+              <button type="button" onClick={onDelete} disabled={busyModel === provider.id} className="btn-danger-outline h-7 px-2"><Trash2 className="h-3.5 w-3.5" />确认删除</button>
             </div>
-          );
-        })}
-      </div>
+          ) : null}
+
+          <div className="divide-y divide-line">
+            {provider.models.map((model) => {
+              const isActive = model.id === activeModelId;
+              const modelStatus = health[model.id];
+              return (
+                <div key={model.id} className={classNames("grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5", isActive && "bg-success-soft/60")}>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[12.5px] font-bold text-ink">{model.name}</span>
+                      {isActive ? <span className="flex items-center gap-1 text-[10px] font-bold text-success-deep"><CheckCircle2 className="h-3 w-3" />默认</span> : null}
+                      {!model.enabled ? <span className="text-[10px] font-bold text-ink-subtle">已停用</span> : null}
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-muted">{model.model}</p>
+                    {modelStatus ? (
+                      <p className={classNames("mt-1 text-[10.5px] font-semibold", modelStatus.status === "healthy" ? "text-success-deep" : "text-danger-deep")}>
+                        {modelStatus.status === "healthy" ? `健康 · ${modelStatus.latency_ms} ms` : `异常 · ${modelStatus.error ?? "检测失败"}`}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => onCheckHealth(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:opacity-40">
+                      <RefreshCw className={classNames("h-3.5 w-3.5", busyModel === model.id && "animate-spin")} />健康检测
+                    </button>
+                  {!isActive ? (
+                    <button type="button" onClick={() => onSetDefault(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-40">
+                      <Check className="h-3.5 w-3.5" />设为默认
+                    </button>
+                  ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
