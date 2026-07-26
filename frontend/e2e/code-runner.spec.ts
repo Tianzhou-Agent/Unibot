@@ -123,7 +123,8 @@ test("FE-E2E-009 在代码运行器中执行脚本并查看输入输出历史", 
   await expect(page.getByText("Kubernetes · gVisor", { exact: true })).toBeVisible();
 
   const editor = page.getByRole("textbox", { name: "脚本编辑器" });
-  await editor.fill("print('这是保存在用户工作区的内容')");
+  await editor.press("Control+A");
+  await editor.type("print('这是保存在用户工作区的内容')");
   await page.getByRole("button", { name: "运行脚本" }).click();
 
   await expect(page.getByText("执行成功，退出码 0", { exact: true })).toBeVisible();
