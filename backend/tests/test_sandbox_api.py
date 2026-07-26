@@ -152,6 +152,24 @@ def test_sandbox_executes_bash_when_available(tmp_path) -> None:
     assert response.json()["stdout"] == "bash-ready"
 
 
+def test_sandbox_executes_node_when_available(tmp_path) -> None:
+    if shutil.which("node") is None:
+        return
+    app = create_app(
+        settings=AgentSettings(sandbox_driver="local", sandbox_workspace_root=tmp_path),
+        repository=InMemoryRepository(),
+        llm=ScriptedLLM([]),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/sandboxes/execute",
+            json={"language": "node", "script": "process.stdout.write('node-ready')"},
+        )
+    assert response.status_code == 200
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["stdout"] == "node-ready"
+
+
 def test_sandbox_bounds_captured_output(tmp_path) -> None:
     app = create_app(
         settings=AgentSettings(

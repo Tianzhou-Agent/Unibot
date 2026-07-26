@@ -10,3 +10,4 @@ frontend/frontend-run.log
 .env
 /data/nas/
 /data/sandboxes/
+/data/runtime-logs/

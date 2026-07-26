@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING, Any
+
 from tianzhou_agent_platform.aina.document.models import (
     DocumentCreate,
     DocumentListResponse,
@@ -5,7 +7,9 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentRename,
     DocumentSummary,
 )
-from tianzhou_agent_platform.aina.document.service import DocumentService
+
+if TYPE_CHECKING:
+    from tianzhou_agent_platform.aina.document.service import DocumentService
 
 __all__ = [
     "DocumentCreate",
@@ -15,3 +19,11 @@ __all__ = [
     "DocumentService",
     "DocumentSummary",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "DocumentService":
+        from tianzhou_agent_platform.aina.document.service import DocumentService
+
+        return DocumentService
+    raise AttributeError(name)

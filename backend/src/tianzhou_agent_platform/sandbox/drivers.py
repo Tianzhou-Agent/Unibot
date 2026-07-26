@@ -81,7 +81,15 @@ class LocalProcessSandboxDriver(SandboxDriver):
         command = self._command(request.language, request.script)
         python_packages = workspace / ".python-packages"
         npm_prefix = workspace / ".npm-global"
+        temp_directory = workspace / ".tmp"
+        temp_directory.mkdir(exist_ok=True)
+        system_environment = {
+            name: value
+            for name in ("COMSPEC", "PATHEXT", "SystemRoot", "WINDIR")
+            if (value := os.environ.get(name))
+        }
         environment = {
+            **system_environment,
             "PATH": os.pathsep.join(
                 [
                     str(npm_prefix / "bin"),
@@ -91,6 +99,8 @@ class LocalProcessSandboxDriver(SandboxDriver):
             ),
             "HOME": str(workspace),
             "USERPROFILE": str(workspace),
+            "TEMP": str(temp_directory),
+            "TMP": str(temp_directory),
             "PYTHONUNBUFFERED": "1",
             "PYTHONPATH": str(python_packages),
             "PIP_TARGET": str(python_packages),
