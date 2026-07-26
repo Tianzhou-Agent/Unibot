@@ -323,7 +323,7 @@ function OutputPanel({ execution }: { execution: SandboxExecution | null }) {
     <section className="overflow-hidden rounded-lg border border-line bg-white">
       <header className="flex items-center gap-2 border-b border-line px-3 py-2.5">
         <TerminalSquare className="h-4 w-4 text-accent" />
-        <h3 className="text-[12.5px] font-extrabold text-ink">输入与输出</h3>
+        <h3 className="text-[12.5px] font-extrabold text-ink">运行输出</h3>
         {execution ? (
           <>
             <ExecutionBadge status={execution.status} />
@@ -333,19 +333,16 @@ function OutputPanel({ execution }: { execution: SandboxExecution | null }) {
       </header>
       {!execution ? (
         <div className="flex min-h-52 items-center justify-center text-[11.5px] text-ink-muted">
-          运行脚本后在这里查看本次输入、标准输出和错误。
+          运行脚本后在这里查看标准输出和错误。
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-2">
-          <CodeBlock label={`${execution.language} 输入`} value={execution.script} />
-          <div className="space-y-3">
-            <CodeBlock label="标准输出" value={execution.stdout || "（无输出）"} />
-            {execution.stderr ? <CodeBlock label="标准错误" value={execution.stderr} error /> : null}
-            <p className="text-[10px] text-ink-subtle">
-              退出码：{execution.exit_code ?? "—"} · 工作目录：/workspace/{execution.working_directory === "." ? "" : execution.working_directory}
-              {execution.truncated ? " · 输出已截断" : ""}
-            </p>
-          </div>
+        <div className="space-y-3 p-3">
+          <CodeBlock label="标准输出" value={execution.stdout || "（无输出）"} />
+          {execution.stderr ? <CodeBlock label="标准错误" value={execution.stderr} error /> : null}
+          <p className="text-[10px] text-ink-subtle">
+            退出码：{execution.exit_code ?? "—"} · 工作目录：/workspace/{execution.working_directory === "." ? "" : execution.working_directory}
+            {execution.truncated ? " · 输出已截断" : ""}
+          </p>
         </div>
       )}
     </section>

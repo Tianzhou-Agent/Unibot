@@ -128,6 +128,8 @@ test("FE-E2E-009 在代码运行器中执行脚本并查看输入输出历史", 
   await page.getByRole("button", { name: "运行脚本" }).click();
 
   await expect(page.getByText("执行成功，退出码 0", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行输出", exact: true })).toBeVisible();
+  await expect(page.getByText("python 输入", { exact: true })).toHaveCount(0);
   await expect(page.getByText("这是保存在用户工作区的内容", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "执行历史", exact: true })).toBeVisible();
   expect(state.executions).toHaveLength(1);
