@@ -152,16 +152,13 @@ def test_agent_uses_the_users_selected_model_configuration() -> None:
 
     async def provider(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        payload = json.loads(request.content)
-        is_router = "AINA routing stage" in str(payload["messages"][0]["content"])
-        content = "NO_AINA_MATCH" if is_router else "selected model response"
         return httpx.Response(
             200,
             json={
                 "choices": [
                     {
                         "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": content},
+                        "message": {"role": "assistant", "content": "selected model response"},
                     }
                 ]
             },

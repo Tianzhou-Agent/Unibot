@@ -1,154 +1,28 @@
+"""Host-owned tools for application discovery, navigation, and clarification."""
+
 from typing import Any
 from urllib.parse import urlencode
 
-from tianzhou_agent_platform.aina.protocol.models import (
-    AinaCanvasResponse,
-    AinaCapabilities,
-    AinaCapability,
-    AinaIdentity,
-    AinaManifest,
-    AinaRecord,
-    AinaUiCapability,
-    BuiltinRuntimeDefinition,
-    Publisher,
+from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
+from tianzhou_agent_platform.aina.protocol.widgets import (
+    WidgetAction,
+    WidgetApp,
+    WidgetDefinition,
+    WidgetField,
 )
-from tianzhou_agent_platform.aina.protocol.widgets import WidgetAction, WidgetApp, WidgetDefinition, WidgetField
-from tianzhou_agent_platform.aina.security.models import Authentication
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 
-UNIBOT_ASSISTANT_ID = "unibot-assistant"
 LIST_APP_TOOL_ID = "list_app"
 DESCRIBE_AINA_TOOL_ID = "describe_aina"
 OPEN_AINA_TOOL_ID = "open_aina"
 REQUEST_CLARIFICATION_TOOL_ID = "request_clarification"
-UNIBOT_TOOL_IDS = {
+PLATFORM_TOOL_IDS = {
     LIST_APP_TOOL_ID,
     DESCRIBE_AINA_TOOL_ID,
     OPEN_AINA_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
 }
-
-
-def unibot_assistant_record() -> AinaRecord:
-    return AinaRecord(
-        manifest=AinaManifest(
-            protocol_version="1.0",
-            aina=AinaIdentity(
-                id=UNIBOT_ASSISTANT_ID,
-                name="Unibot 助手",
-                version="1.0.0",
-                description="负责发现应用、路由请求并打开 AINA 画布的系统应用。",
-                publisher=Publisher(id="unibot", name="Unibot"),
-            ),
-            runtime=BuiltinRuntimeDefinition(),
-            capabilities=AinaCapabilities(
-                tools=[
-                    AinaCapability(
-                        id=LIST_APP_TOOL_ID,
-                        name="列出应用",
-                        description=(
-                            "仅当用户希望发现或选择应用时，以组件形式列出全部可用 AINA；"
-                            "查看已知应用详情时不要调用。"
-                        ),
-                        input_schema={
-                            "type": "object",
-                            "properties": {},
-                            "additionalProperties": False,
-                        },
-                    ),
-                    AinaCapability(
-                        id=DESCRIBE_AINA_TOOL_ID,
-                        name="查看 AINA 详情",
-                        description="只读查看指定 AINA 的真实 Skill、Tool 和 UI 声明，不打开应用或切换画布。",
-                        input_schema={
-                            "type": "object",
-                            "properties": {
-                                "aina_id": {
-                                    "type": "string",
-                                    "description": "需要查看详情的 AINA ID 或准确应用名称。",
-                                }
-                            },
-                            "required": ["aina_id"],
-                            "additionalProperties": False,
-                        },
-                    ),
-                    AinaCapability(
-                        id=OPEN_AINA_TOOL_ID,
-                        name="打开 AINA",
-                        description="打开选定的 AINA，并返回其画布路由和主组件。",
-                        input_schema={
-                            "type": "object",
-                            "properties": {
-                                "aina_id": {
-                                    "type": "string",
-                                    "description": "需要打开的准确 AINA ID。",
-                                }
-                            },
-                            "required": ["aina_id"],
-                            "additionalProperties": False,
-                        },
-                    ),
-                    AinaCapability(
-                        id=REQUEST_CLARIFICATION_TOOL_ID,
-                        name="请求补充信息",
-                        description="缺少必要信息时显示由平台渲染的表单。",
-                        input_schema={
-                            "type": "object",
-                            "properties": {
-                                "title": {"type": "string", "description": "表单标题。"},
-                                "description": {"type": "string", "description": "表单说明。"},
-                                "submit_label": {"type": "string", "description": "提交按钮文字。"},
-                                "fields": {
-                                    "type": "array",
-                                    "minItems": 1,
-                                    "maxItems": 6,
-                                    "description": "需要用户补充的字段，最多 6 项。",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "id": {"type": "string"},
-                                            "label": {"type": "string"},
-                                            "input_type": {
-                                                "type": "string",
-                                                "enum": ["text", "number", "textarea"],
-                                            },
-                                            "placeholder": {"type": "string"},
-                                            "required": {"type": "boolean"},
-                                            "value": {"type": "string"},
-                                        },
-                                        "required": ["id", "label"],
-                                        "additionalProperties": False,
-                                    },
-                                },
-                            },
-                            "required": ["title", "fields"],
-                            "additionalProperties": False,
-                        },
-                    ),
-                ],
-                ui=[
-                    AinaUiCapability(
-                        id="clarification-form",
-                        kind="form",
-                        description="由平台渲染、用于收集缺失信息的表单。",
-                        instructions=(
-                            "Declare fields, labels, required flags, and optional prefilled values. The host renders "
-                            "and submits the form without AINA-specific frontend code."
-                        ),
-                    )
-                ],
-            ),
-            main_widget=WidgetDefinition(
-                id="unibot-assistant-main",
-                kind="panel",
-                title="Unibot 助手",
-                description="发现并打开当前可用的 AINA 应用。",
-            ),
-            authentication=Authentication(type="none"),
-        ),
-        last_health={"status": "healthy", "runtime": "builtin"},
-    )
 
 
 async def list_app_widget(
@@ -167,37 +41,22 @@ async def list_app_widget(
     )
 
 
-async def assistant_main_widget(
-    repository: InMemoryRepository,
-    *,
-    user_id: str,
-    tenant_id: str,
-) -> WidgetDefinition:
-    apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
-    return WidgetDefinition(
-        id="unibot-assistant-main",
-        kind="panel",
-        title="Unibot 助手",
-        description="发现并打开当前可用的 AINA 应用。",
-        apps=apps,
-    )
-
-
 async def _available_apps(
     repository: InMemoryRepository,
     *,
     user_id: str,
     tenant_id: str,
 ) -> list[WidgetApp]:
+    from tianzhou_agent_platform.aina.code_runner.builtin import UNIBOT_CODE_RUNNER_ID
     from tianzhou_agent_platform.aina.document.builtin import UNIBOT_DOCUMENTS_ID
     from tianzhou_agent_platform.aina.memory.builtin import UNIBOT_MEMORY_ID
-    from tianzhou_agent_platform.aina.code_runner.builtin import UNIBOT_CODE_RUNNER_ID
+    from tianzhou_agent_platform.aina.schedule.builtin import UNIBOT_SCHEDULER_ID
 
     builtin_aina_ids = {
-        UNIBOT_ASSISTANT_ID,
         UNIBOT_MEMORY_ID,
         UNIBOT_DOCUMENTS_ID,
         UNIBOT_CODE_RUNNER_ID,
+        UNIBOT_SCHEDULER_ID,
     }
     installations = {
         item.aina_id: item
@@ -264,17 +123,9 @@ async def open_aina(
             user_id=user_id,
             tenant_id=tenant_id,
         )
-        await repository.bind_conversation_aina(
-            conversation_id,
-            aina_id,
-            make_primary=True,
-        )
+        await repository.bind_conversation_aina(conversation_id, aina_id, make_primary=True)
 
-    main_widget = record.manifest.main_widget
-    if aina_id == UNIBOT_ASSISTANT_ID:
-        main_widget = await assistant_main_widget(repository, user_id=user_id, tenant_id=tenant_id)
-    if main_widget is None:
-        main_widget = _default_main_widget(record)
+    main_widget = record.manifest.main_widget or _default_main_widget(record)
     query = urlencode({"conversation": conversation_id}) if conversation_id else ""
     route = f"/canvas/{aina_id}{f'?{query}' if query else ''}"
     return AinaCanvasResponse(
@@ -329,7 +180,7 @@ async def describe_aina(
     }
 
 
-async def invoke_unibot_tool(
+async def invoke_platform_tool(
     repository: InMemoryRepository,
     tool_id: str,
     arguments: dict[str, Any],
@@ -367,14 +218,7 @@ async def invoke_unibot_tool(
             kind="navigation",
             title=f"打开 {canvas.name}",
             description="该应用已准备好，可以进入 Canvas。",
-            actions=[
-                WidgetAction(
-                    id="open",
-                    label="进入 Canvas",
-                    kind="open_aina",
-                    aina_id=aina_id,
-                )
-            ],
+            actions=[WidgetAction(id="open", label="进入 Canvas", kind="open_aina", aina_id=aina_id)],
         )
         return canvas.model_dump(mode="json"), [widget]
     if tool_id == REQUEST_CLARIFICATION_TOOL_ID:
@@ -422,32 +266,14 @@ async def invoke_unibot_tool(
             ],
         )
         return {"requested": True, "field_ids": [field.id for field in fields]}, [widget]
-    raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown Unibot tool {tool_id!r}", status_code=404)
+    raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown platform tool {tool_id!r}", status_code=404)
 
 
 def _default_main_widget(record: AinaRecord) -> WidgetDefinition:
     manifest = record.manifest
     return WidgetDefinition(
         id=f"{manifest.aina.id}-main",
-        kind="form",
+        kind="panel",
         title=manifest.aina.name,
         description=manifest.aina.description,
-        markdown="### 描述你的需求\n\n提交后，消息会直接路由到当前 AINA。",
-        fields=[
-            WidgetField(
-                id="request",
-                label="需求",
-                input_type="textarea",
-                placeholder="请描述希望这个应用完成的任务",
-                required=True,
-            )
-        ],
-        actions=[
-            WidgetAction(
-                id="submit",
-                label="交给 AINA",
-                kind="prompt",
-                prompt="{request}",
-            )
-        ],
     )

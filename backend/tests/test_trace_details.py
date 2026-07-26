@@ -7,7 +7,7 @@ from tianzhou_agent_platform.core.trace_details import REDACTED, sanitize_trace_
 from tianzhou_agent_platform.main import create_app
 
 
-def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
+def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
     settings = AgentSettings(  # type: ignore[call-arg]
         _env_file=None,
         llm_base_url="https://model.invalid/v1",
@@ -15,23 +15,17 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
         llm_model="test-model",
     )
     with TestClient(
-        create_app(settings=settings, llm=ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("Hello.")]))
+        create_app(settings=settings, llm=ScriptedLLM([assistant("Hello.")]))
     ) as client:
         response = client.post("/chat", json={"message": "Hello"})
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
     discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
     graph = discovery["aina_graph"]
-    assert graph["available_count"] == 4
-    assert graph["counts"] == {"builtin_aina": 4, "remote_aina": 0}
+    assert graph["available_count"] == 3
+    assert graph["counts"] == {"builtin_aina": 3, "remote_aina": 0}
     assert graph["excluded"] == []
     available = {item["id"]: item for item in graph["available"]}
-    assert {item["id"] for item in available["unibot-assistant"]["capabilities"]["tools"]} == {
-        "describe_aina",
-        "list_app",
-        "open_aina",
-        "request_clarification",
-    }
     assert {item["id"] for item in available["unibot-memory"]["capabilities"]["tools"]} == {
         "memory.remember",
         "memory.recall",
@@ -44,18 +38,14 @@ def test_trace_groups_builtin_capabilities_under_their_ainas() -> None:
         "sandbox.run_node",
     }
     scope = {item["aina_id"]: item["capabilities"] for item in discovery["model_scope"]["by_aina"]}
-    assert {item["id"] for item in scope["unibot-assistant"]} == {
+    assert {item["id"] for item in scope["unibot-memory"]} == {"unibot-memory"}
+    assert {item["id"] for item in discovery["model_scope"]["standalone"]} == {
         "describe_aina",
         "list_app",
         "open_aina",
         "request_clarification",
     }
-    assert {item["id"] for item in scope["unibot-memory"]} == {
-        "memory.remember",
-        "memory.recall",
-        "memory.update",
-        "memory.forget",
-    }
+    assert all(item["owner_aina_id"] is None for item in discovery["model_scope"]["standalone"])
 
 
 def test_trace_sanitizer_redacts_nested_credentials_and_inline_secrets() -> None:

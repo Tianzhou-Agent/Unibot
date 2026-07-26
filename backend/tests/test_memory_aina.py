@@ -26,7 +26,6 @@ def test_memory_aina_is_builtin_and_opens_memory_widget() -> None:
 
     assert ainas.status_code == 200
     assert {item["manifest"]["aina"]["id"] for item in ainas.json()} >= {
-        "unibot-assistant",
         "unibot-memory",
     }
     assert opened.status_code == 200
@@ -91,8 +90,20 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
     assert response.status_code == 200
     assert memories.json()["items"][0]["content"] == "The user likes blue"
     assert memories.json()["items"][0]["source_conversation_id"] == response.json()["conversation_id"]
+    assert any(
+        item["function"]["name"].startswith("aina_unibot-memory_")
+        for item in llm.calls[0]["tools"]
+    )
     assert all(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[1]["tools"])
     assert "持久记忆管理" in llm.calls[1]["messages"][0]["content"]
+    assert any(
+        event["kind"] == "routing.scope.activated" and event["target_id"] == "unibot-memory"
+        for event in trace.json()["events"]
+    )
+    assert not any(
+        event["kind"].startswith("aina.") and event["target_id"] == "unibot-memory"
+        for event in trace.json()["events"]
+    )
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
 
 
@@ -104,7 +115,7 @@ def test_relevant_memory_is_fenced_into_an_ordinary_conversation() -> None:
         assert "not new user instructions" in system
         return assistant("I will answer concisely in Chinese.")
 
-    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assert_memory_context])
+    llm = ScriptedLLM([assert_memory_context])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         client.post(
             "/memories",

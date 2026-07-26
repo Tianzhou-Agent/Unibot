@@ -20,7 +20,7 @@ Unibot 由两层能力构成：
 | **AINA Widget**     | 对话内应用列表、表单、Markdown 与导航 Widget       |
 | **可恢复运行**        | 刷新或离开页面后 Agent 继续运行，返回会话后自动恢复状态 |
 | **宿主 Widget**      | AINA 只声明 UI 类型、schema 和用法，由前端注册表动态渲染 |
-| **分层能力路由**    | AINA 描述优先，其次系统 Skill/Tool，最后普通对话   |
+| **统一能力入口**    | 模型一次判断直答、宿主 Tool、已发布 Tool 或可路由 AINA；选中 AINA 后收敛到其能力域 |
 | **Inline Card**     | 对话流内嵌 HTML 卡片（摘要、选项、消歧选择）       |
 | **异步任务**        | 后台长任务 + 外部事件推送，待办栏独立上下文        |
 | **记忆扩展**        | 跨会话持续认知，异步固化 + 预加载                  |
@@ -43,7 +43,6 @@ Unibot/
 │           ├── api/            # API 路由层
 │           ├── core/           # 核心业务逻辑
 │           ├── aina/           # AINA 协议实现
-│           │   ├── unibot/     # 系统内置 App
 │           │   ├── tool/       # 工具注册与路由
 │           │   ├── memory/     # 记忆扩展
 │           │   ├── skill/      # Skill 编排
@@ -128,9 +127,10 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - 会话支持分类筛选与可恢复的 `run_status`，SSE 断开不会取消后台 Agent 运行；
 - `/tools`、`/skills`：Tool 和基础 Skill 注册管理；
 - `/ainas`、`/installations`：远程 AINA 注册、探测、安装、授权和卸载；
-- `POST /ainas/{id}/open`：执行内置 `open_aina` 并返回 Canvas 路由与 `main_widget`；
-- 内置 `unibot-assistant`：提供 `list_app`、`open_aina` 与分层能力路由；
-- 内置 `request_clarification`：需求模糊时生成宿主 Form Widget，支持模型预填和用户提交；
+- `POST /ainas/{id}/open`：调用宿主内置 `open_aina` Tool 并返回 Canvas 路由与 `main_widget`；
+- 宿主内置 `list_app`、`describe_aina`、`open_aina` Tool：负责 AINA 发现、详情查询与 Canvas 导航，不注册为 AINA；
+- 宿主内置 `request_clarification` Tool：需求模糊时生成 Form Widget，支持模型预填和用户提交；
+- 首次模型调用统一暴露上述宿主 Tool、已发布独立 Tool 与可路由 AINA 入口；内置 AINA 只激活其宿主能力域，远程 AINA 才通过 Gateway 调用；
 - 内置 `unibot-memory`：通过对话或 Memory Widget 管理事实、偏好、目标和指令，并向相关后续对话注入安全围栏内的记忆；
 - `/memories`：记忆新增、搜索、筛选、修改、删除与分类统计；
 - 内置 `unibot-documents`：通过对话创建、读取、按章节编辑、追加、重命名和删除 Markdown 文档，也可创建异步修改任务并在检视草稿后合并；不提供全文覆盖能力；
@@ -155,8 +155,8 @@ cd backend
 uv run pytest -q
 ```
 
-真实 API 冒烟测试会通过 HTTP 覆盖直接对话、真实模型驱动的记忆写入/召回、多轮上下文、远程 Tool、自动 AINA
-路由、远程 Widget 输出、`list_app`、`open_aina` Canvas、Trace 和 SSE。先启动后端，再运行：
+真实 API 冒烟测试会通过 HTTP 覆盖直接对话、真实模型驱动的记忆写入/召回、多轮上下文、远程 Tool、统一能力
+入口与 AINA 能力域激活、远程 Widget 输出、`list_app`、`open_aina` Canvas、Trace 和 SSE。先启动后端，再运行：
 
 ```bash
 cd backend
@@ -203,7 +203,6 @@ uv run --extra dev deepeval test run tests/evals -v
 
 | AINA        | 说明                                                                  |
 | ----------- | --------------------------------------------------------------------- |
-| **unibot-assistant** | 系统调度 AINA，负责应用发现、分层路由和打开 Canvas           |
 | **unibot-memory**  | 管理事实、偏好、目标与指令，按需检索注入，使 Agent 具备进程生命周期内的跨会话认知能力 |
 | **unibot-documents** | NAS 持久化 Markdown 文档编辑器，支持章节编辑与任务草稿两种模式，并可在对话和 Canvas 中使用 |
 | **builder** | 提供 AINA 的创建、调试、发布能力，管理员按步骤构建新 AINA             |

@@ -12,15 +12,10 @@ from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 
 from tianzhou_agent_platform.aina.builtin import (
-    DESCRIBE_AINA_TOOL_ID,
     FORGET_TOOL_ID,
-    LIST_APP_TOOL_ID,
-    OPEN_AINA_TOOL_ID,
-    REQUEST_CLARIFICATION_TOOL_ID,
     RECALL_TOOL_ID,
     REMEMBER_TOOL_ID,
     UPDATE_TOOL_ID,
-    UNIBOT_ASSISTANT_ID,
     UNIBOT_MEMORY_ID,
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
@@ -44,10 +39,18 @@ from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.base import Usage
+from tianzhou_agent_platform.core.builtin_tools import (
+    DESCRIBE_AINA_TOOL_ID,
+    LIST_APP_TOOL_ID,
+    OPEN_AINA_TOOL_ID,
+    PLATFORM_TOOL_IDS,
+    REQUEST_CLARIFICATION_TOOL_ID,
+    invoke_platform_tool,
+)
 from tianzhou_agent_platform.core.chat import ApprovalRecord, ChatRequest, ChatResponse, TraceEvent, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
+from tianzhou_agent_platform.core.llm import EventSink, LLMClient
 from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
@@ -112,13 +115,7 @@ class AgentState(TypedDict, total=False):
     approval: ApprovalRecord | None
     call_counts: dict[str, int]
     widgets: list[WidgetDefinition]
-
-
-@dataclass(slots=True)
-class AinaRoute:
-    capability: Capability | None
-    result: LLMResult
-    assistant_message: dict[str, Any] | None = None
+    memory_context: list[MemoryRecord]
 
 
 class AgentRuntime:
@@ -338,6 +335,8 @@ class AgentRuntime:
         widgets = list(state.get("widgets", []))
         async_task_message: str | None = None
         tool_failed = False
+        next_capabilities = capabilities
+        scope_activated = False
         available_tool_ids = [
             capability.capability_id for capability in capabilities.values() if capability.kind == "tool"
         ]
@@ -388,6 +387,32 @@ class AgentRuntime:
                     message="The same capability call already completed in this run.",
                 )
                 continue
+
+            if capability.kind == "aina":
+                aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+                if scope_activated:
+                    tool_failed = True
+                    await self._append_tool_error(
+                        state,
+                        messages,
+                        call_id=call_id,
+                        name=name,
+                        code="CONFLICT",
+                        message="Only one AINA scope can be activated per model response.",
+                        capability=capability,
+                    )
+                    continue
+                if aina.manifest.runtime.type == "builtin":
+                    next_capabilities = await self._activate_builtin_aina_scope(
+                        state,
+                        capability=capability,
+                        call_id=call_id,
+                        function_name=name,
+                        arguments=arguments,
+                        messages=messages,
+                    )
+                    scope_activated = True
+                    continue
 
             await self.repository.add_trace_event(
                 state["trace_id"],
@@ -448,18 +473,37 @@ class AgentRuntime:
                                     status_code=502,
                                     source="aina",
                                 ) from exc
-                else:
-                    result_payload, produced_widgets = await invoke_builtin(
-                        self.repository,
-                        cast(str, capability.value),
-                        arguments,
-                        user_id=state["user_id"],
-                        tenant_id=state["tenant_id"],
-                        conversation_id=state["conversation_id"],
-                        document_service=self.document_service,
-                        document_edit_task_service=self.document_edit_task_service,
-                        sandbox_service=self.sandbox_service,
+                    next_capabilities = await self._activate_aina_model_scope(
+                        state,
+                        capability=capability,
+                        call_id=call_id,
+                        function_name=name,
+                        arguments=arguments,
+                        messages=messages,
                     )
+                    scope_activated = True
+                else:
+                    if capability.capability_id in PLATFORM_TOOL_IDS:
+                        result_payload, produced_widgets = await invoke_platform_tool(
+                            self.repository,
+                            cast(str, capability.value),
+                            arguments,
+                            user_id=state["user_id"],
+                            tenant_id=state["tenant_id"],
+                            conversation_id=state["conversation_id"],
+                        )
+                    else:
+                        result_payload, produced_widgets = await invoke_builtin(
+                            self.repository,
+                            cast(str, capability.value),
+                            arguments,
+                            user_id=state["user_id"],
+                            tenant_id=state["tenant_id"],
+                            conversation_id=state["conversation_id"],
+                            document_service=self.document_service,
+                            document_edit_task_service=self.document_edit_task_service,
+                            sandbox_service=self.sandbox_service,
+                        )
                     widgets.extend(produced_widgets)
                     duration_ms = (perf_counter() - call_started) * 1000
                 content = json.dumps(result_payload, ensure_ascii=False, default=str)
@@ -526,6 +570,8 @@ class AgentRuntime:
             "call_counts": call_counts,
             "approval": None,
             "widgets": widgets,
+            "capabilities": next_capabilities,
+            "tool_definitions": [item.llm_definition() for item in next_capabilities.values()],
         }
         if async_task_message is not None and not tool_failed:
             messages.append({"role": "assistant", "content": async_task_message})
@@ -542,6 +588,105 @@ class AgentRuntime:
             update["final_content"] = limit_message
             update["final_status"] = "failed"
         return update
+
+    async def _activate_builtin_aina_scope(
+        self,
+        state: AgentState,
+        *,
+        capability: Capability,
+        call_id: str,
+        function_name: str,
+        arguments: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Capability]:
+        scoped_capabilities = await self._activate_aina_model_scope(
+            state,
+            capability=capability,
+            call_id=call_id,
+            function_name=function_name,
+            arguments=arguments,
+            messages=messages,
+        )
+        payload = {
+            "activated": True,
+            "aina_id": capability.capability_id,
+            "available_capability_ids": sorted(
+                item.capability_id for item in scoped_capabilities.values()
+            ),
+        }
+        messages.append(
+            {
+                "role": "tool",
+                "name": function_name,
+                "tool_call_id": call_id,
+                "content": json.dumps(payload, ensure_ascii=False),
+            }
+        )
+        return scoped_capabilities
+
+    async def _activate_aina_model_scope(
+        self,
+        state: AgentState,
+        *,
+        capability: Capability,
+        call_id: str,
+        function_name: str,
+        arguments: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Capability]:
+        await self._emit(
+            state,
+            {"type": "routing.started", "candidate_count": 1},
+        )
+        conversation = await self.repository.bind_conversation_aina(
+            state["conversation_id"],
+            capability.capability_id,
+            mark_used=True,
+        )
+        scoped_capabilities, selected_aina = await self._aina_scope(conversation, capability)
+        messages[0] = {
+            "role": "system",
+            "content": await self._system_prompt(
+                selected_aina,
+                memory_context=state.get("memory_context") or None,
+            ),
+        }
+        await self.repository.add_trace_event(
+            state["trace_id"],
+            TraceEvent(
+                kind="routing.scope.activated",
+                status="completed",
+                target_type="aina",
+                target_id=capability.capability_id,
+                details={
+                    "call_id": call_id,
+                    "function_name": function_name,
+                    "arguments": sanitize_trace_data(arguments),
+                    "model_scope": _model_scope_trace_details(
+                        scoped_capabilities,
+                        forced_capability=None,
+                        forced_function=None,
+                    ),
+                },
+            ),
+        )
+        await self._record_scope_resolution(
+            state["trace_id"],
+            conversation,
+            selected=capability,
+            source="model_selection",
+            requested_capability=None,
+            preferred_aina_id=None,
+        )
+        await self._emit(
+            state,
+            {
+                "type": "routing.completed",
+                "kind": "aina",
+                "id": capability.capability_id,
+            },
+        )
+        return scoped_capabilities
 
     async def _append_tool_error(
         self,
@@ -737,7 +882,6 @@ class AgentRuntime:
                     conversation,
                     selected=selected,
                     source=requested_source or "explicit_capability",
-                    router_model_called=False,
                     requested_capability=requested_capability,
                     preferred_aina_id=preferred_aina_id,
                 )
@@ -754,7 +898,6 @@ class AgentRuntime:
                 conversation,
                 selected=selected,
                 source=requested_source or "explicit_capability",
-                router_model_called=False,
                 requested_capability=requested_capability,
                 preferred_aina_id=preferred_aina_id,
             )
@@ -788,7 +931,6 @@ class AgentRuntime:
                 conversation,
                 selected=selected,
                 source="preferred_aina",
-                router_model_called=False,
                 requested_capability=None,
                 preferred_aina_id=preferred_aina_id,
             )
@@ -801,80 +943,21 @@ class AgentRuntime:
                 direct=True,
             )
 
-        aina_candidates = {
-            function_name: capability
-            for function_name, capability in all_capabilities.items()
-            if capability.kind == "aina"
-        }
-        if aina_candidates:
-            route = await self._route_to_aina(
-                conversation=conversation,
-                trace_id=trace_id,
-                candidates=aina_candidates,
-                event_sink=event_sink,
-            )
-            if route.capability is not None and route.assistant_message is not None:
-                conversation = _with_ui_context(
-                    await self.repository.bind_conversation_aina(
-                        conversation.id,
-                        route.capability.capability_id,
-                        mark_used=True,
-                    ),
-                    ui_context,
-                )
-                await self._record_scope_resolution(
-                    trace_id,
-                    conversation,
-                    selected=route.capability,
-                    source="model_router",
-                    router_model_called=True,
-                    requested_capability=None,
-                    preferred_aina_id=None,
-                )
-                return await self._run_selected_aina(
-                    conversation=conversation,
-                    trace_id=trace_id,
-                    selected=route.capability,
-                    memory_context=memory_context,
-                    event_sink=event_sink,
-                    direct=False,
-                    route=route,
-                )
-            await self._record_scope_resolution(
-                trace_id,
-                conversation,
-                selected=None,
-                source="model_router",
-                router_model_called=True,
-                requested_capability=None,
-                preferred_aina_id=None,
-            )
-            initial_iterations = 1
-            initial_usage_input = route.result.input_tokens
-            initial_usage_output = route.result.output_tokens
-        else:
-            await self._record_scope_resolution(
-                trace_id,
-                conversation,
-                selected=None,
-                source="system_fallback",
-                router_model_called=False,
-                requested_capability=None,
-                preferred_aina_id=None,
-            )
-            initial_iterations = 0
-            initial_usage_input = 0
-            initial_usage_output = 0
-
+        await self._record_scope_resolution(
+            trace_id,
+            conversation,
+            selected=None,
+            source="unified_entry",
+            requested_capability=None,
+            preferred_aina_id=None,
+        )
         return await self._run(
             conversation=conversation,
             trace_id=trace_id,
             event_sink=event_sink,
-            capabilities=await self._fallback_capabilities(),
+            capabilities=await self._entry_capabilities(conversation),
             system_prompt=await self._system_prompt(memory_context=memory_context),
-            initial_iterations=initial_iterations,
-            initial_usage_input=initial_usage_input,
-            initial_usage_output=initial_usage_output,
+            memory_context=memory_context,
         )
 
     async def _run_selected_aina(
@@ -886,7 +969,6 @@ class AgentRuntime:
         memory_context: list[MemoryRecord],
         event_sink: EventSink | None,
         direct: bool,
-        route: AinaRoute | None = None,
     ) -> ChatResponse:
         capabilities, aina = await self._aina_scope(conversation, selected)
         remote = aina.manifest.runtime.type == "remote"
@@ -897,11 +979,7 @@ class AgentRuntime:
             event_sink=event_sink,
             capabilities=capabilities,
             system_prompt=await self._system_prompt(aina, memory_context=memory_context),
-            initial_assistant=route.assistant_message if route is not None and remote else None,
-            initial_iterations=1 if route is not None else 0,
-            initial_usage_input=route.result.input_tokens if route is not None else 0,
-            initial_usage_output=route.result.output_tokens if route is not None else 0,
-            resume=route is not None and remote,
+            memory_context=memory_context,
         )
 
     async def _record_scope_resolution(
@@ -911,7 +989,6 @@ class AgentRuntime:
         *,
         selected: Capability | None,
         source: str,
-        router_model_called: bool,
         requested_capability: str | None,
         preferred_aina_id: str | None,
     ) -> None:
@@ -924,7 +1001,6 @@ class AgentRuntime:
                 target_id=selected.capability_id if selected is not None else None,
                 details={
                     "source": source,
-                    "router_model_called": router_model_called,
                     "requested_capability": requested_capability,
                     "preferred_aina_id": preferred_aina_id,
                     "active_aina_ids": conversation.active_aina_ids,
@@ -933,97 +1009,6 @@ class AgentRuntime:
                 },
             ),
         )
-
-    async def _route_to_aina(
-        self,
-        *,
-        conversation: Conversation,
-        trace_id: str,
-        candidates: dict[str, Capability],
-        event_sink: EventSink | None,
-    ) -> AinaRoute:
-        await self.repository.add_trace_event(
-            trace_id,
-            TraceEvent(
-                kind="routing.aina.requested",
-                status="started",
-                target_type="aina",
-                details={
-                    "candidate_count": len(candidates),
-                    "candidate_scope": "all_available",
-                    "active_aina_ids": conversation.active_aina_ids,
-                    "primary_aina_id": conversation.primary_aina_id,
-                    "last_aina_id": conversation.last_aina_id,
-                    "candidates": [_capability_trace_details(item) for item in candidates.values()],
-                },
-            ),
-        )
-        if event_sink is not None:
-            await event_sink({"type": "routing.started", "candidate_count": len(candidates)})
-        result = await self.llm.complete(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the AINA routing stage for Unibot Assistant. Inspect the conversation and the "
-                        "AINA descriptions exposed as functions. Call exactly one AINA only when the user's need "
-                        "clearly matches its description. Otherwise respond with exactly NO_AINA_MATCH. Do not "
-                        "answer the user's question and do not call an AINA merely because it is available. "
-                        "Every available AINA is included. Previously active AINAs are conversation context, not "
-                        "a routing restriction or a reason to prefer them. Use the system assistant AINA whenever "
-                        "the request is about AINA applications themselves, including discovering, viewing, "
-                        "listing, selecting, or opening applications. The document AINA is only for document files, "
-                        "folders, chapters, and document edit tasks; never use it for application discovery or "
-                        "application navigation."
-                    ),
-                },
-                *[message.provider_message() for message in conversation.messages],
-            ],
-            tools=[item.llm_definition() for item in candidates.values()],
-            tool_choice="auto",
-            event_sink=None,
-            trace_id=trace_id,
-            context_type="conversation",
-            context_id=conversation.id,
-        )
-        selected: Capability | None = None
-        assistant_message: dict[str, Any] | None = None
-        for call in result.message.get("tool_calls") or []:
-            capability = candidates.get((call.get("function") or {}).get("name", ""))
-            if capability is None:
-                continue
-            selected = capability
-            assistant_message = _normalized_route_message(
-                result.message,
-                conversation.messages[-1].content,
-                capability.function_name,
-            )
-            break
-        await self.repository.add_trace_event(
-            trace_id,
-            TraceEvent(
-                kind="routing.aina.completed",
-                status="completed",
-                target_type="aina",
-                target_id=selected.capability_id if selected else None,
-                details={
-                    "matched": selected is not None,
-                    "selected_function": selected.function_name if selected else None,
-                    "finish_reason": result.finish_reason,
-                    "input_tokens": result.input_tokens,
-                    "output_tokens": result.output_tokens,
-                },
-            ),
-        )
-        if event_sink is not None:
-            await event_sink(
-                {
-                    "type": "routing.completed",
-                    "kind": "aina" if selected else "system",
-                    "id": selected.capability_id if selected else None,
-                }
-            )
-        return AinaRoute(capability=selected, result=result, assistant_message=assistant_message)
 
     async def confirm(self, approval_id: str, *, user_id: str, tenant_id: str) -> ChatResponse:
         approval = await self.repository.get_approval(approval_id)
@@ -1112,12 +1097,10 @@ class AgentRuntime:
         event_sink: EventSink | None = None,
         capabilities: dict[str, Capability] | None = None,
         system_prompt: str | None = None,
-        initial_assistant: dict[str, Any] | None = None,
-        initial_iterations: int = 0,
-        initial_usage_input: int = 0,
-        initial_usage_output: int = 0,
+        memory_context: list[MemoryRecord] | None = None,
     ) -> ChatResponse:
-        capabilities = capabilities or await self._available_capabilities(conversation)
+        if capabilities is None:
+            capabilities = await self._available_capabilities(conversation)
         forced_function = self._resolve_forced_capability(forced_capability, capabilities)
         aina_graph = await self._trace_aina_graph(conversation, capabilities)
         await self.repository.add_trace_event(
@@ -1140,8 +1123,6 @@ class AgentRuntime:
             *[message.provider_message() for message in conversation.messages],
         ]
         persist_from = len(messages)
-        if initial_assistant is not None:
-            messages.append(initial_assistant)
         state: AgentState = {
             "messages": messages,
             "capabilities": capabilities,
@@ -1150,17 +1131,18 @@ class AgentRuntime:
             "conversation_id": conversation.id,
             "user_id": conversation.user_id,
             "tenant_id": conversation.tenant_id,
-            "iterations": initial_iterations,
+            "iterations": 0,
             "max_iterations": self.settings.max_agent_iterations,
             "forced_function": forced_function,
             "approved_call_ids": approved_call_ids or set(),
             "resume": resume,
             "event_sink": event_sink,
-            "usage_input": initial_usage_input,
-            "usage_output": initial_usage_output,
+            "usage_input": 0,
+            "usage_output": 0,
             "call_counts": {},
             "approval": None,
             "widgets": [],
+            "memory_context": memory_context or [],
         }
         try:
             result = await self._graph.ainvoke(state)
@@ -1348,8 +1330,6 @@ class AgentRuntime:
                     f"{scope_guidance}"
                 ),
             ]
-            if manifest.aina.id == UNIBOT_ASSISTANT_ID:
-                sections.append(_unibot_assistant_guidance())
             if aina_skills:
                 sections.append(f"AINA skills:\n{aina_skills}")
             if tools:
@@ -1363,7 +1343,7 @@ class AgentRuntime:
         platform_skills = [item for item in await self.repository.list_skills() if item.status == "published"]
         sections = [
             self.settings.system_prompt,
-            _unibot_assistant_guidance(),
+            _platform_tool_guidance(),
         ]
         if platform_skills:
             guidance = "\n".join(
@@ -1412,7 +1392,6 @@ class AgentRuntime:
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
             requires_confirmation=False,
             value=LIST_APP_TOOL_ID,
-            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         describe_function = _function_name("builtin", DESCRIBE_AINA_TOOL_ID)
         capabilities[describe_function] = Capability(
@@ -1437,7 +1416,6 @@ class AgentRuntime:
             },
             requires_confirmation=False,
             value=DESCRIBE_AINA_TOOL_ID,
-            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         open_function = _function_name("builtin", OPEN_AINA_TOOL_ID)
         capabilities[open_function] = Capability(
@@ -1462,7 +1440,6 @@ class AgentRuntime:
             },
             requires_confirmation=False,
             value=OPEN_AINA_TOOL_ID,
-            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         clarification_function = _function_name("builtin", REQUEST_CLARIFICATION_TOOL_ID)
         capabilities[clarification_function] = Capability(
@@ -1504,7 +1481,6 @@ class AgentRuntime:
             },
             requires_confirmation=False,
             value=REQUEST_CLARIFICATION_TOOL_ID,
-            owner_aina_id=UNIBOT_ASSISTANT_ID,
         )
         return capabilities
 
@@ -1516,8 +1492,6 @@ class AgentRuntime:
         )
         for installation in installations:
             if installation.status != "active":
-                continue
-            if installation.aina_id == UNIBOT_ASSISTANT_ID:
                 continue
             if conversation.enabled_ainas and installation.aina_id not in conversation.enabled_ainas:
                 continue
@@ -1560,7 +1534,6 @@ class AgentRuntime:
                 value=(aina, installation),
                 owner_aina_id=installation.aina_id,
             )
-        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_ASSISTANT_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_MEMORY_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_SCHEDULER_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_DOCUMENTS_ID))
@@ -1571,6 +1544,18 @@ class AgentRuntime:
         return {
             **await self._fallback_capabilities(),
             **await self._available_aina_capabilities(conversation),
+        }
+
+    async def _entry_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
+        """Expose direct host tools and only conversational AINA entrypoints on the first model turn."""
+        aina_capabilities = await self._available_aina_capabilities(conversation)
+        return {
+            **await self._system_capabilities(),
+            **{
+                function_name: capability
+                for function_name, capability in aina_capabilities.items()
+                if capability.kind == "aina" and _is_routable_aina(capability)
+            },
         }
 
     async def _fallback_capabilities(self) -> dict[str, Capability]:
@@ -1645,14 +1630,14 @@ class AgentRuntime:
         if selected.kind != "aina":
             raise PlatformError("INVALID_REQUEST", "The selected capability is not an AINA")
         aina, _installation = cast(tuple[AinaRecord, AinaInstallation], selected.value)
-        if aina.manifest.aina.id == UNIBOT_ASSISTANT_ID:
-            return await self._system_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
             return self._memory_capabilities(), aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
             return {**self._document_capabilities(), **self._memory_capabilities()}, aina
         if aina.manifest.aina.id == UNIBOT_CODE_RUNNER_ID:
             return self._sandbox_capabilities(), aina
+        if aina.manifest.aina.id == UNIBOT_SCHEDULER_ID:
+            return {}, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected}
         if declared_tool_ids:
@@ -1909,6 +1894,19 @@ def _aina_availability(
     return True, "installed", []
 
 
+def _is_routable_aina(capability: Capability) -> bool:
+    if capability.kind != "aina":
+        return False
+    aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+    if aina.manifest.runtime.type == "remote":
+        return True
+    return aina.manifest.aina.id in {
+        UNIBOT_MEMORY_ID,
+        UNIBOT_DOCUMENTS_ID,
+        UNIBOT_CODE_RUNNER_ID,
+    }
+
+
 def _tool_call_trace_details(
     call: dict[str, Any],
     capabilities: dict[str, Capability],
@@ -1938,43 +1936,10 @@ def _function_name(kind: str, capability_id: str) -> str:
     return f"{prefix}{safe[:available]}_{digest}"
 
 
-def _normalized_route_message(
-    message: dict[str, Any],
-    user_message: str,
-    function_name: str,
-) -> dict[str, Any]:
-    selected_call = next(
-        call
-        for call in message.get("tool_calls") or []
-        if (call.get("function") or {}).get("name") == function_name
-    )
-    function = selected_call.get("function") or {}
-    try:
-        arguments = json.loads(function.get("arguments") or "{}")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        arguments = {}
-    if not isinstance(arguments, dict):
-        arguments = {}
-    arguments.setdefault("input", user_message)
-    return {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": selected_call.get("id") or f"call_{uuid4().hex}",
-                "type": "function",
-                "function": {
-                    "name": function_name,
-                    "arguments": json.dumps(arguments, ensure_ascii=False),
-                },
-            }
-        ],
-    }
-
-
-def _unibot_assistant_guidance() -> str:
+def _platform_tool_guidance() -> str:
     return (
-        "You are Unibot Assistant, the system AINA. Use list_app whenever the user asks to list or discover "
+        "You are Unibot. The host provides built-in application and clarification tools. Use list_app whenever "
+        "the user asks to list or discover "
         "applications. Use describe_aina directly for read-only questions about a named AINA's details, skills, "
         "tools, UI, or capabilities; it accepts an exact ID or display name, so do not call list_app first unless "
         "the target AINA is unknown or ambiguous. Use open_aina only when the user asks to enter, open, or start using a specific "
@@ -1982,7 +1947,10 @@ def _unibot_assistant_guidance() -> str:
         "as an ordinary conversation. After open_aina, only confirm that the requested AINA is ready and let the "
         "navigation widget carry its details. When essential details are missing and guessing would change the "
         "result, call request_clarification to show a host-rendered form. Prefill any values already known from "
-        "the conversation. Memory tools stay available across turns so historical tool calls remain valid. Call "
+        "the conversation. Select an AINA entrypoint only when the user wants that AINA to perform work; do not "
+        "select an AINA merely to list, inspect, or open applications, and never combine an AINA entrypoint with "
+        "another capability in the same response. Memory tools stay available across turns so historical tool "
+        "calls remain valid. Call "
         "memory.remember only when the user explicitly asks to remember something or clearly supplies a durable "
         "personal fact during an ongoing memory-collection exchange; never store transient chat or inferred facts."
     )

@@ -135,8 +135,8 @@ export default function CanvasModePage() {
           ...ACTOR,
           title: `${canvas?.name ?? ainaId} 对话`,
           category: "general",
-          active_aina_ids: ainaId === "unibot-assistant" ? [] : [ainaId],
-          primary_aina_id: ainaId === "unibot-assistant" ? null : ainaId,
+          active_aina_ids: [ainaId],
+          primary_aina_id: ainaId,
         });
         targetConversationId = created.id;
         setConversationId(created.id);

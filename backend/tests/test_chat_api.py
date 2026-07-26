@@ -33,9 +33,7 @@ def _settings(*, max_iterations: int = 8) -> AgentSettings:
 def test_chat_preserves_multi_turn_context() -> None:
     llm = ScriptedLLM(
         [
-            assistant("NO_AINA_MATCH"),
             assistant("first answer"),
-            assistant("NO_AINA_MATCH"),
             assistant("second answer"),
         ]
     )
@@ -60,11 +58,11 @@ def test_chat_preserves_multi_turn_context() -> None:
         "user",
         "assistant",
     ]
-    assert any(message.get("content") == "first answer" for message in llm.calls[2]["messages"])
+    assert any(message.get("content") == "first answer" for message in llm.calls[1]["messages"])
 
 
 def test_chat_uses_ui_context_without_persisting_it() -> None:
-    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("done")])
+    llm = ScriptedLLM([assistant("done")])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         response = client.post(
             "/chat",
@@ -79,7 +77,7 @@ def test_chat_uses_ui_context_without_persisting_it() -> None:
 
 
 def test_stream_chat_returns_sse_deltas_and_completion() -> None:
-    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("streamed answer")])
+    llm = ScriptedLLM([assistant("streamed answer")])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         with client.stream("POST", "/chat/stream", json={"message": "stream this"}) as response:
             body = "".join(response.iter_text())
@@ -270,14 +268,13 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
         b"What is 17 + 25? password=customer-secret-value"
     ).hexdigest()
     discovery = next(event for event in events if event["kind"] == "capability.discovery")["details"]
-    assert discovery["aina_graph"]["available_count"] == 4
+    assert discovery["aina_graph"]["available_count"] == 3
     assert {item["id"] for item in discovery["aina_graph"]["available"]} == {
-        "unibot-assistant",
         "unibot-code-runner",
         "unibot-memory",
         "unibot-scheduler",
     }
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 0}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 0}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 0,
@@ -316,7 +313,6 @@ def test_tool_failure_is_isolated_and_returned_to_the_model() -> None:
 
     llm = ScriptedLLM(
         [
-            assistant("NO_AINA_MATCH"),
             call_first_tool(arguments='{"value": "x"}'),
             assistant("The external tool is temporarily unavailable."),
         ]
@@ -342,7 +338,7 @@ def test_tool_failure_is_isolated_and_returned_to_the_model() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
-    tool_result = next(item for item in llm.calls[2]["messages"] if item["role"] == "tool")
+    tool_result = next(item for item in llm.calls[1]["messages"] if item["role"] == "tool")
     assert json.loads(tool_result["content"])["error"]["code"] == "DEPENDENCY_FAILED"
 
 
@@ -356,7 +352,6 @@ def test_high_risk_tool_waits_for_confirmation() -> None:
 
     llm = ScriptedLLM(
         [
-            assistant("NO_AINA_MATCH"),
             call_first_tool(arguments='{"recipient": "user@example.com"}'),
             assistant("The message was sent after confirmation."),
         ]
@@ -448,7 +443,6 @@ def test_new_turn_cancels_pending_approval_and_closes_trace() -> None:
     llm = ScriptedLLM(
         [
             call_first_tool(arguments='{"recipient": "user@example.com"}'),
-            assistant("NO_AINA_MATCH"),
             assistant("Understood, skipping that action."),
         ]
     )

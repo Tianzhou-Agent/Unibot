@@ -55,12 +55,13 @@ def test_list_apps_agent_flow() -> None:
     assert run.response["iterations"] <= 3
     assert run.response["widgets"] and run.response["widgets"][0]["kind"] == "app_list"
     listed_ids = {item["aina_id"] for item in run.response["widgets"][0]["apps"]}
-    assert {"unibot-assistant", "unibot-memory"} <= listed_ids
+    assert "unibot-memory" in listed_ids
+    assert "unibot-assistant" not in listed_ids
     assert_agent_run(
         run,
         task="List the AINA applications available to the current user",
         expected_output=(
-            "The available applications are unibot-assistant and unibot-memory; do not invent other applications."
+            "The available applications include unibot-memory; do not invent other applications."
         ),
         expected_tools=["list_app"],
         criteria="The answer must accurately summarize the applications returned by the list_app capability.",

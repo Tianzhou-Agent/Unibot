@@ -9,7 +9,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 
-from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant
+from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
@@ -85,7 +85,7 @@ def create_app(
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
-            await ensure_unibot_assistant(
+            await ensure_builtin_ainas(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
             )
