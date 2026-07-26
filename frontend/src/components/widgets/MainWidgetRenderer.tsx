@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
@@ -7,7 +7,10 @@ import { DocumentWidget } from "./DocumentWidget";
 import { MemoryMainWidget } from "./MemoryMainWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
 import { ScheduledAinaMainWidget } from "@/pages/ScheduledAinaPage";
-import { CodeRunnerMainWidget } from "./CodeRunnerMainWidget";
+
+const CodeRunnerMainWidget = lazy(() =>
+  import("./CodeRunnerMainWidget").then((module) => ({ default: module.CodeRunnerMainWidget })),
+);
 
 export function MainWidgetRenderer({
   ainaId,
@@ -27,7 +30,13 @@ export function MainWidgetRenderer({
   refreshToken?: string | null;
 }) {
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
-  if (ainaId === "unibot-code-runner") return <CodeRunnerMainWidget />;
+  if (ainaId === "unibot-code-runner") {
+    return (
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载代码编辑器…</div>}>
+        <CodeRunnerMainWidget />
+      </Suspense>
+    );
+  }
   if (widget.kind === "document") return <DocumentWidget disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   return <DeclarativeMainWidget widget={widget} disabled={disabled} onOpenAina={onOpenAina} onPrompt={onPrompt} />;

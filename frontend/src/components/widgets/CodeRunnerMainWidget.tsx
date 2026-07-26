@@ -4,6 +4,7 @@ import {
   Box,
   CheckCircle2,
   Clock3,
+  FileCode2,
   Loader2,
   Play,
   RotateCcw,
@@ -11,6 +12,11 @@ import {
   Square,
   TerminalSquare,
 } from "lucide-react";
+import AceEditor from "react-ace";
+import "ace-builds/src-noconflict/mode-javascript";
+import "ace-builds/src-noconflict/mode-python";
+import "ace-builds/src-noconflict/mode-sh";
+import "ace-builds/src-noconflict/theme-one_dark";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames } from "@/lib/utils";
 import type {
@@ -21,6 +27,12 @@ import type {
 } from "@/types";
 
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
+const EDITOR_LANGUAGE: Record<SandboxExecutionLanguage, { file: string; label: string; mode: string }> = {
+  python: { file: "main.py", label: "Python", mode: "python" },
+  bash: { file: "script.sh", label: "Bash", mode: "sh" },
+  node: { file: "index.js", label: "Node.js", mode: "javascript" },
+  shell: { file: "script.ps1", label: "Shell", mode: "sh" },
+};
 
 const EXAMPLES: Record<SandboxExecutionLanguage, string> = {
   python: [
@@ -205,23 +217,34 @@ export function CodeRunnerMainWidget() {
           </div>
         ) : null}
 
-        <section className="overflow-hidden rounded-lg border border-line bg-white">
-          <div className="flex flex-wrap items-center gap-2 border-b border-line bg-app-soft px-3 py-2">
+        <section className="overflow-hidden rounded-lg border border-slate-700 bg-slate-950 shadow-card">
+          <div className="flex items-end gap-1 bg-slate-900 px-2 pt-2">
             {(["python", "bash", "node"] as SandboxExecutionLanguage[]).map((item) => (
               <button
                 key={item}
                 type="button"
                 onClick={() => setLanguage(item)}
                 className={classNames(
-                  "h-7 rounded-md px-3 font-mono text-[10.5px] font-bold",
-                  language === item ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:text-ink",
+                  "flex h-8 items-center gap-1.5 rounded-t-md border border-b-0 px-3 font-mono text-[10.5px] font-bold transition-colors",
+                  language === item
+                    ? "border-slate-700 bg-[#282c34] text-slate-100"
+                    : "border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-200",
                 )}
               >
-                {item === "node" ? "Node.js" : item[0].toUpperCase() + item.slice(1)}
+                <FileCode2 className="h-3.5 w-3.5" />
+                {EDITOR_LANGUAGE[item].file}
               </button>
             ))}
+            <span className="ml-auto pb-2 pr-2 font-mono text-[9.5px] text-slate-500">
+              {sandbox?.runtime_name ?? "sandbox"}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-y border-slate-700 bg-slate-800 px-3 py-2">
+            <span className="font-mono text-[10px] font-bold text-slate-300">
+              {EDITOR_LANGUAGE[language].label}
+            </span>
             <span className="flex-1" />
-            <label className="flex items-center gap-1.5 text-[10.5px] font-bold text-ink-muted">
+            <label className="flex items-center gap-1.5 text-[10.5px] font-bold text-slate-300">
               超时
               <input
                 type="number"
@@ -229,7 +252,7 @@ export function CodeRunnerMainWidget() {
                 max={300}
                 value={timeoutSeconds}
                 onChange={(event) => setTimeoutSeconds(Number(event.target.value))}
-                className="input-soft h-7 w-16 bg-white px-2 text-[10.5px]"
+                className="h-7 w-16 rounded-md border border-slate-600 bg-slate-900 px-2 text-[10.5px] text-slate-100 outline-none focus:border-accent"
               />
               秒
             </label>
@@ -243,13 +266,47 @@ export function CodeRunnerMainWidget() {
               {running ? "运行中…" : "运行脚本"}
             </button>
           </div>
-          <textarea
-            aria-label="脚本编辑器"
-            spellCheck={false}
-            value={activeScript}
-            onChange={(event) => setScripts((current) => ({ ...current, [language]: event.target.value }))}
-            className="min-h-[280px] w-full resize-y border-0 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-slate-100 outline-none"
-          />
+          <div data-testid="script-editor" className="bg-[#282c34]">
+            <AceEditor
+              name="unibot-script-editor"
+              mode={EDITOR_LANGUAGE[language].mode}
+              theme="one_dark"
+              width="100%"
+              height="380px"
+              fontSize={13}
+              lineHeight={21}
+              showGutter
+              showPrintMargin={false}
+              highlightActiveLine
+              wrapEnabled={false}
+              value={activeScript}
+              onLoad={(editor) => {
+                editor.setOption("textInputAriaLabel", "脚本编辑器");
+                editor.textInput.setAriaLabel();
+              }}
+              onChange={(value) => setScripts((current) => ({ ...current, [language]: value }))}
+              setOptions={{
+                displayIndentGuides: true,
+                enableBasicAutocompletion: false,
+                enableLiveAutocompletion: false,
+                highlightSelectedWord: true,
+                showFoldWidgets: true,
+                showLineNumbers: true,
+                tabSize: 2,
+                textInputAriaLabel: "脚本编辑器",
+                useSoftTabs: true,
+                useWorker: false,
+              }}
+              editorProps={{ $blockScrolling: true }}
+            />
+          </div>
+          <div className="flex items-center gap-3 border-t border-slate-700 bg-accent px-3 py-1 text-[9.5px] font-semibold text-white">
+            <span>{EDITOR_LANGUAGE[language].file}</span>
+            <span className="ml-auto">Ln {activeScript.split(/\r?\n/).length}</span>
+            <span>UTF-8</span>
+            <span>LF</span>
+            <span>{EDITOR_LANGUAGE[language].label}</span>
+          </div>
         </section>
 
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
