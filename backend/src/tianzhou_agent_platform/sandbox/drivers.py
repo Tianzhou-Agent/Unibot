@@ -102,9 +102,13 @@ class LocalProcessSandboxDriver(SandboxDriver):
             "TEMP": str(temp_directory),
             "TMP": str(temp_directory),
             "PYTHONUNBUFFERED": "1",
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
             "PYTHONPATH": str(python_packages),
             "PIP_TARGET": str(python_packages),
             "npm_config_prefix": str(npm_prefix),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
             "UNIBOT_SANDBOX": "true",
             **request.environment,
         }
@@ -187,7 +191,12 @@ class LocalProcessSandboxDriver(SandboxDriver):
                 raise PlatformError("DEPENDENCY_FAILED", "Bash is not installed in this sandbox", status_code=503)
             return [executable, "-lc", script]
         if sys.platform == "win32":
-            return ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]
+            utf8_script = (
+                "$OutputEncoding = [Console]::OutputEncoding = "
+                "[System.Text.UTF8Encoding]::new($false); "
+                f"{script}"
+            )
+            return ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", utf8_script]
         return ["/bin/bash", "-lc", script]
 
 def _bash_executable() -> str | None:

@@ -79,9 +79,13 @@ async def execute_serialized(payload: ExecutionRequest) -> ExecutionResult:
     environment = {
         "HOME": str(WORKSPACE),
         "PYTHONUNBUFFERED": "1",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
         "PYTHONPATH": str(WORKSPACE / ".python-packages"),
         "PIP_TARGET": str(WORKSPACE / ".python-packages"),
         "npm_config_prefix": str(WORKSPACE / ".npm-global"),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
         "PATH": os.pathsep.join(
             [
                 str(WORKSPACE / ".npm-global" / "bin"),

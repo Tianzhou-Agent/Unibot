@@ -41,6 +41,20 @@ def test_sandboxd_executes_in_persistent_workspace(monkeypatch, tmp_path) -> Non
     assert second.json()["stdout"].strip() == "persisted"
 
 
+def test_sandboxd_preserves_utf8_output(monkeypatch, tmp_path) -> None:
+    module = load_sandboxd(monkeypatch, tmp_path)
+    with TestClient(module.app) as client:
+        response = client.post(
+            "/exec",
+            json={
+                "language": "python",
+                "script": "print('容器中文输入输出')",
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["stdout"].strip() == "容器中文输入输出"
+
+
 def test_sandboxd_rejects_workspace_escape(monkeypatch, tmp_path) -> None:
     module = load_sandboxd(monkeypatch, tmp_path)
     with TestClient(module.app) as client:

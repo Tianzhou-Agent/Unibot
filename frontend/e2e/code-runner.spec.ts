@@ -88,7 +88,7 @@ async function installSandboxApi(page: Page) {
         script: payload.script,
         working_directory: payload.working_directory ?? ".",
         status: "succeeded",
-        stdout: "sandbox-e2e-ready\n",
+        stdout: "这是保存在用户工作区的内容\n",
         stderr: "",
         exit_code: 0,
         duration_ms: 42,
@@ -123,13 +123,14 @@ test("FE-E2E-009 在代码运行器中执行脚本并查看输入输出历史", 
   await expect(page.getByText("Kubernetes · gVisor", { exact: true })).toBeVisible();
 
   const editor = page.getByRole("textbox", { name: "脚本编辑器" });
-  await editor.fill("print('sandbox-e2e-ready')");
+  await editor.fill("print('这是保存在用户工作区的内容')");
   await page.getByRole("button", { name: "运行脚本" }).click();
 
   await expect(page.getByText("执行成功，退出码 0", { exact: true })).toBeVisible();
-  await expect(page.getByText("sandbox-e2e-ready", { exact: true })).toBeVisible();
+  await expect(page.getByText("这是保存在用户工作区的内容", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "执行历史", exact: true })).toBeVisible();
   expect(state.executions).toHaveLength(1);
+  expect(state.executions[0].script).toBe("print('这是保存在用户工作区的内容')");
 
   await page.getByRole("button", { name: "停止容器" }).click();
   await expect(page.getByText("运行容器已停止，工作区文件仍会保留。", { exact: true })).toBeVisible();

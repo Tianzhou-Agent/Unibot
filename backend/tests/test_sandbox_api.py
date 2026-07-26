@@ -146,10 +146,10 @@ def test_sandbox_executes_bash_when_available(tmp_path) -> None:
     with TestClient(app) as client:
         response = client.post(
             "/sandboxes/execute",
-            json={"language": "bash", "script": "printf 'bash-ready'"},
+            json={"language": "bash", "script": "printf 'Bash 中文输出'"},
         )
     assert response.status_code == 200
-    assert response.json()["stdout"] == "bash-ready"
+    assert response.json()["stdout"] == "Bash 中文输出"
 
 
 def test_sandbox_executes_node_when_available(tmp_path) -> None:
@@ -163,11 +163,34 @@ def test_sandbox_executes_node_when_available(tmp_path) -> None:
     with TestClient(app) as client:
         response = client.post(
             "/sandboxes/execute",
-            json={"language": "node", "script": "process.stdout.write('node-ready')"},
+            json={"language": "node", "script": "process.stdout.write('Node.js 中文输出')"},
         )
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
-    assert response.json()["stdout"] == "node-ready"
+    assert response.json()["stdout"] == "Node.js 中文输出"
+
+
+def test_sandbox_preserves_utf8_file_content_and_output(tmp_path) -> None:
+    app = create_app(
+        settings=AgentSettings(sandbox_driver="local", sandbox_workspace_root=tmp_path),
+        repository=InMemoryRepository(),
+        llm=ScriptedLLM([]),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/sandboxes/execute",
+            json={
+                "language": "python",
+                "script": (
+                    "from pathlib import Path\n"
+                    "content = '这是保存在用户工作区的内容'\n"
+                    "Path('中文文件.txt').write_text(content, encoding='utf-8')\n"
+                    "print(Path('中文文件.txt').read_text(encoding='utf-8'))"
+                ),
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["stdout"].strip() == "这是保存在用户工作区的内容"
 
 
 def test_sandbox_bounds_captured_output(tmp_path) -> None:
