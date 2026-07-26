@@ -1,5 +1,7 @@
+import json
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -7,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.llm import LLMResult
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
@@ -181,6 +184,205 @@ def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
     assert any(
         event["kind"] == "builtin.completed" and event["target_id"] == "document.create"
         for event in trace.json()["events"]
+    )
+
+
+def test_document_lookup_activates_scope_then_searches_without_opening_canvas(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_unibot-documents_", arguments="{}"),
+            call_first_tool(
+                prefix="builtin_document_search_",
+                arguments='{"query":"古诗"}',
+            ),
+            assistant("找到了古诗选.md。"),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "古诗选", "content": "# 唐诗\n\n静夜思。"})
+        client.post("/documents", json={"name": "收藏", "content": "# 摘录\n\n这里保存了一首古诗。"})
+        client.post("/documents", json={"name": "旅行", "content": "# 行程\n\n参观博物馆。"})
+        response = client.post("/chat", json={"message": "查看古诗文档"})
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    entry = next(
+        item
+        for item in llm.calls[0]["tools"]
+        if item["function"]["name"].startswith("aina_unibot-documents_")
+    )
+    assert entry["function"]["parameters"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    assert "takes no arguments" in entry["function"]["description"]
+    assert "document.edit_task" not in entry["function"]["description"]
+    assert any(
+        item["function"]["name"].startswith("builtin_document_search_")
+        for item in llm.calls[1]["tools"]
+    )
+    tool_result = next(
+        item
+        for item in llm.calls[2]["messages"]
+        if item.get("name", "").startswith("builtin_document_search_")
+    )
+    assert "古诗选.md" in tool_result["content"]
+    assert "收藏.md" in tool_result["content"]
+    assert "这里保存了一首古诗" in tool_result["content"]
+    assert "旅行.md" not in tool_result["content"]
+    assert not any(event["target_id"] == "open_aina" for event in trace["events"])
+    assert any(
+        event["kind"] == "builtin.completed" and event["target_id"] == "document.search"
+        for event in trace["events"]
+    )
+
+
+def test_wrong_scope_document_call_recovers_by_activating_owner_aina(tmp_path: Path) -> None:
+    def call_unadvertised_document_tool(**_: object) -> LLMResult:
+        return LLMResult(
+            message={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_wrong_scope",
+                        "type": "function",
+                        "function": {
+                            "name": "document.create",
+                            "arguments": '{"name":"recovered","content":"# Recovered"}',
+                        },
+                    }
+                ],
+            },
+            finish_reason="tool_calls",
+        )
+
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_unibot-code-runner_", call_id="call_code_scope"),
+            call_unadvertised_document_tool,
+            call_first_tool(prefix="aina_unibot-documents_", call_id="call_document_scope"),
+            call_first_tool(
+                prefix="builtin_document_create_",
+                arguments='{"name":"recovered","content":"# Recovered"}',
+                call_id="call_create_document",
+            ),
+            assistant("The document was created."),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        response = client.post("/chat", json={"message": "Run code, then create a document"})
+        document = client.get("/documents/recovered.md")
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert document.status_code == 200
+    assert document.json()["content"] == "# Recovered"
+    assert any(
+        item["function"]["name"].startswith("aina_unibot-documents_")
+        for item in llm.calls[1]["tools"]
+    )
+    recovery_context = json.dumps(llm.calls[2]["messages"], ensure_ascii=False)
+    assert "CAPABILITY_SCOPE_REQUIRED" in recovery_context
+    assert "owner_aina_id" in recovery_context
+    assert "unibot-documents" in recovery_context
+    assert any(
+        event["kind"] == "builtin.failed"
+        and event["target_id"] == "document.create"
+        and event["details"]["code"] == "CAPABILITY_SCOPE_REQUIRED"
+        for event in trace["events"]
+    )
+
+
+def test_historical_document_tool_calls_are_non_executable_outside_scope(tmp_path: Path) -> None:
+    def assert_scoped_history(*, messages: list[dict[str, Any]], **_: object) -> LLMResult:
+        serialized = json.dumps(messages, ensure_ascii=False)
+        assert "<historical-capability-result>" in serialized
+        assert not any(
+            message.get("role") == "tool"
+            and str(message.get("name", "")).startswith("builtin_document_create_")
+            for message in messages
+        )
+        assert not any(
+            any(
+                str((call.get("function") or {}).get("name", "")).startswith("builtin_document_create_")
+                for call in message.get("tool_calls", [])
+            )
+            for message in messages
+            if isinstance(message.get("tool_calls"), list)
+        )
+        return assistant("The earlier document result remains available as history.")
+
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_document_create_",
+                arguments='{"name":"history","content":"# History"}',
+                call_id="call_history_document",
+            ),
+            assistant("Created."),
+            assert_scoped_history,
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        conversation = client.post("/conversations", json={"title": "History"}).json()
+        first = client.post(
+            "/chat",
+            json={
+                "message": "Create a document",
+                "conversation_id": conversation["id"],
+                "preferred_aina_id": "unibot-documents",
+            },
+        )
+        second = client.post(
+            "/chat",
+            json={"message": "What happened earlier?", "conversation_id": conversation["id"]},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["status"] == "completed"
+
+
+def test_pydantic_argument_failure_is_returned_to_model_instead_of_http_500(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_document_edit_task_create_",
+                arguments=(
+                    '{"name":"guide.md","description":"Rewrite the section",'
+                    '"sections":[{"heading":"   ","occurrence":1}]}'
+                ),
+                call_id="call_invalid_section",
+            ),
+            assistant("The section heading was invalid."),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": "# Guide\n\nBody."})
+        response = client.post(
+            "/chat",
+            json={
+                "message": "Rewrite the section",
+                "preferred_aina_id": "unibot-documents",
+            },
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    tool_result = next(
+        message
+        for message in llm.calls[1]["messages"]
+        if message.get("tool_call_id") == "call_invalid_section"
+    )
+    assert json.loads(tool_result["content"])["error"]["code"] == "INVALID_REQUEST"
+    assert any(
+        event["kind"] == "builtin.failed"
+        and event["target_id"] == "document.edit_task.create"
+        and event["details"]["code"] == "INVALID_REQUEST"
+        for event in trace["events"]
     )
 
 
@@ -384,8 +586,12 @@ def test_conversation_alternates_preferred_ainas_without_router_model(tmp_path: 
         item["function"]["name"].startswith("builtin_document_")
         for item in llm.calls[0]["tools"]
     )
-    assert all(
+    assert any(
         item["function"]["name"].startswith("builtin_memory_")
+        for item in llm.calls[1]["tools"]
+    )
+    assert all(
+        item["function"]["name"].startswith(("builtin_memory_", "aina_"))
         for item in llm.calls[1]["tools"]
     )
     assert updated["active_aina_ids"] == ["unibot-documents", "unibot-memory"]
@@ -403,7 +609,7 @@ def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_pa
             assistant("Started."),
             call_first_tool(
                 prefix="aina_unibot-documents_",
-                arguments='{"input":"Continue"}',
+                arguments="{}",
             ),
             assistant("Continued."),
         ]
@@ -429,8 +635,12 @@ def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_pa
     assert len(llm.calls) == 3
     assert len(llm.calls[1]["tools"]) == 7
     assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
+    assert any(
+        item["function"]["name"].startswith("builtin_document_")
+        for item in llm.calls[2]["tools"]
+    )
     assert all(
-        item["function"]["name"].startswith("builtin_")
+        item["function"]["name"].startswith(("builtin_", "aina_"))
         for item in llm.calls[2]["tools"]
     )
     resolution = next(
@@ -448,7 +658,7 @@ def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_pat
         [
             call_first_tool(
                 prefix="aina_unibot-documents_",
-                arguments='{"input":"Edit the introduction"}',
+                arguments="{}",
             ),
             assistant("Handled by the primary document AINA."),
         ]
@@ -487,7 +697,7 @@ def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) ->
         [
             call_first_tool(
                 prefix="aina_unibot-memory_",
-                arguments='{"input":"Use my profile"}',
+                arguments="{}",
             ),
             assistant("The memory AINA handled the ambiguous turn."),
         ]

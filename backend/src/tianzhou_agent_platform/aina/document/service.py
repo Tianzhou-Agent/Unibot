@@ -11,6 +11,7 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentHeading,
     DocumentOutline,
     DocumentRecord,
+    DocumentSearchResult,
     DocumentSection,
     DocumentSectionUpdateResult,
     DocumentSectionsUpdateResult,
@@ -56,6 +57,40 @@ class DocumentService:
             if item.path.relative_path.casefold().endswith(".md")
         ]
         return sorted(items, key=lambda item: item.name.casefold())
+
+    async def search_documents(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        limit: int = 20,
+    ) -> list[DocumentSearchResult]:
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise StorageValidationError("Document search query cannot be empty")
+        pattern = re.compile(re.escape(normalized_query), re.IGNORECASE)
+        matches: list[DocumentSearchResult] = []
+        for summary in await self.list_documents(user_id=user_id, tenant_id=tenant_id):
+            document = await self.get_document(summary.name, user_id=user_id, tenant_id=tenant_id)
+            name_match = pattern.search(summary.name) is not None
+            content_match = pattern.search(document.content)
+            if not name_match and content_match is None:
+                continue
+            matched_in = [
+                source
+                for source, matched in (("name", name_match), ("content", content_match is not None))
+                if matched
+            ]
+            matches.append(
+                DocumentSearchResult(
+                    **summary.model_dump(),
+                    matched_in=matched_in,
+                    excerpt=_search_excerpt(document.content, content_match) if content_match else None,
+                )
+            )
+        matches.sort(key=lambda item: ("name" not in item.matched_in, item.name.casefold()))
+        return matches[:limit]
 
     async def list_folders(self, *, user_id: str, tenant_id: str) -> list[DocumentFolder]:
         prefix = self._actor_prefix(user_id=user_id, tenant_id=tenant_id)
@@ -446,6 +481,13 @@ def _encode_content(content: str) -> bytes:
     if len(encoded) > MAX_DOCUMENT_BYTES:
         raise StoragePolicyViolationError("Markdown document exceeds the 1 MiB size limit")
     return encoded
+
+
+def _search_excerpt(content: str, match: re.Match[str], *, context_chars: int = 100) -> str:
+    start = max(0, match.start() - context_chars)
+    end = min(len(content), match.end() + context_chars)
+    excerpt = content[start:end].strip()
+    return f"{'…' if start else ''}{excerpt}{'…' if end < len(content) else ''}"
 
 
 def _document_revision(content: str) -> str:

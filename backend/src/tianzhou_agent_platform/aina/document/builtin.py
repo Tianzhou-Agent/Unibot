@@ -22,6 +22,7 @@ from tianzhou_agent_platform.core.errors import PlatformError
 
 UNIBOT_DOCUMENTS_ID = "unibot-documents"
 LIST_DOCUMENTS_TOOL_ID = "document.list"
+SEARCH_DOCUMENTS_TOOL_ID = "document.search"
 READ_DOCUMENT_TOOL_ID = "document.read"
 OUTLINE_DOCUMENT_TOOL_ID = "document.outline"
 BROWSE_DOCUMENT_TOOL_ID = "document.browse"
@@ -51,6 +52,7 @@ DOCUMENT_EDIT_TASK_TOOL_IDS = {
 }
 DOCUMENT_TOOL_IDS = {
     LIST_DOCUMENTS_TOOL_ID,
+    SEARCH_DOCUMENTS_TOOL_ID,
     READ_DOCUMENT_TOOL_ID,
     OUTLINE_DOCUMENT_TOOL_ID,
     BROWSE_DOCUMENT_TOOL_ID,
@@ -68,11 +70,19 @@ def document_tool_capabilities() -> list[AinaCapability]:
     name_property = {
         "type": "string",
         "description": "Markdown 文档名称；省略 .md 扩展名时会自动补充。",
+        "minLength": 1,
+        "maxLength": 500,
     }
-    content_property = {"type": "string", "description": "UTF-8 编码的 Markdown 内容。"}
+    content_property = {
+        "type": "string",
+        "description": "UTF-8 编码的 Markdown 内容。",
+        "maxLength": 2_000_000,
+    }
     heading_property = {
         "type": "string",
         "description": "目录中返回的精确标题文字，不包含开头的 #。",
+        "minLength": 1,
+        "maxLength": 500,
     }
     occurrence_property = {
         "type": "integer",
@@ -84,8 +94,27 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=LIST_DOCUMENTS_TOOL_ID,
             name="列出文档",
-            description="列出当前用户拥有的 Markdown 文档。",
+            description="仅当用户想浏览全部文件且没有提供名称、主题或关键词时，列出所有 Markdown 文档。",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        AinaCapability(
+            id=SEARCH_DOCUMENTS_TOOL_ID,
+            name="搜索文档",
+            description=(
+                "按关键词搜索当前用户 Markdown 文档的文件名和正文。用户提供了名称、主题、标题或内容关键词时，"
+                "优先使用此工具，不要先列出全部文档。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "保留用户指定的文档名称、主题或关键词，不要改写成“所有文档”。",
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
         ),
         AinaCapability(
             id=BROWSE_DOCUMENT_TOOL_ID,
@@ -220,6 +249,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
                     "description": {
                         "type": "string",
                         "description": "The user's complete editing request. The task title is generated automatically.",
+                        "minLength": 1,
+                        "maxLength": 20_000,
                     },
                     "sections": {
                         "type": "array",
@@ -359,7 +390,10 @@ def unibot_documents_record() -> AinaRecord:
                         name="Markdown 文档管理",
                         description="在持久化 NAS 存储中编写和维护用户自己的 Markdown 文档。",
                         instructions=(
-                            "Use document.list when the target filename is unknown. Use document.outline and "
+                            "Use document.search when the user provides a filename, topic, title, or content "
+                            "keyword. Preserve that query instead of replacing it with a request for all documents. "
+                            "Use document.list only when the user wants to browse every document without a search "
+                            "term. Use document.outline and "
                             "document.read_section to inspect only the relevant content. The editor has two modes. "
                             "When the user explicitly asks to directly edit, immediately save, or use edit mode, "
                             "only use document.update_section. Full-document replacement is not supported. Always "
@@ -417,6 +451,16 @@ async def invoke_document_tool(
     if tool_id == LIST_DOCUMENTS_TOOL_ID:
         items = await service.list_documents(user_id=user_id, tenant_id=tenant_id)
         return {"count": len(items), "documents": [item.model_dump(mode="json") for item in items]}, []
+    if tool_id == SEARCH_DOCUMENTS_TOOL_ID:
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            raise PlatformError("INVALID_REQUEST", "document.search requires query")
+        matches = await service.search_documents(query, user_id=user_id, tenant_id=tenant_id)
+        return {
+            "query": query,
+            "count": len(matches),
+            "matches": [item.model_dump(mode="json") for item in matches],
+        }, []
     if not name:
         raise PlatformError("INVALID_REQUEST", f"{tool_id} requires name")
     occurrence = arguments.get("occurrence", 1)

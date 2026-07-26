@@ -36,14 +36,20 @@ def code_runner_tool_capabilities() -> list[AinaCapability]:
             "script": {
                 "type": "string",
                 "description": "The complete source code or shell script to execute.",
+                "minLength": 1,
+                "maxLength": 200_000,
             },
             "timeout_seconds": {
                 "type": "integer",
                 "description": "Execution timeout between 1 and 300 seconds.",
+                "minimum": 1,
+                "maximum": 300,
             },
             "working_directory": {
                 "type": "string",
-                "description": "Relative directory below /workspace.",
+                "description": "Relative directory below /workspace; parent traversal and absolute paths are forbidden.",
+                "maxLength": 500,
+                "pattern": r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$)).*$",
             },
         },
         "required": ["script"],

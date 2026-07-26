@@ -95,6 +95,29 @@ def test_input_schema_failure_is_returned_to_model_without_remote_call() -> None
     assert _tool_error(llm)["code"] == "INVALID_REQUEST"
 
 
+def test_invalid_high_risk_arguments_are_rejected_before_requesting_approval() -> None:
+    calls = 0
+
+    async def remote(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"result": 1})
+
+    llm = ScriptedLLM([call_first_tool(arguments='{"value":"wrong"}'), assistant("Use an integer.")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post("/tools", json=_tool_definition(side_effect_level="high"))
+        response = client.post(
+            "/chat",
+            json={"message": "Run it", "capability": "tool:resilience.tool"},
+        )
+
+    assert response.json()["status"] == "completed"
+    assert response.json()["approval"] is None
+    assert calls == 0
+    assert _tool_error(llm)["code"] == "INVALID_REQUEST"
+
+
 def test_output_schema_failure_is_isolated_from_agent_loop() -> None:
     async def remote(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"result": "wrong"})

@@ -47,8 +47,10 @@ export default function ChatModePage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleted, setDeleted] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const localRunRef = useRef(false);
+  const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
+  const localRunConversationIdRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
+  activeConversationIdRef.current = conversationId ?? null;
 
   const loadConversation = useCallback(async (id: string, silent = false) => {
     const requestId = ++loadRequestRef.current;
@@ -58,18 +60,18 @@ export default function ChatModePage() {
         api.get<ConversationRecord>(`/conversations/${id}`),
         api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
       ]);
-      if (requestId !== loadRequestRef.current) return;
+      if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
       setConversation(record);
       setApproval(pendingApprovals[0] ?? null);
       setTitleDraft(record.title);
       setDeleted(false);
-      if (!localRunRef.current) {
+      if (localRunConversationIdRef.current !== id) {
         setSending(record.run_status === "running");
         setActivity(record.run_status === "running" ? "正在处理，请稍候…" : null);
       }
       setError(record.run_error ?? null);
     } catch (loadError) {
-      if (requestId !== loadRequestRef.current) return;
+      if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
       setError(apiErrorMessage(loadError));
     } finally {
       if (!silent && requestId === loadRequestRef.current) setLoading(false);
@@ -77,14 +79,25 @@ export default function ChatModePage() {
   }, []);
 
   useEffect(() => {
+    const continuingLocalRun = Boolean(
+      conversationId && localRunConversationIdRef.current === conversationId,
+    );
+    setConversation((current) => (current?.id === conversationId ? current : null));
+    if (!continuingLocalRun) {
+      setOptimisticUser(null);
+      setStreamText("");
+      setActivity(null);
+      setSending(false);
+    }
+    setApproval(null);
+    setLastRun(null);
+    setError(null);
+    setDeleted(false);
     if (conversationId) {
       void loadConversation(conversationId);
     } else {
+      loadRequestRef.current += 1;
       setConversation(null);
-      setApproval(null);
-      setLastRun(null);
-      setError(null);
-      setDeleted(false);
       setLoading(false);
     }
   }, [conversationId, loadConversation]);
@@ -104,6 +117,10 @@ export default function ChatModePage() {
       setLastRun(null);
       setError(null);
       setDeleted(false);
+      setOptimisticUser(null);
+      setStreamText("");
+      setActivity(null);
+      setSending(false);
     };
     window.addEventListener("unibot:new-conversation", reset);
     return () => window.removeEventListener("unibot:new-conversation", reset);
@@ -129,7 +146,8 @@ export default function ChatModePage() {
     setError(null);
     setApproval(null);
     setSending(true);
-    localRunRef.current = true;
+    let runConversationId = conversation?.id ?? null;
+    localRunConversationIdRef.current = runConversationId;
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
     try {
@@ -142,9 +160,14 @@ export default function ChatModePage() {
         });
         setConversation(targetConversation);
         setTitleDraft(targetConversation.title);
+        runConversationId = targetConversation.id;
+        localRunConversationIdRef.current = targetConversation.id;
+        activeConversationIdRef.current = targetConversation.id;
         notifyConversationsChanged();
         navigate(`/chat/${targetConversation.id}`, { replace: true });
       }
+      runConversationId = targetConversation.id;
+      localRunConversationIdRef.current = targetConversation.id;
       await streamChat(
         {
           message: text,
@@ -152,6 +175,11 @@ export default function ChatModePage() {
           ...ACTOR,
         },
         (event: StreamEvent) => {
+          if (event.type === "message.completed") completion = event.response;
+          if (event.type === "error") {
+            streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
+          }
+          if (activeConversationIdRef.current !== targetConversation.id) return;
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
           if (event.type === "tool.requested") {
             if (debugMode) {
@@ -166,22 +194,21 @@ export default function ChatModePage() {
           }
           if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
-            streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
             setError(streamFailure);
           }
-          if (event.type === "message.completed") completion = event.response;
         },
       );
       if (!completion) throw new Error(streamFailure ?? "智能体流程结束前没有返回完成事件。");
       const completed = completion as ChatResponse;
-      setLastRun(completed);
-      setApproval(completed.approval ?? null);
       if (["New conversation", "新对话"].includes(targetConversation.title)) {
         await api.patch(`/conversations/${completed.conversation_id}`, {
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
         });
       }
       notifyConversationsChanged();
+      if (activeConversationIdRef.current !== completed.conversation_id) return;
+      setLastRun(completed);
+      setApproval(completed.approval ?? null);
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
@@ -194,13 +221,19 @@ export default function ChatModePage() {
       }
       await loadConversation(completed.conversation_id);
     } catch (sendError) {
-      setError(apiErrorMessage(sendError));
+      if (runConversationId && activeConversationIdRef.current === runConversationId) {
+        setError(apiErrorMessage(sendError));
+      }
     } finally {
-      localRunRef.current = false;
-      setOptimisticUser(null);
-      setStreamText("");
-      setActivity(null);
-      setSending(false);
+      if (localRunConversationIdRef.current === runConversationId) {
+        localRunConversationIdRef.current = null;
+      }
+      if (runConversationId && activeConversationIdRef.current === runConversationId) {
+        setOptimisticUser(null);
+        setStreamText("");
+        setActivity(null);
+        setSending(false);
+      }
     }
   }
 

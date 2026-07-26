@@ -39,16 +39,27 @@ export default function CanvasModePage() {
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const localRunRef = useRef(false);
+  const activeAinaIdRef = useRef(ainaId);
+  const activeConversationIdRef = useRef<string | null>(conversationId);
+  const localRunRef = useRef<{ ainaId: string; conversationId: string | null } | null>(null);
+  const loadRequestRef = useRef(0);
 
-  const loadConversation = useCallback(async (id: string) => {
+  const loadConversation = useCallback(async (id: string, expectedAinaId = activeAinaIdRef.current, force = false) => {
+    const requestId = ++loadRequestRef.current;
     const [record, pendingApprovals] = await Promise.all([
       api.get<ConversationRecord>(`/conversations/${id}`),
       api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
     ]);
-    setMessages(record.messages);
+    if (
+      requestId !== loadRequestRef.current
+      || activeAinaIdRef.current !== expectedAinaId
+      || activeConversationIdRef.current !== id
+    ) return null;
+    const localRun = localRunRef.current;
+    const isCurrentLocalRun = localRun?.ainaId === expectedAinaId && localRun.conversationId === id;
+    if (!isCurrentLocalRun || force) setMessages(record.messages);
     setApproval(pendingApprovals[0] ?? null);
-    if (!localRunRef.current) {
+    if (!isCurrentLocalRun || force) {
       const running = record.run_status === "running";
       setRecoveringRun(running);
       setSending(running);
@@ -60,24 +71,42 @@ export default function CanvasModePage() {
 
   useEffect(() => {
     let cancelled = false;
+    const routeConversationId = searchParams.get("conversation") ?? stateCanvas?.conversation_id ?? null;
+    activeAinaIdRef.current = ainaId;
+    activeConversationIdRef.current = routeConversationId;
+    loadRequestRef.current += 1;
+    const continuingLocalRun = localRunRef.current?.ainaId === ainaId
+      && localRunRef.current.conversationId === routeConversationId;
+    if (!continuingLocalRun) {
+      setMessages([]);
+      setSending(false);
+      setRecoveringRun(false);
+      setStreamText("");
+      setActivity(null);
+      setApproval(null);
+      setLastRun(null);
+      setError(null);
+      setDocumentTaskContext(null);
+    }
     const supplied = stateCanvas?.aina_id === ainaId ? stateCanvas : null;
     if (supplied) {
       setCanvas(supplied);
-      setConversationId(searchParams.get("conversation") ?? supplied.conversation_id ?? null);
+      setConversationId(routeConversationId);
       setLoading(false);
     } else {
       setLoading(true);
-      setMessages([]);
     }
     api
       .post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...ACTOR,
-        conversation_id: searchParams.get("conversation"),
+        conversation_id: routeConversationId,
       })
       .then((opened) => {
         if (!cancelled) {
           setCanvas(opened);
-          setConversationId(searchParams.get("conversation") ?? opened.conversation_id ?? null);
+          const openedConversationId = routeConversationId ?? opened.conversation_id ?? null;
+          activeConversationIdRef.current = openedConversationId;
+          setConversationId(openedConversationId);
           setError(null);
         }
       })
@@ -93,16 +122,16 @@ export default function CanvasModePage() {
       setMessages([]);
       return;
     }
-    void loadConversation(conversationId).catch((loadError) => setError(apiErrorMessage(loadError)));
-  }, [conversationId, loadConversation]);
+    void loadConversation(conversationId, ainaId).catch((loadError) => setError(apiErrorMessage(loadError)));
+  }, [ainaId, conversationId, loadConversation]);
 
   useEffect(() => {
     if (!conversationId || !recoveringRun) return;
     const timer = window.setInterval(() => {
-      void loadConversation(conversationId);
+      void loadConversation(conversationId, ainaId);
     }, 600);
     return () => window.clearInterval(timer);
-  }, [conversationId, loadConversation, recoveringRun]);
+  }, [ainaId, conversationId, loadConversation, recoveringRun]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
@@ -111,6 +140,11 @@ export default function CanvasModePage() {
   async function sendMessage(text: string) {
     const prompt = text.trim();
     if (!prompt || sending) return;
+    const runAinaId = ainaId;
+    let runConversationId = conversationId;
+    localRunRef.current = { ainaId: runAinaId, conversationId: runConversationId };
+    const isActiveRun = () => activeAinaIdRef.current === runAinaId
+      && activeConversationIdRef.current === runConversationId;
     const optimistic: BackendMessage = {
       id: uid("canvas-user"),
       role: "user",
@@ -121,7 +155,6 @@ export default function CanvasModePage() {
     };
     setMessages((current) => [...current, optimistic]);
     setSending(true);
-    localRunRef.current = true;
     setStreamText("");
     setActivity(debugMode ? "正在连接 AINA…" : "正在处理，请稍候…");
     setError(null);
@@ -129,18 +162,21 @@ export default function CanvasModePage() {
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
     try {
-      let targetConversationId = conversationId;
+      let targetConversationId = runConversationId;
       if (!targetConversationId) {
         const created = await api.post<ConversationRecord>("/conversations", {
           ...ACTOR,
-          title: `${canvas?.name ?? ainaId} 对话`,
+          title: `${canvas?.name ?? runAinaId} 对话`,
           category: "general",
-          active_aina_ids: [ainaId],
-          primary_aina_id: ainaId,
+          active_aina_ids: [runAinaId],
+          primary_aina_id: runAinaId,
         });
         targetConversationId = created.id;
+        runConversationId = created.id;
+        localRunRef.current = { ainaId: runAinaId, conversationId: created.id };
+        activeConversationIdRef.current = created.id;
         setConversationId(created.id);
-        navigate(`/canvas/${ainaId}?conversation=${created.id}`, {
+        navigate(`/canvas/${runAinaId}?conversation=${created.id}`, {
           replace: true,
           state: canvas ? { canvas: { ...canvas, conversation_id: created.id } } : undefined,
         });
@@ -149,29 +185,34 @@ export default function CanvasModePage() {
         {
           message: prompt,
           conversation_id: targetConversationId,
-          preferred_aina_id: ainaId,
+          preferred_aina_id: runAinaId,
           ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
           ...ACTOR,
         },
         (event: StreamEvent) => {
+          if (event.type === "message.completed") completion = event.response;
+          if (event.type === "error") {
+            streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
+          }
+          if (!isActiveRun()) return;
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
           if (event.type === "tool.requested") setActivity(debugMode ? `正在调用 ${event.id}…` : "正在处理，请稍候…");
           if (event.type === "tool.completed") setActivity(debugMode ? "调用完成，正在整理结果…" : "正在整理结果…");
           if (event.type === "routing.started") setActivity(debugMode ? "正在匹配 AINA…" : "正在处理，请稍候…");
           if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
-            streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
             setError(streamFailure);
           }
-          if (event.type === "message.completed") completion = event.response;
         },
       );
       if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
+      if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       setLastRun(completed);
       setApproval(completed.approval ?? null);
+      activeConversationIdRef.current = completed.conversation_id;
       setConversationId(completed.conversation_id);
-      await loadConversation(completed.conversation_id);
+      await loadConversation(completed.conversation_id, runAinaId, true);
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
@@ -179,18 +220,20 @@ export default function CanvasModePage() {
         await openAina(openAction.aina_id, completed.conversation_id);
         return;
       }
-      navigate(`/canvas/${ainaId}?conversation=${completed.conversation_id}`, {
-        replace: true,
-        state: canvas ? { canvas: { ...canvas, conversation_id: completed.conversation_id } } : undefined,
-      });
     } catch (sendError) {
-      setMessages((current) => current.filter((message) => message.id !== optimistic.id));
-      setError(apiErrorMessage(sendError));
+      if (isActiveRun()) {
+        setMessages((current) => current.filter((message) => message.id !== optimistic.id));
+        setError(apiErrorMessage(sendError));
+      }
     } finally {
-      localRunRef.current = false;
-      setSending(false);
-      setStreamText("");
-      setActivity(null);
+      const isCurrentRun = localRunRef.current?.ainaId === runAinaId
+        && localRunRef.current.conversationId === runConversationId;
+      if (isCurrentRun) localRunRef.current = null;
+      if (isActiveRun()) {
+        setSending(false);
+        setStreamText("");
+        setActivity(null);
+      }
     }
   }
 

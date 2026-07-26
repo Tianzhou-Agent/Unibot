@@ -50,6 +50,11 @@ class DocumentSummary(StrictModel):
     modified_at: datetime | None = None
 
 
+class DocumentSearchResult(DocumentSummary):
+    matched_in: list[str]
+    excerpt: str | None = None
+
+
 class DocumentRecord(DocumentSummary):
     content: str
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -73,7 +74,7 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
         [
             call_first_tool(
                 prefix="aina_unibot-memory_",
-                arguments='{"input":"Remember that I like blue"}',
+                arguments="{}",
             ),
             call_first_tool(
                 prefix="builtin_memory_remember_",
@@ -94,7 +95,11 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
         item["function"]["name"].startswith("aina_unibot-memory_")
         for item in llm.calls[0]["tools"]
     )
-    assert all(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[1]["tools"])
+    assert any(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[1]["tools"])
+    assert all(
+        item["function"]["name"].startswith(("builtin_memory_", "aina_"))
+        for item in llm.calls[1]["tools"]
+    )
     assert "持久记忆管理" in llm.calls[1]["messages"][0]["content"]
     assert any(
         event["kind"] == "routing.scope.activated" and event["target_id"] == "unibot-memory"
@@ -105,6 +110,52 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
         for event in trace.json()["events"]
     )
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
+
+
+def test_builtin_aina_activation_rejects_arguments_then_allows_model_retry() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="aina_unibot-memory_",
+                arguments='{"input":"This field is not allowed for built-in activation"}',
+                call_id="call_invalid_activation",
+            ),
+            call_first_tool(
+                prefix="aina_unibot-memory_",
+                arguments="{}",
+                call_id="call_valid_activation",
+            ),
+            assistant("The memory capability is ready."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post("/chat", json={"message": "Use memory tools"})
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    invalid_result = next(
+        item
+        for item in llm.calls[1]["messages"]
+        if item.get("tool_call_id") == "call_invalid_activation"
+    )
+    assert json.loads(invalid_result["content"])["error"]["code"] == "INVALID_REQUEST"
+    assert "unknown fields: input" in invalid_result["content"]
+    assert any(
+        item["function"]["name"].startswith("aina_unibot-memory_")
+        for item in llm.calls[1]["tools"]
+    )
+    assert any(
+        item["function"]["name"].startswith("builtin_memory_")
+        for item in llm.calls[2]["tools"]
+    )
+    assert all(
+        item["function"]["name"].startswith(("builtin_memory_", "aina_"))
+        for item in llm.calls[2]["tools"]
+    )
+    assert sum(event["kind"] == "routing.scope.activated" for event in trace["events"]) == 1
+    assert any(
+        event["kind"] == "aina.failed" and event["details"]["code"] == "INVALID_REQUEST"
+        for event in trace["events"]
+    )
 
 
 def test_relevant_memory_is_fenced_into_an_ordinary_conversation() -> None:
@@ -165,7 +216,7 @@ def test_memory_tool_remains_available_for_follow_up_durable_fact() -> None:
         [
             call_first_tool(
                 prefix="aina_unibot-memory_",
-                arguments='{"input":"记住我叫 skar"}',
+                arguments="{}",
             ),
             call_first_tool(
                 prefix="builtin_memory_remember_",
@@ -174,7 +225,7 @@ def test_memory_tool_remains_available_for_follow_up_durable_fact() -> None:
             assistant("我记住了你的名字。"),
             call_first_tool(
                 prefix="aina_unibot-memory_",
-                arguments='{"input":"我是软件工程师"}',
+                arguments="{}",
             ),
             call_first_tool(
                 prefix="builtin_memory_remember_",

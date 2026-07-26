@@ -1142,6 +1142,108 @@ test("FE-E2E-005 new conversation reloads messages after a delayed stream", asyn
   await expect(page.locator("main").getByText("\u8fd9\u662f\u786e\u5b9a\u6027\u7684\u7aef\u5230\u7aef\u56de\u590d\u3002", { exact: true })).toBeVisible();
 });
 
+test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page }) => {
+  await installMockApi(page, {
+    streamDelayMs: 300,
+    conversations: [
+      conversation({ id: "conv-streaming", title: "进行中的会话" }),
+      conversation({
+        id: "conv-other",
+        title: "另一个会话",
+        messages: [
+          {
+            id: "msg-other",
+            role: "assistant",
+            content: "这是另一个会话的独立消息。",
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+  await page.goto("/chat/conv-streaming");
+  const main = page.locator("main");
+
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("只属于进行中会话的问题");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
+
+  await page.getByTestId("conversation-row-conv-other").click();
+  await expect(page).toHaveURL(/\/chat\/conv-other$/);
+  await expect(main.getByText("这是另一个会话的独立消息。", { exact: true })).toBeVisible();
+  await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toHaveCount(0);
+
+  await page.waitForTimeout(450);
+  await expect(page).toHaveURL(/\/chat\/conv-other$/);
+  await expect(main.getByText("这是确定性的端到端回复。", { exact: true })).toHaveCount(0);
+
+  await page.getByTestId("conversation-row-conv-streaming").click();
+  await expect(page).toHaveURL(/\/chat\/conv-streaming$/);
+  await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
+  await expect(main.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async ({ page }) => {
+  await installMockApi(page, {
+    streamDelayMs: 300,
+    conversations: [
+      conversation({
+        id: "conv-canvas-streaming",
+        title: "Canvas 进行中的会话",
+        messages: [
+          {
+            id: "msg-switch-aina",
+            role: "assistant",
+            content: "可以切换到记忆应用。",
+            content_type: "text",
+            widgets: [
+              {
+                id: "switch-to-memory",
+                kind: "navigation",
+                title: "切换应用",
+                description: "继续在同一个会话中使用其他内置能力。",
+                markdown: null,
+                fields: [],
+                apps: [],
+                actions: [
+                  {
+                    id: "open-memory",
+                    label: "切换到记忆",
+                    kind: "open_aina",
+                    aina_id: "unibot-memory",
+                    style: "primary",
+                  },
+                ],
+              },
+            ],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+  await page.goto("/canvas/unibot-documents?conversation=conv-canvas-streaming");
+
+  await page.getByRole("textbox", { name: "画布消息" }).fill("只属于文档 Canvas 的问题");
+  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "切换到记忆", exact: true }).click();
+  await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-canvas-streaming$/);
+  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toHaveCount(0);
+
+  await page.waitForTimeout(450);
+  await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-canvas-streaming$/);
+  await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toHaveCount(0);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-canvas-streaming$/);
+  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
+  await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+});
+
 test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
   const appListWidget = {
     id: "unibot-app-list",

@@ -130,10 +130,11 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - `POST /ainas/{id}/open`：调用宿主内置 `open_aina` Tool 并返回 Canvas 路由与 `main_widget`；
 - 宿主内置 `list_app`、`describe_aina`、`open_aina` Tool：负责 AINA 发现、详情查询与 Canvas 导航，不注册为 AINA；
 - 宿主内置 `request_clarification` Tool：需求模糊时生成 Form Widget，支持模型预填和用户提交；
-- 首次模型调用统一暴露上述宿主 Tool、已发布独立 Tool 与可路由 AINA 入口；内置 AINA 只激活其宿主能力域，远程 AINA 才通过 Gateway 调用；
+- 首次模型调用统一暴露上述宿主 Tool、已发布独立 Tool 与可路由 AINA 入口；内置 AINA 使用无参数入口激活宿主能力域，远程 AINA 才携带完整任务通过 Gateway 调用；
+- 所有 capability 调用在审批和执行前统一校验 input schema，非法参数作为结构化 Tool 错误返回模型修正；
 - 内置 `unibot-memory`：通过对话或 Memory Widget 管理事实、偏好、目标和指令，并向相关后续对话注入安全围栏内的记忆；
 - `/memories`：记忆新增、搜索、筛选、修改、删除与分类统计；
-- 内置 `unibot-documents`：通过对话创建、读取、按章节编辑、追加、重命名和删除 Markdown 文档，也可创建异步修改任务并在检视草稿后合并；不提供全文覆盖能力；
+- 内置 `unibot-documents`：通过文件名或正文关键词搜索文档，并支持创建、读取、按章节编辑、追加、重命名和删除 Markdown 文档，也可创建异步修改任务并在检视草稿后合并；不提供全文覆盖能力；
 - `/documents`：Markdown 文档列表、章节更新与文件管理，文件按租户和用户隔离并持久化到 `data/nas/documents/`；
 - `/approvals/{id}/confirm|deny`：高风险调用确认；
 - `/traces`、`/admin/summary`：调用链和基础管理数据。
