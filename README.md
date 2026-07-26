@@ -127,6 +127,7 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - 会话支持分类筛选与可恢复的 `run_status`，SSE 断开不会取消后台 Agent 运行；
 - `/tools`、`/skills`：Tool 和基础 Skill 注册管理；
 - `/ainas`、`/installations`：远程 AINA 注册、探测、安装、授权和卸载；
+- `/aina-projects/scaffold|validate`：生成并校验 AINA Project 1.0 源码包；格式见 [`docs/aina-project-format.md`](docs/aina-project-format.md)；
 - `POST /ainas/{id}/open`：调用宿主内置 `open_aina` Tool 并返回 Canvas 路由与 `main_widget`；
 - 宿主内置 `list_app`、`describe_aina`、`open_aina` Tool：负责 AINA 发现、详情查询与 Canvas 导航，不注册为 AINA；
 - 宿主内置 `request_clarification` Tool：需求模糊时生成 Form Widget，支持模型预填和用户提交；

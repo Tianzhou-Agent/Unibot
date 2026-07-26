@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from tianzhou_agent_platform.api.aina_projects import create_aina_project_router
 from tianzhou_agent_platform.api.capabilities import create_capability_router
 from tianzhou_agent_platform.api.chat import create_chat_router
 from tianzhou_agent_platform.api.conversations import create_conversation_router
@@ -21,6 +22,7 @@ def create_router() -> APIRouter:
     router.include_router(create_document_router())
     router.include_router(create_memory_router())
     router.include_router(create_model_settings_router())
+    router.include_router(create_aina_project_router())
     router.include_router(create_capability_router())
     router.include_router(create_schedule_router())
     router.include_router(create_sandbox_router())

@@ -69,7 +69,7 @@ def create_capability_router() -> APIRouter:
         if payload.runtime.type != "remote":
             raise PlatformError(
                 "PERMISSION_DENIED",
-                "Built-in AINA runtimes can only be registered by the platform",
+                "Only deployed remote AINA runtimes can be registered directly",
                 status_code=403,
             )
         for capability in [*payload.capabilities.skills, *payload.capabilities.tools]:

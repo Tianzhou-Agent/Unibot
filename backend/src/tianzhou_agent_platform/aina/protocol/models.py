@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, Field, field_validator, model_validator
@@ -31,6 +32,40 @@ class RemoteRuntimeDefinition(StrictModel):
 
 class BuiltinRuntimeDefinition(StrictModel):
     type: Literal["builtin"] = "builtin"
+
+
+class ManagedRuntimeDefinition(StrictModel):
+    """Source runtime declaration for a packaged AINA that has not been deployed yet."""
+
+    type: Literal["managed"] = "managed"
+    language: Literal["python", "node"]
+    entrypoint: str
+    dependency_file: str | None = None
+
+    @field_validator("entrypoint")
+    @classmethod
+    def validate_entrypoint(cls, value: str) -> str:
+        path, separator, handler = value.partition(":")
+        if not separator or not handler.isidentifier():
+            raise ValueError("Managed runtime entrypoint must use relative/path.ext:handler")
+        _validate_relative_project_path(path, label="Managed runtime entrypoint")
+        return value
+
+    @field_validator("dependency_file")
+    @classmethod
+    def validate_dependency_file(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_relative_project_path(value, label="Managed runtime dependency_file")
+        return value
+
+    @model_validator(mode="after")
+    def validate_language_entrypoint(self) -> "ManagedRuntimeDefinition":
+        path = self.entrypoint.partition(":")[0]
+        if self.language == "python" and not path.endswith(".py"):
+            raise ValueError("Python managed runtimes require a .py entrypoint")
+        if self.language == "node" and not path.endswith((".js", ".mjs", ".cjs")):
+            raise ValueError("Node managed runtimes require a .js, .mjs, or .cjs entrypoint")
+        return self
 
 
 class AinaCapability(StrictModel):
@@ -67,7 +102,7 @@ class AinaCapabilities(StrictModel):
 class AinaManifest(StrictModel):
     protocol_version: str
     aina: AinaIdentity
-    runtime: RemoteRuntimeDefinition | BuiltinRuntimeDefinition
+    runtime: RemoteRuntimeDefinition | BuiltinRuntimeDefinition | ManagedRuntimeDefinition
     capabilities: AinaCapabilities = Field(default_factory=AinaCapabilities)
     main_widget: WidgetDefinition | None = None
     permissions: list[str] = Field(default_factory=list)
@@ -80,6 +115,14 @@ class AinaManifest(StrictModel):
         if value != "1.0":
             raise ValueError("Only AINA Protocol 1.0 is supported")
         return value
+
+
+def _validate_relative_project_path(value: str, *, label: str) -> None:
+    if not value or "\\" in value or "\x00" in value:
+        raise ValueError(f"{label} must be a non-empty POSIX path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"{label} must stay inside the AINA project")
 
 
 class AinaRecord(StrictModel):
