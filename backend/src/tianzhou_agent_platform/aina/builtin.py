@@ -1,4 +1,4 @@
-"""Compatibility facade and dispatcher for platform-owned AINAs."""
+"""Registration and dispatcher for platform-owned AINAs."""
 
 from typing import Any
 
@@ -33,46 +33,38 @@ from tianzhou_agent_platform.aina.schedule.builtin import (
     UNIBOT_SCHEDULER_ID,
     unibot_scheduler_record,
 )
-from tianzhou_agent_platform.aina.unibot.builtin import (
-    DESCRIBE_AINA_TOOL_ID,
-    LIST_APP_TOOL_ID,
-    OPEN_AINA_TOOL_ID,
-    REQUEST_CLARIFICATION_TOOL_ID,
-    UNIBOT_ASSISTANT_ID,
-    UNIBOT_TOOL_IDS,
-    describe_aina,
-    invoke_unibot_tool,
-    list_app_widget,
-    open_aina,
-    unibot_assistant_record,
-)
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 from tianzhou_agent_platform.sandbox.service import SandboxService
 
 BUILTIN_AINA_IDS = {
-    UNIBOT_ASSISTANT_ID,
     UNIBOT_MEMORY_ID,
     UNIBOT_DOCUMENTS_ID,
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
 }
 
+_LEGACY_UNIBOT_ASSISTANT_ID = "unibot-assistant"
 
-async def ensure_unibot_assistant(
+
+async def ensure_builtin_ainas(
     repository: InMemoryRepository,
     *,
     document_enabled: bool = False,
 ) -> None:
     builtins = [
-        (UNIBOT_ASSISTANT_ID, unibot_assistant_record),
         (UNIBOT_MEMORY_ID, unibot_memory_record),
         (UNIBOT_SCHEDULER_ID, unibot_scheduler_record),
         (UNIBOT_CODE_RUNNER_ID, unibot_code_runner_record),
     ]
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
+    try:
+        await repository.remove_aina(_LEGACY_UNIBOT_ASSISTANT_ID)
+    except PlatformError as exc:
+        if exc.code != "RESOURCE_NOT_FOUND":
+            raise
     for aina_id, factory in builtins:
         definition = factory()
         try:
@@ -146,10 +138,9 @@ async def invoke_builtin(
             )
         except StorageError as exc:
             raise _document_storage_error(exc, tool_id=tool_id, arguments=arguments) from exc
-    invoke = invoke_memory_tool if tool_id in MEMORY_TOOL_IDS else invoke_unibot_tool
-    if tool_id not in MEMORY_TOOL_IDS | UNIBOT_TOOL_IDS:
+    if tool_id not in MEMORY_TOOL_IDS:
         raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown built-in tool {tool_id!r}", status_code=404)
-    return await invoke(
+    return await invoke_memory_tool(
         repository,
         tool_id,
         arguments,
@@ -192,26 +183,17 @@ def _document_storage_error(
 
 __all__ = [
     "BUILTIN_AINA_IDS",
-    "DESCRIBE_AINA_TOOL_ID",
     "DOCUMENT_TOOL_IDS",
     "FORGET_TOOL_ID",
-    "LIST_APP_TOOL_ID",
-    "OPEN_AINA_TOOL_ID",
     "RECALL_TOOL_ID",
     "REMEMBER_TOOL_ID",
     "UPDATE_TOOL_ID",
-    "REQUEST_CLARIFICATION_TOOL_ID",
-    "UNIBOT_ASSISTANT_ID",
     "UNIBOT_DOCUMENTS_ID",
     "UNIBOT_MEMORY_ID",
     "UNIBOT_SCHEDULER_ID",
     "UNIBOT_CODE_RUNNER_ID",
-    "ensure_unibot_assistant",
-    "describe_aina",
+    "ensure_builtin_ainas",
     "invoke_builtin",
-    "list_app_widget",
-    "open_aina",
-    "unibot_assistant_record",
     "unibot_documents_record",
     "unibot_memory_record",
     "unibot_scheduler_record",

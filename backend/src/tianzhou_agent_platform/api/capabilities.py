@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query, Request, Response, status
 
-from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS, open_aina
+from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCanvasResponse,
     AinaInstallation,
@@ -14,6 +14,7 @@ from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
 from tianzhou_agent_platform.api.dependencies import gateway, repository
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.builtin_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
 
 

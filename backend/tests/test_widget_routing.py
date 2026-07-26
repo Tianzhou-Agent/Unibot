@@ -138,7 +138,6 @@ def _remote(
 def test_list_app_builtin_persists_an_interactive_widget() -> None:
     llm = ScriptedLLM(
         [
-            call_first_tool(prefix="aina_unibot-assistant_", arguments='{"input":"请列出应用"}'),
             call_first_tool(prefix="builtin_list_app_"),
             assistant("## 可用应用\n\n请选择一个应用。"),
         ]
@@ -152,31 +151,24 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     widget = response.json()["widgets"][0]
     assert widget["kind"] == "app_list"
     assert [item["aina_id"] for item in widget["apps"]] == [
-        "unibot-assistant",
         "unibot-code-runner",
-        "unibot-memory",
         "unibot-scheduler",
+        "unibot-memory",
     ]
     assert conversation.json()["messages"][-1]["widgets"] == response.json()["widgets"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
-    assert llm.calls[0]["tool_choice"] == "auto"
-    assert {item["function"]["name"].split("_")[1] for item in llm.calls[0]["tools"]} == {
-        "unibot-assistant",
+    assert llm.calls[0]["tool_choice"] is None
+    entry_names = {item["function"]["name"] for item in llm.calls[0]["tools"]}
+    assert any(name.startswith("builtin_list_app_") for name in entry_names)
+    assert {name.split("_")[1] for name in entry_names if name.startswith("aina_")} == {
         "unibot-code-runner",
         "unibot-memory",
-        "unibot-scheduler",
     }
-    assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
 
 
 def test_describe_aina_returns_real_skills_without_opening_canvas(tmp_path: Path) -> None:
     llm = ScriptedLLM(
         [
-            call_first_tool(
-                prefix="aina_unibot-assistant_",
-                arguments='{"input":"查看文档编辑器的 Skill"}',
-            ),
-            call_first_tool(prefix="builtin_list_app_"),
             call_first_tool(
                 prefix="builtin_describe_aina_",
                 arguments='{"aina_id":"文档编辑器"}',
@@ -196,33 +188,30 @@ def test_describe_aina_returns_real_skills_without_opening_canvas(tmp_path: Path
 
     assert response.status_code == 200
     assert response.json()["widgets"] == []
-    tool_result = llm.calls[3]["messages"][-1]["content"]
+    tool_result = llm.calls[1]["messages"][-1]["content"]
     assert "markdown-document-management" in tool_result
     assert "Markdown 文档管理" in tool_result
     assert any(
         event["kind"] == "builtin.completed" and event["target_id"] == "describe_aina"
         for event in trace["events"]
     )
-    assert any(
-        event["kind"] == "builtin.completed" and event["target_id"] == "list_app"
-        for event in trace["events"]
-    )
+    assert not any(event["target_id"] == "list_app" for event in trace["events"])
     assert not any(
         event["kind"] == "builtin.completed" and event["target_id"] == "open_aina"
         for event in trace["events"]
     )
-    assert "do not call list_app first unless the target AINA is unknown or ambiguous" in llm.calls[1]["messages"][0]["content"]
+    assert "do not call list_app first unless the target AINA is unknown or ambiguous" in llm.calls[0]["messages"][0]["content"]
 
 
-def test_open_assistant_returns_a_dedicated_main_widget() -> None:
+def test_removed_assistant_is_not_listed_or_openable() -> None:
     with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+        listed = client.get("/ainas")
         response = client.post("/ainas/unibot-assistant/open", json={})
 
-    assert response.status_code == 200
-    widget = response.json()["main_widget"]
-    assert widget["id"] == "unibot-assistant-main"
-    assert widget["kind"] == "panel"
-    assert {item["aina_id"] for item in widget["apps"]} >= {"unibot-assistant", "unibot-memory"}
+    assert "unibot-assistant" not in {
+        item["manifest"]["aina"]["id"] for item in listed.json()
+    }
+    assert response.status_code == 404
 
 
 def test_clarification_builtin_returns_a_host_rendered_prefilled_form() -> None:
@@ -364,10 +353,6 @@ def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_pat
     llm = ScriptedLLM(
         [
             call_first_tool(
-                prefix="aina_unibot-assistant_",
-                arguments='{"input":"打开文档应用"}',
-            ),
-            call_first_tool(
                 prefix="builtin_open_aina_",
                 arguments='{"aina_id":"unibot-documents"}',
             ),
@@ -394,19 +379,15 @@ def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_pat
 
     assert response.status_code == 200
     assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
-    assert len(llm.calls[0]["tools"]) == 5
-    assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[1]["tools"])
+    assert len(llm.calls[0]["tools"]) == 7
+    assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
-    assert resolution["details"]["source"] == "model_router"
+    assert resolution["details"]["source"] == "unified_entry"
 
 
 def test_application_discovery_routes_across_all_ainas_from_document_context(tmp_path: Path) -> None:
     llm = ScriptedLLM(
         [
-            call_first_tool(
-                prefix="aina_unibot-assistant_",
-                arguments='{"input":"查看应用"}',
-            ),
             call_first_tool(prefix="builtin_list_app_"),
             assistant("当前可用应用如下。"),
         ]
@@ -427,29 +408,27 @@ def test_application_discovery_routes_across_all_ainas_from_document_context(tmp
             "/chat",
             json={"message": "查看应用", "conversation_id": conversation["id"]},
         )
-        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
     assert response.status_code == 200
     assert {item["aina_id"] for item in response.json()["widgets"][0]["apps"]} == {
-        "unibot-assistant",
         "unibot-code-runner",
         "unibot-documents",
         "unibot-memory",
         "unibot-scheduler",
     }
-    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
-    assert requested["details"]["candidate_scope"] == "all_available"
-    assert requested["details"]["candidate_count"] == 5
-    assert {item["id"] for item in requested["details"]["candidates"]} == {
-        "unibot-assistant",
+    entry_ainas = {
+        item["function"]["name"].split("_")[1]
+        for item in llm.calls[0]["tools"]
+        if item["function"]["name"].startswith("aina_")
+    }
+    assert entry_ainas == {
         "unibot-code-runner",
         "unibot-documents",
         "unibot-memory",
-        "unibot-scheduler",
     }
 
 
-def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -> None:
+def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     invoked: list[dict[str, Any]] = []
     llm = ScriptedLLM(
         [
@@ -478,8 +457,11 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    assert len(llm.calls[0]["tools"]) == 5
-    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
+    assert len(llm.calls[0]["tools"]) == 8
+    entry_names = [item["function"]["name"] for item in llm.calls[0]["tools"]]
+    assert any(name.startswith("builtin_list_app_") for name in entry_names)
+    assert any(name.startswith("tool_report_data_") for name in entry_names)
+    assert any(name.startswith("aina_com_example_canvas_") for name in entry_names)
     scoped_names = [item["function"]["name"] for item in llm.calls[1]["tools"]]
     assert any(name.startswith("aina_") for name in scoped_names)
     assert any(name.startswith("tool_report_data_") for name in scoped_names)
@@ -487,7 +469,7 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
     assert "Use a concise summary followed by risks and next steps." in llm.calls[1]["messages"][0]["content"]
     assert invoked[0]["input"]["input"] == "Create a project status report"
     assert any(
-        event["kind"] == "routing.aina.completed" and event["target_id"] == "com.example.canvas"
+        event["kind"] == "routing.scope.activated" and event["target_id"] == "com.example.canvas"
         for event in trace.json()["events"]
     )
     discovery = next(
@@ -496,25 +478,30 @@ def test_routing_checks_aina_first_then_loads_only_its_declared_capabilities() -
     remote_aina = next(
         item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
     )
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 1}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
-        "remote_aina": 1,
-        "builtin_capability": 0,
+        "remote_aina": 3,
+        "builtin_capability": 4,
     }
     assert remote_aina["availability"] == "installed"
     assert remote_aina["routing_candidate"] is True
     assert remote_aina["entrypoint"]["owner_aina_id"] == "com.example.canvas"
     linked_tool = next(item for item in remote_aina["capabilities"]["tools"] if item["id"] == "report.data")
-    assert linked_tool["model_exposed"] is True
+    assert linked_tool["model_exposed"] is False
+    activation = next(
+        event for event in trace.json()["events"] if event["kind"] == "routing.scope.activated"
+    )
     scoped = next(
-        item for item in discovery["model_scope"]["by_aina"] if item["aina_id"] == "com.example.canvas"
+        item
+        for item in activation["details"]["model_scope"]["by_aina"]
+        if item["aina_id"] == "com.example.canvas"
     )
     assert {item["id"] for item in scoped["capabilities"]} == {"com.example.canvas", "report.data"}
 
 
 def test_trace_graph_explains_why_a_remote_aina_is_unavailable() -> None:
-    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("Ordinary response.")])
+    llm = ScriptedLLM([assistant("Ordinary response.")])
     capability_client = httpx.AsyncClient(transport=httpx.MockTransport(_remote()))
     with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
         client.post("/ainas", json=_manifest())
@@ -534,10 +521,9 @@ def test_trace_graph_explains_why_a_remote_aina_is_unavailable() -> None:
     }
 
 
-def test_routing_falls_back_to_system_tools_when_no_aina_matches() -> None:
+def test_unified_entry_exposes_system_tools_and_aina_choices_together() -> None:
     llm = ScriptedLLM(
         [
-            assistant("NO_AINA_MATCH"),
             call_first_tool(prefix="tool_report_data_"),
             assistant("The system tool completed."),
         ]
@@ -559,12 +545,11 @@ def test_routing_falls_back_to_system_tools_when_no_aina_matches() -> None:
         response = client.post("/chat", json={"message": "Read the platform report data"})
 
     assert response.status_code == 200
-    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
-    fallback_names = [item["function"]["name"] for item in llm.calls[1]["tools"]]
-    assert any(name.startswith("tool_report_data_") for name in fallback_names)
-    assert any(name.startswith("builtin_list_app_") for name in fallback_names)
-    assert not any(name.startswith("aina_") for name in fallback_names)
-    assert "Unibot Assistant" in llm.calls[1]["messages"][0]["content"]
+    entry_names = [item["function"]["name"] for item in llm.calls[0]["tools"]]
+    assert any(name.startswith("tool_report_data_") for name in entry_names)
+    assert any(name.startswith("builtin_list_app_") for name in entry_names)
+    assert any(name.startswith("aina_") for name in entry_names)
+    assert "host provides built-in application and clarification tools" in llm.calls[0]["messages"][0]["content"]
 
 
 def test_aina_widget_output_is_returned_and_persisted() -> None:

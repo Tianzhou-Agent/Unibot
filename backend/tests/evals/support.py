@@ -193,14 +193,14 @@ def _deepeval_trace(run: AgentRun) -> dict[str, Any]:
                     ),
                 }
             )
-        elif kind == "routing.aina.completed":
+        elif kind == "routing.scope.activated":
             steps.append(
                 {
                     "name": "Route to the matching AINA",
                     "type": "routing",
                     "matched_aina": event.get("target_id"),
                     "required": True,
-                    "required_reason": "Automatic AINA selection requires a routing decision before invocation.",
+                    "required_reason": "The unified agent selected the AINA entrypoint required by the request.",
                 }
             )
         elif kind in {"tool.completed", "aina.completed", "builtin.completed"}:

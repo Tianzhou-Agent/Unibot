@@ -286,11 +286,12 @@ function ConversationLink({
   return (
     <div
       className="relative group"
+      data-testid={`conversation-row-${conversation.id}`}
     >
       <NavLink
         to={`/chat/${conversation.id}`}
         className={({ isActive }) => classNames(
-          "block rounded-lg border px-3 py-2.5 transition-colors",
+          "block rounded-lg border px-3 py-2.5 pr-10 transition-colors",
           isActive ? "bg-sidebar-active border-transparent" : "bg-sidebar-bg border-sidebar-border hover:bg-sidebar-hover",
         )}
       >
@@ -299,20 +300,9 @@ function ConversationLink({
             <div className="flex items-center gap-1.5">
               <span className={classNames("h-1.5 w-1.5 shrink-0 rounded-full", conversation.run_status === "running" ? "animate-pulse bg-warning" : isActive ? "bg-white" : "bg-success")} />
               <div className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ink-onDark">{renaming ? "" : title}</div>
-              <div className="relative ml-auto flex h-5 shrink-0 items-center justify-end">
-                <span className={classNames("text-[10px] group-hover:invisible", isActive ? "text-white/70" : "text-ink-onDarkMuted")}>
-                  {timeAgo(conversation.updated_at)}
-                </span>
-                <button
-                  ref={menuBtnRef}
-                  type="button"
-                  onClick={openMenu}
-                  className={classNames("absolute right-0 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded transition-opacity", menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
-                  aria-label="更多操作"
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5 text-ink-onDark hover:text-white" />
-                </button>
-              </div>
+              <span className={classNames("shrink-0 text-[10px] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0", isActive ? "text-white/70" : "text-ink-onDarkMuted")}>
+                {timeAgo(conversation.updated_at)}
+              </span>
             </div>
             {renaming ? (
               <div className="mt-1 flex items-center gap-1" onClick={(e) => e.preventDefault()}>
@@ -337,6 +327,21 @@ function ConversationLink({
         )}
       </NavLink>
 
+      <button
+        ref={menuBtnRef}
+        type="button"
+        onClick={openMenu}
+        className={classNames(
+          "absolute right-2 top-1/2 z-10 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-onDarkMuted transition-[color,background-color,opacity] hover:bg-white/10 hover:text-white focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+          menuOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+        )}
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+
       {confirmingDelete ? (
         <div className="mt-1 flex items-center gap-1 rounded-lg border border-danger/30 bg-danger/10 px-2 py-1.5 text-[10px] text-red-100">
           <span>确认删除？</span><span className="flex-1" />
@@ -350,11 +355,14 @@ function ConversationLink({
             <>
               <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
               <div
+                role="menu"
+                aria-label={`${title} 对话操作`}
                 className="fixed z-50 w-32 overflow-hidden rounded-lg border border-line bg-white py-1 shadow-card"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => { setMenuOpen(false); setRenaming(true); setTitleDraft(title); }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-ink hover:bg-app-soft"
                 >
@@ -362,6 +370,7 @@ function ConversationLink({
                 </button>
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => { setMenuOpen(false); onRequestDelete(); }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-danger hover:bg-danger-soft"
                 >

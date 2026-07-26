@@ -50,7 +50,6 @@ def test_document_aina_opens_editor_and_crud_persists_to_nas(tmp_path: Path) -> 
         renamed = client.post("/documents/notes.md/rename", json={"new_name": "project"})
 
     assert {item["manifest"]["aina"]["id"] for item in ainas.json()} >= {
-        "unibot-assistant",
         "unibot-memory",
         "unibot-documents",
     }
@@ -395,7 +394,7 @@ def test_conversation_alternates_preferred_ainas_without_router_model(tmp_path: 
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["target_id"] == "unibot-memory"
     assert resolution["details"]["source"] == "preferred_aina"
-    assert resolution["details"]["router_model_called"] is False
+    assert "router_model_called" not in resolution["details"]
 
 
 def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_path: Path) -> None:
@@ -428,14 +427,20 @@ def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_pa
     assert first.status_code == 200
     assert second.status_code == 200
     assert len(llm.calls) == 3
-    assert len(llm.calls[1]["tools"]) == 5
-    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[1]["tools"])
-    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
-    assert requested["details"]["last_aina_id"] == "unibot-documents"
-    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert len(llm.calls[1]["tools"]) == 7
+    assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
+    assert all(
+        item["function"]["name"].startswith("builtin_")
+        for item in llm.calls[2]["tools"]
+    )
+    resolution = next(
+        event
+        for event in trace["events"]
+        if event["kind"] == "routing.scope.resolved" and event["details"]["source"] == "model_selection"
+    )
     assert resolution["target_id"] == "unibot-documents"
-    assert resolution["details"]["source"] == "model_router"
-    assert resolution["details"]["router_model_called"] is True
+    assert resolution["details"]["last_aina_id"] == "unibot-documents"
+    assert "router_model_called" not in resolution["details"]
 
 
 def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_path: Path) -> None:
@@ -465,14 +470,16 @@ def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_pat
 
     assert response.status_code == 200
     assert len(llm.calls) == 2
-    assert len(llm.calls[0]["tools"]) == 5
-    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
-    requested = next(event for event in trace["events"] if event["kind"] == "routing.aina.requested")
-    assert requested["details"]["primary_aina_id"] == "unibot-documents"
-    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert len(llm.calls[0]["tools"]) == 7
+    assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
+    resolution = next(
+        event
+        for event in trace["events"]
+        if event["kind"] == "routing.scope.resolved" and event["details"]["source"] == "model_selection"
+    )
     assert resolution["target_id"] == "unibot-documents"
-    assert resolution["details"]["source"] == "model_router"
-    assert resolution["details"]["router_model_called"] is True
+    assert resolution["details"]["primary_aina_id"] == "unibot-documents"
+    assert "router_model_called" not in resolution["details"]
 
 
 def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) -> None:
@@ -503,12 +510,15 @@ def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert len(llm.calls) == 2
-    assert all(item["function"]["name"].startswith("aina_") for item in llm.calls[0]["tools"])
-    assert len(llm.calls[0]["tools"]) == 5
-    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert len(llm.calls[0]["tools"]) == 7
+    assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[0]["tools"])
+    resolution = next(
+        event
+        for event in trace["events"]
+        if event["kind"] == "routing.scope.resolved" and event["details"]["source"] == "model_selection"
+    )
     assert resolution["target_id"] == "unibot-memory"
-    assert resolution["details"]["source"] == "model_router"
-    assert resolution["details"]["router_model_called"] is True
+    assert "router_model_called" not in resolution["details"]
 
 
 def test_opening_aina_binds_it_as_conversation_primary(tmp_path: Path) -> None:

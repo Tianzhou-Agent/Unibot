@@ -851,17 +851,41 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "已有会话" })).toBeVisible();
   const conversationList = page.getByRole("navigation", { name: "对话列表" });
+  const conversationRow = page.getByTestId("conversation-row-conv-e2e-1");
+  await conversationRow.hover();
   await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
-  await page.getByRole("button", { name: "重命名", exact: true }).click();
+  await page.getByRole("menuitem", { name: "重命名", exact: true }).click();
   await page.getByLabel("对话标题").fill("重命名后的会话");
   await page.getByLabel("对话标题").press("Enter");
   await expect(conversationList.getByText("重命名后的会话", { exact: true })).toBeVisible();
 
+  await conversationRow.hover();
   await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
-  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await conversationList.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
   await expect(page).toHaveURL(/\/chat$/);
   await expect(conversationList.getByText("重命名后的会话", { exact: true })).toHaveCount(0);
+});
+
+test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ page }) => {
+  await installMockApi(page, { conversations: [conversation()] });
+  await page.goto("/chat/conv-e2e-1");
+
+  const row = page.getByTestId("conversation-row-conv-e2e-1");
+  const moreButton = row.getByRole("button", { name: "更多操作", exact: true });
+  await expect(moreButton).toHaveCSS("opacity", "0");
+
+  await row.hover();
+  await expect(moreButton).toHaveCSS("opacity", "1");
+
+  const rowBox = await row.boundingBox();
+  const buttonBox = await moreButton.boundingBox();
+  expect(rowBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(Math.abs((buttonBox!.y + buttonBox!.height / 2) - (rowBox!.y + rowBox!.height / 2))).toBeLessThan(2);
+
+  await moreButton.click();
+  await expect(page.getByRole("menu", { name: "已有会话 对话操作", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
@@ -1123,20 +1147,11 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
     id: "unibot-app-list",
     kind: "app_list",
     title: "AINA 应用",
-    description: "当前共有 4 个可用应用。",
+    description: "当前共有 3 个可用应用。",
     markdown: null,
     fields: [],
     actions: [],
     apps: [
-      {
-        aina_id: "unibot-assistant",
-        name: "Unibot Assistant",
-        description: "发现、选择并打开可用的 AINA 应用。",
-        version: "1.0.0",
-        publisher: "Unibot",
-        installed: true,
-        has_main_widget: true,
-      },
       {
         aina_id: "unibot-documents",
         name: "文档编辑器",
@@ -1184,16 +1199,14 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
   });
   await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
 
-  const assistantApp = page.getByRole("button", { name: "打开 Unibot Assistant" });
   const documentApp = page.getByRole("button", { name: "打开 文档编辑器" });
   const memoryApp = page.getByRole("button", { name: "打开 Unibot Memory" });
-  await expect(assistantApp).toBeVisible();
   await expect(documentApp).toBeVisible();
   await expect(memoryApp).toBeVisible();
-  const assistantBox = await assistantApp.boundingBox();
   const documentBox = await documentApp.boundingBox();
-  expect(assistantBox?.width).toBeGreaterThan(200);
-  expect(documentBox?.y).toBeGreaterThan((assistantBox?.y ?? 0) + (assistantBox?.height ?? 0));
+  const memoryBox = await memoryApp.boundingBox();
+  expect(documentBox?.width).toBeGreaterThan(200);
+  expect(memoryBox?.y).toBeGreaterThan((documentBox?.y ?? 0) + (documentBox?.height ?? 0));
 
   await memoryApp.click();
 

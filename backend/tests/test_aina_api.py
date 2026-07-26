@@ -4,10 +4,12 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
-from tianzhou_agent_platform.aina.builtin import ensure_unibot_assistant, unibot_assistant_record
+from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas, unibot_memory_record
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
@@ -109,7 +111,7 @@ def test_aina_without_required_grants_is_not_exposed_to_agent() -> None:
             return httpx.Response(200, json={"protocol_version": "1.0"})
         return httpx.Response(200, json={"status": "healthy"})
 
-    llm = ScriptedLLM([assistant("NO_AINA_MATCH"), assistant("No authorized AINA is available.")])
+    llm = ScriptedLLM([assistant("No authorized AINA is available.")])
     capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
     with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
         client.post("/ainas", json=_manifest(permissions=["user.files.read"]))
@@ -118,7 +120,7 @@ def test_aina_without_required_grants_is_not_exposed_to_agent() -> None:
 
     assert response.status_code == 200
     candidate_names = {item["function"]["name"] for item in llm.calls[0]["tools"]}
-    assert all(name.startswith("aina_") for name in candidate_names)
+    assert any(name.startswith("builtin_list_app_") for name in candidate_names)
     assert not any(name.startswith("aina_com_example_arithmetic_") for name in candidate_names)
 
 
@@ -133,12 +135,16 @@ def test_aina_protocol_version_is_rejected_with_standard_error() -> None:
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
 
-def test_builtin_aina_manifests_expose_skill_prompts_and_tool_inputs() -> None:
-    with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+def test_builtin_aina_manifests_and_host_tool_inputs_are_exposed() -> None:
+    llm = ScriptedLLM([assistant("Done."), assistant("Done."), assistant("Done.")])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         records = {
             item["manifest"]["aina"]["id"]: item["manifest"]
             for item in client.get("/ainas").json()
         }
+        client.post("/chat", json={"message": "Describe it", "capability": "builtin:describe_aina"})
+        client.post("/chat", json={"message": "Open it", "capability": "builtin:open_aina"})
+        client.post("/chat", json={"message": "Ask me", "capability": "builtin:request_clarification"})
 
     memory = records["unibot-memory"]
     assert memory["capabilities"]["skills"][0]["instructions"]
@@ -149,26 +155,35 @@ def test_builtin_aina_manifests_expose_skill_prompts_and_tool_inputs() -> None:
     }
     assert memory_tools["memory.forget"]["input_schema"]["required"] == ["memory_id"]
 
-    assistant = records["unibot-assistant"]
-    assistant_tools = {item["id"]: item for item in assistant["capabilities"]["tools"]}
-    assert assistant_tools["describe_aina"]["input_schema"]["required"] == ["aina_id"]
-    assert assistant_tools["open_aina"]["input_schema"]["required"] == ["aina_id"]
-    clarification = assistant_tools["request_clarification"]["input_schema"]
+    assert "unibot-assistant" not in records
+    host_tools = {
+        call["tools"][0]["function"]["name"].split("_")[1]: call["tools"][0]["function"]
+        for call in llm.calls
+    }
+    assert host_tools["describe"]["parameters"]["required"] == ["aina_id"]
+    assert host_tools["open"]["parameters"]["required"] == ["aina_id"]
+    clarification = host_tools["request"]["parameters"]
     assert clarification["required"] == ["title", "fields"]
     assert clarification["properties"]["fields"]["items"]["required"] == ["id", "label"]
 
 
-async def test_builtin_aina_definition_is_refreshed_without_changing_registration_time() -> None:
+@pytest.mark.asyncio
+async def test_legacy_assistant_registration_is_removed() -> None:
     repository = InMemoryRepository()
-    stale = unibot_assistant_record()
+    stale = unibot_memory_record()
+    stale.manifest.aina.id = "unibot-assistant"
     stale.manifest.aina.name = "Legacy Assistant"
     await repository.register_aina(stale)
 
-    await ensure_unibot_assistant(repository)
+    await ensure_builtin_ainas(repository)
 
-    refreshed = await repository.get_aina(stale.manifest.aina.id)
-    assert refreshed.manifest.aina.name == "Unibot 助手"
-    assert refreshed.registered_at == stale.registered_at
+    with pytest.raises(PlatformError, match="AINA 'unibot-assistant' was not found"):
+        await repository.get_aina("unibot-assistant")
+    assert {item.manifest.aina.id for item in await repository.list_ainas()} == {
+        "unibot-code-runner",
+        "unibot-memory",
+        "unibot-scheduler",
+    }
 
 
 def test_conversation_soft_delete_and_restore() -> None:

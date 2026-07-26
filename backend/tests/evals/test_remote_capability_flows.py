@@ -152,7 +152,7 @@ def test_remote_aina_routing_agent_flow() -> None:
     assert "42" in run.response["content"]
     assert run.response["widgets"] and run.response["widgets"][0]["id"] == "smoke-result"
     assert any(
-        event["kind"] == "routing.aina.completed" and event["target_id"] == aina_id
+        event["kind"] == "routing.scope.activated" and event["target_id"] == aina_id
         for event in run.trace["events"]
     )
     assert_agent_run(
