@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -81,11 +82,11 @@ class NasStore:
         source_target = self._resolve(source)
         destination_target = self._resolve(destination)
         try:
-            if destination_target.exists():
-                raise StorageValidationError("NAS destination already exists")
             if not destination_target.parent.is_dir():
                 raise StorageValidationError("NAS destination parent directory does not exist")
-            await asyncio.to_thread(source_target.rename, destination_target)
+            await asyncio.to_thread(self._move_without_overwrite, source_target, destination_target)
+        except FileExistsError as exc:
+            raise StorageValidationError("NAS destination already exists") from exc
         except FileNotFoundError as exc:
             raise StorageNotFoundError("NAS source path was not found") from exc
         except StorageError:
@@ -148,6 +149,16 @@ class NasStore:
     def _read_bytes(target: Path) -> bytes:
         with target.open("rb") as file:
             return file.read()
+
+    @staticmethod
+    def _move_without_overwrite(source: Path, destination: Path) -> None:
+        if source.is_file():
+            os.link(source, destination)
+            source.unlink()
+            return
+        if destination.exists():
+            raise FileExistsError(destination)
+        source.rename(destination)
 
     def _list_metadata(self, target: Path) -> list[FileMetadata]:
         if not target.exists():

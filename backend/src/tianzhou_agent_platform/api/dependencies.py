@@ -1,14 +1,36 @@
 from typing import cast
 
 from fastapi import Request
+from pydantic import Field
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
+from tianzhou_agent_platform.aina.project_service import AinaProjectService
+from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
+
+
+class RequestActor(StrictModel):
+    """Actor resolved by trusted ASGI middleware, never by request parameters."""
+
+    user_id: str = Field(min_length=1, max_length=160)
+    tenant_id: str = Field(min_length=1, max_length=160)
+
+
+_LOCAL_ACTOR = RequestActor(user_id="anonymous", tenant_id="default")
+
+
+def request_actor(request: Request) -> RequestActor:
+    actor = getattr(request.state, "actor", None)
+    if actor is None:
+        return _LOCAL_ACTOR
+    if isinstance(actor, RequestActor):
+        return actor
+    return RequestActor.model_validate(actor)
 
 
 def repository(request: Request) -> InMemoryRepository:
@@ -25,6 +47,10 @@ def runtime(request: Request) -> AgentRuntime:
 
 def gateway(request: Request) -> RemoteCapabilityGateway:
     return cast(RemoteCapabilityGateway, request.app.state.capability_gateway)
+
+
+def aina_projects(request: Request) -> AinaProjectService:
+    return cast(AinaProjectService, request.app.state.aina_project_service)
 
 
 def sandboxes(request: Request) -> SandboxService:

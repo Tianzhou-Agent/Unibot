@@ -6,6 +6,7 @@ type JsonObject = Record<string, unknown>;
 
 interface MockState {
   ainas: JsonObject[];
+  ainaProjects: JsonObject[];
   conversations: JsonObject[];
   approvals: JsonObject[];
   tools: JsonObject[];
@@ -22,6 +23,8 @@ interface MockState {
   streamWidgets: JsonObject[];
   sandbox: JsonObject | null;
   sandboxExecutions: JsonObject[];
+  lastProjectImportContentType: string | null;
+  lastProjectScaffoldPayload: JsonObject | null;
 }
 
 function conversation(overrides: JsonObject = {}): JsonObject {
@@ -39,6 +42,43 @@ function conversation(overrides: JsonObject = {}): JsonObject {
     config: {},
     enabled_ainas: [],
     messages: [],
+    created_at: NOW,
+    updated_at: NOW,
+    ...overrides,
+  };
+}
+
+function ainaProject(overrides: JsonObject = {}): JsonObject {
+  return {
+    id: "project-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    source_filename: "managed-demo.aina.zip",
+    archive_sha256: "d94f6f6f7bcb3d8b9c4f466e80339edb0a02b1e836c11f005d67462f41fcfa2f",
+    size_bytes: 2048,
+    uncompressed_size_bytes: 4096,
+    file_count: 4,
+    manifest: {
+      protocol_version: "1.0",
+      aina: {
+        id: "com.example.managed-demo",
+        name: "Managed Demo",
+        version: "0.1.0",
+        description: "A managed AINA project used by the browser test.",
+        publisher: { id: "unibot-e2e", name: "Unibot E2E" },
+      },
+      runtime: {
+        type: "managed",
+        language: "python",
+        entrypoint: "src/main.py",
+        dependency_file: "requirements.txt",
+      },
+      capabilities: { skills: [], tools: [], ui: [], events: [] },
+      permissions: [],
+      authentication: { type: "none", header_name: "Authorization" },
+      health_check: null,
+    },
+    status: "validated",
     created_at: NOW,
     updated_at: NOW,
     ...overrides,
@@ -93,6 +133,7 @@ function json(route: Route, body: unknown, status = 200) {
 async function installMockApi(page: Page, initial: Partial<MockState> = {}): Promise<MockState> {
   const state: MockState = {
     ainas: initial.ainas ?? [],
+    ainaProjects: initial.ainaProjects ?? [],
     conversations: initial.conversations ?? [],
     approvals: initial.approvals ?? [],
     tools: initial.tools ?? [],
@@ -109,6 +150,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     streamWidgets: initial.streamWidgets ?? [],
     sandbox: initial.sandbox ?? null,
     sandboxExecutions: initial.sandboxExecutions ?? [],
+    lastProjectImportContentType: null,
+    lastProjectScaffoldPayload: null,
   };
 
   await page.route("**/api/**", async (route) => {
@@ -295,6 +338,35 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           apps: [],
         },
       });
+    }
+    if (method === "POST" && path === "/aina-projects/scaffold") {
+      state.lastProjectScaffoldPayload = request.postDataJSON() as JsonObject;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/zip",
+        headers: { "Content-Disposition": "attachment; filename=\"com.example.my-aina-0.1.0.aina.zip\"" },
+        body: Buffer.from("PK-e2e-scaffold"),
+      });
+    }
+    if (method === "GET" && path === "/aina-projects") return json(route, state.ainaProjects);
+    if (method === "POST" && path === "/aina-projects") {
+      state.lastProjectImportContentType = request.headers()["content-type"] ?? null;
+      const project = ainaProject();
+      if (!state.ainaProjects.some((item) => item.id === project.id)) state.ainaProjects.unshift(project);
+      return json(route, project, 201);
+    }
+    if (method === "GET" && /^\/aina-projects\/[^/]+\/archive$/.test(path)) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/zip",
+        headers: { "Content-Disposition": "attachment; filename=\"managed-demo.aina.zip\"" },
+        body: Buffer.from("PK-e2e-project"),
+      });
+    }
+    if (method === "DELETE" && /^\/aina-projects\/[^/]+$/.test(path)) {
+      const projectId = decodeURIComponent(path.split("/")[2]);
+      state.ainaProjects = state.ainaProjects.filter((item) => item.id !== projectId);
+      return route.fulfill({ status: 204, body: "" });
     }
     if (method === "GET" && path === "/ainas") return json(route, state.ainas);
     if (method === "GET" && path === "/installations") return json(route, []);
@@ -976,6 +1048,41 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
   await expect(dialog.getByRole("cell", { name: "必填", exact: true })).toHaveCount(2);
   await dialog.getByRole("button", { name: "关闭能力详情" }).click();
   await expect(dialog).toBeHidden();
+});
+
+test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭环", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/apps");
+
+  await page.getByRole("button", { name: "项目模板", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "生成 AINA Project 模板", exact: true })).toBeVisible();
+  const scaffoldDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 ZIP 模板", exact: true }).click();
+  await expect((await scaffoldDownload).suggestedFilename()).toBe("com.example.my-aina-0.1.0.aina.zip");
+  expect(state.lastProjectScaffoldPayload?.aina_id).toBe("com.example.my-aina");
+
+  await page.getByLabel("选择 AINA Project ZIP").setInputFiles({
+    name: "managed-demo.aina.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("PK-e2e-upload"),
+  });
+
+  const projectSection = page.getByRole("region", { name: "AINA Projects", exact: true });
+  await expect(projectSection.getByRole("heading", { name: "Managed Demo", exact: true })).toBeVisible();
+  await expect(projectSection.getByText("已校验·待部署", { exact: true })).toBeVisible();
+  await expect(page.getByText("尚未注册 AINA", { exact: true })).toBeVisible();
+  expect(state.lastProjectImportContentType).toContain("multipart/form-data; boundary=");
+  expect(state.ainas).toHaveLength(0);
+
+  const archiveDownload = page.waitForEvent("download");
+  await projectSection.getByRole("button", { name: "下载项目 Managed Demo", exact: true }).click();
+  await expect((await archiveDownload).suggestedFilename()).toBe("managed-demo.aina.zip");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await projectSection.getByRole("button", { name: "删除项目 Managed Demo", exact: true }).click();
+  await expect(projectSection.getByRole("heading", { name: "Managed Demo", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Managed Demo 项目已删除。", { exact: true })).toBeVisible();
+  expect(state.ainaProjects).toHaveLength(0);
 });
 
 test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {

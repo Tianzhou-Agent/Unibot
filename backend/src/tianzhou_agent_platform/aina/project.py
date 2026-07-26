@@ -6,6 +6,7 @@ import json
 import stat
 import zipfile
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal
 
@@ -13,7 +14,7 @@ import yaml  # type: ignore[import-untyped]
 from pydantic import Field, ValidationError
 
 from tianzhou_agent_platform.aina.protocol.models import AinaManifest
-from tianzhou_agent_platform.core.base import StrictModel
+from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.schema import validate_schema
 
@@ -46,6 +47,21 @@ class AinaProjectValidationReport(StrictModel):
     manifest: AinaManifest
     ready_for_registration: bool
     warnings: list[str] = Field(default_factory=list)
+
+
+class AinaProjectRecord(StrictModel):
+    id: str = Field(min_length=1, max_length=160, pattern=r"^aina_project_[0-9a-f]{32}$")
+    user_id: str = Field(min_length=1, max_length=160)
+    tenant_id: str = Field(min_length=1, max_length=160)
+    source_filename: str = Field(min_length=1, max_length=255)
+    archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
+    uncompressed_size_bytes: int = Field(ge=0)
+    file_count: int = Field(gt=0)
+    manifest: AinaManifest
+    status: Literal["importing", "validated"] = "importing"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 def scaffold_project_archive(request: AinaProjectScaffoldRequest) -> bytes:

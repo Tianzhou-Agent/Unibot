@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy import JSON, Column, DateTime, MetaData, String, Table
 
+from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
@@ -11,10 +12,11 @@ from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
-from tianzhou_agent_platform.core.errors import conflict
+from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
 from tianzhou_agent_platform.core.repository import (
+    AINA_PROJECTS_RESOURCE,
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,
     CONVERSATIONS_RESOURCE,
@@ -33,6 +35,7 @@ from tianzhou_agent_platform.core.repository import (
     InMemoryRepository,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores
+from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.models import StoreQuery
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
@@ -57,6 +60,7 @@ repository_tables = {
         TOOLS_RESOURCE,
         SKILLS_RESOURCE,
         AINAS_RESOURCE,
+        AINA_PROJECTS_RESOURCE,
         INSTALLATIONS_RESOURCE,
         LLM_CALLS_RESOURCE,
         TRACES_RESOURCE,
@@ -85,6 +89,7 @@ class PersistentRepository(InMemoryRepository):
         tools = await self._load_models(TOOLS_RESOURCE, ToolRecord)
         skills = await self._load_models(SKILLS_RESOURCE, SkillRecord)
         ainas = await self._load_models(AINAS_RESOURCE, AinaRecord)
+        aina_projects = await self._load_models(AINA_PROJECTS_RESOURCE, AinaProjectRecord)
         installations = await self._load_models(INSTALLATIONS_RESOURCE, AinaInstallation)
         traces = await self._load_models(TRACES_RESOURCE, TraceRecord)
         llm_calls = await self._load_models(LLM_CALLS_RESOURCE, LLMCallRecord)
@@ -105,6 +110,7 @@ class PersistentRepository(InMemoryRepository):
             self._tools = {item.tool_id: item for item in tools}
             self._skills = {item.skill_id: item for item in skills}
             self._ainas = {item.manifest.aina.id: item for item in ainas}
+            self._aina_projects = {item.id: item for item in aina_projects}
             self._installations = {
                 (item.tenant_id, item.user_id, item.aina_id): item for item in installations
             }
@@ -119,6 +125,163 @@ class PersistentRepository(InMemoryRepository):
             self._document_edit_tasks = {item.id: item for item in document_edit_tasks}
             self._sandboxes = {item.id: item for item in sandboxes}
             self._sandbox_executions = {item.id: item for item in sandbox_executions}
+
+    async def create_aina_project(self, project: AinaProjectRecord) -> AinaProjectRecord:
+        async with self.stores.redis.lease(
+            "aina-project-write",
+            project.id,
+            ttl_seconds=30,
+        ) as acquired:
+            if not acquired:
+                existing = await self._load_aina_project(project.id)
+                if existing is not None:
+                    return self._copy(self._resolve_aina_project_import(existing, project))
+                raise conflict("AINA project is being imported. Retry the request.")
+
+            existing = await self._load_aina_project(project.id)
+            if existing is not None:
+                result = self._resolve_aina_project_import(existing, project)
+            else:
+                payload = project.model_dump(mode="json")
+                values = {"id": project.id, "payload": payload, "updated_at": datetime.now(UTC)}
+                try:
+                    await self.stores.mysql.create(AINA_PROJECTS_RESOURCE, values)
+                    result = project
+                except StorageValidationError:
+                    existing = await self._load_aina_project(project.id)
+                    if existing is None:
+                        raise
+                    result = self._resolve_aina_project_import(existing, project)
+
+            async with self._lock:
+                self._aina_projects[result.id] = result
+            await self.stores.redis.set(
+                f"repository:{AINA_PROJECTS_RESOURCE}",
+                result.id,
+                result.model_dump(mode="json"),
+            )
+            return self._copy(result)
+
+    async def mark_aina_project_validated(
+        self,
+        project_id: str,
+        *,
+        archive_sha256: str,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord:
+        async with self.stores.redis.lease(
+            "aina-project-write",
+            project_id,
+            ttl_seconds=30,
+        ) as acquired:
+            if not acquired:
+                project = await self._load_aina_project(project_id)
+                if project is not None:
+                    if project.user_id != user_id or project.tenant_id != tenant_id:
+                        raise PlatformError(
+                            "PERMISSION_DENIED",
+                            "AINA project ownership does not match the caller",
+                            status_code=403,
+                        )
+                    if project.archive_sha256 != archive_sha256:
+                        raise conflict("AINA project archive changed while it was being imported")
+                    if project.status == "validated":
+                        return self._copy(project)
+                raise PlatformError(
+                    "CONFLICT",
+                    "AINA project is being imported. Retry the request.",
+                    status_code=409,
+                    retryable=True,
+                )
+            project = await self._load_aina_project(project_id)
+            if project is None:
+                raise not_found("AINA project", project_id)
+            if project.user_id != user_id or project.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "AINA project ownership does not match the caller",
+                    status_code=403,
+                )
+            if project.archive_sha256 != archive_sha256:
+                raise conflict("AINA project archive changed while it was being imported")
+            if project.status == "validated":
+                return self._copy(project)
+
+            updated = project.model_copy(
+                update={
+                    "status": "validated",
+                    "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            payload = updated.model_dump(mode="json")
+            await self.stores.mysql.update(
+                AINA_PROJECTS_RESOURCE,
+                project_id,
+                {"payload": payload, "updated_at": datetime.now(UTC)},
+            )
+            async with self._lock:
+                self._aina_projects[project_id] = updated
+            await self.stores.redis.set(
+                f"repository:{AINA_PROJECTS_RESOURCE}",
+                project_id,
+                payload,
+            )
+            return self._copy(updated)
+
+    async def get_aina_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord:
+        project = await self._load_aina_project(project_id)
+        async with self._lock:
+            if project is None:
+                self._aina_projects.pop(project_id, None)
+            else:
+                self._aina_projects[project.id] = project
+        return await super().get_aina_project(project_id, user_id=user_id, tenant_id=tenant_id)
+
+    async def list_aina_projects(self, *, user_id: str, tenant_id: str) -> list[AinaProjectRecord]:
+        await self._refresh_aina_projects()
+        return await super().list_aina_projects(user_id=user_id, tenant_id=tenant_id)
+
+    async def remove_aina_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> None:
+        async with self.stores.redis.lease(
+            "aina-project-write",
+            project_id,
+            ttl_seconds=30,
+        ) as acquired:
+            if not acquired:
+                raise conflict("AINA project is being updated. Retry the request.")
+            await self.get_aina_project(project_id, user_id=user_id, tenant_id=tenant_id)
+            deleted = await self.stores.mysql.delete(AINA_PROJECTS_RESOURCE, project_id)
+            if not deleted.deleted:
+                raise not_found("AINA project", project_id)
+            async with self._lock:
+                self._aina_projects.pop(project_id, None)
+            await self.stores.redis.delete(f"repository:{AINA_PROJECTS_RESOURCE}", project_id)
+
+    async def _refresh_aina_projects(self) -> list[AinaProjectRecord]:
+        projects = await self._load_models(AINA_PROJECTS_RESOURCE, AinaProjectRecord)
+        async with self._lock:
+            self._aina_projects = {project.id: project for project in projects}
+        return projects
+
+    async def _load_aina_project(self, project_id: str) -> AinaProjectRecord | None:
+        record = await self.stores.mysql.read(AINA_PROJECTS_RESOURCE, project_id)
+        if record is None:
+            return None
+        return AinaProjectRecord.model_validate(record.values["payload"])
 
     async def get_sandbox_for_actor(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
         sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)

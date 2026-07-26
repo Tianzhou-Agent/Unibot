@@ -1,0 +1,35 @@
+protocol_version: "1.0"
+aina:
+  id: demo.text-stats
+  name: 文本统计 AINA
+  version: 0.1.0
+  description: 统计文本的字符、非空字符、单词和行数。
+  publisher:
+    id: unibot-demo
+    name: Unibot Demo
+runtime:
+  type: managed
+  language: python
+  entrypoint: src/main.py:invoke
+  dependency_file: requirements.txt
+capabilities:
+  skills:
+    - id: analyze_text
+      name: 文本统计
+      description: 接收一段文本并返回字符、非空字符、单词和行数。
+      instructions: 当用户需要统计一段文本的长度、词数或行数时使用此能力。
+      input_schema:
+        type: object
+        properties:
+          text:
+            type: string
+            description: 需要统计的文本。
+        required:
+          - text
+        additionalProperties: false
+  tools: []
+  ui: []
+  events: []
+permissions: []
+authentication:
+  type: none

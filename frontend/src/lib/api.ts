@@ -13,12 +13,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const res = await fetch(`${BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
     ...init,
+    headers,
   });
   const text = await res.text();
   const body = text ? safeJson(text) : null;
@@ -26,6 +27,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status, body, `请求 ${path} 失败（${res.status}）`);
   }
   return body as T;
+}
+
+export interface BlobResponse {
+  blob: Blob;
+  filename?: string;
+}
+
+async function requestBlob(path: string, init: RequestInit = {}): Promise<BlobResponse> {
+  const headers = new Headers(init.headers);
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new ApiError(res.status, text ? safeJson(text) : null, `请求 ${path} 失败（${res.status}）`);
+  }
+  return {
+    blob: await res.blob(),
+    filename: responseFilename(res.headers.get("Content-Disposition")),
+  };
 }
 
 export function apiErrorMessage(error: unknown): string {
@@ -99,6 +121,20 @@ function safeJson(text: string): unknown {
   }
 }
 
+function responseFilename(contentDisposition: string | null): string | undefined {
+  if (!contentDisposition) return undefined;
+  const utf8 = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8);
+    } catch {
+      return utf8;
+    }
+  }
+  return contentDisposition.match(/filename="([^"]+)"/i)?.[1]
+    ?? contentDisposition.match(/filename=([^;]+)/i)?.[1]?.trim();
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
@@ -108,4 +144,8 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  postForm: <T>(path: string, body: FormData) => request<T>(path, { method: "POST", body }),
+  getBlob: (path: string) => requestBlob(path),
+  postBlob: (path: string, body?: unknown) =>
+    requestBlob(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
 };

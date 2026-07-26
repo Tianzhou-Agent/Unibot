@@ -48,6 +48,21 @@ async def test_nas_store_rejects_write_without_overwrite(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_nas_store_move_does_not_replace_existing_file(tmp_path) -> None:
+    store = NasStore(tmp_path)
+    source = StoragePath(relative_path="docs/source.txt")
+    destination = StoragePath(relative_path="docs/destination.txt")
+    await store.write(source, b"source")
+    await store.write(destination, b"destination")
+
+    with pytest.raises(StorageValidationError):
+        await store.move(source, destination)
+
+    assert await store.read(source) == b"source"
+    assert await store.read(destination) == b"destination"
+
+
+@pytest.mark.asyncio
 async def test_nas_store_rejects_oversized_content(tmp_path) -> None:
     store = NasStore(tmp_path, max_file_size_bytes=3)
 

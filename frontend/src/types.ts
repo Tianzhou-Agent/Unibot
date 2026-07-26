@@ -294,7 +294,13 @@ export interface AinaManifest {
         streaming: boolean;
         async_tasks: boolean;
       }
-    | { type: "builtin" };
+    | { type: "builtin" }
+    | {
+        type: "managed";
+        language: "python" | "node";
+        entrypoint: string;
+        dependency_file?: string | null;
+      };
   capabilities: {
     skills: AinaCapabilityDefinition[];
     tools: AinaCapabilityDefinition[];
@@ -312,6 +318,31 @@ export interface AinaRecord {
   status: "registered" | "disabled";
   registered_at: string;
   last_health: Record<string, unknown>;
+}
+
+export interface AinaProjectRecord {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  source_filename: string;
+  archive_sha256: string;
+  size_bytes: number;
+  uncompressed_size_bytes: number;
+  file_count: number;
+  manifest: AinaManifest;
+  status: "importing" | "validated";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AinaProjectScaffoldRequest {
+  aina_id: string;
+  name: string;
+  description: string;
+  version?: string;
+  publisher_id?: string;
+  publisher_name?: string;
+  language: "python" | "node";
 }
 
 export interface AinaInstallation {

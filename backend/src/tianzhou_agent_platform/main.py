@@ -13,6 +13,12 @@ from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
+from tianzhou_agent_platform.aina.project_service import (
+    AinaProjectArtifactStore,
+    AinaProjectService,
+    InMemoryAinaProjectArtifactStore,
+    NasAinaProjectArtifactStore,
+)
 from tianzhou_agent_platform.aina.scheduler import AinaScheduler
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.router import create_router
@@ -41,6 +47,7 @@ def create_app(
     capability_http_client: httpx.AsyncClient | None = None,
     model_health_http_client: httpx.AsyncClient | None = None,
     document_service: DocumentService | None = None,
+    aina_project_artifact_store: AinaProjectArtifactStore | None = None,
     sandbox_service: SandboxService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -60,6 +67,12 @@ def create_app(
     resolved_document_service = document_service or (
         DocumentService(storage_stores.nas) if storage_stores is not None else None
     )
+    resolved_aina_project_artifact_store = aina_project_artifact_store or (
+        NasAinaProjectArtifactStore(storage_stores.nas)
+        if storage_stores is not None
+        else InMemoryAinaProjectArtifactStore()
+    )
+    aina_project_service = AinaProjectService(resolved_repository, resolved_aina_project_artifact_store)
     resolved_llm = llm or OpenAICompatibleClient(
         resolved_settings,
         call_sink=resolved_repository.upsert_llm_call,
@@ -123,6 +136,7 @@ def create_app(
     app.state.capability_gateway = gateway
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
+    app.state.aina_project_service = aina_project_service
     app.state.document_edit_task_service = document_edit_task_service
     app.state.document_edit_worker = document_edit_worker
     app.state.storage_stores = storage_stores

@@ -1,17 +1,146 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import zipfile
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
+import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tianzhou_agent_platform.aina.project import build_project_archive
+from tianzhou_agent_platform.aina.project import AinaProjectRecord, build_project_archive, validate_project_archive
+from tianzhou_agent_platform.aina.project_service import (
+    AinaProjectArtifactStore,
+    AinaProjectService,
+    NasAinaProjectArtifactStore,
+)
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.api.dependencies import RequestActor, request_actor
+from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.repository import AINA_PROJECTS_RESOURCE, InMemoryRepository
 from tianzhou_agent_platform.main import create_app
+from tianzhou_agent_platform.store.errors import StorageNotFoundError, StorageValidationError
+from tianzhou_agent_platform.store.lifecycle import StorageStores
+from tianzhou_agent_platform.store.models import StoragePath, StorePage, StoreQuery, StoreRecord
+from tianzhou_agent_platform.store.nas.filesystem import NasStore
+from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
 from tests.support.fake_llm import ScriptedLLM
+
+
+class InspectableArtifactStore(AinaProjectArtifactStore):
+    def __init__(self) -> None:
+        self.artifacts: dict[str, bytes] = {}
+
+    async def write(self, path: StoragePath, payload: bytes) -> bool:
+        existing = self.artifacts.get(path.relative_path)
+        if existing is not None:
+            if existing != payload:
+                raise AssertionError("test artifact content-address collision")
+            return False
+        self.artifacts[path.relative_path] = bytes(payload)
+        return True
+
+    async def read(self, path: StoragePath) -> bytes:
+        try:
+            return self.artifacts[path.relative_path]
+        except KeyError as exc:
+            raise StorageNotFoundError("test artifact was not found") from exc
+
+    async def delete(self, path: StoragePath) -> None:
+        self.artifacts.pop(path.relative_path, None)
+
+
+class FailingDeleteArtifactStore(InspectableArtifactStore):
+    fail_delete = True
+
+    async def delete(self, path: StoragePath) -> None:
+        if self.fail_delete:
+            raise StorageValidationError("test artifact deletion failure")
+        await super().delete(path)
+
+
+class FailingReserveRepository(InMemoryRepository):
+    async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
+        del record_id, value
+        if resource == AINA_PROJECTS_RESOURCE:
+            raise StorageValidationError("test metadata reservation failure")
+
+
+class FailingValidationOnceRepository(InMemoryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_validation = True
+
+    async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
+        del record_id
+        if (
+            resource == AINA_PROJECTS_RESOURCE
+            and isinstance(value, AinaProjectRecord)
+            and value.status == "validated"
+            and self.fail_validation
+        ):
+            self.fail_validation = False
+            raise StorageValidationError("test metadata validation failure")
+
+
+class FakeRepositoryMySqlStore:
+    def __init__(self) -> None:
+        self.records: dict[str, dict[str, StoreRecord]] = {}
+
+    async def create_tables(self, metadata: Any) -> None:
+        del metadata
+
+    async def read(self, resource: str, record_id: str) -> StoreRecord | None:
+        return self.records.get(resource, {}).get(record_id)
+
+    async def create(self, resource: str, values: dict[str, Any]) -> StoreRecord:
+        record_id = str(values["id"])
+        if record_id in self.records.get(resource, {}):
+            raise StorageValidationError("test duplicate record")
+        record = StoreRecord(
+            resource=resource,
+            id=record_id,
+            values={key: value for key, value in values.items() if key != "id"},
+        )
+        self.records.setdefault(resource, {})[str(record.id)] = record
+        return record
+
+    async def update(self, resource: str, record_id: str, values: dict[str, Any]) -> StoreRecord:
+        record = self.records[resource][record_id]
+        updated = StoreRecord(resource=resource, id=record_id, values={**record.values, **values})
+        self.records[resource][record_id] = updated
+        return updated
+
+    async def delete(self, resource: str, record_id: str) -> None:
+        self.records.get(resource, {}).pop(record_id, None)
+
+    async def query(self, resource: str, query: StoreQuery) -> StorePage:
+        records = list(self.records.get(resource, {}).values())
+        page = records[query.offset : query.offset + query.limit]
+        return StorePage(items=page, limit=query.limit, offset=query.offset)
+
+
+class FakeRepositoryRedisStore:
+    def __init__(self) -> None:
+        self.acquire_lease = True
+
+    async def set(self, namespace: str, key: str, value: Any) -> None:
+        del namespace, key, value
+
+    async def delete(self, namespace: str, key: str) -> None:
+        del namespace, key
+
+    @asynccontextmanager
+    async def lease(self, namespace: str, key: str, *, ttl_seconds: int) -> AsyncIterator[bool]:
+        del namespace, key, ttl_seconds
+        yield self.acquire_lease
 
 
 def _settings() -> AgentSettings:
@@ -21,6 +150,11 @@ def _settings() -> AgentSettings:
         llm_api_key="test-key",
         llm_model="test-model",
     )
+
+
+def _use_actor(app: FastAPI, *, user_id: str, tenant_id: str) -> None:
+    actor = RequestActor(user_id=user_id, tenant_id=tenant_id)
+    app.dependency_overrides[request_actor] = lambda: actor
 
 
 def _managed_manifest(**overrides: Any) -> dict[str, Any]:
@@ -171,3 +305,355 @@ def test_managed_project_manifest_cannot_be_registered_before_deployment() -> No
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "PERMISSION_DENIED"
     assert "deployed remote" in response.json()["error"]["message"]
+
+
+def test_imported_managed_project_can_be_listed_downloaded_and_deleted_without_registration() -> None:
+    archive = _archive(_managed_manifest())
+    artifacts = InspectableArtifactStore()
+    app = create_app(
+        settings=_settings(),
+        llm=ScriptedLLM([]),
+        aina_project_artifact_store=artifacts,
+    )
+    _use_actor(app, user_id="user-a", tenant_id="tenant-a")
+
+    with TestClient(app) as client:
+        imported = client.post(
+            "/aina-projects",
+            files={"file": ("managed.aina.zip", archive, "application/zip")},
+        )
+        project = imported.json()
+        listed = client.get("/aina-projects")
+        downloaded = client.get(f"/aina-projects/{project['id']}/archive")
+        registered = client.get("/ainas")
+        deleted = client.delete(f"/aina-projects/{project['id']}")
+        after_delete = client.get("/aina-projects")
+        missing = client.get(f"/aina-projects/{project['id']}/archive")
+
+    assert imported.status_code == 201
+    assert project["status"] == "validated"
+    assert project["source_filename"] == "managed.aina.zip"
+    assert project["archive_sha256"] == hashlib.sha256(archive).hexdigest()
+    assert project["manifest"]["runtime"]["type"] == "managed"
+    assert "archive_path" not in project
+    assert listed.status_code == 200
+    assert listed.json() == [project]
+    assert downloaded.status_code == 200
+    assert downloaded.content == archive
+    assert "managed.aina.zip" in downloaded.headers["content-disposition"]
+    assert all(item["manifest"]["aina"]["id"] != "com.example.managed" for item in registered.json())
+    assert deleted.status_code == 204
+    assert after_delete.json() == []
+    assert missing.status_code == 404
+    assert artifacts.artifacts == {}
+
+
+def test_project_import_is_idempotent_actor_scoped_and_rejects_changed_content() -> None:
+    archive = _archive(_managed_manifest())
+    changed_archive = _archive(_managed_manifest(), **{"src/extra.py": "CHANGED = True\n"})
+    app = create_app(settings=_settings(), llm=ScriptedLLM([]))
+    _use_actor(app, user_id="user-a", tenant_id="tenant-a")
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/aina-projects",
+            files={"file": ("first.zip", archive, "application/zip")},
+        )
+        repeated = client.post(
+            "/aina-projects",
+            files={"file": ("renamed.zip", archive, "application/zip")},
+        )
+        _use_actor(app, user_id="user-b", tenant_id="tenant-a")
+        other_actor = client.post(
+            "/aina-projects",
+            files={"file": ("other.zip", archive, "application/zip")},
+        )
+        second_list = client.get("/aina-projects")
+        _use_actor(app, user_id="user-a", tenant_id="tenant-a")
+        changed = client.post(
+            "/aina-projects",
+            files={"file": ("changed.zip", changed_archive, "application/zip")},
+        )
+        first_list = client.get("/aina-projects")
+        _use_actor(app, user_id="user-b", tenant_id="tenant-a")
+        foreign_download = client.get(f"/aina-projects/{first.json()['id']}/archive")
+        foreign_delete = client.delete(f"/aina-projects/{first.json()['id']}")
+
+    assert first.status_code == 201
+    assert repeated.status_code == 201
+    assert repeated.json() == first.json()
+    assert other_actor.status_code == 201
+    assert other_actor.json()["id"] != first.json()["id"]
+    assert changed.status_code == 409
+    assert changed.json()["error"]["code"] == "CONFLICT"
+    assert len(first_list.json()) == 1
+    assert len(second_list.json()) == 1
+    assert foreign_download.status_code == 403
+    assert foreign_delete.status_code == 403
+
+
+def test_project_import_rejects_remote_runtime_without_registering_it() -> None:
+    remote_manifest = _managed_manifest(
+        runtime={
+            "type": "remote",
+            "endpoint": "https://remote.invalid/aina",
+            "protocol": "aina",
+        }
+    )
+    archive = _archive(remote_manifest)
+    artifacts = InspectableArtifactStore()
+
+    app = create_app(
+        settings=_settings(),
+        llm=ScriptedLLM([]),
+        aina_project_artifact_store=artifacts,
+    )
+    _use_actor(app, user_id="user-a", tenant_id="tenant-a")
+    with TestClient(app) as client:
+        imported = client.post(
+            "/aina-projects",
+            files={"file": ("remote.zip", archive, "application/zip")},
+        )
+        projects = client.get("/aina-projects")
+
+    assert imported.status_code == 422
+    assert "registration API" in imported.json()["error"]["message"]
+    assert projects.json() == []
+    assert artifacts.artifacts == {}
+
+
+def test_project_archive_download_fails_closed_when_blob_is_tampered() -> None:
+    archive = _archive(_managed_manifest())
+    artifacts = InspectableArtifactStore()
+    app = create_app(
+        settings=_settings(),
+        llm=ScriptedLLM([]),
+        aina_project_artifact_store=artifacts,
+    )
+    _use_actor(app, user_id="user-a", tenant_id="tenant-a")
+
+    with TestClient(app) as client:
+        imported = client.post(
+            "/aina-projects",
+            files={"file": ("managed.zip", archive, "application/zip")},
+        )
+        artifact_path = next(iter(artifacts.artifacts))
+        artifacts.artifacts[artifact_path] = b"tampered"
+        downloaded = client.get(f"/aina-projects/{imported.json()['id']}/archive")
+
+    assert downloaded.status_code == 500
+    assert downloaded.json()["error"]["code"] == "INTEGRITY_CHECK_FAILED"
+    assert downloaded.json()["error"]["source"] == "aina_project"
+
+
+async def test_persistent_repository_restores_aina_project_metadata() -> None:
+    mysql = FakeRepositoryMySqlStore()
+    redis = FakeRepositoryRedisStore()
+    stores = cast(StorageStores, SimpleNamespace(mysql=mysql, redis=redis, nas=None))
+    artifacts = InspectableArtifactStore()
+    archive = _archive(_managed_manifest())
+
+    first_repository = PersistentRepository(stores)
+    second_repository = PersistentRepository(stores)
+    await first_repository.initialize()
+    await second_repository.initialize()
+    imported = await AinaProjectService(first_repository, artifacts).import_project(
+        archive,
+        source_filename="managed.zip",
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+
+    listed = await second_repository.list_aina_projects(user_id="user-a", tenant_id="tenant-a")
+    restored = await second_repository.get_aina_project(
+        imported.id,
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+
+    assert AINA_PROJECTS_RESOURCE in repository_tables
+    assert imported.id in mysql.records[AINA_PROJECTS_RESOURCE]
+    assert listed == [imported]
+    assert restored == imported
+
+    redis.acquire_lease = False
+    contended_result = await second_repository.mark_aina_project_validated(
+        imported.id,
+        archive_sha256=imported.archive_sha256,
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+    assert contended_result == imported
+    redis.acquire_lease = True
+
+    next_identity = imported.manifest.aina.model_copy(update={"version": "0.2.0"})
+    pending = imported.model_copy(
+        update={
+            "id": f"aina_project_{'1' * 32}",
+            "manifest": imported.manifest.model_copy(update={"aina": next_identity}),
+            "status": "importing",
+        }
+    )
+    await second_repository.create_aina_project(pending)
+    redis.acquire_lease = False
+    with pytest.raises(PlatformError, match="being imported") as busy:
+        await first_repository.mark_aina_project_validated(
+            pending.id,
+            archive_sha256=pending.archive_sha256,
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+    assert busy.value.retryable is True
+    redis.acquire_lease = True
+
+    repeated = await AinaProjectService(second_repository, artifacts).import_project(
+        archive,
+        source_filename="renamed.zip",
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+    assert repeated == imported
+
+    changed_archive = _archive(_managed_manifest(), **{"src/extra.py": "CHANGED = True\n"})
+    changed_report = validate_project_archive(changed_archive)
+    changed_record = imported.model_copy(
+        update={
+            "source_filename": "changed.zip",
+            "archive_sha256": changed_report.archive_sha256,
+            "size_bytes": changed_report.size_bytes,
+            "uncompressed_size_bytes": changed_report.uncompressed_size_bytes,
+            "file_count": changed_report.file_count,
+        }
+    )
+    with pytest.raises(PlatformError, match="different content"):
+        await second_repository.create_aina_project(changed_record)
+    with pytest.raises(PlatformError, match="different content") as raised:
+        await AinaProjectService(second_repository, artifacts).import_project(
+            changed_archive,
+            source_filename="changed.zip",
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+    assert raised.value.status_code == 409
+    assert (
+        await first_repository.get_aina_project(
+            imported.id,
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+        == imported
+    )
+
+
+async def test_metadata_reservation_failure_does_not_write_project_blob() -> None:
+    repository = FailingReserveRepository()
+    artifacts = InspectableArtifactStore()
+    service = AinaProjectService(repository, artifacts)
+
+    with pytest.raises(StorageValidationError, match="reservation failure"):
+        await service.import_project(
+            _archive(_managed_manifest()),
+            source_filename="managed.zip",
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+
+    assert await repository.list_aina_projects(user_id="user-a", tenant_id="tenant-a") == []
+    assert artifacts.artifacts == {}
+
+
+async def test_failed_validation_transition_is_visible_and_resumes_same_import() -> None:
+    repository = FailingValidationOnceRepository()
+    artifacts = InspectableArtifactStore()
+    service = AinaProjectService(repository, artifacts)
+    archive = _archive(_managed_manifest())
+
+    with pytest.raises(StorageValidationError, match="validation failure"):
+        await service.import_project(
+            archive,
+            source_filename="managed.zip",
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+
+    pending = await service.list_projects(user_id="user-a", tenant_id="tenant-a")
+    assert len(pending) == 1
+    assert pending[0].status == "importing"
+    assert len(artifacts.artifacts) == 1
+    with pytest.raises(PlatformError, match="has not completed"):
+        await service.get_archive(
+            pending[0].id,
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+
+    changed_archive = _archive(_managed_manifest(), **{"src/extra.py": "CHANGED = True\n"})
+    with pytest.raises(PlatformError, match="different content"):
+        await service.import_project(
+            changed_archive,
+            source_filename="changed.zip",
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+    assert len(artifacts.artifacts) == 1
+
+    resumed = await service.import_project(
+        archive,
+        source_filename="renamed.zip",
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+    assert resumed.id == pending[0].id
+    assert resumed.source_filename == "managed.zip"
+    assert resumed.status == "validated"
+    _, downloaded = await service.get_archive(
+        resumed.id,
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+    assert downloaded == archive
+
+
+async def test_blob_delete_failure_keeps_project_metadata_for_retry() -> None:
+    repository = InMemoryRepository()
+    artifacts = FailingDeleteArtifactStore()
+    service = AinaProjectService(repository, artifacts)
+    imported = await service.import_project(
+        _archive(_managed_manifest()),
+        source_filename="managed.zip",
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+
+    with pytest.raises(StorageValidationError, match="deletion failure"):
+        await service.delete_project(
+            imported.id,
+            user_id="user-a",
+            tenant_id="tenant-a",
+        )
+
+    assert await service.list_projects(user_id="user-a", tenant_id="tenant-a") == [imported]
+    assert artifacts.artifacts
+    artifacts.fail_delete = False
+    await service.delete_project(
+        imported.id,
+        user_id="user-a",
+        tenant_id="tenant-a",
+    )
+    assert await service.list_projects(user_id="user-a", tenant_id="tenant-a") == []
+    assert artifacts.artifacts == {}
+
+
+async def test_nas_artifact_store_concurrent_writes_publish_one_complete_archive(tmp_path: Path) -> None:
+    payload = _archive(_managed_manifest())
+    digest = hashlib.sha256(payload).hexdigest()
+
+    for iteration in range(20):
+        stores = [NasAinaProjectArtifactStore(NasStore(tmp_path)) for _ in range(8)]
+        path = StoragePath(relative_path=f"aina-projects/test/{iteration}-{digest}.aina.zip")
+        results = await asyncio.gather(*(store.write(path, payload) for store in stores))
+
+        assert results.count(True) == 1
+        assert results.count(False) == 7
+        assert await stores[0].read(path) == payload
+    assert list(tmp_path.rglob("*.tmp-*")) == []

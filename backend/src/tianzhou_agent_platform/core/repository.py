@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Iterable
 from uuid import uuid4
 
+from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
@@ -37,6 +38,7 @@ MEMORIES_RESOURCE = "memories"
 TOOLS_RESOURCE = "tools"
 SKILLS_RESOURCE = "skills"
 AINAS_RESOURCE = "ainas"
+AINA_PROJECTS_RESOURCE = "aina_projects"
 INSTALLATIONS_RESOURCE = "installations"
 TRACES_RESOURCE = "traces"
 LLM_CALLS_RESOURCE = "llm_calls"
@@ -64,6 +66,7 @@ class InMemoryRepository:
         self._tools: dict[str, ToolRecord] = {}
         self._skills: dict[str, SkillRecord] = {}
         self._ainas: dict[str, AinaRecord] = {}
+        self._aina_projects: dict[str, AinaProjectRecord] = {}
         self._installations: dict[tuple[str, str, str], AinaInstallation] = {}
         self._traces: dict[str, TraceRecord] = {}
         self._llm_calls: dict[str, LLMCallRecord] = {}
@@ -870,6 +873,127 @@ class InMemoryRepository:
             if self._skills.pop(skill_id, None) is None:
                 raise not_found("Skill", skill_id)
             await self._delete_record(SKILLS_RESOURCE, skill_id)
+
+    async def create_aina_project(self, project: AinaProjectRecord) -> AinaProjectRecord:
+        async with self._lock:
+            for existing in self._aina_projects.values():
+                if (
+                    existing.tenant_id == project.tenant_id
+                    and existing.user_id == project.user_id
+                    and existing.manifest.aina.id == project.manifest.aina.id
+                    and existing.manifest.aina.version == project.manifest.aina.version
+                ):
+                    return self._copy(self._resolve_aina_project_import(existing, project))
+            if project.id in self._aina_projects:
+                raise conflict(f"AINA project {project.id!r} already exists")
+            self._aina_projects[project.id] = project
+            try:
+                await self._save_record(AINA_PROJECTS_RESOURCE, project.id, project)
+            except Exception:
+                self._aina_projects.pop(project.id, None)
+                raise
+            return self._copy(project)
+
+    @staticmethod
+    def _resolve_aina_project_import(
+        existing: AinaProjectRecord,
+        candidate: AinaProjectRecord,
+    ) -> AinaProjectRecord:
+        same_identity = (
+            existing.tenant_id == candidate.tenant_id
+            and existing.user_id == candidate.user_id
+            and existing.manifest.aina.id == candidate.manifest.aina.id
+            and existing.manifest.aina.version == candidate.manifest.aina.version
+        )
+        if same_identity and existing.archive_sha256 == candidate.archive_sha256:
+            return existing
+        if same_identity:
+            raise conflict(
+                f"AINA project {candidate.manifest.aina.id!r} version "
+                f"{candidate.manifest.aina.version!r} was already imported with different content"
+            )
+        raise conflict(f"AINA project {candidate.id!r} already exists")
+
+    async def mark_aina_project_validated(
+        self,
+        project_id: str,
+        *,
+        archive_sha256: str,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord:
+        async with self._lock:
+            project = self._aina_projects.get(project_id)
+            if project is None:
+                raise not_found("AINA project", project_id)
+            if project.user_id != user_id or project.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "AINA project ownership does not match the caller",
+                    status_code=403,
+                )
+            if project.archive_sha256 != archive_sha256:
+                raise conflict("AINA project archive changed while it was being imported")
+            if project.status == "validated":
+                return self._copy(project)
+            updated = project.model_copy(
+                update={
+                    "status": "validated",
+                    "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            await self._save_record(AINA_PROJECTS_RESOURCE, project_id, updated)
+            self._aina_projects[project_id] = updated
+            return self._copy(updated)
+
+    async def get_aina_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord:
+        async with self._lock:
+            project = self._aina_projects.get(project_id)
+            if project is None:
+                raise not_found("AINA project", project_id)
+            if project.user_id != user_id or project.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "AINA project ownership does not match the caller",
+                    status_code=403,
+                )
+            return self._copy(project)
+
+    async def list_aina_projects(self, *, user_id: str, tenant_id: str) -> list[AinaProjectRecord]:
+        async with self._lock:
+            projects = [
+                self._copy(project)
+                for project in self._aina_projects.values()
+                if project.user_id == user_id and project.tenant_id == tenant_id
+            ]
+        return sorted(projects, key=lambda project: project.created_at, reverse=True)
+
+    async def remove_aina_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> None:
+        async with self._lock:
+            project = self._aina_projects.get(project_id)
+            if project is None:
+                raise not_found("AINA project", project_id)
+            if project.user_id != user_id or project.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "AINA project ownership does not match the caller",
+                    status_code=403,
+                )
+            await self._delete_record(AINA_PROJECTS_RESOURCE, project_id)
+            del self._aina_projects[project_id]
 
     async def register_aina(self, aina: AinaRecord) -> AinaRecord:
         aina_id = aina.manifest.aina.id
