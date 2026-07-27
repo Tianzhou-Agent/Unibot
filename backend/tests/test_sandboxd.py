@@ -95,3 +95,23 @@ def test_sandboxd_drains_but_bounds_large_output(monkeypatch, tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["truncated"] is True
     assert len(response.json()["stdout"].encode()) == 128
+
+
+def test_sandboxd_writes_reads_and_deletes_workspace_files(monkeypatch, tmp_path) -> None:
+    module = load_sandboxd(monkeypatch, tmp_path)
+    with TestClient(module.app) as client:
+        created = client.put("/files/projects/demo/request.json", content=b'{"name":"Ada"}')
+        read = client.get("/files/projects/demo/request.json")
+        conflict = client.put(
+            "/files/projects/demo/request.json?overwrite=false",
+            content=b"changed",
+        )
+        deleted = client.delete("/files/projects/demo/request.json")
+        missing = client.get("/files/projects/demo/request.json")
+
+    assert created.status_code == 204
+    assert read.status_code == 200
+    assert read.content == b'{"name":"Ada"}'
+    assert conflict.status_code == 409
+    assert deleted.status_code == 204
+    assert missing.status_code == 404

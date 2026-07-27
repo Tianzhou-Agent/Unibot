@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -31,7 +32,7 @@ from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.models import StoragePath, StorePage, StoreQuery, StoreRecord
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
-from tests.support.fake_llm import ScriptedLLM
+from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
 class InspectableArtifactStore(AinaProjectArtifactStore):
@@ -346,6 +347,77 @@ def test_imported_managed_project_can_be_listed_downloaded_and_deleted_without_r
     assert after_delete.json() == []
     assert missing.status_code == 404
     assert artifacts.artifacts == {}
+
+
+def test_managed_project_can_be_deployed_installed_invoked_and_undeployed(tmp_path: Path) -> None:
+    handler = """
+async def invoke(request):
+    name = request["input"]["input"]
+    return {
+        "request_id": request["request_id"],
+        "status": "completed",
+        "outputs": [{"type": "text", "content": f"Hello, {name}!"}],
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+        "trace_id": request["trace"]["trace_id"],
+    }
+"""
+    archive = _archive(_managed_manifest(), **{"src/main.py": handler})
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_", arguments='{"input":"Ada"}'),
+            assistant("The managed AINA greeted Ada."),
+        ]
+    )
+    settings = AgentSettings(
+        _env_file=None,
+        llm_base_url="https://model.invalid/v1",
+        llm_api_key="test-key",
+        llm_model="test-model",
+        sandbox_workspace_root=tmp_path / "sandboxes",
+    )
+    with TestClient(create_app(settings=settings, llm=llm)) as client:
+        imported = client.post(
+            "/aina-projects",
+            files={"file": ("managed.aina.zip", archive, "application/zip")},
+        )
+        project_id = imported.json()["id"]
+        deployed = client.post(f"/aina-projects/{project_id}/deploy")
+        deployed_again = client.post(f"/aina-projects/{project_id}/deploy")
+        registered = client.get("/ainas/com.example.managed")
+        installed = client.post("/ainas/com.example.managed/install", json={})
+        chat = client.post(
+            "/chat",
+            json={
+                "message": "Greet Ada",
+                "capability": "aina:com.example.managed",
+            },
+        )
+        blocked_delete = client.delete(f"/aina-projects/{project_id}")
+        undeployed = client.delete(f"/aina-projects/{project_id}/deployment")
+        missing = client.get("/ainas/com.example.managed")
+        installations = client.get("/installations")
+
+    assert deployed.status_code == 200
+    assert deployed.json()["status"] == "deployed"
+    assert deployed.json()["deployed_at"] is not None
+    assert deployed_again.status_code == 200
+    assert deployed_again.json() == deployed.json()
+    assert registered.status_code == 200
+    assert registered.json()["manifest"]["runtime"]["type"] == "managed"
+    assert installed.status_code == 200
+    assert chat.status_code == 200
+    assert chat.json()["status"] == "completed"
+    tool_message = next(
+        item for item in llm.calls[1]["messages"] if item.get("tool_call_id") == "call_1"
+    )
+    tool_result = json.loads(tool_message["content"])
+    assert tool_result["status"] == "completed"
+    assert tool_result["outputs"][0]["content"] == "Hello, Ada!"
+    assert blocked_delete.status_code == 409
+    assert undeployed.status_code == 200
+    assert undeployed.json()["status"] == "validated"
+    assert missing.status_code == 404
+    assert installations.json() == []
 
 
 def test_project_import_is_idempotent_actor_scoped_and_rejects_changed_content() -> None:

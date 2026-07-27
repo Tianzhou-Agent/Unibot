@@ -12,6 +12,7 @@ import {
   PackageCheck,
   Plus,
   RefreshCw,
+  Rocket,
   ShieldAlert,
   Trash2,
   Unplug,
@@ -171,7 +172,7 @@ export default function AllAppsPage() {
           return [];
         }),
       ]);
-      setAinas(ainaData.filter((record) => record.manifest.runtime.type !== "managed"));
+      setAinas(ainaData);
       setInstallations(installationData);
       setTools(toolData);
       setSkills(skillData);
@@ -275,6 +276,41 @@ export default function AllAppsPage() {
       setNotice({ tone: "success", text: `${project.manifest.aina.name} 项目已删除。` });
     } catch (deleteError) {
       setNotice({ tone: "error", text: apiErrorMessage(deleteError) });
+    } finally {
+      setProjectAction(null);
+    }
+  }
+
+  async function deployProject(project: AinaProjectRecord) {
+    setProjectAction(project.id);
+    setNotice(null);
+    try {
+      const deployed = await api.post<AinaProjectRecord>(
+        `/aina-projects/${encodeURIComponent(project.id)}/deploy`,
+      );
+      setProjects((current) => current.map((item) => item.id === deployed.id ? deployed : item));
+      setNotice({ tone: "success", text: `${deployed.manifest.aina.name} 已部署，可以安装并从对话调用。` });
+      await load();
+    } catch (deployError) {
+      setNotice({ tone: "error", text: apiErrorMessage(deployError) });
+    } finally {
+      setProjectAction(null);
+    }
+  }
+
+  async function undeployProject(project: AinaProjectRecord) {
+    if (!window.confirm(`取消部署“${project.manifest.aina.name}”？已有安装也会一并移除。`)) return;
+    setProjectAction(project.id);
+    setNotice(null);
+    try {
+      const deployed = await api.delete<AinaProjectRecord>(
+        `/aina-projects/${encodeURIComponent(project.id)}/deployment`,
+      );
+      setProjects((current) => current.map((item) => item.id === deployed.id ? deployed : item));
+      setNotice({ tone: "success", text: `${deployed.manifest.aina.name} 已取消部署，源码项目仍然保留。` });
+      await load();
+    } catch (deployError) {
+      setNotice({ tone: "error", text: apiErrorMessage(deployError) });
     } finally {
       setProjectAction(null);
     }
@@ -448,6 +484,8 @@ export default function AllAppsPage() {
                 busyProjectId={projectAction}
                 onDownload={(project) => void downloadProject(project)}
                 onDelete={(project) => void deleteProject(project)}
+                onDeploy={(project) => void deployProject(project)}
+                onUndeploy={(project) => void undeployProject(project)}
               />
               <AinaGrid
                 ainas={ainas}
@@ -571,11 +609,15 @@ function ProjectSection({
   busyProjectId,
   onDownload,
   onDelete,
+  onDeploy,
+  onUndeploy,
 }: {
   projects: AinaProjectRecord[];
   busyProjectId: string | null;
   onDownload: (project: AinaProjectRecord) => void;
   onDelete: (project: AinaProjectRecord) => void;
+  onDeploy: (project: AinaProjectRecord) => void;
+  onUndeploy: (project: AinaProjectRecord) => void;
 }) {
   return (
     <section aria-label="AINA Projects" className="mb-4 rounded-xl border border-line bg-white p-4 shadow-card">
@@ -608,10 +650,12 @@ function ProjectSection({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="truncate text-[13.5px] font-extrabold text-ink">{project.manifest.aina.name}</h3>
-                      <StatusChip tone={project.status === "validated" ? "success" : "warning"}>
-                        {project.status === "validated"
-                          ? managed ? "已校验·待部署" : "已校验"
-                          : "导入未完成"}
+                      <StatusChip tone={project.status === "deployed" || project.status === "validated" ? "success" : "warning"}>
+                        {project.status === "deployed"
+                          ? "已部署"
+                          : project.status === "validated"
+                            ? managed ? "已校验·待部署" : "已校验"
+                            : "导入未完成"}
                       </StatusChip>
                     </div>
                     <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-subtle">
@@ -628,9 +672,32 @@ function ProjectSection({
                 <div className="mt-3 flex items-center gap-2">
                   <span className="text-[10px] text-ink-subtle">更新于 {formatDate(project.updated_at)}</span>
                   <span className="flex-1" />
+                  {project.status === "validated" ? (
+                    <button
+                      type="button"
+                      disabled={busyProjectId !== null}
+                      onClick={() => onDeploy(project)}
+                      className="btn-primary h-8"
+                      aria-label={`部署项目 ${project.manifest.aina.name}`}
+                    >
+                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
+                      {busy ? "部署中…" : "部署"}
+                    </button>
+                  ) : project.status === "deployed" ? (
+                    <button
+                      type="button"
+                      disabled={busyProjectId !== null}
+                      onClick={() => onUndeploy(project)}
+                      className="btn-outline h-8"
+                      aria-label={`取消部署项目 ${project.manifest.aina.name}`}
+                    >
+                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
+                      取消部署
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    disabled={busyProjectId !== null || project.status !== "validated"}
+                    disabled={busyProjectId !== null || project.status === "importing"}
                     onClick={() => onDownload(project)}
                     className="btn-outline h-8"
                     aria-label={`下载项目 ${project.manifest.aina.name}`}
@@ -640,7 +707,7 @@ function ProjectSection({
                   </button>
                   <button
                     type="button"
-                    disabled={busyProjectId !== null}
+                    disabled={busyProjectId !== null || project.status === "deployed"}
                     onClick={() => onDelete(project)}
                     className="btn-ghost h-8 text-danger"
                     aria-label={`删除项目 ${project.manifest.aina.name}`}
@@ -685,6 +752,7 @@ function AinaGrid({
         {ainas.map((record) => {
           const manifest = record.manifest;
           const builtin = manifest.runtime.type === "builtin";
+          const managed = manifest.runtime.type === "managed";
           const installed = builtin || installedIds.has(manifest.aina.id);
           return (
             <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-card">
@@ -695,7 +763,7 @@ function AinaGrid({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <h2 className="truncate text-[15px] font-extrabold text-ink">{manifest.aina.name}</h2>
-                  {builtin ? <StatusChip tone="success">系统内置</StatusChip> : installed ? <StatusChip tone="success">已安装</StatusChip> : <StatusChip>已注册</StatusChip>}
+                  {builtin ? <StatusChip tone="success">系统内置</StatusChip> : installed ? <StatusChip tone="success">已安装</StatusChip> : <StatusChip>{managed ? "已部署" : "已注册"}</StatusChip>}
                 </div>
                 <p className="mt-0.5 font-mono text-[10.5px] text-ink-muted">{manifest.aina.id} · v{manifest.aina.version}</p>
               </div>
@@ -705,7 +773,11 @@ function AinaGrid({
               <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span className="truncate font-mono">
-                  {manifest.runtime.type === "remote" ? manifest.runtime.endpoint : "platform://builtin"}
+                  {manifest.runtime.type === "remote"
+                    ? manifest.runtime.endpoint
+                    : manifest.runtime.type === "managed"
+                      ? `本地托管 · ${manifest.runtime.language === "python" ? "Python" : "Node.js"}`
+                      : "platform://builtin"}
                 </span>
               </div>
               <div className="text-[11px] text-ink-muted">
@@ -728,9 +800,11 @@ function AinaGrid({
                 </button>
               ) : installed ? (
                 <>
-                  <button type="button" onClick={() => onOpen(record)} className="btn-primary">
-                    <ExternalLink className="w-4 h-4" />打开画布
-                  </button>
+                  {manifest.main_widget ? (
+                    <button type="button" onClick={() => onOpen(record)} className="btn-primary">
+                      <ExternalLink className="w-4 h-4" />打开画布
+                    </button>
+                  ) : null}
                   <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
                     <Unplug className="w-4 h-4" />卸载
                   </button>
@@ -741,7 +815,7 @@ function AinaGrid({
                 </button>
               )}
               <span className="flex-1" />
-              {!builtin ? (
+              {!builtin && !managed ? (
                 <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={`删除 ${manifest.aina.name}`}>
                   <Trash2 className="w-4 h-4" />
                 </button>

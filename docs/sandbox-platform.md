@@ -21,7 +21,7 @@ flowchart LR
     Operator["Kopf Operator"] --> CR
     Operator --> Pod["每用户一个 gVisor Pod"]
     Operator --> PVC["每用户一个 PVC"]
-    API --> Sandboxd["sandboxd /exec"]
+    API --> Sandboxd["sandboxd /exec + /files"]
     Pod --> Sandboxd
     Pod --> PVC
 ```
@@ -35,7 +35,9 @@ flowchart LR
 - PVC 使用 `ReadWriteOncePod`，防止同一个工作区同时挂载到两个运行 Pod。
 - NetworkPolicy 只允许 Unibot 后端访问 `sandboxd`；依赖下载只能访问公网地址和显式配置的额外 CIDR。
 - 停止仅回收 Pod/Service 并保留 PVC；重置删除 CR、PVC、沙箱记录和执行历史。
-- `sandboxd` 串行执行同一用户的脚本，超时会终止整个进程组，并限制返回输出大小。
+- `SandboxService` 对 local 与 Kubernetes driver 提供相同的执行、文件写入、读取和删除契约；业务能力不直接访问宿主机路径或 Kubernetes API。
+- `sandboxd` 串行处理同一用户的执行和文件操作；`PUT/GET/DELETE /files/{relative_path}` 只允许访问工作区内文件，写入使用原子替换并限制单文件大小。
+- 脚本执行超时会终止整个进程组，并限制返回输出大小。
 
 ## 镜像
 

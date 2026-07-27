@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -34,6 +35,22 @@ class SandboxDriver(ABC):
         sandbox: SandboxRecord,
         request: SandboxExecutionRequest,
     ) -> DriverExecutionResult: ...
+
+    @abstractmethod
+    async def write_file(
+        self,
+        sandbox: SandboxRecord,
+        path: str,
+        content: bytes,
+        *,
+        overwrite: bool,
+    ) -> None: ...
+
+    @abstractmethod
+    async def read_file(self, sandbox: SandboxRecord, path: str) -> bytes: ...
+
+    @abstractmethod
+    async def delete_file(self, sandbox: SandboxRecord, path: str) -> None: ...
 
     @abstractmethod
     async def stop(self, sandbox: SandboxRecord) -> DriverSandboxState: ...
@@ -164,6 +181,39 @@ class LocalProcessSandboxDriver(SandboxDriver):
             workspace=str(self._workspace(sandbox)),
         )
 
+    async def write_file(
+        self,
+        sandbox: SandboxRecord,
+        path: str,
+        content: bytes,
+        *,
+        overwrite: bool,
+    ) -> None:
+        target = self._file(sandbox, path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and not overwrite:
+            raise PlatformError("CONFLICT", "Sandbox file already exists", status_code=409, source="sandbox")
+        await asyncio.to_thread(target.write_bytes, content)
+
+    async def read_file(self, sandbox: SandboxRecord, path: str) -> bytes:
+        target = self._file(sandbox, path)
+        try:
+            return await asyncio.to_thread(target.read_bytes)
+        except FileNotFoundError as exc:
+            raise PlatformError(
+                "RESOURCE_NOT_FOUND",
+                "Sandbox file was not found",
+                status_code=404,
+                source="sandbox",
+            ) from exc
+
+    async def delete_file(self, sandbox: SandboxRecord, path: str) -> None:
+        target = self._file(sandbox, path)
+        try:
+            await asyncio.to_thread(target.unlink)
+        except FileNotFoundError:
+            return
+
     async def reset(self, sandbox: SandboxRecord) -> None:
         workspace = self._workspace(sandbox)
         if workspace.exists():
@@ -175,6 +225,13 @@ class LocalProcessSandboxDriver(SandboxDriver):
         if workspace.parent != self.workspace_root:
             raise PlatformError("PERMISSION_DENIED", "Invalid sandbox workspace", status_code=403)
         return workspace
+
+    def _file(self, sandbox: SandboxRecord, path: str) -> Path:
+        workspace = self._workspace(sandbox)
+        target = (workspace / path).resolve()
+        if target == workspace or workspace not in target.parents:
+            raise PlatformError("PERMISSION_DENIED", "Sandbox file path escapes the workspace", status_code=403)
+        return target
 
     @staticmethod
     def _command(language: str, script: str) -> list[str]:
@@ -312,6 +369,46 @@ class KubernetesSandboxDriver(SandboxDriver):
                 source="sandbox",
             ) from exc
 
+    async def write_file(
+        self,
+        sandbox: SandboxRecord,
+        path: str,
+        content: bytes,
+        *,
+        overwrite: bool,
+    ) -> None:
+        state = await self._wait_ready(sandbox)
+        response = await self._sandboxd_request(
+            state,
+            "PUT",
+            path,
+            content=content,
+            params={"overwrite": str(overwrite).lower()},
+        )
+        if response.status_code == 409:
+            raise PlatformError("CONFLICT", "Sandbox file already exists", status_code=409, source="sandbox")
+        self._raise_sandboxd_status(response, "write sandbox file")
+
+    async def read_file(self, sandbox: SandboxRecord, path: str) -> bytes:
+        state = await self._wait_ready(sandbox)
+        response = await self._sandboxd_request(state, "GET", path)
+        if response.status_code == 404:
+            raise PlatformError(
+                "RESOURCE_NOT_FOUND",
+                "Sandbox file was not found",
+                status_code=404,
+                source="sandbox",
+            )
+        self._raise_sandboxd_status(response, "read sandbox file")
+        return response.content
+
+    async def delete_file(self, sandbox: SandboxRecord, path: str) -> None:
+        state = await self._wait_ready(sandbox)
+        response = await self._sandboxd_request(state, "DELETE", path)
+        if response.status_code == 404:
+            return
+        self._raise_sandboxd_status(response, "delete sandbox file")
+
     async def stop(self, sandbox: SandboxRecord) -> DriverSandboxState:
         response = await self._request(
             "PATCH",
@@ -361,6 +458,44 @@ class KubernetesSandboxDriver(SandboxDriver):
             if asyncio.get_running_loop().time() >= deadline:
                 raise PlatformError("TIMEOUT", "Sandbox did not become ready in time", status_code=504)
             await asyncio.sleep(1)
+
+    async def _sandboxd_request(
+        self,
+        state: DriverSandboxState,
+        method: str,
+        path: str,
+        *,
+        content: bytes | None = None,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        if state.endpoint is None:
+            raise PlatformError("DEPENDENCY_FAILED", "Sandbox endpoint is unavailable", status_code=503)
+        try:
+            return await self._client.request(
+                method,
+                f"http://{state.endpoint}:8080/files/{quote(path, safe='/')}",
+                content=content,
+                params=params,
+                timeout=30,
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "The sandbox file service could not be reached",
+                status_code=502,
+                retryable=True,
+                source="sandbox",
+            ) from exc
+
+    @staticmethod
+    def _raise_sandboxd_status(response: httpx.Response, action: str) -> None:
+        if response.is_error:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                f"Sandbox could not {action}: HTTP {response.status_code}",
+                status_code=502,
+                source="sandbox",
+            )
 
     def _collection_url(self) -> str:
         return (

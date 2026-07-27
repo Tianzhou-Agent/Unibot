@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.drivers import LocalProcessSandboxDriver
@@ -133,6 +134,41 @@ async def test_concurrent_sandbox_ensure_reuses_one_actor_record(tmp_path) -> No
     )
 
     assert len({record.id for record in records}) == 1
+
+
+@pytest.mark.asyncio
+async def test_sandbox_service_reuses_driver_file_contract(tmp_path) -> None:
+    service = SandboxService(
+        InMemoryRepository(),
+        LocalProcessSandboxDriver(tmp_path),
+        default_image="unibot/sandboxd:test",
+    )
+
+    await service.write_file(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        path="managed-ainas/request.json",
+        content=b'{"name":"Ada"}',
+    )
+    content = await service.read_file(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        path="managed-ainas/request.json",
+    )
+    await service.delete_file(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        path="managed-ainas/request.json",
+    )
+
+    assert content == b'{"name":"Ada"}'
+    with pytest.raises(PlatformError, match="escapes the workspace"):
+        await service.write_file(
+            user_id="user-1",
+            tenant_id="tenant-1",
+            path="../outside",
+            content=b"unsafe",
+        )
 
 
 def test_sandbox_executes_bash_when_available(tmp_path) -> None:

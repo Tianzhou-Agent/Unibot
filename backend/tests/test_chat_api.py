@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.chat import TraceRecord
+from tianzhou_agent_platform.core.chat import LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.main import create_app
@@ -101,6 +101,79 @@ def test_conversations_can_be_categorized_filtered_and_deleted() -> None:
     assert [item["id"] for item in work.json()] == [created["id"]]
     assert deleted.status_code == 204
     assert remaining.json() == []
+
+
+def test_admin_summary_uses_actor_scope_and_counts_aina_capabilities() -> None:
+    repository = InMemoryRepository()
+
+    async def seed_records() -> None:
+        current = await repository.create_conversation(ConversationCreate(title="Current"))
+        verification = await repository.create_conversation(
+            ConversationCreate(user_id="trace-verification", tenant_id="verification", title="Verification")
+        )
+        await repository.create_trace(
+            TraceRecord(
+                trace_id="trace_current",
+                conversation_id=current.id,
+                user_id="anonymous",
+                tenant_id="default",
+            )
+        )
+        await repository.create_trace(
+            TraceRecord(
+                trace_id="trace_verification",
+                conversation_id=verification.id,
+                user_id="trace-verification",
+                tenant_id="verification",
+            )
+        )
+        for call in (
+            LLMCallRecord(
+                call_id="llm_current_trace",
+                trace_id="trace_current",
+                context_type="conversation",
+                context_id=current.id,
+                endpoint="https://model.invalid/v1/chat/completions",
+                model="test-model",
+                request={},
+            ),
+            LLMCallRecord(
+                call_id="llm_current_context",
+                context_type="conversation",
+                context_id=current.id,
+                endpoint="https://model.invalid/v1/chat/completions",
+                model="test-model",
+                request={},
+            ),
+            LLMCallRecord(
+                call_id="llm_verification",
+                trace_id="trace_verification",
+                context_type="conversation",
+                context_id=verification.id,
+                endpoint="https://model.invalid/v1/chat/completions",
+                model="test-model",
+                request={},
+            ),
+        ):
+            await repository.upsert_llm_call(call)
+
+    asyncio.run(seed_records())
+    with TestClient(create_app(settings=_settings(), repository=repository, llm=ScriptedLLM([]))) as client:
+        current = client.get("/admin/summary").json()
+        verification = client.get(
+            "/admin/summary",
+            params={"user_id": "trace-verification", "tenant_id": "verification"},
+        ).json()
+
+    assert current["conversations"] == 1
+    assert current["traces"] == 1
+    assert current["llm_calls"] == 2
+    assert current["ainas"] == 3
+    assert current["tools"] == 7
+    assert current["skills"] == 1
+    assert verification["conversations"] == 1
+    assert verification["traces"] == 1
+    assert verification["llm_calls"] == 1
 
 
 def test_get_conversation_recovers_running_state_when_active_trace_is_missing() -> None:

@@ -59,9 +59,10 @@ class AinaProjectRecord(StrictModel):
     uncompressed_size_bytes: int = Field(ge=0)
     file_count: int = Field(gt=0)
     manifest: AinaManifest
-    status: Literal["importing", "validated"] = "importing"
+    status: Literal["importing", "validated", "deployed"] = "importing"
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+    deployed_at: datetime | None = None
 
 
 def scaffold_project_archive(request: AinaProjectScaffoldRequest) -> bytes:

@@ -1611,7 +1611,7 @@ class AgentRuntime:
                 aina = await self.repository.get_aina(installation.aina_id)
             except PlatformError:
                 continue
-            if aina.status != "registered" or aina.manifest.runtime.type != "remote":
+            if aina.status != "registered" or aina.manifest.runtime.type not in {"remote", "managed"}:
                 continue
             missing = set(aina.manifest.permissions) - set(installation.granted_permissions)
             if missing:
@@ -1622,7 +1622,7 @@ class AgentRuntime:
                 capability_id=installation.aina_id,
                 function_name=function_name,
                 display_name=aina.manifest.aina.name,
-                description=_aina_entry_description(aina, remote=True),
+                description=_aina_entry_description(aina, executable=True),
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -1700,7 +1700,7 @@ class AgentRuntime:
                 capability_id=aina_id,
                 function_name=function_name,
                 display_name=aina.manifest.aina.name,
-                description=_aina_entry_description(aina, remote=False),
+                description=_aina_entry_description(aina, executable=False),
                 input_schema={
                     "type": "object",
                     "properties": {},
@@ -2084,8 +2084,6 @@ def _aina_availability(
         return False, "disabled", []
     if manifest.runtime.type == "builtin":
         return True, "builtin", []
-    if manifest.runtime.type == "managed":
-        return False, "runtime_not_deployed", []
     if installation is None:
         return False, "not_installed", []
     if installation.status != "active":
@@ -2102,7 +2100,7 @@ def _is_routable_aina(capability: Capability) -> bool:
     if capability.kind != "aina":
         return False
     aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-    if aina.manifest.runtime.type == "remote":
+    if aina.manifest.runtime.type in {"remote", "managed"}:
         return True
     return aina.manifest.aina.id in {
         UNIBOT_MEMORY_ID,
@@ -2111,11 +2109,11 @@ def _is_routable_aina(capability: Capability) -> bool:
     }
 
 
-def _aina_entry_description(aina: AinaRecord, *, remote: bool) -> str:
+def _aina_entry_description(aina: AinaRecord, *, executable: bool) -> str:
     description = aina.manifest.aina.description.rstrip(".。")
-    if remote:
+    if executable:
         return (
-            f"{description}. Invoke this remote AINA when it should perform the user's task. Pass the complete "
+            f"{description}. Invoke this AINA when it should perform the user's task. Pass the complete "
             "request, preserving every important constraint instead of narrowing it to one planned subtask."
         )
     return (

@@ -11,7 +11,12 @@ from tianzhou_agent_platform.aina.project import (
     scaffold_project_archive,
     validate_project_archive,
 )
-from tianzhou_agent_platform.api.dependencies import RequestActor, aina_projects, request_actor
+from tianzhou_agent_platform.api.dependencies import (
+    RequestActor,
+    aina_projects,
+    managed_ainas,
+    request_actor,
+)
 from tianzhou_agent_platform.core.errors import PlatformError
 
 
@@ -73,6 +78,30 @@ def create_aina_project_router() -> APIRouter:
             payload,
             media_type="application/zip",
             headers={"Content-Disposition": _content_disposition(record.source_filename)},
+        )
+
+    @router.post("/{project_id}/deploy", response_model=AinaProjectRecord)
+    async def deploy_aina_project(
+        project_id: str,
+        request: Request,
+        actor: RequestActor = Depends(request_actor),
+    ) -> AinaProjectRecord:
+        return await managed_ainas(request).deploy(
+            project_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+        )
+
+    @router.delete("/{project_id}/deployment", response_model=AinaProjectRecord)
+    async def undeploy_aina_project(
+        project_id: str,
+        request: Request,
+        actor: RequestActor = Depends(request_actor),
+    ) -> AinaProjectRecord:
+        return await managed_ainas(request).undeploy(
+            project_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
         )
 
     @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

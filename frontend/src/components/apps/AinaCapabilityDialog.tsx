@@ -67,7 +67,16 @@ export function AinaCapabilityDialog({
           <aside className="overflow-y-auto border-r border-line bg-app-soft p-4 max-md:max-h-52 max-md:border-b max-md:border-r-0">
             <p className="text-[12px] leading-relaxed text-ink-muted">{manifest.aina.description}</p>
             <dl className="mt-4 space-y-2 text-[11px]">
-              <MetadataRow label="运行方式" value={manifest.runtime.type === "builtin" ? "系统内置" : "远程服务"} />
+              <MetadataRow
+                label="运行方式"
+                value={
+                  manifest.runtime.type === "builtin"
+                    ? "系统内置"
+                    : manifest.runtime.type === "managed"
+                      ? "本地托管"
+                      : "远程服务"
+                }
+              />
               <MetadataRow label="发布者" value={manifest.aina.publisher.name} />
               <MetadataRow label="Skill" value={String(skills.length)} />
               <MetadataRow label="Tool" value={String(tools.length)} />

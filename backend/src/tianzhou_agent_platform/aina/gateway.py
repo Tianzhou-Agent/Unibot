@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from time import perf_counter
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -24,12 +24,21 @@ from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.schema import validate_value
 
+if TYPE_CHECKING:
+    from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
+
 
 class RemoteCapabilityGateway:
-    def __init__(self, settings: AgentSettings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: AgentSettings,
+        client: httpx.AsyncClient | None = None,
+        managed_runtime: ManagedAinaRuntime | None = None,
+    ) -> None:
         self.settings = settings
         self._client = client or httpx.AsyncClient()
         self._owns_client = client is None
+        self._managed_runtime = managed_runtime
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -160,10 +169,27 @@ class RemoteCapabilityGateway:
         trace_id: str,
         available_tools: list[str],
     ) -> tuple[AinaInvokeResponse, float]:
+        if manifest.runtime.type == "managed":
+            if self._managed_runtime is None:
+                raise PlatformError(
+                    "DEPENDENCY_FAILED",
+                    "Managed AINA runtime is unavailable",
+                    status_code=503,
+                    source="aina",
+                )
+            return await self._managed_runtime.invoke(
+                manifest,
+                installation,
+                arguments=arguments,
+                call_id=call_id,
+                conversation_id=conversation_id,
+                trace_id=trace_id,
+                available_tools=available_tools,
+            )
         if manifest.runtime.type != "remote":
             raise PlatformError(
                 "INVALID_REQUEST",
-                "A built-in AINA cannot be invoked through the remote gateway",
+                "A built-in AINA cannot be invoked through the capability gateway",
                 status_code=400,
                 source="aina",
             )

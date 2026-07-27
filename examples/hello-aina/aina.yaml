@@ -1,0 +1,42 @@
+protocol_version: "1.0"
+aina:
+  id: demo.hello
+  name: 问候生成器 AINA
+  version: 0.1.1
+  description: 根据姓名和语言生成一条简短问候语。
+  publisher:
+    id: unibot-demo
+    name: Unibot Demo
+runtime:
+  type: managed
+  language: python
+  entrypoint: src/main.py:invoke
+  dependency_file: requirements.txt
+capabilities:
+  skills:
+    - id: create_greeting
+      name: 生成问候语
+      description: 根据用户提供的姓名生成中文或英文问候语。
+      instructions: 当用户想向某人问好或生成简单欢迎语时使用此能力。
+      input_schema:
+        type: object
+        properties:
+          name:
+            type: string
+            description: 被问候人的姓名。
+          language:
+            type: string
+            enum:
+              - zh
+              - en
+            default: zh
+            description: 问候语语言，zh 为中文，en 为英文。
+        required:
+          - name
+        additionalProperties: false
+  tools: []
+  ui: []
+  events: []
+permissions: []
+authentication:
+  type: none

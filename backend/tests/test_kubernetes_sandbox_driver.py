@@ -12,6 +12,7 @@ from tianzhou_agent_platform.sandbox.models import SandboxExecutionRequest, Sand
 @pytest.mark.asyncio
 async def test_kubernetes_driver_creates_waits_executes_stops_and_resets() -> None:
     requests: list[tuple[str, str]] = []
+    files: dict[str, bytes] = {}
     get_count = 0
     deleting = False
 
@@ -19,6 +20,20 @@ async def test_kubernetes_driver_creates_waits_executes_stops_and_resets() -> No
         nonlocal get_count, deleting
         requests.append((request.method, str(request.url)))
         if request.url.host == "unibot-test.unibot-sandboxes.svc.cluster.local":
+            if request.url.path.startswith("/files/"):
+                path = request.url.path.removeprefix("/files/")
+                if request.method == "PUT":
+                    if request.url.params.get("overwrite") == "false" and path in files:
+                        return httpx.Response(409)
+                    files[path] = request.content
+                    return httpx.Response(204)
+                if request.method == "GET":
+                    if path not in files:
+                        return httpx.Response(404)
+                    return httpx.Response(200, content=files[path])
+                if request.method == "DELETE":
+                    files.pop(path, None)
+                    return httpx.Response(204)
             assert request.method == "POST"
             payload = json.loads(request.content)
             assert payload["language"] == "python"
@@ -102,6 +117,11 @@ async def test_kubernetes_driver_creates_waits_executes_stops_and_resets() -> No
     )
     assert result.status == "succeeded"
     assert result.stdout == "kubernetes-ready\n"
+
+    await driver.write_file(sandbox, "managed-ainas/request.json", b'{"name":"Ada"}', overwrite=True)
+    assert await driver.read_file(sandbox, "managed-ainas/request.json") == b'{"name":"Ada"}'
+    await driver.delete_file(sandbox, "managed-ainas/request.json")
+    assert files == {}
 
     stopped = await driver.stop(sandbox)
     assert stopped.status == "stopped"

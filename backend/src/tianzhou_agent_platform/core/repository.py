@@ -934,12 +934,48 @@ class InMemoryRepository:
                 )
             if project.archive_sha256 != archive_sha256:
                 raise conflict("AINA project archive changed while it was being imported")
-            if project.status == "validated":
+            if project.status in {"validated", "deployed"}:
                 return self._copy(project)
             updated = project.model_copy(
                 update={
                     "status": "validated",
                     "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            await self._save_record(AINA_PROJECTS_RESOURCE, project_id, updated)
+            self._aina_projects[project_id] = updated
+            return self._copy(updated)
+
+    async def set_aina_project_deployed(
+        self,
+        project_id: str,
+        *,
+        deployed: bool,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord:
+        async with self._lock:
+            project = self._aina_projects.get(project_id)
+            if project is None:
+                raise not_found("AINA project", project_id)
+            if project.user_id != user_id or project.tenant_id != tenant_id:
+                raise PlatformError(
+                    "PERMISSION_DENIED",
+                    "AINA project ownership does not match the caller",
+                    status_code=403,
+                )
+            target_status = "deployed" if deployed else "validated"
+            if project.status == target_status:
+                return self._copy(project)
+            if project.status == "importing":
+                raise conflict("AINA project import has not completed")
+            now = datetime.now(UTC)
+            updated = project.model_copy(
+                update={
+                    "status": target_status,
+                    "deployed_at": now if deployed else None,
+                    "updated_at": now,
                 },
                 deep=True,
             )
@@ -1122,9 +1158,21 @@ class InMemoryRepository:
             calls = [self._copy(item) for item in self._llm_calls.values()]
         return sorted(calls, key=lambda item: item.created_at, reverse=True)[:limit]
 
-    async def count_llm_calls(self) -> int:
+    async def count_llm_calls(
+        self,
+        *,
+        trace_ids: set[str] | None = None,
+        context_ids: set[str] | None = None,
+    ) -> int:
         async with self._lock:
-            return len(self._llm_calls)
+            if trace_ids is None and context_ids is None:
+                return len(self._llm_calls)
+            return sum(
+                1
+                for call in self._llm_calls.values()
+                if (trace_ids is not None and call.trace_id in trace_ids)
+                or (context_ids is not None and call.context_id in context_ids)
+            )
 
     async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
         async with self._lock:

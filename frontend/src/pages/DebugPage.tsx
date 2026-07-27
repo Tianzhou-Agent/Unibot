@@ -50,7 +50,7 @@ export default function DebugPage() {
     try {
       const [healthData, summaryData, traceData, llmCallData, conversationData] = await Promise.all([
         api.get<{ status: string }>("/health"),
-        api.get<AdminSummary>("/admin/summary"),
+        api.get<AdminSummary>("/admin/summary?user_id=anonymous&tenant_id=default"),
         api.get<TraceRecord[]>("/traces?user_id=anonymous&tenant_id=default"),
         api.get<LLMCallRecord[]>("/llm-calls?limit=200"),
         api.get<ConversationRecord[]>("/conversations?user_id=anonymous&tenant_id=default"),
@@ -179,7 +179,7 @@ export default function DebugPage() {
           ) : null}
 
           <section
-            className="grid shrink-0 grid-flow-col auto-cols-[minmax(112px,1fr)] gap-2 overflow-x-auto md:gap-3 xl:grid-flow-row xl:grid-cols-8"
+            className="grid shrink-0 grid-flow-col auto-cols-[minmax(128px,1fr)] gap-2 overflow-x-auto md:gap-3 xl:grid-flow-row xl:grid-cols-8"
             aria-label="运行统计"
           >
             <SummaryCard icon={<Bot />} label="对话" value={summary?.conversations} tone="blue" />
@@ -192,8 +192,8 @@ export default function DebugPage() {
             {debugMode ? <SummaryCard icon={<Braces />} label="模型请求" value={summary?.llm_calls} tone="slate" /> : null}
           </section>
 
-          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line xl:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] xl:grid-rows-1">
-            <div className="flex min-h-0 flex-col overflow-hidden">
+          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
+            <div className="flex min-h-0 flex-col overflow-hidden lg:border-r lg:border-line">
               <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
                 <Activity className="h-3.5 w-3.5 text-accent" />
                 <span className="text-[12px] font-bold text-ink">调用记录</span>
@@ -269,12 +269,14 @@ function SummaryCard({
     slate: "bg-app-soft text-ink-muted",
   };
   return (
-    <div className="rounded-xl border border-line bg-white p-3.5 shadow-card">
-      <div className={classNames("w-8 h-8 rounded-lg flex items-center justify-center [&>svg]:w-4 [&>svg]:h-4", colors[tone])}>
+    <div className="flex items-center gap-2.5 rounded-xl border border-line bg-white px-3 py-2.5 shadow-card">
+      <div className={classNames("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg [&>svg]:h-4 [&>svg]:w-4", colors[tone])}>
         {icon}
       </div>
-      <div className="mt-3 text-[22px] font-extrabold text-ink">{value ?? "—"}</div>
-      <div className="text-[12px] font-semibold text-ink-muted">{label}</div>
+      <div className="min-w-0">
+        <div className="text-[20px] font-extrabold leading-none text-ink">{value ?? "—"}</div>
+        <div className="mt-1 truncate text-[11.5px] font-semibold text-ink-muted">{label}</div>
+      </div>
     </div>
   );
 }
@@ -363,7 +365,7 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
         type="button"
         onClick={onClick}
         className={classNames(
-          "w-full border-l-2 py-2.5 pl-[50px] pr-12 text-left transition-colors",
+          "w-full border-l-2 py-2.5 pl-3 pr-10 text-left transition-colors",
           active ? "border-accent bg-accent-soft" : "border-transparent hover:bg-app-soft",
         )}
       >
@@ -381,34 +383,41 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
         value={trace.trace_id}
         label={`复制 Trace ID ${trace.trace_id}`}
         compact
-        className="absolute right-3 top-2.5"
+        className="absolute right-2 top-2.5"
       />
     </div>
   );
 }
 
-function LLMCallRow({ call, active, onClick }: { call: LLMCallRecord; active: boolean; onClick: () => void }) {
+function LLMCallRow({
+  call,
+  sequence,
+  active,
+  onClick,
+}: {
+  call: LLMCallRecord;
+  sequence: number;
+  active: boolean;
+  onClick: () => void;
+}) {
   const performance = llmCallPerformance(call);
   return (
     <button
       type="button"
       onClick={onClick}
       className={classNames(
-        "w-full border-b border-l-2 border-b-line px-3 py-3 text-left transition-colors last:border-b-0",
+        "w-full border-b border-l-2 border-b-line px-2.5 py-2.5 text-left transition-colors last:border-b-0",
         active ? "border-l-accent bg-accent-soft" : "border-l-transparent hover:bg-app-soft",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-1.5">
+        <strong className="truncate text-[12px] text-ink">请求 {sequence}</strong>
         <LLMCallStatus status={call.status} compact />
-        <strong className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{call.model}</strong>
-        {call.duration_ms != null ? (
-          <span className="shrink-0 font-mono text-[11px] text-ink-subtle">{formatDuration(call.duration_ms)}</span>
-        ) : null}
       </div>
-      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-subtle">
-        <span className="font-mono">{formatTokenCount(performance.totalTokens)} Token</span>
-        <span>·</span>
-        <span className="font-mono">{formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
+      <div className="mt-1 truncate font-mono text-[11px] text-ink-muted">{call.model}</div>
+      <div className="mt-1 flex items-center justify-between gap-1 text-[10.5px] text-ink-subtle">
+        <span className="truncate font-mono">{call.duration_ms != null ? formatDuration(call.duration_ms) : "请求中"}</span>
+        <span className="shrink-0 font-mono">{formatTokenCount(performance.totalTokens)} Token</span>
       </div>
     </button>
   );
@@ -463,18 +472,17 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
   }, [call.call_id]);
 
   const payload = payloadView === "request" ? call.request : call.response;
-  const conversationId = call.context_type === "conversation" ? call.context_id : null;
   const performance = llmCallPerformance(call);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
+      <div className="shrink-0 border-b border-line bg-app-soft px-3 py-2">
         <div className="flex items-center gap-2">
           <LLMCallStatus status={call.status} />
-          <h2 className="min-w-0 truncate font-mono text-[12.5px] font-bold text-ink">{call.call_id}</h2>
+          <h2 className="min-w-0 flex-1 truncate font-mono text-[12px] font-bold text-ink">{call.call_id}</h2>
           <CopyIdButton value={call.call_id} label="复制模型调用 ID" />
         </div>
-        <div className="mt-2 grid gap-1 text-[11.5px] text-ink-muted sm:grid-cols-2">
-          <span className="truncate" title={call.endpoint}>接口：<span className="font-mono">{call.endpoint}</span></span>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-muted">
+          <span className="min-w-0 basis-full truncate" title={call.endpoint}>接口：<span className="font-mono">{call.endpoint}</span></span>
           <span>模型：<span className="font-mono text-ink">{call.model}</span></span>
           <span>时间：{new Date(call.created_at).toLocaleString("zh-CN")}</span>
           <span>耗时：{call.duration_ms != null ? formatDuration(call.duration_ms) : "请求中"}</span>
@@ -485,18 +493,6 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
               : ""}
           </span>
           <span>输出速率：{formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">会话 ID：</span>
-            <span className="truncate font-mono">{conversationId ?? "—"}</span>
-            {conversationId ? (
-              <CopyIdButton value={conversationId} label="复制 Conversation ID" compact />
-            ) : null}
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">Trace ID：</span>
-            <span className="truncate font-mono">{call.trace_id ?? "—"}</span>
-            {call.trace_id ? <CopyIdButton value={call.trace_id} label="复制 Trace ID" compact /> : null}
-          </span>
         </div>
       </div>
 
@@ -715,13 +711,8 @@ function TraceDetail({
   const performance = summarizeLlmCalls(calls);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
-        <div className="flex items-center gap-2">
-          <TraceStatus status={trace.status} />
-          <h2 className="min-w-0 truncate font-mono text-[12.5px] font-bold text-ink">{trace.trace_id}</h2>
-          <CopyIdButton value={trace.trace_id} label="复制 Trace ID" />
-        </div>
-        <div className="mt-2 grid gap-x-4 gap-y-1 text-[12px] text-ink-muted sm:grid-cols-2">
+      {view === "trace" ? <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
+        <div className="grid gap-x-4 gap-y-1 text-[12px] text-ink-muted sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="shrink-0">会话：</span>
             <span className="truncate font-medium text-ink">{conversationTitle}</span>
@@ -742,7 +733,7 @@ function TraceDetail({
             <span className="truncate">{new Date(trace.created_at).toLocaleString("zh-CN")}</span>
           </div>
         </div>
-      </div>
+      </div> : null}
       {calls.length > 0 ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
           <div className="flex rounded-lg bg-app-soft p-0.5">
@@ -789,10 +780,11 @@ function TraceDetail({
       ) : (
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.55fr)_minmax(0,1.45fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
           <div className="min-h-0 overflow-y-auto border-b border-line lg:border-b-0 lg:border-r" aria-label="当前 Trace 的模型请求">
-            {calls.map((call) => (
+            {calls.map((call, index) => (
               <LLMCallRow
                 key={call.call_id}
                 call={call}
+                sequence={index + 1}
                 active={call.call_id === selectedCall?.call_id}
                 onClick={() => onSelectCall(call.call_id)}
               />

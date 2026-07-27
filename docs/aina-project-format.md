@@ -40,13 +40,17 @@ authentication:
   type: none
 ```
 
-`entrypoint` 必须是包内相对 POSIX 路径和处理函数名。处理函数接收 AINA Protocol 1.0 request 对象，返回 Protocol 1.0 response 对象。当前阶段支持打包、校验和保存 `managed` 项目；项目必须在后续托管运行时完成部署，才能安装并被 Unibot 调用。
+`entrypoint` 必须是包内相对 POSIX 路径和处理函数名。处理函数接收 AINA Protocol 1.0 request 对象，返回 Protocol 1.0 response 对象。项目导入后处于 `validated` 状态，完成部署后会注册为 `managed` AINA，可以沿用现有的安装、权限和对话路由流程。
+
+托管运行器复用用户现有的 `SandboxService`。部署包和调用请求通过沙箱工作区文件接口写入，依赖安装与入口调用通过沙箱执行接口完成：本地开发使用 local driver，生产环境使用相同契约下的 Kubernetes driver 与 gVisor Pod。AINA 运行代码不会在 Unibot 后端进程或后端宿主机虚拟环境中执行。
 
 ## API
 
 - `POST /aina-projects/scaffold`：根据 AINA ID、名称、描述和语言生成确定性的项目 ZIP。
 - `POST /aina-projects/validate`：上传项目 ZIP，校验 Manifest、JSON Schema、入口文件、依赖文件和归档安全性，并返回内容摘要和 SHA-256。
 - `POST /aina-projects`：导入并保存通过校验的 managed 项目，同一用户下相同 AINA ID 和版本不可被不同内容覆盖。
+- `POST /aina-projects/{project_id}/deploy`：准备依赖和运行目录，并将项目注册为可安装、可调用的 managed AINA。
+- `DELETE /aina-projects/{project_id}/deployment`：取消部署并移除对应安装，保留已导入的源码项目。
 - `GET /aina-projects`：列出当前用户导入的项目。
 - `GET /aina-projects/{project_id}/archive`：校验 SHA-256 后下载原始项目包。
 - `DELETE /aina-projects/{project_id}`：删除项目记录及其归档。
@@ -57,4 +61,4 @@ authentication:
 
 导入采用可恢复的两阶段保存：平台先创建 `importing` 元数据预留，再以不可覆盖的方式保存归档，最后将记录更新为 `validated`。中断后，相同内容可以继续完成导入；相同 AINA ID 和版本的不同内容仍返回冲突。`importing` 记录会显示在项目列表中，方便用户识别并删除未完成的导入，但不能下载。删除时先删除归档，成功后才删除元数据；归档删除失败会保留项目记录以便重试。
 
-`validated` 只表示包结构和已保存归档通过完整性校验；项目不会因此自动获得权限、注册为 AINA 或进入 Unibot 的可调用列表。
+`validated` 只表示包结构和已保存归档通过完整性校验；项目不会自动获得权限。部署后状态变为 `deployed`，用户仍需安装并授予 Manifest 声明的权限，AINA 才会进入对应用户的对话路由候选。

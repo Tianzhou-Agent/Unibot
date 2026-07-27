@@ -139,6 +139,32 @@ class SandboxService:
             )
             return completed
 
+    async def write_file(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        path: str,
+        content: bytes,
+        overwrite: bool = True,
+    ) -> None:
+        normalized = _workspace_file_path(path)
+        async with self._actor_lease(user_id, tenant_id):
+            sandbox = await self._ensure_unlocked(SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id))
+            await self.driver.write_file(sandbox, normalized, content, overwrite=overwrite)
+
+    async def read_file(self, *, user_id: str, tenant_id: str, path: str) -> bytes:
+        normalized = _workspace_file_path(path)
+        async with self._actor_lease(user_id, tenant_id):
+            sandbox = await self._ensure_unlocked(SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id))
+            return await self.driver.read_file(sandbox, normalized)
+
+    async def delete_file(self, *, user_id: str, tenant_id: str, path: str) -> None:
+        normalized = _workspace_file_path(path)
+        async with self._actor_lease(user_id, tenant_id):
+            sandbox = await self._ensure_unlocked(SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id))
+            await self.driver.delete_file(sandbox, normalized)
+
     async def list_executions(
         self,
         *,
@@ -207,3 +233,15 @@ class SandboxService:
 
 def _actor_digest(tenant_id: str, user_id: str) -> str:
     return hashlib.sha256(f"{tenant_id}:{user_id}".encode()).hexdigest()[:20]
+
+
+def _workspace_file_path(value: str) -> str:
+    normalized = value.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or "\x00" in normalized
+        or any(part in {"", ".", ".."} for part in normalized.split("/"))
+    ):
+        raise PlatformError("PERMISSION_DENIED", "Sandbox file path escapes the workspace", status_code=403)
+    return normalized

@@ -186,7 +186,7 @@ class PersistentRepository(InMemoryRepository):
                         )
                     if project.archive_sha256 != archive_sha256:
                         raise conflict("AINA project archive changed while it was being imported")
-                    if project.status == "validated":
+                    if project.status in {"validated", "deployed"}:
                         return self._copy(project)
                 raise PlatformError(
                     "CONFLICT",
@@ -205,7 +205,7 @@ class PersistentRepository(InMemoryRepository):
                 )
             if project.archive_sha256 != archive_sha256:
                 raise conflict("AINA project archive changed while it was being imported")
-            if project.status == "validated":
+            if project.status in {"validated", "deployed"}:
                 return self._copy(project)
 
             updated = project.model_copy(

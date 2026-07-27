@@ -69,22 +69,37 @@ def create_operations_router() -> APIRouter:
         return await repository(request).list_llm_calls(limit=max(1, min(limit, 500)))
 
     @router.get("/admin/summary")
-    async def admin_summary(request: Request) -> dict[str, int]:
+    async def admin_summary(
+        request: Request,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+    ) -> dict[str, int]:
         data_repository = repository(request)
-        conversations, tools, skills, ainas, installations, traces, llm_call_count = await asyncio.gather(
-            data_repository.list_conversations(),
+        conversations, tools, skills, ainas, installations, traces, memories, document_tasks = await asyncio.gather(
+            data_repository.list_conversations(user_id=user_id, tenant_id=tenant_id),
             data_repository.list_tools(),
             data_repository.list_skills(),
             data_repository.list_ainas(),
-            data_repository.list_installations(),
-            data_repository.list_traces(),
-            data_repository.count_llm_calls(),
+            data_repository.list_installations(user_id=user_id, tenant_id=tenant_id),
+            data_repository.list_traces(user_id=user_id, tenant_id=tenant_id),
+            data_repository.list_memories(user_id=user_id, tenant_id=tenant_id),
+            data_repository.list_document_edit_tasks(user_id=user_id, tenant_id=tenant_id),
         )
-        memories = await data_repository.list_memories(user_id="anonymous", tenant_id="default")
+        trace_ids = {trace.trace_id for trace in traces}
+        context_ids = {conversation.id for conversation in conversations} | {task.id for task in document_tasks}
+        llm_call_count = await data_repository.count_llm_calls(
+            trace_ids=trace_ids,
+            context_ids=context_ids,
+        )
+        tool_ids = {tool.tool_id for tool in tools}
+        skill_ids = {skill.skill_id for skill in skills}
+        for aina in ainas:
+            tool_ids.update(capability.id for capability in aina.manifest.capabilities.tools)
+            skill_ids.update(capability.id for capability in aina.manifest.capabilities.skills)
         return {
             "conversations": len(conversations),
-            "tools": len(tools),
-            "skills": len(skills),
+            "tools": len(tool_ids),
+            "skills": len(skill_ids),
             "ainas": len(ainas),
             "installations": len(installations),
             "traces": len(traces),

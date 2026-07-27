@@ -8,12 +8,14 @@ import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 WORKSPACE = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace")).resolve()
 OUTPUT_LIMIT_BYTES = int(os.getenv("SANDBOX_OUTPUT_LIMIT_BYTES", "1000000"))
+FILE_LIMIT_BYTES = int(os.getenv("SANDBOX_FILE_LIMIT_BYTES", "25000000"))
 EXECUTION_LOCK = asyncio.Lock()
 
 
@@ -68,6 +70,53 @@ async def health() -> dict[str, str]:
 async def execute(payload: ExecutionRequest) -> ExecutionResult:
     async with EXECUTION_LOCK:
         return await execute_serialized(payload)
+
+
+@app.put("/files/{relative_path:path}", status_code=204)
+async def write_file(
+    relative_path: str,
+    request: Request,
+    overwrite: bool = Query(default=True),
+) -> Response:
+    content = await request.body()
+    if len(content) > FILE_LIMIT_BYTES:
+        raise HTTPException(status_code=413, detail="Sandbox file exceeds the configured size limit")
+    async with EXECUTION_LOCK:
+        target = workspace_file(relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and not overwrite:
+            raise HTTPException(status_code=409, detail="Sandbox file already exists")
+        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        try:
+            await asyncio.to_thread(temporary.write_bytes, content)
+            await asyncio.to_thread(temporary.replace, target)
+        finally:
+            await asyncio.to_thread(temporary.unlink, missing_ok=True)
+    return Response(status_code=204)
+
+
+@app.get("/files/{relative_path:path}")
+async def read_file(relative_path: str) -> Response:
+    async with EXECUTION_LOCK:
+        target = workspace_file(relative_path)
+        try:
+            content = await asyncio.to_thread(target.read_bytes)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Sandbox file was not found") from exc
+    if len(content) > FILE_LIMIT_BYTES:
+        raise HTTPException(status_code=413, detail="Sandbox file exceeds the configured size limit")
+    return Response(content, media_type="application/octet-stream")
+
+
+@app.delete("/files/{relative_path:path}", status_code=204)
+async def delete_file(relative_path: str) -> Response:
+    async with EXECUTION_LOCK:
+        target = workspace_file(relative_path)
+        try:
+            await asyncio.to_thread(target.unlink)
+        except FileNotFoundError:
+            return Response(status_code=204)
+    return Response(status_code=204)
 
 
 async def execute_serialized(payload: ExecutionRequest) -> ExecutionResult:
@@ -148,6 +197,23 @@ def command_for(language: str, script: str) -> list[str]:
     if executable is None:
         raise HTTPException(status_code=503, detail="Bash is not installed")
     return [executable, "-lc", script]
+
+
+def workspace_file(relative_path: str) -> Path:
+    normalized = relative_path.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or "\x00" in normalized
+        or any(part in {"", ".", ".."} for part in normalized.split("/"))
+    ):
+        raise HTTPException(status_code=403, detail="File path escapes /workspace")
+    target = (WORKSPACE / normalized).resolve()
+    if not normalized or target == WORKSPACE or WORKSPACE not in target.parents:
+        raise HTTPException(status_code=403, detail="File path escapes /workspace")
+    if target.exists() and not target.is_file():
+        raise HTTPException(status_code=409, detail="Sandbox path is not a file")
+    return target
 
 
 def terminate_process_tree(process: asyncio.subprocess.Process) -> None:

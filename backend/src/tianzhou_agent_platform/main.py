@@ -13,6 +13,7 @@ from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
+from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.aina.project_service import (
     AinaProjectArtifactStore,
     AinaProjectService,
@@ -73,6 +74,16 @@ def create_app(
         else InMemoryAinaProjectArtifactStore()
     )
     aina_project_service = AinaProjectService(resolved_repository, resolved_aina_project_artifact_store)
+    resolved_sandbox_service = sandbox_service or create_sandbox_service(
+        resolved_settings,
+        resolved_repository,
+    )
+    managed_aina_runtime = ManagedAinaRuntime(
+        resolved_settings,
+        resolved_repository,
+        aina_project_service,
+        resolved_sandbox_service,
+    )
     resolved_llm = llm or OpenAICompatibleClient(
         resolved_settings,
         call_sink=resolved_repository.upsert_llm_call,
@@ -83,13 +94,13 @@ def create_app(
         else None
     )
     document_edit_worker = DocumentEditWorker(document_edit_task_service) if document_edit_task_service else None
-    gateway = RemoteCapabilityGateway(resolved_settings, capability_http_client)
+    gateway = RemoteCapabilityGateway(
+        resolved_settings,
+        capability_http_client,
+        managed_runtime=managed_aina_runtime,
+    )
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
-    resolved_sandbox_service = sandbox_service or create_sandbox_service(
-        resolved_settings,
-        resolved_repository,
-    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -137,6 +148,7 @@ def create_app(
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
     app.state.aina_project_service = aina_project_service
+    app.state.managed_aina_runtime = managed_aina_runtime
     app.state.document_edit_task_service = document_edit_task_service
     app.state.document_edit_worker = document_edit_worker
     app.state.storage_stores = storage_stores

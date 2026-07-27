@@ -149,13 +149,20 @@ class AinaProjectService:
     async def list_projects(self, *, user_id: str, tenant_id: str) -> list[AinaProjectRecord]:
         return await self._repository.list_aina_projects(user_id=user_id, tenant_id=tenant_id)
 
+    async def get_project(self, project_id: str, *, user_id: str, tenant_id: str) -> AinaProjectRecord:
+        return await self._repository.get_aina_project(
+            project_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+
     async def get_archive(self, project_id: str, *, user_id: str, tenant_id: str) -> tuple[AinaProjectRecord, bytes]:
         record = await self._repository.get_aina_project(
             project_id,
             user_id=user_id,
             tenant_id=tenant_id,
         )
-        if record.status != "validated":
+        if record.status == "importing":
             raise conflict("AINA project import has not completed")
         return record, await self._read_verified(record)
 
@@ -165,6 +172,8 @@ class AinaProjectService:
             user_id=user_id,
             tenant_id=tenant_id,
         )
+        if record.status == "deployed":
+            raise conflict("Undeploy the AINA project before deleting it")
         await self._artifacts.delete(_artifact_path(record))
         await self._repository.remove_aina_project(
             project_id,

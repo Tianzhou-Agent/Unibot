@@ -330,9 +330,10 @@ export interface AinaProjectRecord {
   uncompressed_size_bytes: number;
   file_count: number;
   manifest: AinaManifest;
-  status: "importing" | "validated";
+  status: "importing" | "validated" | "deployed";
   created_at: string;
   updated_at: string;
+  deployed_at?: string | null;
 }
 
 export interface AinaProjectScaffoldRequest {

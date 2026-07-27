@@ -103,7 +103,15 @@ def create_capability_router() -> APIRouter:
     async def delete_aina(aina_id: str, request: Request) -> Response:
         if aina_id in BUILTIN_AINA_IDS:
             raise PlatformError("PERMISSION_DENIED", "The system AINA cannot be deleted", status_code=403)
-        await repository(request).remove_aina(aina_id)
+        data_repository = repository(request)
+        record = await data_repository.get_aina(aina_id)
+        if record.manifest.runtime.type == "managed":
+            raise PlatformError(
+                "CONFLICT",
+                "Undeploy managed AINA from its project before deleting it",
+                status_code=409,
+            )
+        await data_repository.remove_aina(aina_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/ainas/{aina_id}/install", response_model=AinaInstallation)
