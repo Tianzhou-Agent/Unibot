@@ -99,6 +99,21 @@ class AgentSettings(BaseSettings):
         default="gvisor",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_RUNTIME_CLASS", "sandbox_runtime_class"),
     )
+    vision_base_url: str = Field(
+        default="http://127.0.0.1:18081",
+        validation_alias=AliasChoices("UNIBOT_VISION_BASE_URL", "vision_base_url"),
+    )
+    vision_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias=AliasChoices("UNIBOT_VISION_TIMEOUT_SECONDS", "vision_timeout_seconds"),
+    )
+    vision_max_image_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        le=50 * 1024 * 1024,
+        validation_alias=AliasChoices("UNIBOT_VISION_MAX_IMAGE_BYTES", "vision_max_image_bytes"),
+    )
     system_prompt: str = Field(
         default=(
             "You are Unibot, a helpful assistant. Use an available capability when it is needed to answer "

@@ -1,0 +1,18 @@
+replicaCount: 1
+
+image:
+  repository: registry.example.com/unibot/vision-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+gpu:
+  enabled: true
+  count: 1
+
+resources:
+  requests:
+    cpu: "1"
+    memory: 4Gi
+  limits:
+    cpu: "4"
+    memory: 12Gi

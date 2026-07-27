@@ -154,6 +154,7 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
         "unibot-code-runner",
         "unibot-scheduler",
         "unibot-memory",
+        "unibot-image-recognition",
     ]
     assert conversation.json()["messages"][-1]["widgets"] == response.json()["widgets"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
@@ -413,6 +414,7 @@ def test_application_discovery_routes_across_all_ainas_from_document_context(tmp
     assert {item["aina_id"] for item in response.json()["widgets"][0]["apps"]} == {
         "unibot-code-runner",
         "unibot-documents",
+        "unibot-image-recognition",
         "unibot-memory",
         "unibot-scheduler",
     }
@@ -478,7 +480,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     remote_aina = next(
         item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
     )
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 1}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 3,

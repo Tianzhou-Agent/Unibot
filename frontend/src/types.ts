@@ -441,6 +441,41 @@ export interface AinaCanvasResponse {
   main_widget: WidgetDefinition;
 }
 
+export interface VisionHealth {
+  status: string;
+  model: string;
+  device: string;
+  requested_device: string;
+  gpu_name?: string | null;
+}
+
+export interface VisionBoundingBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface VisionDetection {
+  class_id: number;
+  label: string;
+  label_zh: string;
+  confidence: number;
+  box: VisionBoundingBox;
+}
+
+export interface VisionDetectionResponse {
+  model: string;
+  device: string;
+  image: {
+    width: number;
+    height: number;
+  };
+  detections: VisionDetection[];
+  summary: Record<string, number>;
+  inference_ms: number;
+}
+
 export type SandboxStatus = "provisioning" | "ready" | "busy" | "stopped" | "error";
 export type SandboxExecutionStatus = "running" | "succeeded" | "failed" | "timed_out";
 export type SandboxExecutionLanguage = "python" | "bash" | "shell" | "node";

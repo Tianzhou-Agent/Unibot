@@ -22,8 +22,8 @@ def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
 
     discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
     graph = discovery["aina_graph"]
-    assert graph["available_count"] == 3
-    assert graph["counts"] == {"builtin_aina": 3, "remote_aina": 0}
+    assert graph["available_count"] == 4
+    assert graph["counts"] == {"builtin_aina": 4, "remote_aina": 0}
     assert graph["excluded"] == []
     available = {item["id"]: item for item in graph["available"]}
     assert {item["id"] for item in available["unibot-memory"]["capabilities"]["tools"]} == {

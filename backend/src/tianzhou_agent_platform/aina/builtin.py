@@ -33,6 +33,10 @@ from tianzhou_agent_platform.aina.schedule.builtin import (
     UNIBOT_SCHEDULER_ID,
     unibot_scheduler_record,
 )
+from tianzhou_agent_platform.aina.vision.builtin import (
+    UNIBOT_IMAGE_RECOGNITION_ID,
+    unibot_image_recognition_record,
+)
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
@@ -43,6 +47,7 @@ BUILTIN_AINA_IDS = {
     UNIBOT_DOCUMENTS_ID,
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
+    UNIBOT_IMAGE_RECOGNITION_ID,
 }
 
 _LEGACY_UNIBOT_ASSISTANT_ID = "unibot-assistant"
@@ -57,6 +62,7 @@ async def ensure_builtin_ainas(
         (UNIBOT_MEMORY_ID, unibot_memory_record),
         (UNIBOT_SCHEDULER_ID, unibot_scheduler_record),
         (UNIBOT_CODE_RUNNER_ID, unibot_code_runner_record),
+        (UNIBOT_IMAGE_RECOGNITION_ID, unibot_image_recognition_record),
     ]
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
@@ -192,10 +198,12 @@ __all__ = [
     "UNIBOT_MEMORY_ID",
     "UNIBOT_SCHEDULER_ID",
     "UNIBOT_CODE_RUNNER_ID",
+    "UNIBOT_IMAGE_RECOGNITION_ID",
     "ensure_builtin_ainas",
     "invoke_builtin",
     "unibot_documents_record",
     "unibot_memory_record",
     "unibot_scheduler_record",
     "unibot_code_runner_record",
+    "unibot_image_recognition_record",
 ]

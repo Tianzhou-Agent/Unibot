@@ -1,0 +1,28 @@
+replicaCount: 1
+
+image:
+  repository: unibot/vision-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+model:
+  device: auto
+  imageSize: 640
+  maxConcurrency: 1
+  maxImageBytes: 10485760
+  maxImagePixels: 40000000
+
+gpu:
+  enabled: false
+  count: 1
+
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    cpu: "4"
+    memory: 8Gi

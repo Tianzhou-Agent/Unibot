@@ -19,6 +19,7 @@ from tianzhou_agent_platform.aina.builtin import (
     UNIBOT_MEMORY_ID,
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
+    UNIBOT_IMAGE_RECOGNITION_ID,
     invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
@@ -1645,6 +1646,7 @@ class AgentRuntime:
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_SCHEDULER_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_DOCUMENTS_ID))
         capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_CODE_RUNNER_ID))
+        capabilities.update(await self._builtin_aina_capability(conversation, UNIBOT_IMAGE_RECOGNITION_ID))
         return capabilities
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
@@ -1738,6 +1740,8 @@ class AgentRuntime:
         if aina.manifest.aina.id == UNIBOT_CODE_RUNNER_ID:
             return {**self._sandbox_capabilities(), **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_SCHEDULER_ID:
+            return switch_capabilities, aina
+        if aina.manifest.aina.id == UNIBOT_IMAGE_RECOGNITION_ID:
             return switch_capabilities, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected, **switch_capabilities}

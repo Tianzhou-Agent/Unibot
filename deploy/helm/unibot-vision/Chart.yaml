@@ -1,0 +1,6 @@
+apiVersion: v2
+name: unibot-vision
+description: Shared YOLO26m inference service for the Unibot image recognition AINA
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

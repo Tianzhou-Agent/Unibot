@@ -13,6 +13,7 @@ from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.vision.client import VisionClient
 
 
 class RequestActor(StrictModel):
@@ -60,6 +61,10 @@ def managed_ainas(request: Request) -> ManagedAinaRuntime:
 
 def sandboxes(request: Request) -> SandboxService:
     return cast(SandboxService, request.app.state.sandbox_service)
+
+
+def vision(request: Request) -> VisionClient:
+    return cast(VisionClient, request.app.state.vision_client)
 
 
 def documents(request: Request) -> DocumentService:

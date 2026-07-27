@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bug, Check, LayoutGrid, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
+import { Bug, Check, Github, LayoutGrid, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
@@ -400,10 +400,20 @@ function SkeletonList() {
 
 function FooterUtility() {
   return (
-    <div className="grid grid-cols-1 gap-2 border-t border-sidebar-border p-2 md:grid-cols-3 md:p-3">
+    <div className="grid grid-cols-1 gap-2 border-t border-sidebar-border p-2 md:grid-cols-4 md:p-3">
       <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
       <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
       <FooterButton to="/debug" label="Debug" icon={<Bug className="h-4 w-4" />} />
+      <a
+        href="https://github.com/Tianzhou-Agent/Unibot"
+        target="_blank"
+        rel="noreferrer"
+        aria-label="源代码（AGPL-3.0）"
+        title="源代码（AGPL-3.0）"
+        className="flex h-10 items-center justify-center rounded-lg text-ink-onDark transition-colors hover:bg-sidebar-hover"
+      >
+        <Github className="h-4 w-4" />
+      </a>
     </div>
   );
 }

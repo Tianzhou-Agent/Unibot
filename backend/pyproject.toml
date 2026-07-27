@@ -3,7 +3,7 @@ name = "tianzhou_agent_platform"
 version = "0.1.0"
 description = "天舟Agent Platform - 智能体框架与Agentic Harness OS"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-only" }
 authors = [{ name = "Tianzhou Team" }]
 
 dependencies = [

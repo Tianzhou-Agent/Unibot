@@ -168,7 +168,7 @@ def test_admin_summary_uses_actor_scope_and_counts_aina_capabilities() -> None:
     assert current["conversations"] == 1
     assert current["traces"] == 1
     assert current["llm_calls"] == 2
-    assert current["ainas"] == 3
+    assert current["ainas"] == 4
     assert current["tools"] == 7
     assert current["skills"] == 1
     assert verification["conversations"] == 1
@@ -341,13 +341,14 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
         b"What is 17 + 25? password=customer-secret-value"
     ).hexdigest()
     discovery = next(event for event in events if event["kind"] == "capability.discovery")["details"]
-    assert discovery["aina_graph"]["available_count"] == 3
+    assert discovery["aina_graph"]["available_count"] == 4
     assert {item["id"] for item in discovery["aina_graph"]["available"]} == {
         "unibot-code-runner",
+        "unibot-image-recognition",
         "unibot-memory",
         "unibot-scheduler",
     }
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 0}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 0}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 0,

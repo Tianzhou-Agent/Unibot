@@ -181,6 +181,7 @@ async def test_legacy_assistant_registration_is_removed() -> None:
         await repository.get_aina("unibot-assistant")
     assert {item.manifest.aina.id for item in await repository.list_ainas()} == {
         "unibot-code-runner",
+        "unibot-image-recognition",
         "unibot-memory",
         "unibot-scheduler",
     }

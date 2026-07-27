@@ -37,6 +37,7 @@ from tianzhou_agent_platform.store.runtime_check import (
 from tianzhou_agent_platform.store.settings import StorageSettings
 from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.vision.client import VisionClient
 
 
 def create_app(
@@ -50,6 +51,7 @@ def create_app(
     document_service: DocumentService | None = None,
     aina_project_artifact_store: AinaProjectArtifactStore | None = None,
     sandbox_service: SandboxService | None = None,
+    vision_http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
     storage_stores: StorageStores | None = None
@@ -101,6 +103,11 @@ def create_app(
     )
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
+    vision_client = VisionClient(
+        base_url=resolved_settings.vision_base_url,
+        timeout_seconds=resolved_settings.vision_timeout_seconds,
+        http_client=vision_http_client,
+    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -128,6 +135,7 @@ def create_app(
                 await asyncio.gather(*background_tasks, return_exceptions=True)
             await gateway.aclose()
             await resolved_sandbox_service.aclose()
+            await vision_client.aclose()
             if model_health_http_client is None:
                 await health_client.aclose()
             close = getattr(resolved_llm, "aclose", None)
@@ -165,6 +173,7 @@ def create_app(
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service
+    app.state.vision_client = vision_client
 
     @app.middleware("http")
     async def attach_trace_id(request: Request, call_next):  # type: ignore[no-untyped-def]

@@ -27,6 +27,7 @@ Unibot 由两层能力构成：
 | **文件附件**        | 文件上传、签名 URL、                               |
 | **多 LLM Provider** | 支持多LLM Provider配置，用户级隔离                 |
 | **用户代码沙箱**    | Code Runner AINA、每用户持久工作区、本地/K3s 双驱动与 gVisor 隔离 |
+| **图片目标检测**    | 图片识别 AINA、YOLO26m 容器推理、GPU 优先与 CPU 自动回退 |
 
 ## 项目结构
 
@@ -57,9 +58,11 @@ Unibot/
 │               ├── s3/         # 对象存储
 │               └── nas/        # 文件存储
 ├── frontend/                   # React/Vite MVP 前端
+├── vision-service/             # YOLO26m 独立推理服务
+├── deploy/helm/unibot-vision/  # 生产 Kubernetes Helm Chart
 ├── scripts/                    # 脚本工具
 ├── docs/                       # 文档
-└── LICENSE                     # MIT License
+└── LICENSE                     # AGPL-3.0 License
 ```
 
 ## 快速开始
@@ -86,6 +89,16 @@ uv run tianzhou-agent-platform
 
 后端启动时会自动创建 MySQL 业务表，并对 MySQL、Redis 和 NAS 执行读写探测。MySQL 是业务数据的
 权威存储，Redis 用于缓存和会话运行锁，NAS 默认位于仓库根目录的 `data/nas/`。
+
+图片识别 AINA 还需要启动独立 YOLO26m 推理容器。在仓库根目录运行：
+
+```powershell
+.\scripts\start-vision.cmd
+```
+
+脚本会构建同一套本地/生产镜像，自动探测 Docker GPU；GPU 可用时优先使用 CUDA，否则直接以 CPU
+模式运行。服务默认只监听 `127.0.0.1:18081`，详细部署与配置见
+[`docs/image-recognition.md`](docs/image-recognition.md)。
 
 ### 启动前端
 
@@ -141,6 +154,8 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - `/traces`、`/admin/summary`：调用链和基础管理数据。
 - 内置 `unibot-code-runner`：在每用户独立沙箱中执行 Python、Bash 和 Node.js，查看输入输出与历史，并停止或重置环境；
 - `/sandboxes`：沙箱初始化、脚本执行、执行历史、停止和重置；完整部署说明见 [`docs/sandbox-platform.md`](docs/sandbox-platform.md)。
+- 内置 `unibot-image-recognition`：粘贴、拖入或选择图片，使用 YOLO26m 展示目标框、类别、数量和置信度；
+- `/vision/health`、`/vision/detect`：查询实际推理设备并代理图片目标检测，原图不会持久化保存。
 
 最小对话请求：
 
@@ -198,6 +213,7 @@ uv run --extra dev deepeval test run tests/evals -v
 | **对象存储** | S3 兼容              |
 | **协议**     | AINA (AI-Native App) |
 | **前端**     | React 18 + Vite 5    |
+| **目标检测** | Ultralytics YOLO26m  |
 
 #
 
@@ -207,8 +223,12 @@ uv run --extra dev deepeval test run tests/evals -v
 | ----------- | --------------------------------------------------------------------- |
 | **unibot-memory**  | 管理事实、偏好、目标与指令，按需检索注入，使 Agent 具备进程生命周期内的跨会话认知能力 |
 | **unibot-documents** | NAS 持久化 Markdown 文档编辑器，支持章节编辑与任务草稿两种模式，并可在对话和 Canvas 中使用 |
+| **unibot-image-recognition** | 粘贴或选择图片，通过独立 YOLO26m 服务完成纯目标检测并叠加识别框 |
 | **builder** | 提供 AINA 的创建、调试、发布能力，管理员按步骤构建新 AINA             |
 
 ## License
 
-[MIT](LICENSE) © 2026 Tianzhou Agent
+[GNU Affero General Public License v3.0](LICENSE) © 2026 Tianzhou Agent
+
+本项目选择完全公开发布，以满足 Ultralytics YOLO 的 AGPL-3.0 开源要求。通过网络向用户提供修改版
+服务时，也必须向这些用户提供相应的完整源代码。第三方组件仍分别遵循其自身许可证。

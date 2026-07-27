@@ -11,6 +11,9 @@ import { ScheduledAinaMainWidget } from "@/pages/ScheduledAinaPage";
 const CodeRunnerMainWidget = lazy(() =>
   import("./CodeRunnerMainWidget").then((module) => ({ default: module.CodeRunnerMainWidget })),
 );
+const ImageRecognitionMainWidget = lazy(() =>
+  import("./ImageRecognitionMainWidget").then((module) => ({ default: module.ImageRecognitionMainWidget })),
+);
 
 export function MainWidgetRenderer({
   ainaId,
@@ -34,6 +37,13 @@ export function MainWidgetRenderer({
     return (
       <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载代码编辑器…</div>}>
         <CodeRunnerMainWidget />
+      </Suspense>
+    );
+  }
+  if (ainaId === "unibot-image-recognition") {
+    return (
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载图片识别…</div>}>
+        <ImageRecognitionMainWidget />
       </Suspense>
     );
   }
