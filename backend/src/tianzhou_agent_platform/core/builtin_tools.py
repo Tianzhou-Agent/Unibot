@@ -69,8 +69,6 @@ async def _available_apps(
         aina_id = manifest.aina.id
         if record.status != "registered":
             continue
-        if manifest.runtime.type == "managed":
-            continue
         if manifest.runtime.type != "builtin":
             installation = installations.get(aina_id)
             if installation is None:
@@ -103,12 +101,6 @@ async def open_aina(
     record = await repository.get_aina(aina_id)
     if record.status != "registered":
         raise PlatformError("PERMISSION_DENIED", "The selected AINA is disabled", status_code=403)
-    if record.manifest.runtime.type == "managed":
-        raise PlatformError(
-            "CONFLICT",
-            "The managed AINA project must be deployed before it can be opened",
-            status_code=409,
-        )
     if record.manifest.runtime.type != "builtin":
         installation = await repository.get_installation(
             tenant_id=tenant_id,

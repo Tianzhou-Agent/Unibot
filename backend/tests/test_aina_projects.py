@@ -364,6 +364,8 @@ async def invoke(request):
     archive = _archive(_managed_manifest(), **{"src/main.py": handler})
     llm = ScriptedLLM(
         [
+            call_first_tool(prefix="builtin_list_app_"),
+            assistant("The managed AINA is available."),
             call_first_tool(prefix="aina_", arguments='{"input":"Ada"}'),
             assistant("The managed AINA greeted Ada."),
         ]
@@ -385,6 +387,14 @@ async def invoke(request):
         deployed_again = client.post(f"/aina-projects/{project_id}/deploy")
         registered = client.get("/ainas/com.example.managed")
         installed = client.post("/ainas/com.example.managed/install", json={})
+        listed_apps = client.post(
+            "/chat",
+            json={"message": "List applications", "capability": "builtin:list_app"},
+        )
+        opened = client.post(
+            "/ainas/com.example.managed/open",
+            json={"conversation_id": listed_apps.json()["conversation_id"]},
+        )
         chat = client.post(
             "/chat",
             json={
@@ -405,10 +415,16 @@ async def invoke(request):
     assert registered.status_code == 200
     assert registered.json()["manifest"]["runtime"]["type"] == "managed"
     assert installed.status_code == 200
+    assert listed_apps.status_code == 200
+    app_widget = listed_apps.json()["widgets"][0]
+    assert "com.example.managed" in {item["aina_id"] for item in app_widget["apps"]}
+    assert opened.status_code == 200
+    assert opened.json()["main_widget"]["kind"] == "panel"
+    assert opened.json()["main_widget"]["title"] == "Managed AINA"
     assert chat.status_code == 200
     assert chat.json()["status"] == "completed"
     tool_message = next(
-        item for item in llm.calls[1]["messages"] if item.get("tool_call_id") == "call_1"
+        item for item in llm.calls[3]["messages"] if item.get("tool_call_id") == "call_1"
     )
     tool_result = json.loads(tool_message["content"])
     assert tool_result["status"] == "completed"
