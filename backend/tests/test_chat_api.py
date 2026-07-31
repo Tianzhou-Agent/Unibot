@@ -235,10 +235,11 @@ class BlockingLLM:
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
         trace_id: str | None = None,
+        span_id: str | None = None,
         context_type: str | None = None,
         context_id: str | None = None,
     ) -> LLMResult:
-        del messages, tools, tool_choice, trace_id, context_type, context_id
+        del messages, tools, tool_choice, trace_id, span_id, context_type, context_id
         self.started.set()
         while not self.release.is_set():
             await asyncio.sleep(0.01)
@@ -371,6 +372,16 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
     completed_event = next(event for event in events if event["kind"] == "tool.completed")
     assert completed_event["details"]["result"] == {"result": 42, "authorization": "[REDACTED]"}
     assert completed_event["details"]["result_size_bytes"] > 0
+    spans = trace.json()["spans"]
+    root_span = next(span for span in spans if span["span_id"] == trace.json()["root_span_id"])
+    tool_span = next(span for span in spans if span["kind"] == "tool")
+    assert tool_span["parent_span_id"] == root_span["span_id"]
+    assert tool_span["status"] == "completed"
+    assert tool_span["logical_call_id"] == "call_1"
+    assert tool_span["target_id"] == "demo.add"
+    assert tool_span["target_version"] == "1.0.0"
+    assert tool_span["attributes"]["arguments"] == {"a": 17, "b": 25, "api_key": "[REDACTED]"}
+    assert tool_span["attributes"]["result"] == {"result": 42, "authorization": "[REDACTED]"}
     final_event = next(event for event in events if event["kind"] == "final.response")
     assert final_event["details"]["content"] == "The result is 42."
     assert final_event["details"]["message_id"] == response.json()["message_id"]
@@ -409,11 +420,15 @@ def test_tool_failure_is_isolated_and_returned_to_the_model() -> None:
             },
         )
         response = client.post("/chat", json={"message": "Use the tool"})
+        trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
     tool_result = next(item for item in llm.calls[1]["messages"] if item["role"] == "tool")
     assert json.loads(tool_result["content"])["error"]["code"] == "DEPENDENCY_FAILED"
+    tool_span = next(span for span in trace.json()["spans"] if span["kind"] == "tool")
+    assert tool_span["status"] == "failed"
+    assert tool_span["error"]["code"] == "DEPENDENCY_FAILED"
 
 
 def test_high_risk_tool_waits_for_confirmation() -> None:

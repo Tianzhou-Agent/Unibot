@@ -48,7 +48,14 @@ from tianzhou_agent_platform.core.builtin_tools import (
     REQUEST_CLARIFICATION_TOOL_ID,
     invoke_platform_tool,
 )
-from tianzhou_agent_platform.core.chat import ApprovalRecord, ChatRequest, ChatResponse, TraceEvent, TraceRecord
+from tianzhou_agent_platform.core.chat import (
+    ApprovalRecord,
+    ChatRequest,
+    ChatResponse,
+    TraceEvent,
+    TraceRecord,
+    TraceSpan,
+)
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient
@@ -102,6 +109,7 @@ class AgentState(TypedDict, total=False):
     recovery_capabilities: dict[str, Capability]
     tool_definitions: list[dict[str, Any]]
     trace_id: str
+    root_span_id: str
     conversation_id: str
     user_id: str
     tenant_id: str
@@ -117,6 +125,7 @@ class AgentState(TypedDict, total=False):
     final_status: Literal["completed", "approval_required", "failed"]
     approval: ApprovalRecord | None
     call_counts: dict[str, int]
+    tool_span_ids: dict[str, str]
     widgets: list[WidgetDefinition]
     memory_context: list[MemoryRecord]
 
@@ -182,9 +191,26 @@ class AgentRuntime:
         started = perf_counter()
         runtime_model = current_model_runtime()
         model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
+        model_span_id = f"span_{uuid4().hex}"
         provider_messages = _provider_messages_for_scope(
             state["messages"],
             active_function_names=set(state["capabilities"]),
+        )
+        await self.repository.add_trace_span(
+            state["trace_id"],
+            TraceSpan(
+                span_id=model_span_id,
+                parent_span_id=state["root_span_id"],
+                kind="model",
+                name="model.complete",
+                target_id=model_target_id,
+                logical_call_id=f"model_iteration_{iterations}",
+                attributes={
+                    "iteration": iterations,
+                    "message_count": len(state["messages"]),
+                    "streaming": state.get("event_sink") is not None,
+                },
+            ),
         )
         await self.repository.add_trace_event(
             state["trace_id"],
@@ -218,10 +244,21 @@ class AgentRuntime:
                 tool_choice=tool_choice,
                 event_sink=state.get("event_sink"),
                 trace_id=state["trace_id"],
+                span_id=model_span_id,
                 context_type="conversation",
                 context_id=state["conversation_id"],
             )
         except PlatformError as exc:
+            await self.repository.finish_trace_span(
+                state["trace_id"],
+                model_span_id,
+                "failed",
+                error={
+                    "code": exc.code,
+                    "message": sanitize_trace_data(exc.message),
+                    "retryable": exc.retryable,
+                },
+            )
             await self.repository.add_trace_event(
                 state["trace_id"],
                 TraceEvent(
@@ -247,6 +284,22 @@ class AgentRuntime:
         else:
             final_status = "completed"
         messages = [*state["messages"], message]
+        model_attributes = {
+            "iteration": iterations,
+            "finish_reason": result.finish_reason,
+            "tool_call_count": len(message.get("tool_calls") or []),
+            "content_length": len(str(message.get("content") or "")),
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "ttft_ms": result.ttft_ms,
+        }
+        await self.repository.finish_trace_span(
+            state["trace_id"],
+            model_span_id,
+            "completed",
+            attributes=model_attributes,
+            first_output_at=result.first_token_at,
+        )
         await self.repository.add_trace_event(
             state["trace_id"],
             TraceEvent(
@@ -370,6 +423,21 @@ class AgentRuntime:
             call_id = str(call.get("id") or f"call_{uuid4().hex}")
             arguments_text = function.get("arguments") or "{}"
             capability = capabilities.get(name)
+            tool_span_id = f"span_{uuid4().hex}"
+            state.setdefault("tool_span_ids", {})[call_id] = tool_span_id
+            await self.repository.add_trace_span(
+                state["trace_id"],
+                TraceSpan(
+                    span_id=tool_span_id,
+                    parent_span_id=state["root_span_id"],
+                    kind="aina" if capability is not None and capability.kind == "aina" else "tool",
+                    name=name or "unknown",
+                    target_id=capability.capability_id if capability is not None else name or None,
+                    target_version=_capability_version(capability),
+                    logical_call_id=call_id,
+                    attributes={"function_name": name},
+                ),
+            )
             if capability is None:
                 tool_failed = True
                 recovery = _capability_scope_recovery(
@@ -476,6 +544,15 @@ class AgentRuntime:
                         function_name=name,
                         arguments=arguments,
                         messages=messages,
+                    )
+                    await self.repository.finish_trace_span(
+                        state["trace_id"],
+                        tool_span_id,
+                        "completed",
+                        attributes={
+                            "arguments": sanitize_trace_data(arguments),
+                            "activated": True,
+                        },
                     )
                     scope_activated = True
                     continue
@@ -602,6 +679,16 @@ class AgentRuntime:
                             ],
                         },
                     ),
+                )
+                await self.repository.finish_trace_span(
+                    state["trace_id"],
+                    tool_span_id,
+                    "completed",
+                    attributes={
+                        "arguments": sanitize_trace_data(arguments),
+                        "result": sanitize_trace_data(result_payload),
+                        "result_size_bytes": result_size_bytes,
+                    },
                 )
                 await self._emit(
                     state,
@@ -834,6 +921,18 @@ class AgentRuntime:
                 },
             ),
         )
+        span_id = state.get("tool_span_ids", {}).get(call_id)
+        if span_id is not None:
+            await self.repository.finish_trace_span(
+                state["trace_id"],
+                span_id,
+                "failed",
+                error={
+                    "code": code,
+                    "message": sanitize_trace_data(message),
+                    "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
+                },
+            )
         await self._emit(state, {"type": "error", "code": code, "source": "capability"})
 
     async def chat(self, request: ChatRequest, *, event_sink: EventSink | None = None) -> ChatResponse:
@@ -848,14 +947,29 @@ class AgentRuntime:
                 tenant_id=request.tenant_id,
             )
         trace_id = f"trace_{uuid4().hex}"
+        root_span_id = f"span_{uuid4().hex}"
         trace_created = False
         try:
             await self.repository.create_trace(
                 TraceRecord(
                     trace_id=trace_id,
+                    root_span_id=root_span_id,
                     conversation_id=conversation.id,
                     user_id=request.user_id,
                     tenant_id=request.tenant_id,
+                    spans=[
+                        TraceSpan(
+                            span_id=root_span_id,
+                            kind="agent",
+                            name="agent.run",
+                            target_id="unibot",
+                            attributes={
+                                "conversation_id": conversation.id,
+                                "requested_capability": request.capability,
+                                "preferred_aina_id": request.preferred_aina_id,
+                            },
+                        )
+                    ],
                 )
             )
             trace_created = True
@@ -1202,6 +1316,22 @@ class AgentRuntime:
         system_prompt: str | None = None,
         memory_context: list[MemoryRecord] | None = None,
     ) -> ChatResponse:
+        trace = await self.repository.get_trace(trace_id)
+        if trace.root_span_id is None:
+            root_span = await self.repository.ensure_trace_root_span(
+                trace_id,
+                TraceSpan(
+                    span_id=f"span_{uuid4().hex}",
+                    kind="agent",
+                    name="agent.run",
+                    target_id="unibot",
+                    started_at=trace.created_at,
+                    attributes={"conversation_id": conversation.id, "migrated_trace": True},
+                ),
+            )
+            trace = trace.model_copy(update={"root_span_id": root_span.span_id})
+        root_span_id = trace.root_span_id
+        assert root_span_id is not None
         if capabilities is None:
             capabilities = await self._available_capabilities(conversation)
         recovery_capabilities = await self._available_capabilities(conversation)
@@ -1233,6 +1363,7 @@ class AgentRuntime:
             "recovery_capabilities": recovery_capabilities,
             "tool_definitions": [item.llm_definition() for item in capabilities.values()],
             "trace_id": trace_id,
+            "root_span_id": root_span_id,
             "conversation_id": conversation.id,
             "user_id": conversation.user_id,
             "tenant_id": conversation.tenant_id,
@@ -1245,6 +1376,7 @@ class AgentRuntime:
             "usage_input": 0,
             "usage_output": 0,
             "call_counts": {},
+            "tool_span_ids": {},
             "approval": None,
             "widgets": [],
             "memory_context": memory_context or [],
@@ -2146,6 +2278,17 @@ def _tool_call_trace_details(
         "kind": capability.kind if capability else None,
         "arguments": sanitize_trace_data(arguments),
     }
+
+
+def _capability_version(capability: Capability | None) -> str | None:
+    if capability is None:
+        return None
+    if capability.kind == "tool":
+        return cast(ToolRecord, capability.value).version
+    if capability.kind == "aina":
+        aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+        return installation.installed_version or aina.manifest.aina.version
+    return None
 
 
 def _function_name(kind: str, capability_id: str) -> str:

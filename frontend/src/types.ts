@@ -662,13 +662,33 @@ export interface TraceEvent {
   details: Record<string, unknown>;
 }
 
+export interface TraceSpan {
+  span_id: string;
+  parent_span_id?: string | null;
+  kind: "agent" | "model" | "tool" | "aina" | "internal";
+  name: string;
+  status: "running" | "completed" | "failed" | "cancelled" | "approval_required";
+  target_id?: string | null;
+  target_version?: string | null;
+  logical_call_id?: string | null;
+  attempt_no: number;
+  started_at: string;
+  first_output_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  attributes: Record<string, unknown>;
+  error?: Record<string, unknown> | null;
+}
+
 export interface TraceRecord {
   trace_id: string;
+  root_span_id?: string | null;
   conversation_id?: string | null;
   user_id: string;
   tenant_id: string;
   status: "running" | "completed" | "approval_required" | "failed";
   events: TraceEvent[];
+  spans: TraceSpan[];
   created_at: string;
   completed_at?: string | null;
 }
@@ -676,6 +696,7 @@ export interface TraceRecord {
 export interface LLMCallRecord {
   call_id: string;
   trace_id?: string | null;
+  span_id?: string | null;
   context_type?: string | null;
   context_id?: string | null;
   endpoint: string;
@@ -684,6 +705,8 @@ export interface LLMCallRecord {
   request: Record<string, unknown>;
   response?: Record<string, unknown> | null;
   duration_ms?: number | null;
+  first_token_at?: string | null;
+  ttft_ms?: number | null;
   error?: string | null;
   created_at: string;
   completed_at?: string | null;

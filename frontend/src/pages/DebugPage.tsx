@@ -27,7 +27,14 @@ import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
-import type { AdminSummary, ConversationRecord, LLMCallRecord, TraceEvent, TraceRecord } from "@/types";
+import type {
+  AdminSummary,
+  ConversationRecord,
+  LLMCallRecord,
+  TraceEvent,
+  TraceRecord,
+  TraceSpan,
+} from "@/types";
 
 export default function DebugPage() {
   const { debugMode, setDebugMode } = useDebugMode();
@@ -40,7 +47,7 @@ export default function DebugPage() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<string | null>(requestedTrace);
   const [selectedLlmCall, setSelectedLlmCall] = useState<string | null>(null);
-  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("llm");
+  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("trace");
   const [expandedTraceGroups, setExpandedTraceGroups] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -112,7 +119,7 @@ export default function DebugPage() {
   }, [selectedTrace, traceGroups, traces]);
 
   useEffect(() => {
-    setTraceDetailView("llm");
+    setTraceDetailView("trace");
   }, [selectedTrace]);
 
   useEffect(() => {
@@ -374,6 +381,8 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
           <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{trace.trace_id}</span>
         </div>
         <div className="mt-1.5 flex items-center gap-2 text-[11.5px] text-ink-muted">
+          <span>{trace.spans?.length ?? 0} 个 Span</span>
+          <span>·</span>
           <span>{trace.events.length} 个事件</span>
           <span>·</span>
           <span>{timeAgo(trace.created_at)}</span>
@@ -709,6 +718,7 @@ function TraceDetail({
   onSelectCall: (callId: string) => void;
 }) {
   const performance = summarizeLlmCalls(calls);
+  const spans = trace.spans ?? [];
   return (
     <div className="flex h-full min-h-0 flex-col">
       {view === "trace" ? <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
@@ -734,48 +744,75 @@ function TraceDetail({
           </div>
         </div>
       </div> : null}
-      {calls.length > 0 ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
-          <div className="flex rounded-lg bg-app-soft p-0.5">
-            <button
-              type="button"
-              onClick={() => onViewChange("llm")}
-              className={classNames(
-                "rounded-md px-3 py-1.5 text-[12px] font-bold",
-                view === "llm" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-              )}
-            >
-              模型请求 {calls.length}
-            </button>
-            <button
-              type="button"
-              onClick={() => onViewChange("trace")}
-              className={classNames(
-                "rounded-md px-3 py-1.5 text-[12px] font-bold",
-                view === "trace" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-              )}
-            >
-              调用链
-            </button>
-          </div>
-          {view === "llm" ? (
-            <span className="ml-auto hidden text-[11px] text-ink-subtle xl:block">
-              总耗时 {formatDuration(performance.totalDurationMs)}
-              {" · "}
-              {formatTokenCount(performance.totalTokens)} Token
-              {" · "}
-              {formatOutputTokenRate(performance.outputTokensPerSecond)}
-            </span>
-          ) : null}
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
+        <div className="flex rounded-lg bg-app-soft p-0.5">
+          <button
+            type="button"
+            onClick={() => onViewChange("trace")}
+            className={classNames(
+              "rounded-md px-3 py-1.5 text-[12px] font-bold",
+              view === "trace" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+            )}
+          >
+            调用链
+          </button>
+          <button
+            type="button"
+            onClick={() => onViewChange("llm")}
+            className={classNames(
+              "rounded-md px-3 py-1.5 text-[12px] font-bold",
+              view === "llm" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+            )}
+          >
+            模型请求 {calls.length}
+          </button>
         </div>
-      ) : null}
+        {view === "llm" ? (
+          <span className="ml-auto hidden text-[11px] text-ink-subtle xl:block">
+            总耗时 {formatDuration(performance.totalDurationMs)}
+            {" · "}
+            {formatTokenCount(performance.totalTokens)} Token
+            {" · "}
+            {formatOutputTokenRate(performance.outputTokensPerSecond)}
+          </span>
+        ) : (
+          <span className="ml-auto text-[11px] text-ink-subtle">
+            {spans.length} 个 Span · {trace.events.length} 个事件
+          </span>
+        )}
+      </div>
       {view === "trace" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-4" aria-label="Trace 事件">
-          <div className="space-y-0">
-            {trace.events.map((event, index) => (
-              <EventRow key={`${event.timestamp}-${index}`} event={event} last={index === trace.events.length - 1} />
-            ))}
-          </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <section aria-label="Span 调用树">
+            <div className="mb-3 flex items-center gap-2">
+              <Route className="h-4 w-4 text-accent" />
+              <h3 className="text-[13px] font-bold text-ink">Span 调用树</h3>
+              <span className="text-[11px] text-ink-subtle">{spans.length}</span>
+            </div>
+            {spans.length > 0 ? (
+              <div className="space-y-2">
+                {buildSpanRows(spans, trace.root_span_id).map(({ span, depth }) => (
+                  <SpanRow key={span.span_id} span={span} depth={depth} />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-[12px] text-ink-muted">
+                此 Trace 没有 Span 数据，可能由旧版本产生。
+              </div>
+            )}
+          </section>
+          <section className="mt-6 border-t border-line pt-4" aria-label="Trace 原始事件">
+            <div className="mb-3 flex items-center gap-2">
+              <Activity className="h-4 w-4 text-ink-muted" />
+              <h3 className="text-[13px] font-bold text-ink">原始事件</h3>
+              <span className="text-[11px] text-ink-subtle">{trace.events.length}</span>
+            </div>
+            <div className="space-y-0">
+              {trace.events.map((event, index) => (
+                <EventRow key={`${event.timestamp}-${index}`} event={event} last={index === trace.events.length - 1} />
+              ))}
+            </div>
+          </section>
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.55fr)_minmax(0,1.45fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
@@ -797,6 +834,141 @@ function TraceDetail({
       )}
     </div>
   );
+}
+
+function SpanRow({ span, depth }: { span: TraceSpan; depth: number }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const failed = span.status === "failed";
+  const ttftMs = numberMetric(span.attributes.ttft_ms);
+  const inputTokens = numberMetric(span.attributes.input_tokens);
+  const outputTokens = numberMetric(span.attributes.output_tokens);
+  const hasDetails = Boolean(
+    span.target_id
+    || span.target_version
+    || span.logical_call_id
+    || span.first_output_at
+    || Object.keys(span.attributes).length
+    || span.error,
+  );
+
+  return (
+    <div
+      className={classNames(
+        "rounded-lg border bg-white",
+        failed ? "border-danger/30" : "border-line",
+      )}
+      style={{ marginLeft: Math.min(depth, 6) * 24 }}
+    >
+      <button
+        type="button"
+        onClick={() => hasDetails && setCollapsed((current) => !current)}
+        aria-expanded={hasDetails ? !collapsed : undefined}
+        className={classNames(
+          "flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left",
+          hasDetails && "cursor-pointer",
+        )}
+      >
+        {hasDetails ? (
+          collapsed
+            ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+            : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-accent" />
+        ) : <span className="w-3.5 shrink-0" />}
+        <SpanKindIcon kind={span.kind} />
+        <span className="shrink-0 rounded bg-app-soft px-1.5 py-0.5 text-[10.5px] font-bold uppercase text-ink-muted">
+          {spanKindLabel(span.kind)}
+        </span>
+        <span className="min-w-0 truncate text-[13px] font-bold text-ink">{span.name}</span>
+        <span className={classNames(
+          "shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-bold",
+          spanStatusTone(span.status),
+        )}>
+          {spanStatusLabel(span.status)}
+        </span>
+        {ttftMs != null ? (
+          <span className="hidden shrink-0 text-[11px] text-ink-muted sm:inline">TTFT {formatDuration(ttftMs)}</span>
+        ) : null}
+        {inputTokens != null || outputTokens != null ? (
+          <span className="hidden shrink-0 text-[11px] text-ink-muted xl:inline">
+            {formatTokenCount(inputTokens)} / {formatTokenCount(outputTokens)} Token
+          </span>
+        ) : null}
+        <span className="ml-auto shrink-0 font-mono text-[11px] text-ink-subtle">
+          {span.duration_ms != null ? formatDuration(span.duration_ms) : "进行中"}
+        </span>
+      </button>
+      {!collapsed && hasDetails ? (
+        <div className="border-t border-line px-3 py-3 text-[11px] text-ink-muted">
+          <div className="grid gap-x-4 gap-y-1 md:grid-cols-2 xl:grid-cols-4">
+            <div><span className="text-ink-subtle">Span ID：</span><span className="font-mono break-all">{span.span_id}</span></div>
+            <div><span className="text-ink-subtle">父 Span：</span><span className="font-mono break-all">{span.parent_span_id ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">目标：</span><span className="font-mono break-all">{span.target_id ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">版本：</span><span className="font-mono break-all">{span.target_version ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">逻辑调用：</span><span className="font-mono break-all">{span.logical_call_id ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">Attempt：</span>{span.attempt_no}</div>
+            <div><span className="text-ink-subtle">开始：</span>{new Date(span.started_at).toLocaleString("zh-CN")}</div>
+            <div><span className="text-ink-subtle">首输出：</span>{span.first_output_at ? new Date(span.first_output_at).toLocaleString("zh-CN") : "—"}</div>
+          </div>
+          {Object.keys(span.attributes).length > 0 ? (
+            <div className="mt-3">
+              <div className="mb-1 font-bold text-ink">属性</div>
+              <pre className="rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all leading-relaxed">{JSON.stringify(span.attributes, null, 2)}</pre>
+            </div>
+          ) : null}
+          {span.error ? (
+            <div className="mt-3">
+              <div className="mb-1 font-bold text-danger">错误</div>
+              <pre className="rounded-md bg-danger-soft p-2 whitespace-pre-wrap break-all leading-relaxed text-danger">{JSON.stringify(span.error, null, 2)}</pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SpanKindIcon({ kind }: { kind: TraceSpan["kind"] }) {
+  const iconClass = "h-4 w-4 shrink-0 text-accent";
+  if (kind === "agent") return <Bot className={iconClass} />;
+  if (kind === "model") return <Brain className={iconClass} />;
+  if (kind === "tool") return <Wrench className={iconClass} />;
+  if (kind === "aina") return <AppWindow className={iconClass} />;
+  return <Activity className={iconClass} />;
+}
+
+function buildSpanRows(
+  spans: TraceSpan[],
+  rootSpanId: string | null | undefined,
+): Array<{ span: TraceSpan; depth: number }> {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const children = new Map<string, TraceSpan[]>();
+  for (const span of spans) {
+    if (!span.parent_span_id || !byId.has(span.parent_span_id)) continue;
+    const siblings = children.get(span.parent_span_id) ?? [];
+    siblings.push(span);
+    children.set(span.parent_span_id, siblings);
+  }
+  const byStartTime = (left: TraceSpan, right: TraceSpan) =>
+    left.started_at.localeCompare(right.started_at);
+  for (const siblings of children.values()) siblings.sort(byStartTime);
+
+  const roots = spans
+    .filter((span) => !span.parent_span_id || !byId.has(span.parent_span_id))
+    .sort((left, right) => {
+      if (left.span_id === rootSpanId) return -1;
+      if (right.span_id === rootSpanId) return 1;
+      return byStartTime(left, right);
+    });
+  const rows: Array<{ span: TraceSpan; depth: number }> = [];
+  const visited = new Set<string>();
+  const visit = (span: TraceSpan, depth: number) => {
+    if (visited.has(span.span_id)) return;
+    visited.add(span.span_id);
+    rows.push({ span, depth });
+    for (const child of children.get(span.span_id) ?? []) visit(child, depth + 1);
+  };
+  for (const root of roots) visit(root, 0);
+  for (const span of [...spans].sort(byStartTime)) visit(span, 0);
+  return rows;
 }
 
 function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
@@ -1219,4 +1391,28 @@ function eventStatusLabel(value: TraceEvent["status"]): string {
   if (value === "failed") return "失败";
   if (value === "pending") return "等待中";
   return value === "started" ? "已开始" : value;
+}
+
+function spanKindLabel(value: TraceSpan["kind"]): string {
+  if (value === "agent") return "Agent";
+  if (value === "model") return "Model";
+  if (value === "tool") return "Tool";
+  if (value === "aina") return "AINA";
+  return "Internal";
+}
+
+function spanStatusLabel(value: TraceSpan["status"]): string {
+  if (value === "completed") return "已完成";
+  if (value === "failed") return "失败";
+  if (value === "cancelled") return "已取消";
+  if (value === "approval_required") return "等待确认";
+  return "运行中";
+}
+
+function spanStatusTone(value: TraceSpan["status"]): string {
+  if (value === "completed") return "bg-success-soft text-success";
+  if (value === "failed") return "bg-danger-soft text-danger";
+  if (value === "cancelled") return "bg-app-soft text-ink-muted";
+  if (value === "approval_required") return "bg-warning-soft text-warning";
+  return "bg-accent-soft text-accent";
 }

@@ -20,6 +20,17 @@ def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
         response = client.post("/chat", json={"message": "Hello"})
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
+    root_span = next(span for span in trace["spans"] if span["span_id"] == trace["root_span_id"])
+    assert root_span["kind"] == "agent"
+    assert root_span["parent_span_id"] is None
+    assert root_span["status"] == "completed"
+    assert root_span["duration_ms"] is not None
+    model_span = next(span for span in trace["spans"] if span["kind"] == "model")
+    assert model_span["parent_span_id"] == root_span["span_id"]
+    assert model_span["status"] == "completed"
+    assert model_span["attributes"]["input_tokens"] == 5
+    assert model_span["attributes"]["output_tokens"] == 3
+
     discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
     graph = discovery["aina_graph"]
     assert graph["available_count"] == 4

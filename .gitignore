@@ -8,6 +8,4 @@ frontend/playwright-report/
 frontend/test-results/
 frontend/frontend-run.log
 .env
-/data/nas/
-/data/sandboxes/
-/data/runtime-logs/
+/data/

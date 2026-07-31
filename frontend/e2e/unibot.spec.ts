@@ -629,6 +629,43 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           tenant_id: "default",
           status: "completed",
           events: [{ timestamp: NOW, kind: "agent.completed", status: "completed", details: {} }],
+          root_span_id: "span-agent-e2e-1",
+          spans: [
+            {
+              span_id: "span-agent-e2e-1",
+              parent_span_id: null,
+              kind: "agent",
+              name: "agent.run",
+              status: "completed",
+              target_id: "unibot",
+              target_version: null,
+              logical_call_id: null,
+              attempt_no: 1,
+              started_at: NOW,
+              first_output_at: null,
+              completed_at: NOW,
+              duration_ms: 180,
+              attributes: { conversation_id: "conv-e2e-1" },
+              error: null,
+            },
+            {
+              span_id: "span-model-e2e-1",
+              parent_span_id: "span-agent-e2e-1",
+              kind: "model",
+              name: "model.complete",
+              status: "completed",
+              target_id: "debug-model",
+              target_version: null,
+              logical_call_id: "model_iteration_1",
+              attempt_no: 1,
+              started_at: NOW,
+              first_output_at: NOW,
+              completed_at: NOW,
+              duration_ms: 129,
+              attributes: { input_tokens: 90, output_tokens: 30, ttft_ms: 42 },
+              error: null,
+            },
+          ],
           created_at: NOW,
           completed_at: NOW,
         },
@@ -1100,11 +1137,15 @@ test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
   await page.getByText("trace-e2e-1", { exact: true }).click();
   await expect(page.getByRole("button", { name: "调用链", exact: true })).toBeVisible();
+  const spanTree = page.getByLabel("Span 调用树");
+  await expect(spanTree.getByText("agent.run", { exact: true })).toBeVisible();
+  await expect(spanTree.getByText("model.complete", { exact: true })).toBeVisible();
+  await expect(spanTree.getByText("TTFT 42 ms", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "模型请求 1", exact: true }).click();
   await expect(page.getByRole("button", { name: "已有会话 1 Trace conv-e2e-1", exact: true })).toBeVisible();
   const modelRequestList = page.getByLabel("当前 Trace 的模型请求");
   await expect(modelRequestList.getByRole("button", {
-    name: "成功 debug-model 129 ms 120 Token · 233.5 Output Token/s",
+    name: "请求 1 成功 debug-model 129 ms 120 Token",
     exact: true,
   })).toBeVisible();
   await expect(page.getByText("总耗时 129 ms · 120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();

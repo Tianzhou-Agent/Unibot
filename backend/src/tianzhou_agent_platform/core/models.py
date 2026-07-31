@@ -49,6 +49,7 @@ from tianzhou_agent_platform.core.chat import (
     StandardError,
     TraceEvent,
     TraceRecord,
+    TraceSpan,
 )
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 
@@ -94,6 +95,7 @@ __all__ = [
     "ToolRecord",
     "TraceEvent",
     "TraceRecord",
+    "TraceSpan",
     "Usage",
     "WidgetAction",
     "WidgetApp",

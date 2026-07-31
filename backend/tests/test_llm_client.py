@@ -214,6 +214,11 @@ async def test_langchain_streaming_emits_message_deltas() -> None:
     recorded = next(iter(recorded_calls.values()))
     assert recorded.status == "completed"
     assert recorded.request["stream"] is True
+    assert recorded.first_token_at is not None
+    assert recorded.ttft_ms is not None
+    assert recorded.ttft_ms >= 0
+    assert result.first_token_at == recorded.first_token_at
+    assert result.ttft_ms == recorded.ttft_ms
     assert recorded.response is not None
     assert recorded.response["choices"][0]["message"]["content"] == "Hello world"
     result.message["widgets"] = [{"id": "document-outline", "kind": "document_outline"}]

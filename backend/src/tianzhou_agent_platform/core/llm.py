@@ -20,6 +20,7 @@ from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import current_model_runtime
+from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 LLMCallSink = Callable[[LLMCallRecord], Awaitable[None]]
@@ -32,6 +33,8 @@ class LLMResult:
     input_tokens: int = 0
     output_tokens: int = 0
     finish_reason: str | None = None
+    first_token_at: datetime | None = None
+    ttft_ms: float | None = None
 
 
 class LLMClient(Protocol):
@@ -43,6 +46,7 @@ class LLMClient(Protocol):
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
         trace_id: str | None = None,
+        span_id: str | None = None,
         context_type: str | None = None,
         context_id: str | None = None,
     ) -> LLMResult: ...
@@ -103,6 +107,7 @@ class OpenAICompatibleClient:
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
         trace_id: str | None = None,
+        span_id: str | None = None,
         context_type: str | None = None,
         context_id: str | None = None,
     ) -> LLMResult:
@@ -116,6 +121,7 @@ class OpenAICompatibleClient:
                 tool_choice=tool_choice,
                 event_sink=event_sink,
                 trace_id=trace_id,
+                span_id=span_id,
                 context_type=context_type,
                 context_id=context_id,
             )
@@ -124,6 +130,7 @@ class OpenAICompatibleClient:
             tools,
             tool_choice,
             trace_id=trace_id,
+            span_id=span_id,
             context_type=context_type,
             context_id=context_id,
         )
@@ -135,6 +142,7 @@ class OpenAICompatibleClient:
         tool_choice: dict[str, Any] | str | None,
         *,
         trace_id: str | None,
+        span_id: str | None,
         context_type: str | None,
         context_id: str | None,
     ) -> LLMResult:
@@ -144,6 +152,7 @@ class OpenAICompatibleClient:
                 tools,
                 tool_choice,
                 trace_id=trace_id,
+                span_id=span_id,
                 context_type=context_type,
                 context_id=context_id,
             )
@@ -157,6 +166,7 @@ class OpenAICompatibleClient:
                     tools,
                     None,
                     trace_id=trace_id,
+                    span_id=span_id,
                     context_type=context_type,
                     context_id=context_id,
                 )
@@ -172,6 +182,7 @@ class OpenAICompatibleClient:
         tool_choice: dict[str, Any] | str | None,
         *,
         trace_id: str | None,
+        span_id: str | None,
         context_type: str | None,
         context_id: str | None,
     ) -> LLMResult:
@@ -181,6 +192,7 @@ class OpenAICompatibleClient:
             tool_choice,
             stream=False,
             trace_id=trace_id,
+            span_id=span_id,
             context_type=context_type,
             context_id=context_id,
         )
@@ -204,6 +216,7 @@ class OpenAICompatibleClient:
         tool_choice: dict[str, Any] | str | None,
         event_sink: EventSink,
         trace_id: str | None,
+        span_id: str | None,
         context_type: str | None,
         context_id: str | None,
     ) -> LLMResult:
@@ -213,15 +226,21 @@ class OpenAICompatibleClient:
             tool_choice,
             stream=True,
             trace_id=trace_id,
+            span_id=span_id,
             context_type=context_type,
             context_id=context_id,
         )
         aggregate: AIMessageChunk | None = None
+        first_token_at: datetime | None = None
+        ttft_ms: float | None = None
         try:
             async for chunk in self._bound_model(tools, tool_choice).astream(messages):
                 aggregate = chunk if aggregate is None else aggregate + chunk
                 delta = _message_text(chunk.content)
                 if delta:
+                    if first_token_at is None:
+                        first_token_at = datetime.now(UTC)
+                        ttft_ms = max(0.0, (perf_counter() - started) * 1000)
                     await event_sink({"type": "message.delta", "delta": delta})
         except openai.OpenAIError as exc:
             await self._fail_call(call, started, exc)
@@ -239,6 +258,8 @@ class OpenAICompatibleClient:
             await self._fail_call(call, started, error)
             raise error
         result = _result_from_message(aggregate)
+        result.first_token_at = first_token_at
+        result.ttft_ms = ttft_ms
         await self._complete_call(call, started, result)
         return result
 
@@ -250,6 +271,7 @@ class OpenAICompatibleClient:
         *,
         stream: bool,
         trace_id: str | None,
+        span_id: str | None,
         context_type: str | None,
         context_id: str | None,
     ) -> tuple[LLMCallRecord, float]:
@@ -263,9 +285,11 @@ class OpenAICompatibleClient:
             request["tools"] = deepcopy(tools)
         if tool_choice is not None:
             request["tool_choice"] = deepcopy(tool_choice)
+        request = sanitize_trace_data(request)
         call = LLMCallRecord(
             call_id=f"llm_{uuid4().hex}",
             trace_id=trace_id,
+            span_id=span_id,
             context_type=context_type,
             context_id=context_id,
             endpoint=endpoint,
@@ -280,8 +304,10 @@ class OpenAICompatibleClient:
         completed = call.model_copy(
             update={
                 "status": "completed",
-                "response": _response_from_result(call.model, result),
+                "response": sanitize_trace_data(_response_from_result(call.model, result)),
                 "duration_ms": (perf_counter() - started) * 1000,
+                "first_token_at": result.first_token_at,
+                "ttft_ms": result.ttft_ms,
                 "completed_at": completed_at,
             }
         )
@@ -292,9 +318,9 @@ class OpenAICompatibleClient:
         failed = call.model_copy(
             update={
                 "status": "failed",
-                "response": _response_from_error(exc),
+                "response": sanitize_trace_data(_response_from_error(exc)),
                 "duration_ms": (perf_counter() - started) * 1000,
-                "error": str(exc),
+                "error": sanitize_trace_data(str(exc)),
                 "completed_at": completed_at,
             }
         )

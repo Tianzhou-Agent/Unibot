@@ -21,7 +21,7 @@ from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
 )
-from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceEvent, TraceRecord
+from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceEvent, TraceRecord, TraceSpan
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.model_settings import (
@@ -1117,13 +1117,88 @@ class InMemoryRepository:
             trace.events.append(event)
             await self._save_record(TRACES_RESOURCE, trace_id, trace)
 
+    async def add_trace_span(self, trace_id: str, span: TraceSpan) -> TraceSpan:
+        async with self._lock:
+            trace = self._traces.get(trace_id)
+            if trace is None:
+                raise not_found("Trace", trace_id)
+            if any(item.span_id == span.span_id for item in trace.spans):
+                raise conflict(f"Trace span {span.span_id!r} already exists")
+            if span.parent_span_id is not None and not any(
+                item.span_id == span.parent_span_id for item in trace.spans
+            ):
+                raise conflict(f"Trace span parent {span.parent_span_id!r} does not exist")
+            trace.spans.append(span)
+            await self._save_record(TRACES_RESOURCE, trace_id, trace)
+            return self._copy(span)
+
+    async def ensure_trace_root_span(self, trace_id: str, span: TraceSpan) -> TraceSpan:
+        async with self._lock:
+            trace = self._traces.get(trace_id)
+            if trace is None:
+                raise not_found("Trace", trace_id)
+            if trace.root_span_id is not None:
+                existing = next((item for item in trace.spans if item.span_id == trace.root_span_id), None)
+                if existing is None:
+                    raise not_found("Trace span", trace.root_span_id)
+                return self._copy(existing)
+            if span.parent_span_id is not None:
+                raise conflict("Trace root span cannot have a parent")
+            trace.root_span_id = span.span_id
+            trace.spans.append(span)
+            await self._save_record(TRACES_RESOURCE, trace_id, trace)
+            return self._copy(span)
+
+    async def finish_trace_span(
+        self,
+        trace_id: str,
+        span_id: str,
+        status: str,
+        *,
+        attributes: dict[str, Any] | None = None,
+        first_output_at: datetime | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> TraceSpan:
+        async with self._lock:
+            trace = self._traces.get(trace_id)
+            if trace is None:
+                raise not_found("Trace", trace_id)
+            span = next((item for item in trace.spans if item.span_id == span_id), None)
+            if span is None:
+                raise not_found("Trace span", span_id)
+            if span.status != "running":
+                return self._copy(span)
+            completed_at = datetime.now(UTC)
+            span.status = status  # type: ignore[assignment]
+            span.first_output_at = first_output_at
+            span.completed_at = completed_at
+            span.duration_ms = max(0.0, (completed_at - span.started_at).total_seconds() * 1000)
+            if attributes:
+                span.attributes.update(attributes)
+            span.error = error
+            await self._save_record(TRACES_RESOURCE, trace_id, trace)
+            return self._copy(span)
+
     async def finish_trace(self, trace_id: str, status: str) -> TraceRecord:
         async with self._lock:
             trace = self._traces.get(trace_id)
             if trace is None:
                 raise not_found("Trace", trace_id)
             trace.status = status  # type: ignore[assignment]
-            trace.completed_at = datetime.now(UTC)
+            completed_at = datetime.now(UTC)
+            trace.completed_at = completed_at
+            if status in {"completed", "failed"}:
+                for span in trace.spans:
+                    if span.status != "running":
+                        continue
+                    if span.span_id == trace.root_span_id:
+                        span.status = "completed" if status == "completed" else "failed"
+                    elif status == "failed":
+                        span.status = "failed"
+                    else:
+                        span.status = "cancelled"
+                    span.completed_at = completed_at
+                    span.duration_ms = max(0.0, (completed_at - span.started_at).total_seconds() * 1000)
             await self._save_record(TRACES_RESOURCE, trace_id, trace)
             return self._copy(trace)
 

@@ -19,6 +19,7 @@ class ScriptedLLM:
         tool_choice: dict[str, Any] | str | None = None,
         event_sink: EventSink | None = None,
         trace_id: str | None = None,
+        span_id: str | None = None,
         context_type: str | None = None,
         context_id: str | None = None,
     ) -> LLMResult:
@@ -27,6 +28,7 @@ class ScriptedLLM:
             "tools": tools,
             "tool_choice": tool_choice,
             "trace_id": trace_id,
+            "span_id": span_id,
             "context_type": context_type,
             "context_id": context_id,
         }
