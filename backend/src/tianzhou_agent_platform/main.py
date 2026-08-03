@@ -26,6 +26,7 @@ from tianzhou_agent_platform.api.router import create_router
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
+from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
 from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
@@ -80,6 +81,7 @@ def create_app(
         resolved_settings,
         resolved_repository,
     )
+    observability = ObservabilityAspect(resolved_repository)
     managed_aina_runtime = ManagedAinaRuntime(
         resolved_settings,
         resolved_repository,
@@ -88,7 +90,7 @@ def create_app(
     )
     resolved_llm = llm or OpenAICompatibleClient(
         resolved_settings,
-        call_sink=resolved_repository.upsert_llm_call,
+        call_sink=observability.record_llm_call,
     )
     document_edit_task_service = (
         DocumentEditTaskService(resolved_document_service, resolved_repository, resolved_llm)
@@ -161,11 +163,13 @@ def create_app(
     app.state.document_edit_worker = document_edit_worker
     app.state.storage_stores = storage_stores
     app.state.storage_status = None
+    app.state.observability = observability
     app.state.agent_runtime = AgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,
         llm=resolved_llm,
         gateway=gateway,
+        observability=observability,
         document_service=resolved_document_service,
         document_edit_task_service=document_edit_task_service,
         sandbox_service=resolved_sandbox_service,

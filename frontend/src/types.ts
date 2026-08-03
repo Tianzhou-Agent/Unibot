@@ -676,6 +676,8 @@ export interface TraceSpan {
   first_output_at?: string | null;
   completed_at?: string | null;
   duration_ms?: number | null;
+  input?: unknown;
+  output?: unknown;
   attributes: Record<string, unknown>;
   error?: Record<string, unknown> | null;
 }

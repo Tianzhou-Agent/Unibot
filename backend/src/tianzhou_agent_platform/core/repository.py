@@ -805,13 +805,18 @@ class InMemoryRepository:
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, conversation)
         return appended
 
-    async def close_dangling_tool_calls(self, conversation_id: str, *, trace_id: str) -> None:
+    async def close_dangling_tool_calls(
+        self,
+        conversation_id: str,
+        *,
+        trace_id: str,
+    ) -> list[ApprovalRecord]:
         conversation = await self.get_conversation(conversation_id)
         if not conversation.messages:
-            return
+            return []
         last = conversation.messages[-1]
         if last.role != "assistant" or not last.tool_calls:
-            return
+            return []
         closing = [
             {
                 "role": "tool",
@@ -822,7 +827,7 @@ class InMemoryRepository:
             for call in last.tool_calls
         ]
         await self.append_provider_messages(conversation_id, closing, trace_id=trace_id)
-        await self.cancel_pending_approvals(conversation_id)
+        return await self.cancel_pending_approvals(conversation_id)
 
     async def register_tool(self, tool: ToolRecord) -> ToolRecord:
         async with self._lock:
@@ -1155,6 +1160,8 @@ class InMemoryRepository:
         span_id: str,
         status: str,
         *,
+        input_data: Any | None = None,
+        output_data: Any | None = None,
         attributes: dict[str, Any] | None = None,
         first_output_at: datetime | None = None,
         error: dict[str, Any] | None = None,
@@ -1173,6 +1180,10 @@ class InMemoryRepository:
             span.first_output_at = first_output_at
             span.completed_at = completed_at
             span.duration_ms = max(0.0, (completed_at - span.started_at).total_seconds() * 1000)
+            if input_data is not None:
+                span.input = input_data
+            if output_data is not None:
+                span.output = output_data
             if attributes:
                 span.attributes.update(attributes)
             span.error = error
@@ -1291,7 +1302,7 @@ class InMemoryRepository:
             await self._save_record(APPROVALS_RESOURCE, approval_id, approval)
             return self._copy(approval)
 
-    async def cancel_pending_approvals(self, conversation_id: str) -> None:
+    async def cancel_pending_approvals(self, conversation_id: str) -> list[ApprovalRecord]:
         cancelled: list[ApprovalRecord] = []
         async with self._lock:
             for approval in self._approvals.values():
@@ -1301,16 +1312,7 @@ class InMemoryRepository:
                     await self._save_record(APPROVALS_RESOURCE, approval.id, approval)
                     if approval.trace_id in self._traces:
                         cancelled.append(approval)
-        for approval in cancelled:
-            await self.add_trace_event(
-                approval.trace_id,
-                TraceEvent(
-                    kind="approval.cancelled",
-                    status="completed",
-                    details={"approval_id": approval.id},
-                ),
-            )
-            await self.finish_trace(approval.trace_id, "completed")
+        return [self._copy(approval) for approval in cancelled]
 
 
 def _installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:

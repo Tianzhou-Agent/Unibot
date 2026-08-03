@@ -645,6 +645,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
               first_output_at: null,
               completed_at: NOW,
               duration_ms: 180,
+              input: { message: "排查模型调用", requested_capability: null, preferred_aina_id: null },
+              output: { content: "模型返回正常", status: "completed" },
               attributes: { conversation_id: "conv-e2e-1" },
               error: null,
             },
@@ -665,6 +667,25 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
               attributes: { input_tokens: 90, output_tokens: 30, ttft_ms: 42 },
               error: null,
             },
+            {
+              span_id: "span-tool-e2e-1",
+              parent_span_id: "span-agent-e2e-1",
+              kind: "tool",
+              name: "demo.lookup",
+              status: "completed",
+              target_id: "demo.lookup",
+              target_version: "1.0.0",
+              logical_call_id: "call-e2e-1",
+              attempt_no: 1,
+              started_at: NOW,
+              first_output_at: null,
+              completed_at: NOW,
+              duration_ms: 21,
+              input: { query: "Unibot" },
+              output: { result: "工具返回正常" },
+              attributes: {},
+              error: null,
+            },
           ],
           created_at: NOW,
           completed_at: NOW,
@@ -676,6 +697,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         {
           call_id: "llm-e2e-1",
           trace_id: "trace-e2e-1",
+          span_id: "span-model-e2e-1",
           context_type: "conversation",
           context_id: "conv-e2e-1",
           endpoint: "https://provider.example/v1/chat/completions",
@@ -1141,6 +1163,15 @@ test("FE-E2E-004 查看运行摘要并开启 Trace Debug", async ({ page }) => {
   await expect(spanTree.getByText("agent.run", { exact: true })).toBeVisible();
   await expect(spanTree.getByText("model.complete", { exact: true })).toBeVisible();
   await expect(spanTree.getByText("TTFT 42 ms", { exact: true })).toBeVisible();
+  await spanTree.getByText("agent.run", { exact: true }).click();
+  await expect(spanTree.getByLabel("agent.run 输入")).toContainText("排查模型调用");
+  await expect(spanTree.getByLabel("agent.run 输出")).toContainText("模型返回正常");
+  await spanTree.getByText("model.complete", { exact: true }).click();
+  await expect(spanTree.getByLabel("model.complete 输入")).toContainText("排查模型调用");
+  await expect(spanTree.getByLabel("model.complete 输出")).toContainText("模型返回正常");
+  await spanTree.getByText("demo.lookup", { exact: true }).click();
+  await expect(spanTree.getByLabel("demo.lookup 输入")).toContainText("Unibot");
+  await expect(spanTree.getByLabel("demo.lookup 输出")).toContainText("工具返回正常");
   await page.getByRole("button", { name: "模型请求 1", exact: true }).click();
   await expect(page.getByRole("button", { name: "已有会话 1 Trace conv-e2e-1", exact: true })).toBeVisible();
   const modelRequestList = page.getByLabel("当前 Trace 的模型请求");

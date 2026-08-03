@@ -81,6 +81,8 @@ class TraceSpan(StrictModel):
     first_output_at: datetime | None = None
     completed_at: datetime | None = None
     duration_ms: float | None = None
+    input: Any | None = None
+    output: Any | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, Any] | None = None
 

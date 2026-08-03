@@ -719,6 +719,11 @@ function TraceDetail({
 }) {
   const performance = summarizeLlmCalls(calls);
   const spans = trace.spans ?? [];
+  const callsBySpanId = new Map(
+    calls.filter((call) => call.span_id).map((call) => [call.span_id as string, call]),
+  );
+  const userRequest = trace.events.find((event) => event.kind === "user.request");
+  const finalResponse = [...trace.events].reverse().find((event) => event.kind === "final.response");
   return (
     <div className="flex h-full min-h-0 flex-col">
       {view === "trace" ? <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
@@ -791,9 +796,19 @@ function TraceDetail({
             </div>
             {spans.length > 0 ? (
               <div className="space-y-2">
-                {buildSpanRows(spans, trace.root_span_id).map(({ span, depth }) => (
-                  <SpanRow key={span.span_id} span={span} depth={depth} />
-                ))}
+                {buildSpanRows(spans, trace.root_span_id).map(({ span, depth }) => {
+                  const llmCall = callsBySpanId.get(span.span_id);
+                  const root = span.span_id === trace.root_span_id;
+                  return (
+                    <SpanRow
+                      key={span.span_id}
+                      span={span}
+                      depth={depth}
+                      fallbackInput={span.kind === "model" ? llmCall?.request : root ? userRequest?.details : undefined}
+                      fallbackOutput={span.kind === "model" ? llmCall?.response : root ? finalResponse?.details : undefined}
+                    />
+                  );
+                })}
               </div>
             ) : (
               <div className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-[12px] text-ink-muted">
@@ -836,18 +851,35 @@ function TraceDetail({
   );
 }
 
-function SpanRow({ span, depth }: { span: TraceSpan; depth: number }) {
+function SpanRow({
+  span,
+  depth,
+  fallbackInput,
+  fallbackOutput,
+}: {
+  span: TraceSpan;
+  depth: number;
+  fallbackInput?: unknown;
+  fallbackOutput?: unknown;
+}) {
   const [collapsed, setCollapsed] = useState(true);
   const failed = span.status === "failed";
   const ttftMs = numberMetric(span.attributes.ttft_ms);
   const inputTokens = numberMetric(span.attributes.input_tokens);
   const outputTokens = numberMetric(span.attributes.output_tokens);
+  const input = span.input ?? span.attributes.arguments ?? fallbackInput;
+  const output = span.output ?? span.attributes.result ?? fallbackOutput;
+  const attributes = Object.fromEntries(
+    Object.entries(span.attributes).filter(([key]) => key !== "arguments" && key !== "result"),
+  );
   const hasDetails = Boolean(
     span.target_id
     || span.target_version
     || span.logical_call_id
     || span.first_output_at
-    || Object.keys(span.attributes).length
+    || input != null
+    || output != null
+    || Object.keys(attributes).length
     || span.error,
   );
 
@@ -908,10 +940,16 @@ function SpanRow({ span, depth }: { span: TraceSpan; depth: number }) {
             <div><span className="text-ink-subtle">开始：</span>{new Date(span.started_at).toLocaleString("zh-CN")}</div>
             <div><span className="text-ink-subtle">首输出：</span>{span.first_output_at ? new Date(span.first_output_at).toLocaleString("zh-CN") : "—"}</div>
           </div>
-          {Object.keys(span.attributes).length > 0 ? (
+          {input != null || output != null ? (
+            <div className="mt-3 grid gap-3 xl:grid-cols-2">
+              {input != null ? <SpanPayload label="输入" value={input} spanName={span.name} /> : null}
+              {output != null ? <SpanPayload label="输出" value={output} spanName={span.name} /> : null}
+            </div>
+          ) : null}
+          {Object.keys(attributes).length > 0 ? (
             <div className="mt-3">
               <div className="mb-1 font-bold text-ink">属性</div>
-              <pre className="rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all leading-relaxed">{JSON.stringify(span.attributes, null, 2)}</pre>
+              <pre className="max-h-80 overflow-auto rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all leading-relaxed">{JSON.stringify(attributes, null, 2)}</pre>
             </div>
           ) : null}
           {span.error ? (
@@ -923,6 +961,17 @@ function SpanRow({ span, depth }: { span: TraceSpan; depth: number }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function SpanPayload({ label, value, spanName }: { label: "输入" | "输出"; value: unknown; spanName: string }) {
+  return (
+    <section aria-label={`${spanName} ${label}`}>
+      <div className="mb-1 font-bold text-ink">{label}</div>
+      <pre className="max-h-96 overflow-auto rounded-md bg-slate-950 p-3 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-slate-200">
+        {JSON.stringify(value, null, 2) ?? String(value)}
+      </pre>
+    </section>
   );
 }
 

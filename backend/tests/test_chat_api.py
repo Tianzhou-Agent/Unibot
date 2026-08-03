@@ -205,19 +205,22 @@ class TraceCreationFailureRepository(InMemoryRepository):
         )
 
 
-def test_trace_creation_failure_does_not_leave_conversation_running() -> None:
+def test_trace_creation_failure_does_not_block_chat() -> None:
     repository = TraceCreationFailureRepository()
     conversation = asyncio.run(repository.create_conversation(ConversationCreate(title="Trace failure")))
 
-    with TestClient(create_app(settings=_settings(), repository=repository, llm=ScriptedLLM([]))) as client:
+    with TestClient(
+        create_app(settings=_settings(), repository=repository, llm=ScriptedLLM([assistant("Still works")]))
+    ) as client:
         response = client.post(
             "/chat",
             json={"message": "Trigger trace failure", "conversation_id": conversation.id},
         )
         recovered = client.get(f"/conversations/{conversation.id}")
 
-    assert response.status_code == 503
-    assert response.json()["error"]["message"] == "Trace storage is unavailable"
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["content"] == "Still works"
     assert recovered.json()["run_status"] == "idle"
     assert recovered.json()["active_trace_id"] is None
 
@@ -380,6 +383,8 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
     assert tool_span["logical_call_id"] == "call_1"
     assert tool_span["target_id"] == "demo.add"
     assert tool_span["target_version"] == "1.0.0"
+    assert tool_span["input"] == {"a": 17, "b": 25, "api_key": "[REDACTED]"}
+    assert tool_span["output"] == {"result": 42, "authorization": "[REDACTED]"}
     assert tool_span["attributes"]["arguments"] == {"a": 17, "b": 25, "api_key": "[REDACTED]"}
     assert tool_span["attributes"]["result"] == {"result": 42, "authorization": "[REDACTED]"}
     final_event = next(event for event in events if event["kind"] == "final.response")

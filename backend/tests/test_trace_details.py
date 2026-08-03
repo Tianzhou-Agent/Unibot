@@ -25,11 +25,19 @@ def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
     assert root_span["parent_span_id"] is None
     assert root_span["status"] == "completed"
     assert root_span["duration_ms"] is not None
+    assert root_span["input"] == {
+        "message": "Hello",
+        "requested_capability": None,
+        "preferred_aina_id": None,
+    }
+    assert root_span["output"]["content"] == "Hello."
     model_span = next(span for span in trace["spans"] if span["kind"] == "model")
     assert model_span["parent_span_id"] == root_span["span_id"]
     assert model_span["status"] == "completed"
     assert model_span["attributes"]["input_tokens"] == 5
     assert model_span["attributes"]["output_tokens"] == 3
+    assert model_span["input"]["messages"][-1] == {"role": "user", "content": "Hello"}
+    assert model_span["output"] == {"role": "assistant", "content": "Hello."}
 
     discovery = next(event for event in trace["events"] if event["kind"] == "capability.discovery")["details"]
     graph = discovery["aina_graph"]
