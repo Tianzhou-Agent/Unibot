@@ -8,6 +8,7 @@ from uuid import uuid4
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
@@ -22,6 +23,8 @@ from tianzhou_agent_platform.aina.project_service import (
 )
 from tianzhou_agent_platform.aina.scheduler import AinaScheduler
 from tianzhou_agent_platform.api.errors import install_exception_handlers
+from tianzhou_agent_platform.api.auth import SESSION_COOKIE
+from tianzhou_agent_platform.api.dependencies import RequestActor
 from tianzhou_agent_platform.api.router import create_router
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.agent import AgentRuntime
@@ -39,6 +42,7 @@ from tianzhou_agent_platform.store.settings import StorageSettings
 from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
+from tianzhou_agent_platform.auth.service import AuthService
 
 
 def create_app(
@@ -53,6 +57,8 @@ def create_app(
     aina_project_artifact_store: AinaProjectArtifactStore | None = None,
     sandbox_service: SandboxService | None = None,
     vision_http_client: httpx.AsyncClient | None = None,
+    github_auth_http_client: httpx.AsyncClient | None = None,
+    enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
     storage_stores: StorageStores | None = None
@@ -110,6 +116,11 @@ def create_app(
         timeout_seconds=resolved_settings.vision_timeout_seconds,
         http_client=vision_http_client,
     )
+    auth_service = AuthService(
+        settings=resolved_settings,
+        repository=resolved_repository,
+        github_http_client=github_auth_http_client,
+    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -138,6 +149,7 @@ def create_app(
             await gateway.aclose()
             await resolved_sandbox_service.aclose()
             await vision_client.aclose()
+            await auth_service.aclose()
             if model_health_http_client is None:
                 await health_client.aclose()
             close = getattr(resolved_llm, "aclose", None)
@@ -178,10 +190,32 @@ def create_app(
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service
     app.state.vision_client = vision_client
+    app.state.auth_service = auth_service
+    app.state.auth_enforced = enforce_auth
 
     @app.middleware("http")
-    async def attach_trace_id(request: Request, call_next):  # type: ignore[no-untyped-def]
+    async def attach_request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
         request.state.request_trace_id = request.headers.get("X-Trace-ID") or f"request_{uuid4().hex}"
+        user = await auth_service.resolve_session(request.cookies.get(SESSION_COOKIE))
+        if user is not None:
+            request.state.user = user
+            request.state.actor = RequestActor(user_id=user.id, tenant_id=user.tenant_id)
+        elif enforce_auth and not _is_public_path(request.url.path):
+            trace_id = request.state.request_trace_id
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "code": "AUTHENTICATION_REQUIRED",
+                        "message": "Authentication is required",
+                        "retryable": False,
+                        "source": "auth",
+                        "user_message": "请先登录。",
+                        "trace_id": trace_id,
+                    }
+                },
+                headers={"X-Trace-ID": trace_id},
+            )
         response = await call_next(request)
         response.headers.setdefault("X-Trace-ID", request.state.request_trace_id)
         return response
@@ -192,8 +226,12 @@ def create_app(
     return app
 
 
-app = create_app(storage_settings=StorageSettings())
+app = create_app(storage_settings=StorageSettings(), enforce_auth=True)
 
 
 def run() -> None:
     uvicorn.run("tianzhou_agent_platform.main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+def _is_public_path(path: str) -> bool:
+    return path in {"/health", "/openapi.json", "/docs", "/redoc"} or path.startswith("/auth/")

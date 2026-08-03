@@ -6,11 +6,14 @@ import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
 import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
+import LoginPage from "@/pages/LoginPage";
+import { RequireAuth } from "@/lib/auth";
 
 export default function App() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatModePage />} />
         <Route path="/chat/:conversationId" element={<ChatModePage />} />

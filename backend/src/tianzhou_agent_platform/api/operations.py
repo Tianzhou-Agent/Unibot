@@ -2,7 +2,13 @@ import asyncio
 
 from fastapi import APIRouter, Request
 
-from tianzhou_agent_platform.api.dependencies import repository, runtime
+from tianzhou_agent_platform.api.dependencies import (
+    actor_scope,
+    bind_actor,
+    repository,
+    require_actor_ownership,
+    runtime,
+)
 from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, LLMCallRecord, TraceRecord
 
 
@@ -19,10 +25,11 @@ def create_operations_router() -> APIRouter:
         payload: ApprovalAction,
         request: Request,
     ) -> ChatResponse:
+        scoped = bind_actor(request, payload)
         return await runtime(request).confirm(
             approval_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post("/approvals/{approval_id}/deny", response_model=ApprovalRecord)
@@ -31,10 +38,11 @@ def create_operations_router() -> APIRouter:
         payload: ApprovalAction,
         request: Request,
     ) -> ApprovalRecord:
+        scoped = bind_actor(request, payload)
         return await runtime(request).deny(
             approval_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.get("/approvals", response_model=list[ApprovalRecord])
@@ -45,10 +53,11 @@ def create_operations_router() -> APIRouter:
         tenant_id: str | None = None,
         status: str | None = None,
     ) -> list[ApprovalRecord]:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         return await repository(request).list_approvals(
             conversation_id=conversation_id,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
             status=status,
         )
 
@@ -58,15 +67,29 @@ def create_operations_router() -> APIRouter:
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> list[TraceRecord]:
-        return await repository(request).list_traces(user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        return await repository(request).list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.get("/traces/{trace_id}", response_model=TraceRecord)
     async def get_trace(trace_id: str, request: Request) -> TraceRecord:
-        return await repository(request).get_trace(trace_id)
+        trace = await repository(request).get_trace(trace_id)
+        require_actor_ownership(request, user_id=trace.user_id, tenant_id=trace.tenant_id)
+        return trace
 
     @router.get("/llm-calls", response_model=list[LLMCallRecord])
     async def list_llm_calls(request: Request, limit: int = 200) -> list[LLMCallRecord]:
-        return await repository(request).list_llm_calls(limit=max(1, min(limit, 500)))
+        data_repository = repository(request)
+        calls = await data_repository.list_llm_calls(limit=max(1, min(limit, 500)))
+        if getattr(request.state, "actor", None) is None:
+            return calls
+        actor = actor_scope(request)
+        traces, conversations = await asyncio.gather(
+            data_repository.list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            data_repository.list_conversations(user_id=actor.user_id, tenant_id=actor.tenant_id),
+        )
+        trace_ids = {item.trace_id for item in traces}
+        context_ids = {item.id for item in conversations}
+        return [item for item in calls if item.trace_id in trace_ids or item.context_id in context_ids]
 
     @router.get("/admin/summary")
     async def admin_summary(
@@ -74,16 +97,17 @@ def create_operations_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> dict[str, int]:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         data_repository = repository(request)
         conversations, tools, skills, ainas, installations, traces, memories, document_tasks = await asyncio.gather(
-            data_repository.list_conversations(user_id=user_id, tenant_id=tenant_id),
+            data_repository.list_conversations(user_id=actor.user_id, tenant_id=actor.tenant_id),
             data_repository.list_tools(),
             data_repository.list_skills(),
             data_repository.list_ainas(),
-            data_repository.list_installations(user_id=user_id, tenant_id=tenant_id),
-            data_repository.list_traces(user_id=user_id, tenant_id=tenant_id),
-            data_repository.list_memories(user_id=user_id, tenant_id=tenant_id),
-            data_repository.list_document_edit_tasks(user_id=user_id, tenant_id=tenant_id),
+            data_repository.list_installations(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            data_repository.list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            data_repository.list_memories(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            data_repository.list_document_edit_tasks(user_id=actor.user_id, tenant_id=actor.tenant_id),
         )
         trace_ids = {trace.trace_id for trace in traces}
         context_ids = {conversation.id for conversation in conversations} | {task.id for task in document_tasks}

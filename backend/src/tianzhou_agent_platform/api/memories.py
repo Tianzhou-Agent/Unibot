@@ -8,7 +8,7 @@ from tianzhou_agent_platform.aina.memory.models import (
     MemoryStats,
     MemoryUpdate,
 )
-from tianzhou_agent_platform.api.dependencies import repository
+from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, repository
 
 
 def create_memory_router() -> APIRouter:
@@ -16,7 +16,7 @@ def create_memory_router() -> APIRouter:
 
     @router.post("/memories", response_model=MemoryRecord, status_code=status.HTTP_201_CREATED)
     async def create_memory(payload: MemoryCreate, request: Request) -> MemoryRecord:
-        return await repository(request).create_memory(payload)
+        return await repository(request).create_memory(bind_actor(request, payload))
 
     @router.get("/memories", response_model=MemoryListResponse)
     async def list_memories(
@@ -26,9 +26,10 @@ def create_memory_router() -> APIRouter:
         q: str | None = None,
         category: MemoryCategory | None = None,
     ) -> MemoryListResponse:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         items = await repository(request).list_memories(
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
             query=q,
             category=category,
         )
@@ -40,11 +41,12 @@ def create_memory_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> MemoryStats:
-        return await repository(request).memory_stats(user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        return await repository(request).memory_stats(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.patch("/memories/{memory_id}", response_model=MemoryRecord)
     async def update_memory(memory_id: str, payload: MemoryUpdate, request: Request) -> MemoryRecord:
-        return await repository(request).update_memory(memory_id, payload)
+        return await repository(request).update_memory(memory_id, bind_actor(request, payload))
 
     @router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_memory(
@@ -53,7 +55,8 @@ def create_memory_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> Response:
-        await repository(request).remove_memory(memory_id, user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        await repository(request).remove_memory(memory_id, user_id=actor.user_id, tenant_id=actor.tenant_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

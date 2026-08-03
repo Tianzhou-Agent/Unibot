@@ -16,7 +16,7 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentSectionUpdateResult,
     DocumentTreeResponse,
 )
-from tianzhou_agent_platform.api.dependencies import documents
+from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, documents
 
 
 def create_document_router() -> APIRouter:
@@ -28,16 +28,18 @@ def create_document_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> DocumentListResponse:
-        items = await documents(request).list_documents(user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        items = await documents(request).list_documents(user_id=actor.user_id, tenant_id=actor.tenant_id)
         return DocumentListResponse(items=items, total=len(items))
 
     @router.post("", response_model=DocumentRecord, status_code=status.HTTP_201_CREATED)
     async def create_document(payload: DocumentCreate, request: Request) -> DocumentRecord:
+        scoped = bind_actor(request, payload)
         return await documents(request).create_document(
-            payload.name,
-            payload.content,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.name,
+            scoped.content,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.get("/tree", response_model=DocumentTreeResponse)
@@ -46,19 +48,21 @@ def create_document_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> DocumentTreeResponse:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         service = documents(request)
         folders, document_items = await service.list_folders(
-            user_id=user_id,
-            tenant_id=tenant_id,
-        ), await service.list_documents(user_id=user_id, tenant_id=tenant_id)
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+        ), await service.list_documents(user_id=actor.user_id, tenant_id=actor.tenant_id)
         return DocumentTreeResponse(folders=folders, documents=document_items)
 
     @router.post("/folders", response_model=DocumentFolder, status_code=status.HTTP_201_CREATED)
     async def create_folder(payload: DocumentFolderCreate, request: Request) -> DocumentFolder:
+        scoped = bind_actor(request, payload)
         return await documents(request).create_folder(
-            payload.path,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.path,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post("/folders/{path:path}/rename", response_model=DocumentFolder)
@@ -67,11 +71,12 @@ def create_document_router() -> APIRouter:
         payload: DocumentFolderRename,
         request: Request,
     ) -> DocumentFolder:
+        scoped = bind_actor(request, payload)
         return await documents(request).rename_folder(
             path,
-            payload.new_path,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.new_path,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.delete("/folders/{path:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -81,7 +86,8 @@ def create_document_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> Response:
-        await documents(request).delete_folder(path, user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        await documents(request).delete_folder(path, user_id=actor.user_id, tenant_id=actor.tenant_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/{name:path}/outline", response_model=DocumentOutline)
@@ -91,7 +97,8 @@ def create_document_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> DocumentOutline:
-        return await documents(request).get_outline(name, user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        return await documents(request).get_outline(name, user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.get("/{name:path}/sections", response_model=DocumentSection)
     async def get_document_section(
@@ -102,12 +109,13 @@ def create_document_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> DocumentSection:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         return await documents(request).get_section(
             name,
             heading,
             occurrence,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
         )
 
     @router.get("/{name:path}", response_model=DocumentRecord)
@@ -117,7 +125,8 @@ def create_document_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> DocumentRecord:
-        return await documents(request).get_document(name, user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        return await documents(request).get_document(name, user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.put("/{name:path}/sections", response_model=DocumentSectionUpdateResult)
     async def update_document_section(
@@ -125,14 +134,15 @@ def create_document_router() -> APIRouter:
         payload: DocumentSectionUpdate,
         request: Request,
     ) -> DocumentSectionUpdateResult:
+        scoped = bind_actor(request, payload)
         return await documents(request).update_section(
             name,
-            payload.heading,
-            payload.occurrence,
-            payload.section_content,
-            payload.expected_revision,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.heading,
+            scoped.occurrence,
+            scoped.section_content,
+            scoped.expected_revision,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.put("/{name:path}/section-changes", response_model=DocumentSectionsUpdateResult)
@@ -141,21 +151,23 @@ def create_document_router() -> APIRouter:
         payload: DocumentSectionsUpdate,
         request: Request,
     ) -> DocumentSectionsUpdateResult:
+        scoped = bind_actor(request, payload)
         return await documents(request).update_sections(
             name,
-            payload.content,
-            payload.expected_revision,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.content,
+            scoped.expected_revision,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post("/{name:path}/rename", response_model=DocumentRecord)
     async def rename_document(name: str, payload: DocumentRename, request: Request) -> DocumentRecord:
+        scoped = bind_actor(request, payload)
         return await documents(request).rename_document(
             name,
-            payload.new_name,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.new_name,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -165,7 +177,8 @@ def create_document_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> Response:
-        await documents(request).delete_document(name, user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        await documents(request).delete_document(name, user_id=actor.user_id, tenant_id=actor.tenant_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

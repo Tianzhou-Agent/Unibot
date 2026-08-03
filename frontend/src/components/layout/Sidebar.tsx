@@ -1,11 +1,12 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bug, Check, Github, LayoutGrid, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
+import { Bug, Check, Github, LayoutGrid, LogOut, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, UserRound, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
 import { CONVERSATION_CATEGORIES, conversationCategoryLabel } from "@/lib/conversationCategories";
 import type { ConversationRecord } from "@/types";
+import { useAuth } from "@/lib/auth";
 
 export const CONVERSATIONS_CHANGED_EVENT = "unibot:conversations-changed";
 
@@ -158,6 +159,7 @@ export function Sidebar() {
         </div>
       </nav>
 
+      <UserAccount />
       <FooterUtility />
     </aside>
   );
@@ -414,6 +416,40 @@ function FooterUtility() {
       >
         <Github className="h-4 w-4" />
       </a>
+    </div>
+  );
+}
+
+function UserAccount() {
+  const { user, config, logout } = useAuth();
+  const navigate = useNavigate();
+  if (!user) return null;
+  return (
+    <div className="border-t border-sidebar-border px-2 py-2 md:px-3">
+      <div className="flex items-center justify-center gap-2 rounded-lg px-1.5 py-1.5 md:justify-start">
+        {user.avatar_url ? (
+          <img src={user.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
+        ) : (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-ink-onDark">
+            <UserRound className="h-4 w-4" />
+          </span>
+        )}
+        <div className="hidden min-w-0 flex-1 md:block">
+          <div className="truncate text-[11.5px] font-bold text-ink-onDark">{user.name}</div>
+          <div className="truncate text-[9.5px] text-ink-onDarkMuted">{config.auth_required ? user.email : "本地模式"}</div>
+        </div>
+        {config.auth_required ? (
+          <button
+            type="button"
+            aria-label="退出登录"
+            title="退出登录"
+            onClick={() => void logout().then(() => navigate("/login", { replace: true }))}
+            className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-onDarkMuted transition hover:bg-sidebar-hover hover:text-white md:flex"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

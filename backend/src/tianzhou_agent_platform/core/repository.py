@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Iterable
 from uuid import uuid4
 
+from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -50,6 +51,7 @@ SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
 DOCUMENT_EDIT_TASKS_RESOURCE = "document_edit_tasks"
 SANDBOXES_RESOURCE = "sandboxes"
 SANDBOX_EXECUTIONS_RESOURCE = "sandbox_executions"
+USERS_RESOURCE = "users"
 
 
 class InMemoryRepository:
@@ -78,6 +80,7 @@ class InMemoryRepository:
         self._document_edit_tasks: dict[str, DocumentEditTask] = {}
         self._sandboxes: dict[str, SandboxRecord] = {}
         self._sandbox_executions: dict[str, SandboxExecution] = {}
+        self._users: dict[str, UserRecord] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -90,6 +93,92 @@ class InMemoryRepository:
         if hasattr(value, "model_copy"):
             return value.model_copy(deep=True)  # type: ignore[no-any-return, union-attr]
         return value
+
+    async def create_user(self, user: UserRecord) -> UserRecord:
+        async with self._lock:
+            normalized_email = str(user.email).lower()
+            if any(str(item.email).lower() == normalized_email for item in self._users.values()):
+                raise PlatformError(
+                    "CONFLICT",
+                    "A user with this email already exists",
+                    status_code=409,
+                    source="auth",
+                    user_message="该邮箱已注册。",
+                )
+            if user.github_id and any(item.github_id == user.github_id for item in self._users.values()):
+                raise PlatformError(
+                    "CONFLICT",
+                    "This GitHub account is already linked",
+                    status_code=409,
+                    source="auth",
+                    user_message="该 GitHub 账号已绑定其他用户。",
+                )
+            self._users[user.id] = user
+            await self._save_record(USERS_RESOURCE, user.id, user)
+            return self._copy(user)
+
+    async def find_user_by_id(self, user_id: str) -> UserRecord | None:
+        async with self._lock:
+            user = self._users.get(user_id)
+            return self._copy(user) if user else None
+
+    async def find_user_by_email(self, email: str) -> UserRecord | None:
+        normalized = email.strip().lower()
+        async with self._lock:
+            user = next(
+                (item for item in self._users.values() if str(item.email).lower() == normalized),
+                None,
+            )
+            return self._copy(user) if user else None
+
+    async def upsert_github_user(
+        self,
+        *,
+        github_id: str,
+        github_login: str,
+        email: str,
+        name: str,
+        avatar_url: str | None,
+    ) -> UserRecord:
+        normalized_email = email.strip().lower()
+        async with self._lock:
+            user = next((item for item in self._users.values() if item.github_id == github_id), None)
+            if user is None:
+                email_owner = next(
+                    (item for item in self._users.values() if str(item.email).lower() == normalized_email),
+                    None,
+                )
+                if email_owner is not None:
+                    raise PlatformError(
+                        "CONFLICT",
+                        "The verified GitHub email already belongs to a local account",
+                        status_code=409,
+                        source="auth",
+                        user_message="该邮箱已有账户，请先使用邮箱登录。",
+                    )
+            if user is None:
+                user = UserRecord(
+                    id=f"user_{uuid4().hex}",
+                    email=normalized_email,
+                    name=name,
+                    github_id=github_id,
+                    github_login=github_login,
+                    avatar_url=avatar_url,
+                )
+            else:
+                user = user.model_copy(
+                    update={
+                        "github_id": github_id,
+                        "github_login": github_login,
+                        "name": name or user.name,
+                        "avatar_url": avatar_url or user.avatar_url,
+                        "updated_at": datetime.now(UTC),
+                    },
+                    deep=True,
+                )
+            self._users[user.id] = user
+            await self._save_record(USERS_RESOURCE, user.id, user)
+            return self._copy(user)
 
     async def create_model_provider(self, data: ModelProviderCreate) -> ModelProviderRecord:
         async with self._lock:

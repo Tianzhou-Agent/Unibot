@@ -8,7 +8,7 @@ from tianzhou_agent_platform.aina.document.task_models import (
     DocumentEditTaskCreate,
     DocumentEditTaskListResponse,
 )
-from tianzhou_agent_platform.api.dependencies import document_edit_tasks
+from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, document_edit_tasks
 
 
 def create_document_task_router() -> APIRouter:
@@ -24,7 +24,7 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentEditTaskCreate,
         request: Request,
     ) -> DocumentEditTask:
-        return await document_edit_tasks(request).create_task(name, payload)
+        return await document_edit_tasks(request).create_task(name, bind_actor(request, payload))
 
     @router.get(
         "/documents/{name:path}/edit-tasks",
@@ -36,10 +36,11 @@ def create_document_task_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> DocumentEditTaskListResponse:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         items = await document_edit_tasks(request).list_tasks(
             name,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
         )
         return DocumentEditTaskListResponse(items=items, total=len(items))
 
@@ -50,10 +51,11 @@ def create_document_task_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> DocumentEditTask:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         return await document_edit_tasks(request).get_task(
             task_id,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
         )
 
     @router.patch(
@@ -66,13 +68,14 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentDraftUpdate,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).update_draft(
             task_id,
             section_id,
-            payload.content,
-            payload.expected_draft_revision,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.content,
+            scoped.expected_draft_revision,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post(
@@ -86,13 +89,14 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentDraftAiRevision,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).request_ai_revision(
             task_id,
             section_id,
-            payload.instruction,
-            payload.expected_draft_revision,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            scoped.instruction,
+            scoped.expected_draft_revision,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post(
@@ -105,11 +109,12 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentEditTaskActor,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).merge_section(
             task_id,
             section_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post(
@@ -122,11 +127,12 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentEditTaskActor,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).abandon_section(
             task_id,
             section_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post(
@@ -139,10 +145,11 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentEditTaskActor,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).retry_failed(
             task_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.post(
@@ -154,10 +161,11 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentEditTaskActor,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).abandon_task(
             task_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     @router.delete(
@@ -170,10 +178,11 @@ def create_document_task_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> Response:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         await document_edit_tasks(request).delete_task(
             task_id,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -186,10 +195,11 @@ def create_document_task_router() -> APIRouter:
         payload: DocumentEditTaskActor,
         request: Request,
     ) -> DocumentEditTask:
+        scoped = bind_actor(request, payload)
         return await document_edit_tasks(request).merge_task(
             task_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
 
     return router
