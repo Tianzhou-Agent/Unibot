@@ -1,6 +1,11 @@
 import type { ChatResponse } from "@/types";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+export const AUTH_REQUIRED_EVENT = "unibot:auth-required";
+
+export function apiUrl(path: string): string {
+  return `${BASE}${path}`;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -20,10 +25,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
     headers,
+    credentials: "include",
   });
   const text = await res.text();
   const body = text ? safeJson(text) : null;
   if (!res.ok) {
+    notifyAuthenticationRequired(path, res.status);
     throw new ApiError(res.status, body, `请求 ${path} 失败（${res.status}）`);
   }
   return body as T;
@@ -39,9 +46,10 @@ async function requestBlob(path: string, init: RequestInit = {}): Promise<BlobRe
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${BASE}${path}`, { ...init, headers, credentials: "include" });
   if (!res.ok) {
     const text = await res.text();
+    notifyAuthenticationRequired(path, res.status);
     throw new ApiError(res.status, text ? safeJson(text) : null, `请求 ${path} 失败（${res.status}）`);
   }
   return {
@@ -85,9 +93,11 @@ export async function streamChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
     signal,
+    credentials: "include",
   });
   if (!response.ok) {
     const text = await response.text();
+    notifyAuthenticationRequired("/chat/stream", response.status);
     throw new ApiError(response.status, text ? safeJson(text) : null);
   }
   if (!response.body) throw new Error("浏览器未提供流式响应体。");
@@ -118,6 +128,12 @@ function safeJson(text: string): unknown {
     return JSON.parse(text);
   } catch {
     return text;
+  }
+}
+
+function notifyAuthenticationRequired(path: string, status: number) {
+  if (status === 401 && !path.startsWith("/auth/")) {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
   }
 }
 

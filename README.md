@@ -26,6 +26,7 @@ Unibot 由两层能力构成：
 | **记忆扩展**        | 跨会话持续认知，异步固化 + 预加载                  |
 | **文件附件**        | 文件上传、签名 URL、                               |
 | **多 LLM Provider** | 支持多LLM Provider配置，用户级隔离                 |
+| **用户与认证**      | 邮箱密码注册登录、HttpOnly 会话、GitHub OAuth、跨节点用户数据隔离 |
 | **用户代码沙箱**    | Code Runner AINA、每用户持久工作区、本地/K3s 双驱动与 gVisor 隔离 |
 | **图片目标检测**    | 图片识别 AINA、YOLO26m 容器推理、GPU 优先与 CPU 自动回退 |
 
@@ -113,6 +114,12 @@ npm run dev
 开发服务器默认打开 `http://127.0.0.1:5173`，并将 `/api` 代理到
 `http://127.0.0.1:8000`。如需直连其他后端，可配置 `VITE_API_BASE_URL`。
 
+首次打开业务页面会进入登录页。系统支持邮箱密码注册登录；GitHub 登录在配置 OAuth App 后自动显示。
+生产环境必须设置唯一的 `UNIBOT_AUTH_SECRET`，所有 Unibot 后端节点使用相同值，并开启
+`UNIBOT_AUTH_COOKIE_SECURE=true`。GitHub OAuth App 的本地回调地址为
+`http://127.0.0.1:5173/api/auth/github/callback`。完整配置和安全说明见
+[`docs/authentication.md`](docs/authentication.md)。
+
 MVP 前端包含真实流式对话、多轮会话管理、Markdown 消息、AINA Widget、`main_widget`
 Canvas、能力选择、高风险确认、Tool/Skill/AINA 注册管理、AINA 安装授权以及 Trace
 运行中心。MSW 原型数据默认关闭，仅在显式设置 `VITE_ENABLE_MOCKS=true` 时启用。
@@ -134,6 +141,8 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 
 当前后端不依赖前端即可运行，包含：
 
+- `/auth/register`、`/auth/login`、`/auth/logout`、`/auth/me`：本地账户、HttpOnly 会话和当前用户；
+- `/auth/github`、`/auth/github/callback`：GitHub OAuth 授权码登录；
 - `POST /chat`：多轮 Agent Loop；
 - `POST /chat/stream`：SSE 文本与运行事件流；
 - `/conversations`：会话创建、读取、重命名、软删除和恢复；
@@ -160,7 +169,11 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 最小对话请求：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/chat \
+curl -c cookies.txt -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"your-password"}'
+
+curl -b cookies.txt -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"message":"你好，请介绍一下自己"}'
 ```

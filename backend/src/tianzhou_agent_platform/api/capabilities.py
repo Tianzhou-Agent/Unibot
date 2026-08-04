@@ -12,7 +12,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
-from tianzhou_agent_platform.api.dependencies import gateway, repository
+from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, gateway, repository
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.builtin_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
@@ -91,12 +91,13 @@ def create_capability_router() -> APIRouter:
         payload: OpenAinaRequest,
         request: Request,
     ) -> AinaCanvasResponse:
+        scoped = bind_actor(request, payload)
         return await open_aina(
             repository(request),
             aina_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
-            conversation_id=payload.conversation_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+            conversation_id=scoped.conversation_id,
         )
 
     @router.delete("/ainas/{aina_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -120,13 +121,14 @@ def create_capability_router() -> APIRouter:
         payload: InstallationRequest,
         request: Request,
     ) -> AinaInstallation:
+        scoped = bind_actor(request, payload)
         if aina_id in BUILTIN_AINA_IDS:
             raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         data_repository = repository(request)
         record = await data_repository.get_aina(aina_id)
-        _validate_permission_subset(record, payload.granted_permissions)
+        _validate_permission_subset(record, scoped.granted_permissions)
         installation = AinaInstallation(
-            **payload.model_dump(),
+            **scoped.model_dump(),
             aina_id=aina_id,
             installed_version=record.manifest.aina.version,
         )
@@ -138,15 +140,16 @@ def create_capability_router() -> APIRouter:
         payload: PermissionUpdate,
         request: Request,
     ) -> AinaInstallation:
+        scoped = bind_actor(request, payload)
         data_repository = repository(request)
         record = await data_repository.get_aina(aina_id)
-        _validate_permission_subset(record, payload.granted_permissions)
+        _validate_permission_subset(record, scoped.granted_permissions)
         installation = await data_repository.get_installation(
-            tenant_id=payload.tenant_id,
-            user_id=payload.user_id,
+            tenant_id=scoped.tenant_id,
+            user_id=scoped.user_id,
             aina_id=aina_id,
         )
-        updated = installation.model_copy(update={"granted_permissions": payload.granted_permissions}, deep=True)
+        updated = installation.model_copy(update={"granted_permissions": scoped.granted_permissions}, deep=True)
         return await data_repository.put_installation(updated)
 
     @router.delete("/ainas/{aina_id}/install", status_code=status.HTTP_204_NO_CONTENT)
@@ -156,9 +159,10 @@ def create_capability_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> Response:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         await repository(request).remove_installation(
-            tenant_id=tenant_id,
-            user_id=user_id,
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
             aina_id=aina_id,
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -169,7 +173,8 @@ def create_capability_router() -> APIRouter:
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> list[AinaInstallation]:
-        return await repository(request).list_installations(user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        return await repository(request).list_installations(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     return router
 

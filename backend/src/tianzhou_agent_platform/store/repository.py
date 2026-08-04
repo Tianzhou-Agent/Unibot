@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy import JSON, Column, DateTime, MetaData, String, Table
 
+from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -32,6 +33,7 @@ from tianzhou_agent_platform.core.repository import (
     SKILLS_RESOURCE,
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
+    USERS_RESOURCE,
     InMemoryRepository,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores
@@ -71,6 +73,7 @@ repository_tables = {
         DOCUMENT_EDIT_TASKS_RESOURCE,
         SANDBOXES_RESOURCE,
         SANDBOX_EXECUTIONS_RESOURCE,
+        USERS_RESOURCE,
     )
 }
 
@@ -103,6 +106,7 @@ class PersistentRepository(InMemoryRepository):
         document_edit_tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
         sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
         sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
+        users = await self._load_models(USERS_RESOURCE, UserRecord)
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -125,6 +129,56 @@ class PersistentRepository(InMemoryRepository):
             self._document_edit_tasks = {item.id: item for item in document_edit_tasks}
             self._sandboxes = {item.id: item for item in sandboxes}
             self._sandbox_executions = {item.id: item for item in sandbox_executions}
+            self._users = {item.id: item for item in users}
+
+    async def create_user(self, user: UserRecord) -> UserRecord:
+        async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:
+            if not acquired:
+                raise conflict("User registration is already in progress")
+            await self._refresh_users()
+            return await super().create_user(user)
+
+    async def find_user_by_id(self, user_id: str) -> UserRecord | None:
+        record = await self.stores.mysql.read(USERS_RESOURCE, user_id)
+        if record is None:
+            async with self._lock:
+                self._users.pop(user_id, None)
+            return None
+        user = UserRecord.model_validate(record.values["payload"])
+        async with self._lock:
+            self._users[user.id] = user
+        return self._copy(user)
+
+    async def find_user_by_email(self, email: str) -> UserRecord | None:
+        await self._refresh_users()
+        return await super().find_user_by_email(email)
+
+    async def upsert_github_user(
+        self,
+        *,
+        github_id: str,
+        github_login: str,
+        email: str,
+        name: str,
+        avatar_url: str | None,
+    ) -> UserRecord:
+        async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:
+            if not acquired:
+                raise conflict("GitHub sign-in is already in progress")
+            await self._refresh_users()
+            return await super().upsert_github_user(
+                github_id=github_id,
+                github_login=github_login,
+                email=email,
+                name=name,
+                avatar_url=avatar_url,
+            )
+
+    async def _refresh_users(self) -> list[UserRecord]:
+        users = await self._load_models(USERS_RESOURCE, UserRecord)
+        async with self._lock:
+            self._users = {item.id: item for item in users}
+        return users
 
     async def create_aina_project(self, project: AinaProjectRecord) -> AinaProjectRecord:
         async with self.stores.redis.lease(

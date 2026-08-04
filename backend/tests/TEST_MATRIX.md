@@ -6,6 +6,7 @@ navigation. A row is complete only when every applicable layer is automated.
 
 | Area | Deterministic contract coverage | Real-model DeepEval | Browser E2E | Required invariant |
 | --- | --- | --- | --- | --- |
+| User authentication and isolation | `test_auth.py` covers password sessions, logout, impersonation rejection, OAuth state and PKCE | Not applicable: identity flows are deterministic | `auth.spec.ts` | Password hashes never leave storage, session cookies are HttpOnly, GitHub tokens are not persisted, and authenticated callers cannot select another actor. |
 | Ordinary chat / no false tool call | `test_chat_preserves_multi_turn_context` | `test_ordinary_chat_does_not_call_capabilities` | FE-E2E-001 | Direct questions complete without Tool or AINA calls. |
 | Application discovery | `test_list_app_builtin_persists_an_interactive_widget` | `test_list_apps_agent_flow` | FE-E2E-005, FE-E2E-006 | `list_app` is selected once and returns the installed AINA widget. |
 | Open AINA | `test_open_aina_builtin_returns_navigation_widget_through_agent` | `test_open_aina_agent_flow` | FE-E2E-006 | `open_aina` targets the requested ID and returns a Canvas navigation action. |

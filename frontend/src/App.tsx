@@ -10,11 +10,14 @@ import ObservabilityPage from "@/pages/ObservabilityPage";
 import FeedbackAdminPage from "@/pages/FeedbackAdminPage";
 import OperationsAnalyticsPage from "@/pages/OperationsAnalyticsPage";
 import { AdminRoute } from "@/components/auth/AdminRoute";
+import LoginPage from "@/pages/LoginPage";
+import { RequireAuth } from "@/lib/auth";
 
 export default function App() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatModePage />} />
         <Route path="/chat/:conversationId" element={<ChatModePage />} />

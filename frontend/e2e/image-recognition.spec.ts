@@ -14,6 +14,10 @@ async function installVisionApi(page: Page) {
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\/api/, "");
 
+    if (request.method() === "GET" && path === "/auth/config") {
+      return json(route, { auth_required: false, registration_enabled: true, github_enabled: false });
+    }
+
     if (request.method() === "POST" && path === "/ainas/unibot-image-recognition/open") {
       return json(route, {
         aina_id: "unibot-image-recognition",

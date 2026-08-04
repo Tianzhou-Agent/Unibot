@@ -9,9 +9,10 @@ import pytest
 from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate
 from tianzhou_agent_platform.core.conversation import ConversationCreate
-from tianzhou_agent_platform.core.repository import CONVERSATIONS_RESOURCE, MEMORIES_RESOURCE
+from tianzhou_agent_platform.core.repository import CONVERSATIONS_RESOURCE, MEMORIES_RESOURCE, USERS_RESOURCE
 from tianzhou_agent_platform.store import (
     MySqlStore,
     NasStore,
@@ -129,6 +130,7 @@ async def test_persistent_repository_restores_records_after_recreation() -> None
     first_repository = PersistentRepository(first_stores)
     conversation_id = ""
     memory_id = ""
+    user_id = ""
 
     try:
         await first_repository.initialize()
@@ -137,8 +139,17 @@ async def test_persistent_repository_restores_records_after_recreation() -> None
             ConversationCreate(title=f"Persistent conversation {suffix}")
         )
         memory = await first_repository.create_memory(MemoryCreate(content=f"Persistent memory {suffix}"))
+        user = await first_repository.create_user(
+            UserRecord(
+                id=f"user_{suffix}",
+                email=f"storage-{suffix}@example.com",
+                name="Storage E2E",
+                password_hash="persistent-password-hash",
+            )
+        )
         conversation_id = conversation.id
         memory_id = memory.id
+        user_id = user.id
     finally:
         await first_stores.close()
 
@@ -152,9 +163,12 @@ async def test_persistent_repository_restores_records_after_recreation() -> None
             user_id="anonymous",
             tenant_id="default",
         )
+        restored_user = await second_repository.find_user_by_id(user_id)
 
         assert restored_conversation.id == conversation_id
         assert restored_memory.id == memory_id
+        assert restored_user is not None
+        assert str(restored_user.email).startswith("storage-")
     finally:
         if conversation_id:
             await second_stores.mysql.delete(CONVERSATIONS_RESOURCE, conversation_id)
@@ -162,4 +176,7 @@ async def test_persistent_repository_restores_records_after_recreation() -> None
         if memory_id:
             await second_stores.mysql.delete(MEMORIES_RESOURCE, memory_id)
             await second_stores.redis.delete(f"repository:{MEMORIES_RESOURCE}", memory_id)
+        if user_id:
+            await second_stores.mysql.delete(USERS_RESOURCE, user_id)
+            await second_stores.redis.delete(f"repository:{USERS_RESOURCE}", user_id)
         await second_stores.close()

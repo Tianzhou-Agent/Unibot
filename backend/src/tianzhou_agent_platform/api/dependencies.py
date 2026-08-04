@@ -1,7 +1,7 @@
 from typing import cast
 
 from fastapi import Request
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
@@ -14,6 +14,8 @@ from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
+from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.service import AuthService
 
 
 class RequestActor(StrictModel):
@@ -33,6 +35,48 @@ def request_actor(request: Request) -> RequestActor:
     if isinstance(actor, RequestActor):
         return actor
     return RequestActor.model_validate(actor)
+
+
+def actor_scope(
+    request: Request,
+    *,
+    user_id: str | None = None,
+    tenant_id: str | None = None,
+) -> RequestActor:
+    actor = getattr(request.state, "actor", None)
+    if actor is not None:
+        return request_actor(request)
+    return RequestActor(user_id=user_id or _LOCAL_ACTOR.user_id, tenant_id=tenant_id or _LOCAL_ACTOR.tenant_id)
+
+
+def bind_actor[ModelT: BaseModel](request: Request, payload: ModelT) -> ModelT:
+    actor = getattr(request.state, "actor", None)
+    if actor is None:
+        return payload
+    resolved = request_actor(request)
+    fields = type(payload).model_fields
+    updates = {
+        name: value
+        for name, value in {"user_id": resolved.user_id, "tenant_id": resolved.tenant_id}.items()
+        if name in fields
+    }
+    return payload.model_copy(update=updates, deep=True)
+
+
+def require_actor_ownership(request: Request, *, user_id: str, tenant_id: str) -> None:
+    if getattr(request.state, "actor", None) is None:
+        return
+    actor = request_actor(request)
+    if actor.user_id != user_id or actor.tenant_id != tenant_id:
+        from tianzhou_agent_platform.core.errors import PlatformError
+
+        raise PlatformError(
+            "PERMISSION_DENIED",
+            "Resource ownership does not match the authenticated user",
+            status_code=403,
+            source="auth",
+            user_message="无权访问该资源。",
+        )
 
 
 def repository(request: Request) -> InMemoryRepository:
@@ -65,6 +109,25 @@ def sandboxes(request: Request) -> SandboxService:
 
 def vision(request: Request) -> VisionClient:
     return cast(VisionClient, request.app.state.vision_client)
+
+
+def auth(request: Request) -> AuthService:
+    return cast(AuthService, request.app.state.auth_service)
+
+
+def current_user(request: Request) -> UserRecord:
+    user = getattr(request.state, "user", None)
+    if not isinstance(user, UserRecord):
+        from tianzhou_agent_platform.core.errors import PlatformError
+
+        raise PlatformError(
+            "AUTHENTICATION_REQUIRED",
+            "Authentication is required",
+            status_code=401,
+            source="auth",
+            user_message="请先登录。",
+        )
+    return user
 
 
 def documents(request: Request) -> DocumentService:

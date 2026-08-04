@@ -4,7 +4,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Query, Request, Response, status
 
-from tianzhou_agent_platform.api.dependencies import repository, settings
+from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, repository, settings
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import (
     ActiveModel,
@@ -33,8 +33,12 @@ def create_model_settings_router() -> APIRouter:
         tenant_id: str = "default",
     ) -> ModelSettingsResponse:
         data_repository = repository(request)
-        providers = await data_repository.list_model_providers(user_id=user_id, tenant_id=tenant_id)
-        runtime_model = await data_repository.get_default_model_runtime(user_id=user_id, tenant_id=tenant_id)
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        providers = await data_repository.list_model_providers(user_id=actor.user_id, tenant_id=actor.tenant_id)
+        runtime_model = await data_repository.get_default_model_runtime(
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+        )
         if runtime_model is not None:
             active_model = ActiveModel(
                 source="user",
@@ -62,28 +66,29 @@ def create_model_settings_router() -> APIRouter:
 
     @router.post("/providers", response_model=ModelProviderView, status_code=status.HTTP_201_CREATED)
     async def create_provider(payload: ModelProviderCreate, request: Request) -> ModelProviderView:
-        return provider_view(await repository(request).create_model_provider(payload))
+        return provider_view(await repository(request).create_model_provider(bind_actor(request, payload)))
 
     @router.post("/providers/discover-models", response_model=ModelDiscoveryResponse)
     async def discover_provider_models(
         payload: ModelDiscoveryRequest,
         request: Request,
     ) -> ModelDiscoveryResponse:
-        api_key = payload.api_key or ""
-        if payload.provider_id and not api_key:
+        scoped = bind_actor(request, payload)
+        api_key = scoped.api_key or ""
+        if scoped.provider_id and not api_key:
             provider = await repository(request).get_model_provider(
-                payload.provider_id,
-                user_id=payload.user_id,
-                tenant_id=payload.tenant_id,
+                scoped.provider_id,
+                user_id=scoped.user_id,
+                tenant_id=scoped.tenant_id,
             )
             api_key = provider.api_key
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         client: httpx.AsyncClient = request.app.state.model_health_http_client
         try:
             response = await client.get(
-                models_url(payload.base_url),
+                models_url(scoped.base_url),
                 headers=headers,
-                timeout=payload.timeout_seconds,
+                timeout=scoped.timeout_seconds,
             )
             response.raise_for_status()
             data = response.json()
@@ -159,7 +164,7 @@ def create_model_settings_router() -> APIRouter:
         payload: ModelProviderUpdate,
         request: Request,
     ) -> ModelProviderView:
-        return provider_view(await repository(request).update_model_provider(provider_id, payload))
+        return provider_view(await repository(request).update_model_provider(provider_id, bind_actor(request, payload)))
 
     @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_provider(
@@ -168,10 +173,11 @@ def create_model_settings_router() -> APIRouter:
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
     ) -> Response:
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         await repository(request).remove_model_provider(
             provider_id,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -185,11 +191,12 @@ def create_model_settings_router() -> APIRouter:
         payload: ModelActor,
         request: Request,
     ) -> ModelProviderView:
+        scoped = bind_actor(request, payload)
         provider = await repository(request).set_default_model(
             provider_id,
             model_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
         return provider_view(provider)
 
@@ -203,10 +210,11 @@ def create_model_settings_router() -> APIRouter:
         payload: ModelActor,
         request: Request,
     ) -> ModelHealthResult:
+        scoped = bind_actor(request, payload)
         provider = await repository(request).get_model_provider(
             provider_id,
-            user_id=payload.user_id,
-            tenant_id=payload.tenant_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
         )
         model = next((item for item in provider.models if item.id == model_id), None)
         if model is None:

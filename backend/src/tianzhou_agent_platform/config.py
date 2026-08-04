@@ -114,6 +114,50 @@ class AgentSettings(BaseSettings):
         le=50 * 1024 * 1024,
         validation_alias=AliasChoices("UNIBOT_VISION_MAX_IMAGE_BYTES", "vision_max_image_bytes"),
     )
+    auth_secret: SecretStr = Field(
+        default=SecretStr("unibot-development-secret-change-before-production"),
+        min_length=32,
+        validation_alias=AliasChoices("UNIBOT_AUTH_SECRET", "auth_secret"),
+    )
+    auth_issuer: str = Field(
+        default="unibot",
+        min_length=1,
+        validation_alias=AliasChoices("UNIBOT_AUTH_ISSUER", "auth_issuer"),
+    )
+    auth_session_hours: int = Field(
+        default=168,
+        ge=1,
+        le=24 * 365,
+        validation_alias=AliasChoices("UNIBOT_AUTH_SESSION_HOURS", "auth_session_hours"),
+    )
+    auth_cookie_secure: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_AUTH_COOKIE_SECURE", "auth_cookie_secure"),
+    )
+    auth_registration_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_AUTH_REGISTRATION_ENABLED", "auth_registration_enabled"),
+    )
+    frontend_base_url: str = Field(
+        default="http://127.0.0.1:5173",
+        validation_alias=AliasChoices("UNIBOT_FRONTEND_BASE_URL", "frontend_base_url"),
+    )
+    github_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_GITHUB_CLIENT_ID", "github_oauth_client_id"),
+    )
+    github_oauth_client_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_GITHUB_CLIENT_SECRET", "github_oauth_client_secret"),
+    )
+    github_oauth_callback_url: str = Field(
+        default="http://127.0.0.1:5173/api/auth/github/callback",
+        validation_alias=AliasChoices("UNIBOT_GITHUB_CALLBACK_URL", "github_oauth_callback_url"),
+    )
+    github_api_version: str = Field(
+        default="2026-03-10",
+        validation_alias=AliasChoices("UNIBOT_GITHUB_API_VERSION", "github_api_version"),
+    )
     system_prompt: str = Field(
         default=(
             "You are Unibot, a helpful assistant. Use an available capability when it is needed to answer "
@@ -131,3 +175,7 @@ class AgentSettings(BaseSettings):
         if base_url.endswith("/chat/completions"):
             return base_url
         return f"{base_url}/chat/completions"
+
+    @property
+    def github_oauth_enabled(self) -> bool:
+        return bool(self.github_oauth_client_id and self.github_oauth_client_secret)

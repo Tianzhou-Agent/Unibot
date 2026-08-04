@@ -35,6 +35,10 @@ async function installSandboxApi(page: Page) {
     const path = url.pathname.replace(/^\/api/, "");
     const method = request.method();
 
+    if (method === "GET" && path === "/auth/config") {
+      return json(route, { auth_required: false, registration_enabled: true, github_enabled: false });
+    }
+
     if (method === "POST" && path === "/ainas/unibot-code-runner/open") {
       return json(route, {
         aina_id: "unibot-code-runner",
