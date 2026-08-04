@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  Activity,
   AlertTriangle,
   ArrowUp,
   Bot,
@@ -18,6 +19,7 @@ import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
+import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
 import type {
   AinaCanvasResponse,
@@ -27,12 +29,12 @@ import type {
   ConversationRecord,
 } from "@/types";
 
-const ACTOR = { user_id: "anonymous", tenant_id: "default" };
-
 export default function ChatModePage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
   const { debugMode } = useDebugMode();
+  const { profile } = useMockSession();
+  const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
@@ -154,7 +156,7 @@ export default function ChatModePage() {
       let targetConversation = conversation;
       if (!targetConversation) {
         targetConversation = await api.post<ConversationRecord>("/conversations", {
-          ...ACTOR,
+          ...actor,
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
           category: "general",
         });
@@ -172,7 +174,7 @@ export default function ChatModePage() {
         {
           message: text,
           conversation_id: targetConversation.id,
-          ...ACTOR,
+          ...actor,
         },
         (event: StreamEvent) => {
           if (event.type === "message.completed") completion = event.response;
@@ -244,10 +246,10 @@ export default function ChatModePage() {
     setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
     try {
       if (action === "confirm") {
-        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, ACTOR);
+        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, actor);
         setLastRun(response);
       } else {
-        await api.post(`/approvals/${approval.id}/deny`, ACTOR);
+        await api.post(`/approvals/${approval.id}/deny`, actor);
       }
       setApproval(null);
       await loadConversation(approval.conversation_id);
@@ -302,7 +304,7 @@ export default function ChatModePage() {
     setError(null);
     try {
       const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
-        ...ACTOR,
+        ...actor,
         conversation_id: targetConversationId,
       });
       navigate(canvas.route, { state: { canvas } });
@@ -328,7 +330,15 @@ export default function ChatModePage() {
       <Topbar
         title={title}
         badge={badge}
-        actions={null}
+        actions={conversation?.id && !deleted ? (
+          <Link
+            to={`/obs?sessionId=${encodeURIComponent(conversation.id)}`}
+            className="btn-outline h-8"
+            aria-label="查看当前对话观测数据"
+          >
+            <Activity className="h-3.5 w-3.5" />OBS
+          </Link>
+        ) : null}
       />
 
       {renaming ? (
@@ -520,7 +530,7 @@ function RunSummary({ response }: { response: ChatResponse }) {
       <span>·</span>
       <span>{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
       <span>·</span>
-      <Link to={`/debug?trace=${response.trace_id}`} className="text-accent hover:underline">
+      <Link to={`/obs?sessionId=${encodeURIComponent(response.conversation_id)}`} className="text-accent hover:underline">
         查看调用记录
       </Link>
     </div>

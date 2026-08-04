@@ -14,19 +14,24 @@ import {
   Code2,
   Copy,
   Database,
+  LockKeyhole,
   MessageSquareText,
   RefreshCw,
   Route,
   Server,
   ShieldCheck,
+  UserRound,
+  UsersRound,
   Wrench,
   XCircle,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Topbar } from "@/components/layout/Topbar";
+import { PersonalObservabilityView } from "@/components/observability/PersonalObservabilityView";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
+import { useMockSession } from "@/lib/mockSession";
 import type {
   AdminSummary,
   ConversationRecord,
@@ -36,9 +41,28 @@ import type {
   TraceSpan,
 } from "@/types";
 
+const LLM_CALL_PAGE_SIZE = 500;
+
+async function loadAllPersonalLlmCalls(actorQuery: string): Promise<LLMCallRecord[]> {
+  const calls: LLMCallRecord[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await api.get<LLMCallRecord[]>(
+      `/llm-calls?${actorQuery}&limit=${LLM_CALL_PAGE_SIZE}&offset=${offset}`,
+    );
+    calls.push(...page);
+    if (page.length < LLM_CALL_PAGE_SIZE) return calls;
+    offset += page.length;
+  }
+}
+
 export default function DebugPage() {
   const { debugMode, setDebugMode } = useDebugMode();
+  const { isAdmin, profile } = useMockSession();
+  const [dataScope, setDataScope] = useState<"mine" | "all">("mine");
+  const effectiveScope = isAdmin ? dataScope : "mine";
   const [searchParams] = useSearchParams();
+  const requestedSessionId = searchParams.get("sessionId");
   const requestedTrace = searchParams.get("trace");
   const [health, setHealth] = useState<"checking" | "ok" | "error">("checking");
   const [summary, setSummary] = useState<AdminSummary | null>(null);
@@ -52,32 +76,63 @@ export default function DebugPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  useEffect(() => {
+    if (!isAdmin) setDataScope("mine");
+  }, [isAdmin]);
+
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
+      const tenantQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}`;
+      const actorQuery = effectiveScope === "mine"
+        ? `${tenantQuery}&user_id=${encodeURIComponent(profile.actorUserId)}`
+        : tenantQuery;
+      const summaryRequest: Promise<AdminSummary | null> = isAdmin
+        ? api.get<AdminSummary>(`/admin/summary?${actorQuery}`)
+        : Promise.resolve(null);
+      const llmCallRequest = isAdmin
+        ? api.get<LLMCallRecord[]>(`/llm-calls?${actorQuery}&limit=500`)
+        : loadAllPersonalLlmCalls(actorQuery);
       const [healthData, summaryData, traceData, llmCallData, conversationData] = await Promise.all([
         api.get<{ status: string }>("/health"),
-        api.get<AdminSummary>("/admin/summary?user_id=anonymous&tenant_id=default"),
-        api.get<TraceRecord[]>("/traces?user_id=anonymous&tenant_id=default"),
-        api.get<LLMCallRecord[]>("/llm-calls?limit=200"),
-        api.get<ConversationRecord[]>("/conversations?user_id=anonymous&tenant_id=default"),
+        summaryRequest,
+        api.get<TraceRecord[]>(`/traces?${actorQuery}`),
+        llmCallRequest,
+        api.get<ConversationRecord[]>(`/conversations?${actorQuery}`),
       ]);
+      const traceIds = new Set(traceData.map((trace) => trace.trace_id));
+      const contextIds = new Set(conversationData.map((conversation) => conversation.id));
+      const visibleLlmCalls = llmCallData.filter((call) => (
+        (call.trace_id != null && traceIds.has(call.trace_id))
+        || (call.context_id != null && contextIds.has(call.context_id))
+      ));
       setHealth(healthData.status === "ok" ? "ok" : "error");
-      setSummary(summaryData);
+      setSummary({
+        tools: summaryData?.tools ?? 0,
+        skills: summaryData?.skills ?? 0,
+        ainas: summaryData?.ainas ?? 0,
+        installations: summaryData?.installations ?? 0,
+        memories: summaryData?.memories ?? 0,
+        conversations: conversationData.length,
+        traces: traceData.length,
+        llm_calls: visibleLlmCalls.length,
+      });
       setTraces(traceData);
-      setLlmCalls(llmCallData);
+      setLlmCalls(visibleLlmCalls);
       setConversations(conversationData);
       setError(null);
-      if (requestedTrace && traceData.some((trace) => trace.trace_id === requestedTrace)) {
-        setSelectedTrace(requestedTrace);
-      }
+      setSelectedTrace((current) => {
+        if (requestedTrace && traceData.some((trace) => trace.trace_id === requestedTrace)) return requestedTrace;
+        if (current && !traceData.some((trace) => trace.trace_id === current)) return null;
+        return current;
+      });
     } catch (loadError) {
       setHealth("error");
       setError(apiErrorMessage(loadError));
     } finally {
       setRefreshing(false);
     }
-  }, [requestedTrace]);
+  }, [effectiveScope, isAdmin, profile.actorUserId, profile.tenantId, requestedTrace]);
 
   useEffect(() => {
     void load();
@@ -139,16 +194,53 @@ export default function DebugPage() {
     ? conversationsById.get(selected.conversation_id)?.title ?? "已删除或不可用的会话"
     : "未关联会话";
 
+  if (!isAdmin) {
+    return (
+      <PersonalObservabilityView
+        error={error}
+        sessionId={requestedSessionId}
+        conversations={conversations}
+        traces={traces}
+        llmCalls={llmCalls}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-bg">
       <Topbar
-        title="Debug"
-        badge={{
-          label: health === "ok" ? "后端在线" : health === "checking" ? "检查中" : "后端异常",
-          tone: health === "ok" ? "success" : health === "checking" ? "thinking" : "warning",
+        title="OBS"
+        badge={health === "ok" ? undefined : {
+          label: health === "checking" ? "检查中" : "后端异常",
+          tone: health === "checking" ? "thinking" : "warning",
         }}
         actions={
           <div className="flex items-center gap-2">
+            {isAdmin ? (
+              <div className="flex rounded-lg border border-line bg-app-soft p-0.5" aria-label="OBS 数据范围">
+                <button
+                  type="button"
+                  onClick={() => setDataScope("mine")}
+                  className={classNames("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold", dataScope === "mine" ? "bg-white text-accent shadow-sm" : "text-ink-muted")}
+                >
+                  <UserRound className="h-3.5 w-3.5" />我的数据
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDataScope("all")}
+                  className={classNames("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold", dataScope === "all" ? "bg-white text-accent shadow-sm" : "text-ink-muted")}
+                >
+                  <UsersRound className="h-3.5 w-3.5" />全部用户
+                </button>
+              </div>
+            ) : (
+              <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-app-soft px-2.5 text-[11px] font-bold text-ink-muted" aria-label="OBS 数据范围：仅我的数据">
+                <LockKeyhole className="h-3.5 w-3.5" />仅我的数据
+              </span>
+            )}
+            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-app-soft px-2.5 text-[11px] font-bold text-ink-muted" aria-label="前端 Mock 范围">
+              <ShieldCheck className="h-3.5 w-3.5" />前端 Mock 范围
+            </span>
             <div className="flex rounded-lg bg-app-soft p-0.5">
               <button
                 type="button"
@@ -177,8 +269,8 @@ export default function DebugPage() {
           </div>
         }
       />
-      <div className="flex min-h-0 flex-1 overflow-hidden p-3 md:p-4">
-        <div className="flex h-full min-h-0 w-full flex-col gap-3 md:gap-4">
+      <div className="flex min-h-0 flex-1 overflow-hidden p-2.5 md:p-3">
+        <div className="flex h-full min-h-0 w-full flex-col gap-2.5 md:gap-3">
           {error ? (
             <div className="shrink-0 rounded-lg border border-danger-ring bg-danger-soft p-3 text-[12.5px] text-danger-deep">
               {error}
@@ -186,7 +278,7 @@ export default function DebugPage() {
           ) : null}
 
           <section
-            className="grid shrink-0 grid-flow-col auto-cols-[minmax(128px,1fr)] gap-2 overflow-x-auto md:gap-3 xl:grid-flow-row xl:grid-cols-8"
+            className="grid shrink-0 grid-flow-col auto-cols-[minmax(112px,1fr)] gap-2 overflow-x-auto xl:grid-flow-row xl:grid-cols-8"
             aria-label="运行统计"
           >
             <SummaryCard icon={<Bot />} label="对话" value={summary?.conversations} tone="blue" />
@@ -201,7 +293,7 @@ export default function DebugPage() {
 
           {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
             <div className="flex min-h-0 flex-col overflow-hidden lg:border-r lg:border-line">
-              <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
+              <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
                 <Activity className="h-3.5 w-3.5 text-accent" />
                 <span className="text-[12px] font-bold text-ink">调用记录</span>
                 <span className="ml-auto text-[11.5px] text-ink-muted">{traces.length} 条 Trace</span>
@@ -243,7 +335,7 @@ export default function DebugPage() {
               ) : <NoTraceSelected />}
             </div>
           </section> : (
-            <section className="px-6 py-16 text-center" aria-label="调试模式说明">
+            <section className="px-6 py-10 text-center" aria-label="调试模式说明">
               <Bug className="mx-auto h-8 w-8 text-ink-subtle" />
               <h2 className="mt-3 text-[15px] font-extrabold text-ink">调试模式已关闭</h2>
               <p className="mx-auto mt-2 max-w-lg text-[12px] leading-relaxed text-ink-muted">
@@ -276,13 +368,13 @@ function SummaryCard({
     slate: "bg-app-soft text-ink-muted",
   };
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border border-line bg-white px-3 py-2.5 shadow-card">
-      <div className={classNames("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg [&>svg]:h-4 [&>svg]:w-4", colors[tone])}>
+    <div className="flex items-center gap-2.5 rounded-xl border border-line bg-white px-2.5 py-1.5 shadow-card">
+      <div className={classNames("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg [&>svg]:h-3.5 [&>svg]:w-3.5", colors[tone])}>
         {icon}
       </div>
       <div className="min-w-0">
-        <div className="text-[20px] font-extrabold leading-none text-ink">{value ?? "—"}</div>
-        <div className="mt-1 truncate text-[11.5px] font-semibold text-ink-muted">{label}</div>
+        <div className="text-[17px] font-extrabold leading-none text-ink">{value ?? "—"}</div>
+        <div className="mt-0.5 truncate text-[10.5px] font-semibold text-ink-muted">{label}</div>
       </div>
     </div>
   );
@@ -317,7 +409,7 @@ function ConversationTraceGroup({
           onClick={onToggle}
           aria-expanded={expanded}
           className={classNames(
-            "flex w-full items-start gap-2.5 px-4 py-3 pr-11 text-left transition-colors hover:bg-app-soft",
+            "flex w-full items-start gap-2.5 px-3 py-2 pr-11 text-left transition-colors hover:bg-app-soft",
             containsSelected && "bg-accent-soft/60",
           )}
         >
@@ -372,7 +464,7 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
         type="button"
         onClick={onClick}
         className={classNames(
-          "w-full border-l-2 py-2.5 pl-3 pr-10 text-left transition-colors",
+          "w-full border-l-2 py-2 pl-3 pr-10 text-left transition-colors",
           active ? "border-accent bg-accent-soft" : "border-transparent hover:bg-app-soft",
         )}
       >
@@ -380,7 +472,7 @@ function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: bool
           <TraceStatus status={trace.status} />
           <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{trace.trace_id}</span>
         </div>
-        <div className="mt-1.5 flex items-center gap-2 text-[11.5px] text-ink-muted">
+        <div className="mt-1 flex items-center gap-2 text-[11.5px] text-ink-muted">
           <span>{trace.spans?.length ?? 0} 个 Span</span>
           <span>·</span>
           <span>{trace.events.length} 个事件</span>
@@ -415,7 +507,7 @@ function LLMCallRow({
       type="button"
       onClick={onClick}
       className={classNames(
-        "w-full border-b border-l-2 border-b-line px-2.5 py-2.5 text-left transition-colors last:border-b-0",
+        "w-full border-b border-l-2 border-b-line px-2.5 py-2 text-left transition-colors last:border-b-0",
         active ? "border-l-accent bg-accent-soft" : "border-l-transparent hover:bg-app-soft",
       )}
     >
@@ -484,7 +576,7 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
   const performance = llmCallPerformance(call);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-line bg-app-soft px-3 py-2">
+      <div className="shrink-0 border-b border-line bg-app-soft px-3 py-1.5">
         <div className="flex items-center gap-2">
           <LLMCallStatus status={call.status} />
           <h2 className="min-w-0 flex-1 truncate font-mono text-[12px] font-bold text-ink">{call.call_id}</h2>
@@ -505,7 +597,7 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
         <div className="flex rounded-lg bg-app-soft p-0.5">
           <button
             type="button"
@@ -533,7 +625,7 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-[#0f172a] p-4" aria-label={payloadView === "request" ? "模型请求 JSON" : "模型响应 JSON"}>
+      <div className="min-h-0 flex-1 overflow-auto bg-[#0f172a] p-3" aria-label={payloadView === "request" ? "模型请求 JSON" : "模型响应 JSON"}>
         {payload ? (
           <HighlightedJson key={`${call.call_id}-${payloadView}`} value={payload} />
         ) : (
@@ -543,7 +635,7 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
         )}
       </div>
       {call.error ? (
-        <div className="shrink-0 border-t border-danger-ring bg-danger-soft px-4 py-2 text-[12px] text-danger-deep">
+        <div className="shrink-0 border-t border-danger-ring bg-danger-soft px-3 py-1.5 text-[12px] text-danger-deep">
           {call.error}
         </div>
       ) : null}
@@ -726,7 +818,7 @@ function TraceDetail({
   const finalResponse = [...trace.events].reverse().find((event) => event.kind === "final.response");
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {view === "trace" ? <div className="shrink-0 border-b border-line bg-app-soft px-4 py-3">
+      {view === "trace" ? <div className="shrink-0 border-b border-line bg-app-soft px-3 py-2.5">
         <div className="grid gap-x-4 gap-y-1 text-[12px] text-ink-muted sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="shrink-0">会话：</span>
@@ -749,7 +841,7 @@ function TraceDetail({
           </div>
         </div>
       </div> : null}
-      <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
         <div className="flex rounded-lg bg-app-soft p-0.5">
           <button
             type="button"
@@ -787,7 +879,7 @@ function TraceDetail({
         )}
       </div>
       {view === "trace" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <section aria-label="Span 调用树">
             <div className="mb-3 flex items-center gap-2">
               <Route className="h-4 w-4 text-accent" />
@@ -811,7 +903,7 @@ function TraceDetail({
                 })}
               </div>
             ) : (
-              <div className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-[12px] text-ink-muted">
+              <div className="rounded-lg border border-dashed border-line px-3 py-4 text-center text-[12px] text-ink-muted">
                 此 Trace 没有 Span 数据，可能由旧版本产生。
               </div>
             )}
@@ -896,7 +988,7 @@ function SpanRow({
         onClick={() => hasDetails && setCollapsed((current) => !current)}
         aria-expanded={hasDetails ? !collapsed : undefined}
         className={classNames(
-          "flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left",
+          "flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left",
           hasDetails && "cursor-pointer",
         )}
       >

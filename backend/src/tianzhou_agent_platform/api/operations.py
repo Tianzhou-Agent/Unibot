@@ -65,8 +65,29 @@ def create_operations_router() -> APIRouter:
         return await repository(request).get_trace(trace_id)
 
     @router.get("/llm-calls", response_model=list[LLMCallRecord])
-    async def list_llm_calls(request: Request, limit: int = 200) -> list[LLMCallRecord]:
-        return await repository(request).list_llm_calls(limit=max(1, min(limit, 500)))
+    async def list_llm_calls(
+        request: Request,
+        limit: int = 200,
+        offset: int = 0,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[LLMCallRecord]:
+        data_repository = repository(request)
+        if user_id is None and tenant_id is None:
+            return await data_repository.list_llm_calls(
+                limit=max(1, min(limit, 500)),
+                offset=max(0, offset),
+            )
+        conversations, traces = await asyncio.gather(
+            data_repository.list_conversations(user_id=user_id, tenant_id=tenant_id),
+            data_repository.list_traces(user_id=user_id, tenant_id=tenant_id),
+        )
+        return await data_repository.list_llm_calls(
+            limit=max(1, min(limit, 500)),
+            offset=max(0, offset),
+            trace_ids={trace.trace_id for trace in traces},
+            context_ids={conversation.id for conversation in conversations},
+        )
 
     @router.get("/admin/summary")
     async def admin_summary(

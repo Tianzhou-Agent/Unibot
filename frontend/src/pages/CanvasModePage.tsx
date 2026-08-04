@@ -9,10 +9,9 @@ import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
+import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
 import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext } from "@/types";
-
-const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 
 export default function CanvasModePage() {
   const { ainaId = "" } = useParams<{ ainaId: string }>();
@@ -20,6 +19,8 @@ export default function CanvasModePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { debugMode } = useDebugMode();
+  const { profile } = useMockSession();
+  const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
   const stateCanvas = (location.state as { canvas?: AinaCanvasResponse } | null)?.canvas;
   const [canvas, setCanvas] = useState<AinaCanvasResponse | null>(
     stateCanvas?.aina_id === ainaId ? stateCanvas : null,
@@ -98,7 +99,7 @@ export default function CanvasModePage() {
     }
     api
       .post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
-        ...ACTOR,
+        ...actor,
         conversation_id: routeConversationId,
       })
       .then((opened) => {
@@ -165,7 +166,7 @@ export default function CanvasModePage() {
       let targetConversationId = runConversationId;
       if (!targetConversationId) {
         const created = await api.post<ConversationRecord>("/conversations", {
-          ...ACTOR,
+          ...actor,
           title: `${canvas?.name ?? runAinaId} 对话`,
           category: "general",
           active_aina_ids: [runAinaId],
@@ -187,7 +188,7 @@ export default function CanvasModePage() {
           conversation_id: targetConversationId,
           preferred_aina_id: runAinaId,
           ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
-          ...ACTOR,
+          ...actor,
         },
         (event: StreamEvent) => {
           if (event.type === "message.completed") completion = event.response;
@@ -244,10 +245,10 @@ export default function CanvasModePage() {
     setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
     try {
       if (action === "confirm") {
-        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, ACTOR);
+        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, actor);
         setLastRun(response);
       } else {
-        await api.post(`/approvals/${approval.id}/deny`, ACTOR);
+        await api.post(`/approvals/${approval.id}/deny`, actor);
       }
       setApproval(null);
       await loadConversation(approval.conversation_id);
@@ -262,7 +263,7 @@ export default function CanvasModePage() {
   async function openAina(targetAinaId: string, targetConversationId = conversationId) {
     try {
       const opened = await api.post<AinaCanvasResponse>(`/ainas/${targetAinaId}/open`, {
-        ...ACTOR,
+        ...actor,
         conversation_id: targetConversationId,
       });
       navigate(opened.route, { state: { canvas: opened } });

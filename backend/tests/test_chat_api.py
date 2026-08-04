@@ -164,6 +164,21 @@ def test_admin_summary_uses_actor_scope_and_counts_aina_capabilities() -> None:
             "/admin/summary",
             params={"user_id": "trace-verification", "tenant_id": "verification"},
         ).json()
+        current_calls = client.get(
+            "/llm-calls",
+            params={"user_id": "anonymous", "tenant_id": "default"},
+        ).json()
+        verification_calls = client.get(
+            "/llm-calls",
+            params={"user_id": "trace-verification", "tenant_id": "verification"},
+        ).json()
+        current_call_pages = [
+            client.get(
+                "/llm-calls",
+                params={"user_id": "anonymous", "tenant_id": "default", "limit": 1, "offset": offset},
+            ).json()
+            for offset in (0, 1)
+        ]
 
     assert current["conversations"] == 1
     assert current["traces"] == 1
@@ -174,6 +189,9 @@ def test_admin_summary_uses_actor_scope_and_counts_aina_capabilities() -> None:
     assert verification["conversations"] == 1
     assert verification["traces"] == 1
     assert verification["llm_calls"] == 1
+    assert {call["call_id"] for call in current_calls} == {"llm_current_trace", "llm_current_context"}
+    assert {call["call_id"] for call in verification_calls} == {"llm_verification"}
+    assert {page[0]["call_id"] for page in current_call_pages} == {"llm_current_trace", "llm_current_context"}
 
 
 def test_get_conversation_recovers_running_state_when_active_trace_is_missing() -> None:

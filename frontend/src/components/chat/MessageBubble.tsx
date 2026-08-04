@@ -2,6 +2,7 @@ import { Copy, Share2, Trash2, Paperclip, ArrowUp, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { classNames } from "@/lib/utils";
 import type { ChatMessage, FileChip, MessageBlock } from "@/types";
+import { MessageFeedback } from "@/components/feedback/MessageFeedback";
 import { MarkdownContent } from "./MarkdownContent";
 import { SurfaceRenderer } from "./SurfaceRenderer";
 
@@ -48,7 +49,7 @@ export function AssistantMessage({
           }}
         />
       ) : null}
-      {message.role === "assistant" ? <AgentActions /> : null}
+      {message.role === "assistant" ? <AgentActions message={message} /> : null}
     </div>
   );
 }
@@ -98,9 +99,12 @@ function FileChipPill({ file }: { file: FileChip }) {
   );
 }
 
-function AgentActions() {
+function AgentActions({ message }: { message: ChatMessage }) {
+  const feedbackEnabled = message.id !== "streaming" && message.runState !== "running" && message.runState !== "thinking";
   return (
     <div className="flex items-center justify-end gap-1.5">
+      {feedbackEnabled ? <MessageFeedback messageId={message.id} /> : null}
+      <span className="h-4 w-px bg-line" />
       <ActionIcon icon={<Copy className="w-3.5 h-3.5" />} label="复制" />
       <ActionIcon icon={<Share2 className="w-3.5 h-3.5" />} label="分享" />
       <ActionIcon

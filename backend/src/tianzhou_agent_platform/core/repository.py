@@ -1239,10 +1239,23 @@ class InMemoryRepository:
             self._llm_calls[call.call_id] = call
             await self._save_record(LLM_CALLS_RESOURCE, call.call_id, call)
 
-    async def list_llm_calls(self, *, limit: int = 200) -> list[LLMCallRecord]:
+    async def list_llm_calls(
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        trace_ids: set[str] | None = None,
+        context_ids: set[str] | None = None,
+    ) -> list[LLMCallRecord]:
         async with self._lock:
-            calls = [self._copy(item) for item in self._llm_calls.values()]
-        return sorted(calls, key=lambda item: item.created_at, reverse=True)[:limit]
+            calls = [
+                self._copy(item)
+                for item in self._llm_calls.values()
+                if (trace_ids is None and context_ids is None)
+                or (trace_ids is not None and item.trace_id in trace_ids)
+                or (context_ids is not None and item.context_id in context_ids)
+            ]
+        return sorted(calls, key=lambda item: item.created_at, reverse=True)[offset : offset + limit]
 
     async def count_llm_calls(
         self,

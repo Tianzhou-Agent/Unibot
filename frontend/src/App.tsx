@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import ChatModePage from "@/pages/ChatModePage";
 import CanvasModePage from "@/pages/CanvasModePage";
@@ -6,6 +6,10 @@ import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
 import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
+import ObservabilityPage from "@/pages/ObservabilityPage";
+import FeedbackAdminPage from "@/pages/FeedbackAdminPage";
+import OperationsAnalyticsPage from "@/pages/OperationsAnalyticsPage";
+import { AdminRoute } from "@/components/auth/AdminRoute";
 
 export default function App() {
   return (
@@ -16,11 +20,22 @@ export default function App() {
         <Route path="/chat/:conversationId" element={<ChatModePage />} />
         <Route path="/canvas/:ainaId" element={<CanvasModePage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/debug" element={<DebugPage />} />
         <Route path="/apps" element={<AllAppsPage />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />
+        <Route path="/obs" element={<DebugPage />} />
+        <Route path="/debug" element={<LegacyDebugRedirect />} />
+        <Route element={<AdminRoute />}>
+          <Route path="/admin/observability" element={<ObservabilityPage />} />
+          <Route path="/admin/feedback" element={<FeedbackAdminPage />} />
+          <Route path="/admin/operations" element={<OperationsAnalyticsPage />} />
+        </Route>
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>
     </Routes>
   );
+}
+
+function LegacyDebugRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/obs${search}`} replace />;
 }

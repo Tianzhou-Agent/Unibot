@@ -1,11 +1,12 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bug, Check, Github, LayoutGrid, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, X } from "lucide-react";
+import { Activity, BarChart3, Check, Github, LayoutGrid, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
 import { CONVERSATION_CATEGORIES, conversationCategoryLabel } from "@/lib/conversationCategories";
 import type { ConversationRecord } from "@/types";
+import { useMockSession } from "@/lib/mockSession";
 
 export const CONVERSATIONS_CHANGED_EVENT = "unibot:conversations-changed";
 
@@ -14,6 +15,7 @@ export function notifyConversationsChanged() {
 }
 
 export function Sidebar() {
+  const { isAdmin, profile } = useMockSession();
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -26,7 +28,7 @@ export function Sidebar() {
   const load = useCallback(async () => {
     try {
       const records = await api.get<ConversationRecord[]>(
-        "/conversations?user_id=anonymous&tenant_id=default",
+        `/conversations?user_id=${encodeURIComponent(profile.actorUserId)}&tenant_id=${encodeURIComponent(profile.tenantId)}`,
       );
       setConversations(records);
       setError(null);
@@ -35,7 +37,7 @@ export function Sidebar() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [profile.actorUserId, profile.tenantId]);
 
   useEffect(() => {
     void load();
@@ -108,6 +110,8 @@ export function Sidebar() {
           />
         </label>
       </div>
+
+      {isAdmin ? <AdminNavigation /> : null}
 
       <div className="hidden px-4 pb-2 md:flex items-center gap-2">
         <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
@@ -398,22 +402,64 @@ function SkeletonList() {
   );
 }
 
-function FooterUtility() {
+function AdminNavigation() {
   return (
-    <div className="grid grid-cols-1 gap-2 border-t border-sidebar-border p-2 md:grid-cols-4 md:p-3">
-      <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
-      <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
-      <FooterButton to="/debug" label="Debug" icon={<Bug className="h-4 w-4" />} />
-      <a
-        href="https://github.com/Tianzhou-Agent/Unibot"
-        target="_blank"
-        rel="noreferrer"
-        aria-label="源代码（AGPL-3.0）"
-        title="源代码（AGPL-3.0）"
-        className="flex h-10 items-center justify-center rounded-lg text-ink-onDark transition-colors hover:bg-sidebar-hover"
+    <section className="border-y border-sidebar-border px-2 py-2 md:px-3" aria-label="管理员导航">
+      <div className="hidden px-1.5 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted md:block">管理中心</div>
+      <div className="grid grid-cols-1 gap-1 md:grid-cols-3">
+        <AdminLink to="/admin/observability" label="可观测" icon={<Activity className="h-4 w-4" />} />
+        <AdminLink to="/admin/feedback" label="反馈" icon={<MessageSquareText className="h-4 w-4" />} />
+        <AdminLink to="/admin/operations" label="运营" icon={<BarChart3 className="h-4 w-4" />} />
+      </div>
+    </section>
+  );
+}
+
+function AdminLink({ to, label, icon }: { to: string; label: string; icon: React.ReactNode }) {
+  return (
+    <NavLink
+      to={to}
+      aria-label={label}
+      title={label}
+      className={({ isActive }) => classNames(
+        "flex h-9 items-center justify-center gap-1 rounded-lg text-[10px] font-semibold transition-colors",
+        isActive ? "bg-sidebar-active text-white" : "text-ink-onDark hover:bg-sidebar-hover",
+      )}
+    >
+      {icon}<span className="hidden md:inline">{label}</span>
+    </NavLink>
+  );
+}
+
+function FooterUtility() {
+  const { profile, isAdmin, toggleRole } = useMockSession();
+  return (
+    <div className="border-t border-sidebar-border p-2 md:p-3">
+      <button
+        type="button"
+        onClick={toggleRole}
+        aria-label={`切换身份，当前${profile.roleLabel}`}
+        className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-sidebar-border text-ink-onDark transition-colors hover:bg-sidebar-hover md:justify-start md:px-2"
       >
-        <Github className="h-4 w-4" />
-      </a>
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white/10 text-[10px] font-bold">{profile.initials}</span>
+        <span className="hidden min-w-0 flex-1 text-left md:block"><span className="block truncate text-[10.5px] font-semibold">{profile.name}</span><span className="block truncate text-[9px] text-ink-onDarkMuted">Mock · {profile.roleLabel}</span></span>
+        {isAdmin ? <ShieldCheck className="hidden h-3.5 w-3.5 text-blue-300 md:block" /> : <UserRound className="hidden h-3.5 w-3.5 text-ink-onDarkMuted md:block" />}
+      </button>
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+        <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
+        <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
+        <FooterButton to="/obs" label="OBS" icon={<Activity className="h-4 w-4" />} />
+        <a
+          href="https://github.com/Tianzhou-Agent/Unibot"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="源代码（AGPL-3.0）"
+          title="源代码（AGPL-3.0）"
+          className="flex h-10 items-center justify-center rounded-lg text-ink-onDark transition-colors hover:bg-sidebar-hover"
+        >
+          <Github className="h-4 w-4" />
+        </a>
+      </div>
     </div>
   );
 }
