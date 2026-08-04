@@ -54,6 +54,39 @@ class AgentSettings(BaseSettings):
         le=32,
         validation_alias=AliasChoices("UNIBOT_MAX_AGENT_ITERATIONS", "max_agent_iterations"),
     )
+    context_compression_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_CONTEXT_COMPRESSION_ENABLED", "context_compression_enabled"),
+    )
+    context_window_tokens: int = Field(
+        default=128_000,
+        ge=4_096,
+        validation_alias=AliasChoices("UNIBOT_CONTEXT_WINDOW_TOKENS", "context_window_tokens"),
+    )
+    context_compression_threshold_ratio: float = Field(
+        default=0.75,
+        gt=0.1,
+        le=0.95,
+        validation_alias=AliasChoices(
+            "UNIBOT_CONTEXT_COMPRESSION_THRESHOLD_RATIO",
+            "context_compression_threshold_ratio",
+        ),
+    )
+    context_compression_keep_recent_turns: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices(
+            "UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS",
+            "context_compression_keep_recent_turns",
+        ),
+    )
+    context_compression_min_messages: int = Field(
+        default=8,
+        ge=3,
+        le=100,
+        validation_alias=AliasChoices("UNIBOT_CONTEXT_COMPRESSION_MIN_MESSAGES", "context_compression_min_messages"),
+    )
     node_id: str = Field(
         default_factory=socket.gethostname,
         validation_alias=AliasChoices("UNIBOT_NODE_ID", "node_id"),

@@ -91,6 +91,8 @@ async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
     assert completed.request["messages"][0]["content"].endswith(
         "Call that function before answering the user."
     )
+    assert completed.request["context_window"] == settings.context_window_tokens
+    assert completed.request["estimated_prompt_tokens"] > 0
     assert completed.response is not None
     assert completed.response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "demo_add"
 

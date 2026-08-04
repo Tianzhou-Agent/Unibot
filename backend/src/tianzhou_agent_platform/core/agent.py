@@ -53,7 +53,16 @@ from tianzhou_agent_platform.core.chat import (
     ChatRequest,
     ChatResponse,
 )
-from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate
+from tianzhou_agent_platform.core.context_compression import (
+    COMPRESSION_CONFIG_KEY,
+    active_history,
+    estimate_request_tokens,
+    plan_compression,
+    serialized_state,
+    summary_message,
+    summary_request,
+)
+from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient
 from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
@@ -1287,6 +1296,159 @@ class AgentRuntime:
         await self.repository.finish_conversation_run(approval.conversation_id)
         return denied
 
+    async def _prepare_context(
+        self,
+        *,
+        conversation: Conversation,
+        trace_id: str,
+        root_span_id: str,
+        system_prompt: str,
+        tool_definitions: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        history = active_history(conversation)
+        active_messages = [
+            {"role": "system", "content": system_prompt},
+            *history.provider_messages(),
+        ]
+        if not self.settings.context_compression_enabled:
+            return active_messages, 0, 0
+
+        before_tokens = estimate_request_tokens(active_messages, tool_definitions)
+        threshold_tokens = int(
+            self.settings.context_window_tokens * self.settings.context_compression_threshold_ratio
+        )
+        if before_tokens < threshold_tokens:
+            return active_messages, 0, 0
+
+        plan = plan_compression(
+            history,
+            keep_recent_turns=self.settings.context_compression_keep_recent_turns,
+            min_messages=self.settings.context_compression_min_messages,
+        )
+        if plan is None:
+            return active_messages, 0, 0
+
+        span_id = f"span_{uuid4().hex}"
+        runtime_model = current_model_runtime()
+        model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
+        next_count = (plan.previous_state.count if plan.previous_state is not None else 0) + 1
+        await self.observability.start_span(
+            trace_id,
+            span_id=span_id,
+            parent_span_id=root_span_id,
+            kind="internal",
+            name="context.compress",
+            target_id=model_target_id,
+            input_data={
+                "through_message_id": plan.through_message_id,
+                "summarized_message_count": len(plan.messages_to_summarize),
+            },
+            attributes={
+                "before_tokens": before_tokens,
+                "threshold_tokens": threshold_tokens,
+                "context_window_tokens": self.settings.context_window_tokens,
+                "compression_count": next_count,
+            },
+        )
+        await self.observability.record_event(
+            trace_id,
+            kind="context.compression.started",
+            status="started",
+            details={
+                "before_tokens": before_tokens,
+                "threshold_tokens": threshold_tokens,
+                "summarized_message_count": len(plan.messages_to_summarize),
+                "retained_message_count": len(plan.retained_messages),
+                "compression_count": next_count,
+            },
+        )
+
+        compression_input_tokens = 0
+        compression_output_tokens = 0
+        try:
+            result = await self.llm.complete(
+                messages=summary_request(plan),
+                tools=[],
+                trace_id=trace_id,
+                span_id=span_id,
+                context_type="compression",
+                context_id=conversation.id,
+            )
+            compression_input_tokens = result.input_tokens
+            compression_output_tokens = result.output_tokens
+            raw_summary = result.message.get("content")
+            summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+            if not summary:
+                raise ValueError("The context compression model returned an empty summary")
+
+            compressed_messages = [
+                {"role": "system", "content": system_prompt},
+                summary_message(summary),
+                *[message.provider_message() for message in plan.retained_messages],
+            ]
+            after_tokens = estimate_request_tokens(compressed_messages, tool_definitions)
+            if after_tokens >= before_tokens:
+                raise ValueError("The context summary did not reduce the estimated request size")
+
+            state = serialized_state(plan, summary)
+            await self.repository.update_conversation(
+                conversation.id,
+                ConversationUpdate(
+                    config={
+                        **conversation.config,
+                        COMPRESSION_CONFIG_KEY: state,
+                    }
+                ),
+            )
+            attributes = {
+                "before_tokens": before_tokens,
+                "after_tokens": after_tokens,
+                "threshold_tokens": threshold_tokens,
+                "context_window_tokens": self.settings.context_window_tokens,
+                "summarized_message_count": len(plan.messages_to_summarize),
+                "retained_message_count": len(plan.retained_messages),
+                "compression_count": state["count"],
+                "input_tokens": compression_input_tokens,
+                "output_tokens": compression_output_tokens,
+            }
+            await self.observability.finish_span(
+                trace_id,
+                span_id,
+                "completed",
+                output_data={
+                    "through_message_id": plan.through_message_id,
+                    "summary_length": len(summary),
+                },
+                attributes=attributes,
+            )
+            await self.observability.record_event(
+                trace_id,
+                kind="context.compacted",
+                status="completed",
+                details=attributes,
+            )
+            return compressed_messages, compression_input_tokens, compression_output_tokens
+        except Exception as exc:
+            logger.warning(
+                "Context compression failed; preserving the original context",
+                exc_info=True,
+                extra={"trace_id": trace_id, "conversation_id": conversation.id},
+            )
+            error = {"type": type(exc).__name__, "message": str(exc)}
+            await self.observability.finish_span(trace_id, span_id, "failed", error=error)
+            await self.observability.record_event(
+                trace_id,
+                kind="context.compression.failed",
+                status="failed",
+                details={
+                    "before_tokens": before_tokens,
+                    "threshold_tokens": threshold_tokens,
+                    "compression_count": next_count,
+                    "error": error,
+                },
+            )
+            return active_messages, compression_input_tokens, compression_output_tokens
+
     async def _run(
         self,
         *,
@@ -1323,16 +1485,21 @@ class AgentRuntime:
                 ),
             },
         )
-        messages = [
-            {"role": "system", "content": system_prompt or await self._system_prompt()},
-            *[message.provider_message() for message in conversation.messages],
-        ]
+        resolved_system_prompt = system_prompt or await self._system_prompt()
+        tool_definitions = [item.llm_definition() for item in capabilities.values()]
+        messages, compression_input_tokens, compression_output_tokens = await self._prepare_context(
+            conversation=conversation,
+            trace_id=trace_id,
+            root_span_id=root_span_id,
+            system_prompt=resolved_system_prompt,
+            tool_definitions=tool_definitions,
+        )
         persist_from = len(messages)
         state: AgentState = {
             "messages": messages,
             "capabilities": capabilities,
             "recovery_capabilities": recovery_capabilities,
-            "tool_definitions": [item.llm_definition() for item in capabilities.values()],
+            "tool_definitions": tool_definitions,
             "trace_id": trace_id,
             "root_span_id": root_span_id,
             "conversation_id": conversation.id,
@@ -1344,8 +1511,8 @@ class AgentRuntime:
             "approved_call_ids": approved_call_ids or set(),
             "resume": resume,
             "event_sink": event_sink,
-            "usage_input": 0,
-            "usage_output": 0,
+            "usage_input": compression_input_tokens,
+            "usage_output": compression_output_tokens,
             "call_counts": {},
             "tool_span_ids": {},
             "approval": None,

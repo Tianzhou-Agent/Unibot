@@ -26,6 +26,8 @@ type ConversationDimension = "models" | "capabilities" | "errors" | "spans" | "l
 type Period = "day" | "week" | "month";
 type LogRole = "user" | "assistant" | "tool" | "system";
 
+const DEFAULT_CONTEXT_CAPACITY = 128_000;
+
 interface PersonalObservabilityViewProps {
   error: string | null;
   sessionId: string | null;
@@ -348,7 +350,7 @@ function ConversationOverview({
   calls: LLMCallRecord[];
 }) {
   const metrics = buildConversationOverviewMetrics(traces, calls);
-  const contextProgress = metrics.contextUsed != null && metrics.contextCapacity != null
+  const contextProgress = metrics.contextUsed != null
     ? Math.min(100, (metrics.contextUsed / metrics.contextCapacity) * 100)
     : null;
   return (
@@ -386,7 +388,7 @@ function ConversationOverview({
         title="上下文使用"
         primary={{ label: "当前使用", value: metrics.contextUsed == null ? "—" : formatNumber(metrics.contextUsed), hint: metrics.contextUsed == null ? "模型 Usage 未上报" : "最近一次模型请求的输入 Token" }}
         details={[
-          { label: "总容量", value: metrics.contextCapacity == null ? "—" : formatNumber(metrics.contextCapacity), hint: metrics.contextCapacity == null ? "当前模型未上报" : undefined },
+          { label: "总容量", value: formatNumber(metrics.contextCapacity), hint: "默认模型上下文窗口" },
           { label: "压缩次数", value: String(metrics.compressionCount), hint: "已完成的上下文压缩事件" },
         ]}
         progress={contextProgress}
@@ -924,7 +926,8 @@ function buildConversationOverviewMetrics(traces: TraceRecord[], calls: LLMCallR
   const latestCall = [...calls].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
   const latestModelSpan = traces.flatMap((trace) => trace.spans).filter((span) => span.kind === "model").sort((left, right) => right.started_at.localeCompare(left.started_at))[0];
   const latestSpanUsage = latestModelSpan ? spanTokenUsage(latestModelSpan) : null;
-  const contextUsed = latestCall ? callInputTokens(latestCall) : latestSpanUsage?.measured ? latestSpanUsage.input : null;
+  const latestCallInput = latestCall ? callInputTokens(latestCall) : null;
+  const contextUsed = latestCallInput ?? (latestSpanUsage?.measured ? latestSpanUsage.input : null);
   const compressionEvents = traces.flatMap((trace) => trace.events).filter((event) => event.status === "completed" && isContextCompression(event.kind)).length;
   const compressionSpans = traces.flatMap((trace) => trace.spans).filter((span) => span.kind === "internal" && span.status === "completed" && isContextCompression(span.name)).length;
   return {
@@ -935,14 +938,14 @@ function buildConversationOverviewMetrics(traces: TraceRecord[], calls: LLMCallR
     avgTtft: ttfts.length ? ttfts.reduce((sum, value) => sum + value, 0) / ttfts.length : null,
     avgDuration: durations.length ? durations.reduce((sum, value) => sum + value, 0) / durations.length : null,
     contextUsed,
-    contextCapacity: latestCall ? callContextCapacity(latestCall) : null,
+    contextCapacity: (latestCall ? callContextCapacity(latestCall) : null) ?? DEFAULT_CONTEXT_CAPACITY,
     compressionCount: compressionEvents || compressionSpans,
   };
 }
 
 function callInputTokens(call: LLMCallRecord) {
   const usage = asRecord(call.response?.usage);
-  return numberValue(usage?.prompt_tokens ?? usage?.input_tokens);
+  return numberValue(usage?.prompt_tokens ?? usage?.input_tokens ?? call.request.estimated_prompt_tokens);
 }
 
 function callCacheReadTokens(call: LLMCallRecord) {
@@ -1036,7 +1039,7 @@ function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]): DiagnosticErro
   const failedSpans = trace.spans.filter((span) => (
     span.kind !== "agent"
     && (span.status === "failed" || span.error)
-    && !(span.kind === "model" && callSpanIds.has(span.span_id))
+    && !callSpanIds.has(span.span_id)
   ));
   for (const span of failedSpans) {
     errors.push({

@@ -718,7 +718,6 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
             model: "debug-model",
             messages: [{ role: "user", content: "排查模型调用" }],
             stream: true,
-            context_window: 128000,
           },
           response: {
             object: "chat.completion",
@@ -1377,6 +1376,7 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(conversationOverview.getByLabel("交互信息")).toContainText("交互轮次");
   await expect(conversationOverview.getByLabel("交互信息")).toContainText("消息数");
   await expect(conversationOverview.getByLabel("上下文使用")).toContainText("128,000");
+  await expect(conversationOverview.getByLabel("上下文使用")).toContainText("90");
   await expect(conversationOverview.getByLabel("上下文使用")).toContainText("压缩次数");
 
   await expect(page.getByLabel("模型性能分析").getByText("debug-model", { exact: true })).toBeVisible();
