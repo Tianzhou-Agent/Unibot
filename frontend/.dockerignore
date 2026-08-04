@@ -1,0 +1,9 @@
+node_modules
+dist
+e2e-results
+playwright-report
+test-results
+frontend-run.log
+pnpm-workspace.yaml
+.env
+.env.*
