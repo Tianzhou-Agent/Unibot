@@ -435,18 +435,21 @@ function AdminLink({ to, label, icon }: { to: string; label: string; icon: React
 
 function FooterUtility() {
   const { profile, isAdmin, toggleRole } = useMockSession();
+  const { config } = useAuth();
   return (
     <div className="border-t border-sidebar-border p-2 md:p-3">
-      <button
-        type="button"
-        onClick={toggleRole}
-        aria-label={`切换身份，当前${profile.roleLabel}`}
-        className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-sidebar-border text-ink-onDark transition-colors hover:bg-sidebar-hover md:justify-start md:px-2"
-      >
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white/10 text-[10px] font-bold">{profile.initials}</span>
-        <span className="hidden min-w-0 flex-1 text-left md:block"><span className="block truncate text-[10.5px] font-semibold">{profile.name}</span><span className="block truncate text-[9px] text-ink-onDarkMuted">Mock · {profile.roleLabel}</span></span>
-        {isAdmin ? <ShieldCheck className="hidden h-3.5 w-3.5 text-blue-300 md:block" /> : <UserRound className="hidden h-3.5 w-3.5 text-ink-onDarkMuted md:block" />}
-      </button>
+      {!config.auth_required ? (
+        <button
+          type="button"
+          onClick={toggleRole}
+          aria-label={`切换身份，当前${profile.roleLabel}`}
+          className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-sidebar-border text-ink-onDark transition-colors hover:bg-sidebar-hover md:justify-start md:px-2"
+        >
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-white/10 text-[10px] font-bold">{profile.initials}</span>
+          <span className="hidden min-w-0 flex-1 text-left md:block"><span className="block truncate text-[10.5px] font-semibold">{profile.name}</span><span className="block truncate text-[9px] text-ink-onDarkMuted">Mock · {profile.roleLabel}</span></span>
+          {isAdmin ? <ShieldCheck className="hidden h-3.5 w-3.5 text-blue-300 md:block" /> : <UserRound className="hidden h-3.5 w-3.5 text-ink-onDarkMuted md:block" />}
+        </button>
+      ) : null}
       <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
         <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
         <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
