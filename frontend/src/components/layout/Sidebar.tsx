@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Check, Github, LayoutGrid, LogOut, MessageSquarePlus, MessageSquareText, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Check, LayoutGrid, LogOut, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
@@ -16,7 +16,7 @@ export function notifyConversationsChanged() {
 }
 
 export function Sidebar() {
-  const { isAdmin, profile } = useMockSession();
+  const { profile } = useMockSession();
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -111,8 +111,6 @@ export function Sidebar() {
           />
         </label>
       </div>
-
-      {isAdmin ? <AdminNavigation /> : null}
 
       <div className="hidden px-4 pb-2 md:flex items-center gap-2">
         <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
@@ -404,38 +402,10 @@ function SkeletonList() {
   );
 }
 
-function AdminNavigation() {
-  return (
-    <section className="border-y border-sidebar-border px-2 py-2 md:px-3" aria-label="管理员导航">
-      <div className="hidden px-1.5 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted md:block">管理中心</div>
-      <div className="grid grid-cols-1 gap-1 md:grid-cols-3">
-        <AdminLink to="/admin/observability" label="可观测" icon={<Activity className="h-4 w-4" />} />
-        <AdminLink to="/admin/feedback" label="反馈" icon={<MessageSquareText className="h-4 w-4" />} />
-        <AdminLink to="/admin/operations" label="运营" icon={<BarChart3 className="h-4 w-4" />} />
-      </div>
-    </section>
-  );
-}
-
-function AdminLink({ to, label, icon }: { to: string; label: string; icon: React.ReactNode }) {
-  return (
-    <NavLink
-      to={to}
-      aria-label={label}
-      title={label}
-      className={({ isActive }) => classNames(
-        "flex h-9 items-center justify-center gap-1 rounded-lg text-[10px] font-semibold transition-colors",
-        isActive ? "bg-sidebar-active text-white" : "text-ink-onDark hover:bg-sidebar-hover",
-      )}
-    >
-      {icon}<span className="hidden md:inline">{label}</span>
-    </NavLink>
-  );
-}
-
 function FooterUtility() {
   const { profile, isAdmin, toggleRole } = useMockSession();
-  const { config } = useAuth();
+  const { user, config } = useAuth();
+  const canAccessAdmin = config.auth_required ? Boolean(user?.is_admin) : true;
   return (
     <div className="border-t border-sidebar-border p-2 md:p-3">
       {!config.auth_required ? (
@@ -454,16 +424,7 @@ function FooterUtility() {
         <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
         <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
         <FooterButton to="/obs" label="OBS" icon={<Activity className="h-4 w-4" />} />
-        <a
-          href="https://github.com/Tianzhou-Agent/Unibot"
-          target="_blank"
-          rel="noreferrer"
-          aria-label="源代码（AGPL-3.0）"
-          title="源代码（AGPL-3.0）"
-          className="flex h-10 items-center justify-center rounded-lg text-ink-onDark transition-colors hover:bg-sidebar-hover"
-        >
-          <Github className="h-4 w-4" />
-        </a>
+        {canAccessAdmin ? <FooterButton to="/admin/observability" label="管理" icon={<ShieldCheck className="h-4 w-4" />} /> : null}
       </div>
     </div>
   );

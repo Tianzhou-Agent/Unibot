@@ -1164,9 +1164,6 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await page.goto("/obs");
 
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("前端 Mock 范围")).toBeVisible();
-  await expect(page.getByRole("button", { name: "我的数据", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "全部用户", exact: true }).click();
   await expect(page.getByLabel("运行统计").getByText("3", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "调试模式已关闭" })).toBeVisible();
   await page.getByRole("button", { name: "开启", exact: true }).click();
@@ -1327,7 +1324,7 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toBeVisible();
 });
 
-test("FE-E2E-IR-001 普通用户与管理员 Mock 入口隔离", async ({ page }) => {
+test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await installMockApi(page, {
     conversations: [conversation({
       messages: [
@@ -1347,6 +1344,7 @@ test("FE-E2E-IR-001 普通用户与管理员 Mock 入口隔离", async ({ page }
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toHaveCount(0);
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "我的数据", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "全部用户", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "个人总览", exact: true })).toHaveCount(0);
@@ -1432,15 +1430,117 @@ test("FE-E2E-IR-001 普通用户与管理员 Mock 入口隔离", async ({ page }
   await page.goto("/admin/observability");
 
   await page.getByRole("button", { name: "切换为管理员", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "可观测与质量", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OBS", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "可观测", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "反馈", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "运营", exact: true })).toBeVisible();
+
+  await page.goto("/obs");
+  await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OBS", exact: true })).toHaveCount(0);
+  await page.goto("/admin/observability");
+  await expect(page.getByRole("heading", { name: "OBS", exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "反馈", exact: true }).click();
   await expect(page.getByRole("heading", { name: "用户反馈", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "运营", exact: true }).click();
   await expect(page.getByRole("heading", { name: "运营增长", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", async ({ page }) => {
+  const providerError = "The model provider returned HTTP 503";
+  await installMockApi(page, {
+    conversations: [conversation({
+      run_status: "failed",
+      run_error: providerError,
+      messages: [{
+        id: "msg-user-error-e2e",
+        role: "user",
+        content: "复现模型错误",
+        content_type: "text",
+        widgets: [],
+        trace_id: "trace-error-e2e",
+        created_at: NOW,
+      }],
+    })],
+  });
+  await page.route("**/api/traces*", (route) => json(route, [{
+    trace_id: "trace-error-e2e",
+    conversation_id: "conv-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    status: "failed",
+    events: [{ timestamp: NOW, kind: "user.request", status: "completed", details: { content: "复现模型错误" } }],
+    root_span_id: "span-agent-error-e2e",
+    spans: [
+      {
+        span_id: "span-agent-error-e2e",
+        parent_span_id: null,
+        kind: "agent",
+        name: "agent.run",
+        status: "failed",
+        target_id: "unibot",
+        started_at: NOW,
+        completed_at: NOW,
+        duration_ms: 180,
+        input: { message: "复现模型错误" },
+        output: null,
+        attributes: { conversation_id: "conv-e2e-1" },
+        error: { message: providerError },
+      },
+      {
+        span_id: "span-model-error-e2e",
+        parent_span_id: "span-agent-error-e2e",
+        kind: "model",
+        name: "model.complete",
+        status: "failed",
+        target_id: "debug-model",
+        started_at: NOW,
+        completed_at: NOW,
+        duration_ms: 128,
+        attributes: {},
+        error: { message: providerError },
+      },
+    ],
+    created_at: NOW,
+    completed_at: NOW,
+  }]));
+  await page.route("**/api/llm-calls*", (route) => json(route, [{
+    call_id: "llm-error-e2e",
+    trace_id: "trace-error-e2e",
+    span_id: "span-model-error-e2e",
+    context_type: "conversation",
+    context_id: "conv-e2e-1",
+    endpoint: "https://provider.example/v1/chat/completions",
+    model: "debug-model",
+    status: "failed",
+    request: { model: "debug-model", messages: [{ role: "user", content: "复现模型错误" }], stream: true },
+    response: null,
+    error: providerError,
+    duration_ms: 128,
+    ttft_ms: null,
+    created_at: NOW,
+    completed_at: NOW,
+  }]));
+
+  await page.goto("/chat/conv-e2e-1");
+  const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
+  await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e");
+  await chatLogLink.click();
+
+  const targetLog = page.getByLabel("原始日志 llm-error-e2e", { exact: true });
+  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e$/);
+  await expect(targetLog).toHaveAttribute("open", "");
+  await expect(targetLog).toContainText(providerError);
+  await expect(targetLog).toHaveClass(/ring-2/);
+
+  await page.getByRole("tab", { name: /^错误诊断/ }).click();
+  const diagnostics = page.locator('section[aria-label="错误诊断"]');
+  await expect(diagnostics.getByText("1 个异常", { exact: true })).toBeVisible();
+  await expect(diagnostics.getByText(providerError, { exact: true })).toBeVisible();
+  await diagnostics.getByRole("button", { name: "查看原始日志", exact: true }).click();
+  await expect(page).toHaveURL(/logId=llm-error-e2e/);
+  await expect(targetLog).toHaveAttribute("open", "");
 });
 
 test("FE-E2E-IR-002 普通用户提交、修改和取消回答反馈", async ({ page }) => {

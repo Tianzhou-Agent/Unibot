@@ -158,6 +158,10 @@ class AgentSettings(BaseSettings):
         default="2026-03-10",
         validation_alias=AliasChoices("UNIBOT_GITHUB_API_VERSION", "github_api_version"),
     )
+    admin_identities: str = Field(
+        default="",
+        validation_alias=AliasChoices("UNIBOT_ADMIN_IDENTITIES", "admin_identities"),
+    )
     system_prompt: str = Field(
         default=(
             "You are Unibot, a helpful assistant. Use an available capability when it is needed to answer "
@@ -179,3 +183,20 @@ class AgentSettings(BaseSettings):
     @property
     def github_oauth_enabled(self) -> bool:
         return bool(self.github_oauth_client_id and self.github_oauth_client_secret)
+
+    def is_platform_admin(
+        self,
+        *,
+        user_id: str,
+        email: str,
+        github_login: str | None = None,
+    ) -> bool:
+        allowed = {
+            identity.strip().casefold()
+            for identity in self.admin_identities.split(",")
+            if identity.strip()
+        }
+        identities = {user_id.casefold(), email.casefold()}
+        if github_login:
+            identities.add(github_login.casefold())
+        return bool(allowed & identities)

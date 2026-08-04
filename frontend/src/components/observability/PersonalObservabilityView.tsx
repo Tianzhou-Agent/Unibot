@@ -17,6 +17,7 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { classNames } from "@/lib/utils";
 import type { ConversationRecord, LLMCallRecord, TraceRecord, TraceSpan } from "@/types";
 
@@ -49,12 +50,22 @@ interface TokenSample extends TokenUsage {
 
 interface RawLogEntry {
   id: string;
+  traceId: string;
   role: LogRole;
   title: string;
   subtitle: string;
   input?: unknown;
   output?: unknown;
   error?: unknown;
+}
+
+interface DiagnosticError {
+  id: string;
+  traceId: string;
+  logId: string;
+  source: string;
+  code: string;
+  message: string;
 }
 
 export function PersonalObservabilityView({
@@ -64,6 +75,7 @@ export function PersonalObservabilityView({
   traces,
   llmCalls,
 }: PersonalObservabilityViewProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [view, setView] = useState<PageView>(() => sessionId ? "conversation" : "overview");
   useEffect(() => {
     setView(sessionId ? "conversation" : "overview");
@@ -89,6 +101,16 @@ export function PersonalObservabilityView({
   const conversation = conversations.find((item) => item.id === sessionId);
   const conversationTitle = conversation?.title
     ?? (sessionId ? "已删除或不可用的对话" : "暂无对话");
+  const focusedLogId = searchParams.get("logId");
+  const focusedTraceId = searchParams.get("traceId");
+
+  function focusRawLog(logId: string, traceId: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", "logs");
+    next.set("traceId", traceId);
+    next.set("logId", logId);
+    setSearchParams(next, { replace: true });
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-bg">
@@ -111,10 +133,10 @@ export function PersonalObservabilityView({
             ) : null}
             {sessionId ? <div className="ml-auto flex shrink-0 rounded-lg bg-app-soft p-0.5" aria-label="个人观测视图">
               <ViewButton active={view === "conversation"} onClick={() => setView("conversation")}>
-                <MessageSquareText className="h-3.5 w-3.5" />当前对话
+                当前对话
               </ViewButton>
               <ViewButton active={view === "overview"} onClick={() => setView("overview")}>
-                <Activity className="h-3.5 w-3.5" />个人总览
+                个人总览
               </ViewButton>
             </div> : null}
           </div>
@@ -124,6 +146,10 @@ export function PersonalObservabilityView({
               conversation={conversation}
               traces={conversationTraces}
               calls={conversationCalls}
+              initialDimension={searchParams.get("tab") === "logs" ? "logs" : undefined}
+              focusedLogId={focusedLogId}
+              focusedTraceId={focusedTraceId}
+              onFocusRawLog={focusRawLog}
             />
           ) : (
             <PersonalOverview traces={traces} calls={llmCalls} />
@@ -153,12 +179,20 @@ function ConversationView({
   conversation,
   traces,
   calls,
+  initialDimension,
+  focusedLogId,
+  focusedTraceId,
+  onFocusRawLog,
 }: {
   conversation?: ConversationRecord;
   traces: TraceRecord[];
   calls: LLMCallRecord[];
+  initialDimension?: ConversationDimension;
+  focusedLogId: string | null;
+  focusedTraceId: string | null;
+  onFocusRawLog: (logId: string, traceId: string) => void;
 }) {
-  const [dimension, setDimension] = useState<ConversationDimension>("models");
+  const [dimension, setDimension] = useState<ConversationDimension>(initialDimension ?? "models");
   const allSpans = traces.flatMap((trace) => trace.spans);
   const capabilities = capabilityMetrics(allSpans);
   const capabilityTotals = countCapabilityTypes(capabilities);
@@ -171,7 +205,18 @@ function ConversationView({
     trace,
     calls.filter((call) => call.trace_id === trace.trace_id),
   ));
+  const resolvedFocusedLogId = focusedLogId
+    ?? (focusedTraceId
+      ? errors.find((item) => item.traceId === focusedTraceId)?.logId
+        ?? rawLogs.find((entry) => entry.traceId === focusedTraceId && entry.error != null)?.id
+        ?? rawLogs.find((entry) => entry.traceId === focusedTraceId)?.id
+        ?? null
+      : null);
   const spanCount = allSpans.length;
+
+  useEffect(() => {
+    if (initialDimension === "logs" || focusedLogId || focusedTraceId) setDimension("logs");
+  }, [focusedLogId, focusedTraceId, initialDimension]);
 
   return (
     <div className="space-y-3">
@@ -253,6 +298,16 @@ function ConversationView({
                 <div key={item.id} className="rounded-lg border border-danger-ring bg-danger-soft p-2.5">
                   <div className="flex flex-wrap items-center gap-2"><XCircle className="h-4 w-4 text-danger" /><strong className="text-[12px] text-danger-deep">{item.source}</strong><span className="font-mono text-[10.5px] text-danger">{item.code}</span></div>
                   <p className="mt-1 whitespace-pre-wrap break-words text-[11.5px] text-danger-deep">{item.message}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onFocusRawLog(item.logId, item.traceId);
+                      setDimension("logs");
+                    }}
+                    className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-danger-deep hover:underline"
+                  >
+                    查看原始日志<ChevronRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               ))}</div> : (
                 <div className="flex items-center gap-2 rounded-lg bg-success-soft p-3 text-[12px] font-semibold text-success-deep"><CheckCircle2 className="h-4 w-4" />模型和能力调用均未发现错误。</div>
@@ -274,7 +329,7 @@ function ConversationView({
             </div>
           </section> : null}
 
-          {dimension === "logs" ? <RawLogs entries={rawLogs} /> : null}
+          {dimension === "logs" ? <RawLogs entries={rawLogs} focusedEntryId={resolvedFocusedLogId} /> : null}
         </>
       ) : (
         <div className="rounded-xl bg-white py-14 text-center text-[13px] text-ink-muted">暂无可展示的调用数据。</div>
@@ -668,9 +723,17 @@ function resolveSpanIo(span: TraceSpan, trace: TraceRecord, modelCall?: LLMCallR
   return { input, output };
 }
 
-function RawLogs({ entries }: { entries: RawLogEntry[] }) {
+function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedEntryId: string | null }) {
   const [role, setRole] = useState<"all" | LogRole>("all");
   const visible = role === "all" ? entries : entries.filter((entry) => entry.role === role);
+  useEffect(() => {
+    if (!focusedEntryId) return;
+    setRole("all");
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`raw-log-${focusedEntryId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusedEntryId]);
   return (
     <section className="rounded-xl bg-white" aria-label="原始日志">
       <SectionHeader icon={<TerminalSquare />} title="原始日志" note={`${visible.length} 条完整 I/O`} />
@@ -685,7 +748,16 @@ function RawLogs({ entries }: { entries: RawLogEntry[] }) {
         {visible.map((entry) => {
           const hasInput = entry.input != null;
           const hasOutput = entry.output != null;
-          return <details key={entry.id} className="overflow-hidden rounded-lg bg-app-soft/50">
+          return <details
+            id={`raw-log-${entry.id}`}
+            key={entry.id}
+            open={focusedEntryId ? entry.id === focusedEntryId : undefined}
+            aria-label={`原始日志 ${entry.id}`}
+            className={classNames(
+              "overflow-hidden rounded-lg bg-app-soft/50",
+              entry.id === focusedEntryId && "ring-2 ring-accent/50",
+            )}
+          >
             <summary className="flex cursor-pointer list-none items-center gap-2 bg-white/40 px-2.5 py-2">
               <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent">{entry.role}</span>
               <strong className="min-w-0 flex-1 truncate text-[11.5px] text-ink">{entry.title}</strong>
@@ -958,10 +1030,45 @@ function countCapabilityTypes(items: ReturnType<typeof capabilityMetrics>) {
   return items.reduce((sum, item) => ({ ...sum, [item.type]: sum[item.type] + item.calls }), { AINA: 0, Tool: 0, Skill: 0, MCP: 0 });
 }
 
-function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]) {
-  const errors = trace.spans.filter((span) => span.status === "failed" || span.error).map((span) => ({ id: span.span_id, source: `${span.kind} · ${span.target_id || span.name}`, code: errorField(span.error, "code") || span.status.toUpperCase(), message: errorField(span.error, "message") || stringifyError(span.error) || "调用失败，未提供详细错误信息。" }));
-  for (const call of calls.filter((item) => item.status === "failed" || item.error)) errors.push({ id: call.call_id, source: `model · ${call.model}`, code: call.status.toUpperCase(), message: call.error || "模型请求失败，未提供详细错误信息。" });
-  if (!errors.length && trace.status === "failed") errors.push({ id: trace.trace_id, source: "agent · 当前交互", code: "TRACE_FAILED", message: "交互失败，但 Trace 中没有更具体的 Span 错误。" });
+function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]): DiagnosticError[] {
+  const errors: DiagnosticError[] = [];
+  const callSpanIds = new Set(calls.map((call) => call.span_id).filter(Boolean));
+  const failedSpans = trace.spans.filter((span) => (
+    span.kind !== "agent"
+    && (span.status === "failed" || span.error)
+    && !(span.kind === "model" && callSpanIds.has(span.span_id))
+  ));
+  for (const span of failedSpans) {
+    errors.push({
+      id: span.span_id,
+      traceId: trace.trace_id,
+      logId: span.kind === "model" ? `${span.span_id}-model` : span.span_id,
+      source: `${span.kind} · ${span.target_id || span.name}`,
+      code: errorField(span.error, "code") || span.status.toUpperCase(),
+      message: errorField(span.error, "message") || stringifyError(span.error) || "调用失败，未提供详细错误信息。",
+    });
+  }
+  for (const call of calls.filter((item) => item.status === "failed" || item.error)) {
+    errors.push({
+      id: call.call_id,
+      traceId: trace.trace_id,
+      logId: call.call_id,
+      source: `model · ${call.model}`,
+      code: call.status.toUpperCase(),
+      message: call.error || "模型请求失败，未提供详细错误信息。",
+    });
+  }
+  if (!errors.length && trace.status === "failed") {
+    const root = findRootSpan(trace);
+    errors.push({
+      id: trace.trace_id,
+      traceId: trace.trace_id,
+      logId: root ? `${root.span_id}-user` : trace.trace_id,
+      source: "agent · 当前交互",
+      code: "TRACE_FAILED",
+      message: "交互失败，但 Trace 中没有更具体的 Span 错误。",
+    });
+  }
   return errors;
 }
 
@@ -998,22 +1105,23 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
   const logs: RawLogEntry[] = [];
   if (root) {
     const rootIo = resolveSpanIo(root, trace);
-    logs.push({ id: `${root.span_id}-user`, role: "user", title: "交互输入", subtitle: root.span_id, input: rootIo.input, error: root.error ?? undefined });
+    logs.push({ id: `${root.span_id}-user`, traceId: trace.trace_id, role: "user", title: "交互输入", subtitle: root.span_id, input: rootIo.input, error: root.error ?? undefined });
   }
   calls.forEach((call, index) => {
     const requestMessages = asArray(call.request.messages);
     requestMessages.forEach((message, messageIndex) => {
       const record = asRecord(message);
       const role = normalizeRole(record?.role);
-      if (role === "system") logs.push({ id: `${call.call_id}-context-${messageIndex}`, role, title: `模型上下文 · ${role}`, subtitle: call.model, input: message });
+      if (role === "system") logs.push({ id: `${call.call_id}-context-${messageIndex}`, traceId: trace.trace_id, role, title: `模型上下文 · ${role}`, subtitle: call.model, input: message });
     });
-    logs.push({ id: call.call_id, role: "assistant", title: `模型请求 ${index + 1} · ${call.model}`, subtitle: call.call_id, input: call.request, output: call.response ?? undefined, error: call.error ?? undefined });
+    logs.push({ id: call.call_id, traceId: trace.trace_id, role: "assistant", title: `模型请求 ${index + 1} · ${call.model}`, subtitle: call.call_id, input: call.request, output: call.response ?? undefined, error: call.error ?? undefined });
   });
   const callSpanIds = new Set(calls.map((call) => call.span_id).filter(Boolean));
   trace.spans.filter((span) => span.kind === "model" && !callSpanIds.has(span.span_id)).forEach((span, index) => {
     const io = resolveSpanIo(span, trace);
     logs.push({
       id: `${span.span_id}-model`,
+      traceId: trace.trace_id,
       role: "assistant",
       title: `模型 Span ${index + 1} · ${span.target_id || span.name}`,
       subtitle: span.span_id,
@@ -1026,9 +1134,23 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
     const io = resolveSpanIo(span, trace);
     logs.push({
       id: span.span_id,
+      traceId: trace.trace_id,
       role: "tool",
       title: `${capabilityType(span)} · ${span.target_id || span.name}`,
       subtitle: span.logical_call_id || span.span_id,
+      input: io.input,
+      output: io.output,
+      error: span.error ?? undefined,
+    });
+  });
+  trace.spans.filter((span) => span.kind === "internal" && (span.status === "failed" || span.error)).forEach((span) => {
+    const io = resolveSpanIo(span, trace);
+    logs.push({
+      id: span.span_id,
+      traceId: trace.trace_id,
+      role: "system",
+      title: `内部调用 · ${span.target_id || span.name}`,
+      subtitle: span.span_id,
       input: io.input,
       output: io.output,
       error: span.error ?? undefined,

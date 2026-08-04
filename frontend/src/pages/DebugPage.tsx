@@ -14,21 +14,19 @@ import {
   Code2,
   Copy,
   Database,
-  LockKeyhole,
   MessageSquareText,
   RefreshCw,
   Route,
   Server,
   ShieldCheck,
-  UserRound,
-  UsersRound,
   Wrench,
   XCircle,
 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { Topbar } from "@/components/layout/Topbar";
 import { PersonalObservabilityView } from "@/components/observability/PersonalObservabilityView";
 import { api, apiErrorMessage } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
 import { useMockSession } from "@/lib/mockSession";
@@ -43,12 +41,12 @@ import type {
 
 const LLM_CALL_PAGE_SIZE = 500;
 
-async function loadAllPersonalLlmCalls(actorQuery: string): Promise<LLMCallRecord[]> {
+async function loadAllPersonalLlmCalls(actorQuery = ""): Promise<LLMCallRecord[]> {
   const calls: LLMCallRecord[] = [];
   let offset = 0;
   while (true) {
     const page = await api.get<LLMCallRecord[]>(
-      `/llm-calls?${actorQuery}&limit=${LLM_CALL_PAGE_SIZE}&offset=${offset}`,
+      `/llm-calls?${actorQuery ? `${actorQuery}&` : ""}limit=${LLM_CALL_PAGE_SIZE}&offset=${offset}`,
     );
     calls.push(...page);
     if (page.length < LLM_CALL_PAGE_SIZE) return calls;
@@ -58,9 +56,11 @@ async function loadAllPersonalLlmCalls(actorQuery: string): Promise<LLMCallRecor
 
 export default function DebugPage() {
   const { debugMode, setDebugMode } = useDebugMode();
-  const { isAdmin, profile } = useMockSession();
-  const [dataScope, setDataScope] = useState<"mine" | "all">("mine");
-  const effectiveScope = isAdmin ? dataScope : "mine";
+  const { user, config } = useAuth();
+  const { isAdmin: mockIsAdmin, profile } = useMockSession();
+  const isAdmin = config.auth_required ? Boolean(user?.is_admin) : mockIsAdmin;
+  const location = useLocation();
+  const showAdminView = isAdmin && location.pathname.startsWith("/admin/");
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("sessionId");
   const requestedTrace = searchParams.get("trace");
@@ -76,29 +76,28 @@ export default function DebugPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (!isAdmin) setDataScope("mine");
-  }, [isAdmin]);
-
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const tenantQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}`;
-      const actorQuery = effectiveScope === "mine"
-        ? `${tenantQuery}&user_id=${encodeURIComponent(profile.actorUserId)}`
-        : tenantQuery;
-      const summaryRequest: Promise<AdminSummary | null> = isAdmin
-        ? api.get<AdminSummary>(`/admin/summary?${actorQuery}`)
+      const actorQuery = config.auth_required
+        ? ""
+        : `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
+      const querySuffix = actorQuery ? `?${actorQuery}` : "";
+      const adminData = config.auth_required && showAdminView;
+      const summaryRequest: Promise<AdminSummary | null> = showAdminView
+        ? api.get<AdminSummary>(`/admin/summary${querySuffix}`)
         : Promise.resolve(null);
-      const llmCallRequest = isAdmin
-        ? api.get<LLMCallRecord[]>(`/llm-calls?${actorQuery}&limit=500`)
+      const llmCallRequest = adminData
+        ? api.get<LLMCallRecord[]>("/admin/llm-calls?limit=500")
+        : showAdminView
+          ? api.get<LLMCallRecord[]>(`/llm-calls?${actorQuery}&limit=500`)
         : loadAllPersonalLlmCalls(actorQuery);
       const [healthData, summaryData, traceData, llmCallData, conversationData] = await Promise.all([
         api.get<{ status: string }>("/health"),
         summaryRequest,
-        api.get<TraceRecord[]>(`/traces?${actorQuery}`),
+        api.get<TraceRecord[]>(adminData ? "/admin/traces" : `/traces${querySuffix}`),
         llmCallRequest,
-        api.get<ConversationRecord[]>(`/conversations?${actorQuery}`),
+        api.get<ConversationRecord[]>(adminData ? "/admin/conversations" : `/conversations${querySuffix}`),
       ]);
       const traceIds = new Set(traceData.map((trace) => trace.trace_id));
       const contextIds = new Set(conversationData.map((conversation) => conversation.id));
@@ -132,7 +131,7 @@ export default function DebugPage() {
     } finally {
       setRefreshing(false);
     }
-  }, [effectiveScope, isAdmin, profile.actorUserId, profile.tenantId, requestedTrace]);
+  }, [config.auth_required, profile.actorUserId, profile.tenantId, requestedTrace, showAdminView]);
 
   useEffect(() => {
     void load();
@@ -194,7 +193,7 @@ export default function DebugPage() {
     ? conversationsById.get(selected.conversation_id)?.title ?? "已删除或不可用的会话"
     : "未关联会话";
 
-  if (!isAdmin) {
+  if (!showAdminView) {
     return (
       <PersonalObservabilityView
         error={error}
@@ -216,31 +215,6 @@ export default function DebugPage() {
         }}
         actions={
           <div className="flex items-center gap-2">
-            {isAdmin ? (
-              <div className="flex rounded-lg border border-line bg-app-soft p-0.5" aria-label="OBS 数据范围">
-                <button
-                  type="button"
-                  onClick={() => setDataScope("mine")}
-                  className={classNames("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold", dataScope === "mine" ? "bg-white text-accent shadow-sm" : "text-ink-muted")}
-                >
-                  <UserRound className="h-3.5 w-3.5" />我的数据
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDataScope("all")}
-                  className={classNames("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold", dataScope === "all" ? "bg-white text-accent shadow-sm" : "text-ink-muted")}
-                >
-                  <UsersRound className="h-3.5 w-3.5" />全部用户
-                </button>
-              </div>
-            ) : (
-              <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-app-soft px-2.5 text-[11px] font-bold text-ink-muted" aria-label="OBS 数据范围：仅我的数据">
-                <LockKeyhole className="h-3.5 w-3.5" />仅我的数据
-              </span>
-            )}
-            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-app-soft px-2.5 text-[11px] font-bold text-ink-muted" aria-label="前端 Mock 范围">
-              <ShieldCheck className="h-3.5 w-3.5" />前端 Mock 范围
-            </span>
             <div className="flex rounded-lg bg-app-soft p-0.5">
               <button
                 type="button"

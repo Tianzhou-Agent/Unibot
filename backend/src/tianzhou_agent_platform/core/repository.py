@@ -789,8 +789,8 @@ class InMemoryRepository:
     async def list_memories(
         self,
         *,
-        user_id: str,
-        tenant_id: str,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
         query: str | None = None,
         category: str | None = None,
     ) -> list[MemoryRecord]:
@@ -799,8 +799,8 @@ class InMemoryRepository:
             values = [
                 self._copy(item)
                 for item in self._memories.values()
-                if item.user_id == user_id
-                and item.tenant_id == tenant_id
+                if (user_id is None or item.user_id == user_id)
+                and (tenant_id is None or item.tenant_id == tenant_id)
                 and (category is None or item.category == category)
                 and (not normalized_query or normalized_query in item.content.casefold())
             ]

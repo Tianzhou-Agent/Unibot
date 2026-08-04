@@ -28,9 +28,10 @@ class UserView(StrictModel):
     avatar_url: str | None = None
     tenant_id: str
     providers: list[Literal["password", "github"]]
+    is_admin: bool = False
 
     @classmethod
-    def from_record(cls, user: UserRecord) -> "UserView":
+    def from_record(cls, user: UserRecord, *, is_admin: bool = False) -> "UserView":
         providers: list[Literal["password", "github"]] = []
         if user.password_hash:
             providers.append("password")
@@ -43,6 +44,7 @@ class UserView(StrictModel):
             avatar_url=user.avatar_url,
             tenant_id=user.tenant_id,
             providers=providers,
+            is_admin=is_admin,
         )
 
 

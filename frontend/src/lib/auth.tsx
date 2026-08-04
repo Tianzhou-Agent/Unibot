@@ -9,6 +9,7 @@ export interface AuthUser {
   avatar_url: string | null;
   tenant_id: string;
   providers: Array<"password" | "github">;
+  is_admin: boolean;
 }
 
 interface AuthConfig {
@@ -43,6 +44,7 @@ const LEGACY_USER: AuthUser = {
   avatar_url: null,
   tenant_id: "default",
   providers: [],
+  is_admin: false,
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);

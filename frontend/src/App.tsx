@@ -6,10 +6,10 @@ import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
 import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
-import ObservabilityPage from "@/pages/ObservabilityPage";
 import FeedbackAdminPage from "@/pages/FeedbackAdminPage";
 import OperationsAnalyticsPage from "@/pages/OperationsAnalyticsPage";
 import { AdminRoute } from "@/components/auth/AdminRoute";
+import { AdminLayout } from "@/components/admin/AdminLayout";
 import LoginPage from "@/pages/LoginPage";
 import { RequireAuth } from "@/lib/auth";
 
@@ -28,9 +28,12 @@ export default function App() {
         <Route path="/obs" element={<DebugPage />} />
         <Route path="/debug" element={<LegacyDebugRedirect />} />
         <Route element={<AdminRoute />}>
-          <Route path="/admin/observability" element={<ObservabilityPage />} />
-          <Route path="/admin/feedback" element={<FeedbackAdminPage />} />
-          <Route path="/admin/operations" element={<OperationsAnalyticsPage />} />
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<Navigate to="/admin/observability" replace />} />
+            <Route path="observability" element={<DebugPage />} />
+            <Route path="feedback" element={<FeedbackAdminPage />} />
+            <Route path="operations" element={<OperationsAnalyticsPage />} />
+          </Route>
         </Route>
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>

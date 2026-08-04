@@ -7,9 +7,11 @@ from tianzhou_agent_platform.api.dependencies import (
     bind_actor,
     repository,
     require_actor_ownership,
+    require_platform_admin,
     runtime,
 )
 from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, LLMCallRecord, TraceRecord
+from tianzhou_agent_platform.core.conversation import Conversation
 
 
 def create_operations_router() -> APIRouter:
@@ -108,24 +110,47 @@ def create_operations_router() -> APIRouter:
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> dict[str, int]:
-        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        require_platform_admin(request)
+        legacy_actor = (
+            actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+            if getattr(request.state, "actor", None) is None
+            else None
+        )
         data_repository = repository(request)
         conversations, tools, skills, ainas, installations, traces, memories, document_tasks = await asyncio.gather(
-            data_repository.list_conversations(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            data_repository.list_conversations(
+                user_id=legacy_actor.user_id if legacy_actor else None,
+                tenant_id=legacy_actor.tenant_id if legacy_actor else None,
+            ),
             data_repository.list_tools(),
             data_repository.list_skills(),
             data_repository.list_ainas(),
-            data_repository.list_installations(user_id=actor.user_id, tenant_id=actor.tenant_id),
-            data_repository.list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id),
-            data_repository.list_memories(user_id=actor.user_id, tenant_id=actor.tenant_id),
-            data_repository.list_document_edit_tasks(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            data_repository.list_installations(
+                user_id=legacy_actor.user_id if legacy_actor else None,
+                tenant_id=legacy_actor.tenant_id if legacy_actor else None,
+            ),
+            data_repository.list_traces(
+                user_id=legacy_actor.user_id if legacy_actor else None,
+                tenant_id=legacy_actor.tenant_id if legacy_actor else None,
+            ),
+            data_repository.list_memories(
+                user_id=legacy_actor.user_id if legacy_actor else None,
+                tenant_id=legacy_actor.tenant_id if legacy_actor else None,
+            ),
+            data_repository.list_document_edit_tasks(
+                user_id=legacy_actor.user_id if legacy_actor else None,
+                tenant_id=legacy_actor.tenant_id if legacy_actor else None,
+            ),
         )
-        trace_ids = {trace.trace_id for trace in traces}
-        context_ids = {conversation.id for conversation in conversations} | {task.id for task in document_tasks}
-        llm_call_count = await data_repository.count_llm_calls(
-            trace_ids=trace_ids,
-            context_ids=context_ids,
-        )
+        if legacy_actor:
+            trace_ids = {trace.trace_id for trace in traces}
+            context_ids = {conversation.id for conversation in conversations} | {task.id for task in document_tasks}
+            llm_call_count = await data_repository.count_llm_calls(
+                trace_ids=trace_ids,
+                context_ids=context_ids,
+            )
+        else:
+            llm_call_count = await data_repository.count_llm_calls()
         tool_ids = {tool.tool_id for tool in tools}
         skill_ids = {skill.skill_id for skill in skills}
         for aina in ainas:
@@ -141,5 +166,27 @@ def create_operations_router() -> APIRouter:
             "llm_calls": llm_call_count,
             "memories": len(memories),
         }
+
+    @router.get("/admin/conversations", response_model=list[Conversation])
+    async def admin_conversations(request: Request) -> list[Conversation]:
+        require_platform_admin(request)
+        return await repository(request).list_conversations()
+
+    @router.get("/admin/traces", response_model=list[TraceRecord])
+    async def admin_traces(request: Request) -> list[TraceRecord]:
+        require_platform_admin(request)
+        return await repository(request).list_traces()
+
+    @router.get("/admin/llm-calls", response_model=list[LLMCallRecord])
+    async def admin_llm_calls(
+        request: Request,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[LLMCallRecord]:
+        require_platform_admin(request)
+        return await repository(request).list_llm_calls(
+            limit=max(1, min(limit, 500)),
+            offset=max(0, offset),
+        )
 
     return router

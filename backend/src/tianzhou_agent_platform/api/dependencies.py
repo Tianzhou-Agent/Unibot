@@ -130,6 +130,28 @@ def current_user(request: Request) -> UserRecord:
     return user
 
 
+def require_platform_admin(request: Request) -> UserRecord | None:
+    if not bool(request.app.state.auth_enforced):
+        return None
+    user = current_user(request)
+    if settings(request).is_platform_admin(
+        user_id=user.id,
+        email=str(user.email),
+        github_login=user.github_login,
+    ):
+        return user
+
+    from tianzhou_agent_platform.core.errors import PlatformError
+
+    raise PlatformError(
+        "PERMISSION_DENIED",
+        "Platform administrator permission is required",
+        status_code=403,
+        source="auth",
+        user_message="需要平台管理员权限。",
+    )
+
+
 def documents(request: Request) -> DocumentService:
     service = cast(DocumentService | None, request.app.state.document_service)
     if service is None:

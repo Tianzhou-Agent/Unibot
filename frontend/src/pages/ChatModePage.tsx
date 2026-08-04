@@ -53,6 +53,12 @@ export default function ChatModePage() {
   const localRunConversationIdRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
   activeConversationIdRef.current = conversationId ?? null;
+  const errorTraceId = useMemo(() => (
+    [...(conversation?.messages ?? [])].reverse().find((message) => message.trace_id)?.trace_id ?? null
+  ), [conversation?.messages]);
+  const errorLogHref = error && conversation?.id && errorTraceId
+    ? `/obs?sessionId=${encodeURIComponent(conversation.id)}&tab=logs&traceId=${encodeURIComponent(errorTraceId)}`
+    : null;
 
   const loadConversation = useCallback(async (id: string, silent = false) => {
     const requestId = ++loadRequestRef.current;
@@ -225,6 +231,7 @@ export default function ChatModePage() {
     } catch (sendError) {
       if (runConversationId && activeConversationIdRef.current === runConversationId) {
         setError(apiErrorMessage(sendError));
+        await loadConversation(runConversationId, true);
       }
     } finally {
       if (localRunConversationIdRef.current === runConversationId) {
@@ -413,7 +420,7 @@ export default function ChatModePage() {
                   onDeny={() => void resolveApproval("deny")}
                 />
               ) : null}
-              {error ? <ErrorNotice message={error} onDismiss={() => setError(null)} /> : null}
+              {error ? <ErrorNotice message={error} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
               {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
               <div ref={endRef} />
             </div>
@@ -537,11 +544,12 @@ function RunSummary({ response }: { response: ChatResponse }) {
   );
 }
 
-function ErrorNotice({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; detailsHref: string | null; onDismiss: () => void }) {
   return (
     <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 flex items-center gap-2.5">
       <AlertTriangle className="w-4 h-4 text-danger" />
       <span className="flex-1 text-[12.5px] text-danger-deep">{message}</span>
+      {detailsHref ? <Link to={detailsHref} className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline">查看原始日志</Link> : null}
       <button type="button" onClick={onDismiss} aria-label="关闭错误">
         <X className="w-4 h-4 text-danger" />
       </button>

@@ -9,6 +9,7 @@ from tianzhou_agent_platform.auth.models import (
     AuthResponse,
     LoginRequest,
     RegisterRequest,
+    UserRecord,
     UserView,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
@@ -37,17 +38,17 @@ def create_auth_router() -> APIRouter:
             name=payload.name,
         )
         _set_session_cookie(request, response, auth(request).issue_session(user))
-        return AuthResponse(user=UserView.from_record(user))
+        return AuthResponse(user=_user_view(request, user))
 
     @router.post("/login", response_model=AuthResponse)
     async def login(payload: LoginRequest, request: Request, response: Response) -> AuthResponse:
         user = await auth(request).authenticate_password(email=str(payload.email), password=payload.password)
         _set_session_cookie(request, response, auth(request).issue_session(user))
-        return AuthResponse(user=UserView.from_record(user))
+        return AuthResponse(user=_user_view(request, user))
 
     @router.get("/me", response_model=AuthResponse)
     async def me(request: Request) -> AuthResponse:
-        return AuthResponse(user=UserView.from_record(current_user(request)))
+        return AuthResponse(user=_user_view(request, current_user(request)))
 
     @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
     async def logout(request: Request) -> Response:
@@ -105,6 +106,18 @@ def create_auth_router() -> APIRouter:
         return response
 
     return router
+
+
+def _user_view(request: Request, user: UserRecord) -> UserView:
+    app_settings = settings(request)
+    return UserView.from_record(
+        user,
+        is_admin=app_settings.is_platform_admin(
+            user_id=user.id,
+            email=str(user.email),
+            github_login=user.github_login,
+        ),
+    )
 
 
 def _set_session_cookie(request: Request, response: Response, token: str) -> None:

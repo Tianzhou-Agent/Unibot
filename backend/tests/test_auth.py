@@ -47,6 +47,7 @@ def test_password_authentication_session_and_logout() -> None:
         user = _register(client, email="USER@example.com")
         assert user["email"] == "user@example.com"
         assert user["providers"] == ["password"]
+        assert user["is_admin"] is False
         assert "password" not in user
         assert client.get("/auth/me").json()["user"]["id"] == user["id"]
 
@@ -170,10 +171,38 @@ def test_github_oauth_uses_state_pkce_and_creates_a_session() -> None:
             "avatar_url": "https://avatars.example/octocat.png",
             "tenant_id": "default",
             "providers": ["github"],
+            "is_admin": False,
         }
 
     asyncio.run(github_client.aclose())
     assert [request.url.path for request in requests] == ["/login/oauth/access_token", "/user", "/user/emails"]
+
+
+def test_platform_admin_allowlist_protects_admin_data() -> None:
+    app = create_app(
+        settings=_settings(admin_identities="admin@example.com"),
+        enforce_auth=True,
+    )
+
+    with TestClient(app) as client:
+        member = _register(client, email="member@example.com")
+        assert member["is_admin"] is False
+        member_conversation = client.post("/conversations", json={"title": "Member conversation"})
+        assert member_conversation.status_code == 201
+        denied = client.get("/admin/summary")
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "PERMISSION_DENIED"
+
+        assert client.post("/auth/logout").status_code == 204
+        admin = _register(client, email="ADMIN@example.com")
+        assert admin["is_admin"] is True
+        admin_conversation = client.post("/conversations", json={"title": "Admin conversation"})
+        assert admin_conversation.status_code == 201
+        assert len(client.get("/conversations").json()) == 1
+        assert client.get("/admin/summary").json()["conversations"] == 2
+        assert len(client.get("/admin/conversations").json()) == 2
+        assert client.get("/admin/traces").status_code == 200
+        assert client.get("/admin/llm-calls").status_code == 200
 
 
 def test_github_oauth_rejects_a_mismatched_state_before_token_exchange() -> None:
