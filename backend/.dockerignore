@@ -1,0 +1,8 @@
+.env
+.venv
+.e2e-venv
+.e2e-results
+__pycache__
+.pytest_cache
+.ruff_cache
+tests

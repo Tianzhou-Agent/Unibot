@@ -1,0 +1,12 @@
+services:
+  vision:
+    build:
+      args:
+        ULTRALYTICS_IMAGE: ultralytics/ultralytics:8.4.105
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

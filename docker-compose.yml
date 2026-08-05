@@ -1,0 +1,124 @@
+name: unibot
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${UNIBOT_MYSQL_ROOT_PASSWORD:-unibot_root}
+      MYSQL_DATABASE: ${UNIBOT_MYSQL_DATABASE:-unibot}
+      MYSQL_USER: ${UNIBOT_MYSQL_USER:-unibot}
+      MYSQL_PASSWORD: ${UNIBOT_MYSQL_PASSWORD:-unibot}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  vision:
+    image: unibot/vision-service:local
+    build:
+      context: ./vision-service
+      args:
+        ULTRALYTICS_IMAGE: ultralytics/ultralytics:8.4.105-cpu
+    environment:
+      YOLO_DEVICE: auto
+      YOLO_IMAGE_SIZE: ${YOLO_IMAGE_SIZE:-640}
+      YOLO_MAX_CONCURRENCY: ${YOLO_MAX_CONCURRENCY:-1}
+      YOLO_MAX_IMAGE_BYTES: ${UNIBOT_VISION_MAX_IMAGE_BYTES:-10485760}
+      YOLO_MAX_IMAGE_PIXELS: ${YOLO_MAX_IMAGE_PIXELS:-40000000}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3))['status'] == 'ready'"
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 12
+    restart: unless-stopped
+
+  backend:
+    image: unibot/backend:local
+    build:
+      context: ./backend
+    environment:
+      TZ_STORAGE_MYSQL_DSN: ${TZ_STORAGE_MYSQL_DSN:-mysql+aiomysql://unibot:unibot@mysql:3306/unibot}
+      TZ_STORAGE_REDIS_DSN: ${TZ_STORAGE_REDIS_DSN:-redis://redis:6379/0}
+      TZ_STORAGE_NAS_ROOT_PATH: /data/nas
+      UNIBOT_LLM_BASE_URL: ${UNIBOT_LLM_BASE_URL:-}
+      UNIBOT_LLM_API_KEY: ${UNIBOT_LLM_API_KEY:-}
+      UNIBOT_LLM_MODEL: ${UNIBOT_LLM_MODEL:-}
+      UNIBOT_AUTH_SECRET: ${UNIBOT_AUTH_SECRET:?Set UNIBOT_AUTH_SECRET in .env}
+      UNIBOT_AUTH_SESSION_HOURS: ${UNIBOT_AUTH_SESSION_HOURS:-168}
+      UNIBOT_AUTH_COOKIE_SECURE: ${UNIBOT_AUTH_COOKIE_SECURE:-false}
+      UNIBOT_AUTH_REGISTRATION_ENABLED: ${UNIBOT_AUTH_REGISTRATION_ENABLED:-true}
+      UNIBOT_FRONTEND_BASE_URL: ${UNIBOT_FRONTEND_BASE_URL:-http://127.0.0.1:8080}
+      UNIBOT_GITHUB_CLIENT_ID: ${UNIBOT_GITHUB_CLIENT_ID:-}
+      UNIBOT_GITHUB_CLIENT_SECRET: ${UNIBOT_GITHUB_CLIENT_SECRET:-}
+      UNIBOT_GITHUB_CALLBACK_URL: ${UNIBOT_GITHUB_CALLBACK_URL:-http://127.0.0.1:8080/api/auth/github/callback}
+      UNIBOT_ADMIN_IDENTITIES: ${UNIBOT_ADMIN_IDENTITIES:-}
+      UNIBOT_NODE_ID: ${UNIBOT_NODE_ID:-unibot-compose-1}
+      UNIBOT_SANDBOX_DRIVER: local
+      UNIBOT_SANDBOX_WORKSPACE_ROOT: /data/sandboxes
+      UNIBOT_VISION_BASE_URL: http://vision:8080
+      UNIBOT_VISION_TIMEOUT_SECONDS: ${UNIBOT_VISION_TIMEOUT_SECONDS:-60}
+      UNIBOT_VISION_MAX_IMAGE_BYTES: ${UNIBOT_VISION_MAX_IMAGE_BYTES:-10485760}
+    volumes:
+      - nas-data:/data/nas
+      - sandbox-data:/data/sandboxes
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vision:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${UNIBOT_BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3))['status'] == 'ok'"
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+    restart: unless-stopped
+
+  frontend:
+    image: unibot/frontend:local
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${UNIBOT_HTTP_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  nas-data:
+  sandbox-data:

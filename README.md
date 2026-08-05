@@ -1,5 +1,7 @@
 # Unibot
 
+完整的 Docker Compose 部署方式见 [容器化部署文档](docs/container-deployment.md)。
+
 > AI-Native 交互平台 — 以 Chatbot 为入口，用户通过自然语言对话完成各类任务。
 
 ## 产品定位
