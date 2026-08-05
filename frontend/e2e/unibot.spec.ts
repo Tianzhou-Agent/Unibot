@@ -1160,7 +1160,7 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
   await installMockApi(page, { conversations: [conversation()] });
-  await page.goto("/obs");
+  await page.goto("/admin/observability");
 
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("运行统计").getByText("3", { exact: true })).toBeVisible();
@@ -1320,7 +1320,7 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
 
   await page.getByRole("link", { name: "OBS", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
-  await expect(page.getByRole("heading", { name: "OBS", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
@@ -1351,9 +1351,9 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByLabel("Token 消耗日历")).toBeVisible();
 
   await page.goto("/chat/conv-e2e-1");
-  await page.getByRole("link", { name: "查看当前对话观测数据", exact: true }).click();
-  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1$/);
-  await expect(page.getByRole("button", { name: "当前对话", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "查看当前对话观测数据", exact: true }).click();
+  await expect(page.getByLabel("对话观测抽屉")).toBeVisible();
+  await expect(page.getByRole("link", { name: "个人总览", exact: true })).toBeVisible();
   await expect(page.getByLabel("选择对话")).toHaveCount(0);
   await expect(page.getByLabel("交互轮次")).toHaveCount(0);
   const obsSelector = page.getByLabel("OBS 视图选择");
@@ -1417,10 +1417,11 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   const modelRawLog = modelRawLogTitle.locator("..").locator("..");
   await modelRawLogTitle.click();
   await expect(modelRawLog.getByText("原始输入", { exact: true })).toBeVisible();
+  await modelRawLog.getByRole("button", { name: "输出", exact: true }).click();
   await expect(modelRawLog.getByText("原始输出", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("原始日志").getByText("null", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "个人总览", exact: true }).click();
+  await page.getByRole("link", { name: "个人总览", exact: true }).click();
+  await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("button", { name: "日", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "周", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "月", exact: true })).toBeVisible();
@@ -1524,8 +1525,8 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
   }]));
 
   await page.goto("/chat/conv-e2e-1");
-  const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
-  await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e");
+  const chatLogLink = page.locator('a[href="/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e"]');
+  await expect(chatLogLink).toBeVisible();
   await chatLogLink.click();
 
   const targetLog = page.getByLabel("原始日志 llm-error-e2e", { exact: true });
@@ -1541,6 +1542,42 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
   await diagnostics.getByRole("button", { name: "查看原始日志", exact: true }).click();
   await expect(page).toHaveURL(/logId=llm-error-e2e/);
   await expect(targetLog).toHaveAttribute("open", "");
+});
+
+test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始日志", async ({ page }) => {
+  const providerError = "The model provider returned HTTP 502";
+  await installMockApi(page, {
+    conversations: [conversation({
+      messages: [
+        { id: "msg-user-fail-e2e", role: "user", content: "触发一次失败调用", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
+        { id: "msg-asst-fail-e2e", role: "assistant", content: "抱歉，处理失败了。", content_type: "text", widgets: [], trace_id: "trace-msg-fail-e2e", created_at: NOW },
+      ],
+    })],
+  });
+  await page.route("**/api/llm-calls*", (route) => json(route, [{
+    call_id: "llm-msg-fail-e2e",
+    trace_id: "trace-msg-fail-e2e",
+    span_id: "span-model-msg-fail-e2e",
+    context_type: "conversation",
+    context_id: "conv-e2e-1",
+    endpoint: "https://provider.example/v1/chat/completions",
+    model: "debug-model",
+    status: "failed",
+    request: { model: "debug-model", messages: [{ role: "user", content: "触发一次失败调用" }], stream: true },
+    response: null,
+    error: providerError,
+    duration_ms: 96,
+    ttft_ms: null,
+    created_at: NOW,
+    completed_at: NOW,
+  }]));
+
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText(`调用失败：${providerError}`, { exact: true })).toBeVisible();
+  const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
+  await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e");
+  await chatLogLink.click();
+  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e$/);
 });
 
 test("FE-E2E-IR-002 普通用户提交、修改和取消回答反馈", async ({ page }) => {

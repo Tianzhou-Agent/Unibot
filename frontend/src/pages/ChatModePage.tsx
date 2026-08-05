@@ -10,15 +10,17 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
+import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
+import { loadAllPersonalLlmCalls } from "@/lib/obsData";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
 import type {
@@ -27,6 +29,7 @@ import type {
   BackendMessage,
   ChatResponse,
   ConversationRecord,
+  LLMCallRecord,
 } from "@/types";
 
 export default function ChatModePage() {
@@ -35,6 +38,7 @@ export default function ChatModePage() {
   const { debugMode } = useDebugMode();
   const { profile } = useMockSession();
   const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
+  const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
@@ -48,11 +52,35 @@ export default function ChatModePage() {
   const [titleDraft, setTitleDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [obsOpen, setObsOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const endRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
   const localRunConversationIdRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
   activeConversationIdRef.current = conversationId ?? null;
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    const actorQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
+    void loadAllPersonalLlmCalls(actorQuery).then((calls) => {
+      if (active) setLlmCalls(calls);
+    });
+    return () => { active = false; };
+  }, [conversationId, profile.actorUserId, profile.tenantId]);
+
+  const failedCallsByTrace = useMemo(() => {
+    const map = new Map<string, LLMCallRecord[]>();
+    for (const call of llmCalls) {
+      if (call.status !== "failed" && !call.error) continue;
+      if (!call.trace_id) continue;
+      const list = map.get(call.trace_id) ?? [];
+      list.push(call);
+      map.set(call.trace_id, list);
+    }
+    return map;
+  }, [llmCalls]);
+
   const errorTraceId = useMemo(() => (
     [...(conversation?.messages ?? [])].reverse().find((message) => message.trace_id)?.trace_id ?? null
   ), [conversation?.messages]);
@@ -333,18 +361,27 @@ export default function ChatModePage() {
       : ({ label: "已就绪", tone: "success" } as const);
 
   return (
+    <>
     <div className="h-full flex flex-col bg-app-bg">
       <Topbar
         title={title}
         badge={badge}
         actions={conversation?.id && !deleted ? (
-          <Link
-            to={`/obs?sessionId=${encodeURIComponent(conversation.id)}`}
+          <button
+            type="button"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete("tab");
+              next.delete("traceId");
+              next.delete("logId");
+              setSearchParams(next, { replace: true });
+              setObsOpen(true);
+            }}
             className="btn-outline h-8"
             aria-label="查看当前对话观测数据"
           >
             <Activity className="h-3.5 w-3.5" />OBS
-          </Link>
+          </button>
         ) : null}
       />
 
@@ -396,6 +433,8 @@ export default function ChatModePage() {
                       onOpenAina={(ainaId) => void openAina(ainaId)}
                       onPrompt={sendMessage}
                       debugMode={debugMode}
+                      conversationId={conversation?.id ?? ""}
+                      failedCalls={message.trace_id ? failedCallsByTrace.get(message.trace_id) ?? [] : []}
                     />
                   ))
                 : null}
@@ -432,7 +471,14 @@ export default function ChatModePage() {
             />
           ) : null}
         </div>
-    </div>
+      </div>
+      {conversation?.id && obsOpen ? (
+        <ConversationObsDrawer
+          sessionId={conversation.id}
+          onClose={() => setObsOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -441,14 +487,28 @@ function ConversationMessage({
   onOpenAina,
   onPrompt,
   debugMode,
+  conversationId,
+  failedCalls,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
+  conversationId: string;
+  failedCalls: LLMCallRecord[];
 }) {
+  const failedCall = failedCalls[0] ?? null;
   if (message.role === "system") return null;
-  if (message.role === "user") return <UserMessage content={message.content} />;
+  if (message.role === "user") {
+    return (
+      <div className="space-y-2">
+        <UserMessage content={message.content} />
+        {failedCall && message.trace_id ? (
+          <FailedCallNotice conversationId={conversationId} traceId={message.trace_id} call={failedCall} />
+        ) : null}
+      </div>
+    );
+  }
   if (message.role === "tool") return debugMode ? <ToolResultMessage message={message} /> : null;
   const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
@@ -465,6 +525,9 @@ function ConversationMessage({
           }}
         />
       ) : null}
+      {failedCall && message.trace_id ? (
+        <FailedCallNotice conversationId={conversationId} traceId={message.trace_id} call={failedCall} />
+      ) : null}
       {message.widgets?.map((widget) => (
         <SessionWidgetRenderer
           key={widget.id}
@@ -473,6 +536,23 @@ function ConversationMessage({
           onPrompt={onPrompt}
         />
       ))}
+    </div>
+  );
+}
+
+function FailedCallNotice({ conversationId, traceId, call }: { conversationId: string; traceId: string; call: LLMCallRecord }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2">
+      <AlertTriangle className="h-4 w-4 shrink-0 text-danger" />
+      <span className="min-w-0 flex-1 truncate text-[12px] text-danger-deep">
+        调用失败：{call.error ?? "模型调用失败"}
+      </span>
+      <Link
+        to={`/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}&logId=${encodeURIComponent(call.call_id)}`}
+        className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline"
+      >
+        查看原始日志
+      </Link>
     </div>
   );
 }

@@ -29,6 +29,7 @@ import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
+import { loadAllPersonalLlmCalls } from "@/lib/obsData";
 import { useMockSession } from "@/lib/mockSession";
 import type {
   AdminSummary,
@@ -38,21 +39,6 @@ import type {
   TraceRecord,
   TraceSpan,
 } from "@/types";
-
-const LLM_CALL_PAGE_SIZE = 500;
-
-async function loadAllPersonalLlmCalls(actorQuery = ""): Promise<LLMCallRecord[]> {
-  const calls: LLMCallRecord[] = [];
-  let offset = 0;
-  while (true) {
-    const page = await api.get<LLMCallRecord[]>(
-      `/llm-calls?${actorQuery ? `${actorQuery}&` : ""}limit=${LLM_CALL_PAGE_SIZE}&offset=${offset}`,
-    );
-    calls.push(...page);
-    if (page.length < LLM_CALL_PAGE_SIZE) return calls;
-    offset += page.length;
-  }
-}
 
 export default function DebugPage() {
   const { debugMode, setDebugMode } = useDebugMode();

@@ -17,7 +17,7 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { classNames } from "@/lib/utils";
 import type { ConversationRecord, LLMCallRecord, TraceRecord, TraceSpan } from "@/types";
 
@@ -34,6 +34,8 @@ interface PersonalObservabilityViewProps {
   conversations: ConversationRecord[];
   traces: TraceRecord[];
   llmCalls: LLMCallRecord[];
+  /** 是否通过 URL searchParams 同步 tab/logId/traceId（整页场景默认 true；抽屉内嵌场景传 false 用内部状态，避免污染当前页面 URL） */
+  urlParams?: boolean;
 }
 
 interface TokenUsage {
@@ -76,12 +78,31 @@ export function PersonalObservabilityView({
   conversations,
   traces,
   llmCalls,
+  urlParams = true,
 }: PersonalObservabilityViewProps) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [internalFocus, setInternalFocus] = useState<{ tab: string | null; logId: string | null; traceId: string | null }>({ tab: null, logId: null, traceId: null });
   const [view, setView] = useState<PageView>(() => sessionId ? "conversation" : "overview");
   useEffect(() => {
     setView(sessionId ? "conversation" : "overview");
   }, [sessionId]);
+
+  const syncToUrl = urlParams;
+  const tabParam = syncToUrl ? searchParams.get("tab") : internalFocus.tab;
+  const focusedLogId = syncToUrl ? searchParams.get("logId") : internalFocus.logId;
+  const focusedTraceId = syncToUrl ? searchParams.get("traceId") : internalFocus.traceId;
+
+  function focusRawLog(logId: string, traceId: string) {
+    if (syncToUrl) {
+      const next = new URLSearchParams(searchParams);
+      next.set("tab", "logs");
+      next.set("traceId", traceId);
+      next.set("logId", logId);
+      setSearchParams(next, { replace: true });
+    } else {
+      setInternalFocus({ tab: "logs", logId, traceId });
+    }
+  }
 
   const conversationTraces = useMemo(
     () => sessionId
@@ -103,16 +124,6 @@ export function PersonalObservabilityView({
   const conversation = conversations.find((item) => item.id === sessionId);
   const conversationTitle = conversation?.title
     ?? (sessionId ? "已删除或不可用的对话" : "暂无对话");
-  const focusedLogId = searchParams.get("logId");
-  const focusedTraceId = searchParams.get("traceId");
-
-  function focusRawLog(logId: string, traceId: string) {
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", "logs");
-    next.set("traceId", traceId);
-    next.set("logId", logId);
-    setSearchParams(next, { replace: true });
-  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-bg">
@@ -133,14 +144,14 @@ export function PersonalObservabilityView({
                 <span className="mt-0.5 hidden truncate font-mono text-[10px] text-ink-subtle sm:block">Session ID：{sessionId}</span>
               </div>
             ) : null}
-            {sessionId ? <div className="ml-auto flex shrink-0 rounded-lg bg-app-soft p-0.5" aria-label="个人观测视图">
-              <ViewButton active={view === "conversation"} onClick={() => setView("conversation")}>
-                当前对话
-              </ViewButton>
-              <ViewButton active={view === "overview"} onClick={() => setView("overview")}>
+            {sessionId ? (
+              <Link
+                to="/obs"
+                className="ml-auto inline-flex items-center rounded-md px-3 py-1.5 text-[12px] font-bold text-ink-muted transition-colors hover:bg-app-soft hover:text-ink"
+              >
                 个人总览
-              </ViewButton>
-            </div> : null}
+              </Link>
+            ) : null}
           </div>
 
           {view === "conversation" && sessionId ? (
@@ -148,7 +159,7 @@ export function PersonalObservabilityView({
               conversation={conversation}
               traces={conversationTraces}
               calls={conversationCalls}
-              initialDimension={searchParams.get("tab") === "logs" ? "logs" : undefined}
+              initialDimension={tabParam === "logs" ? "logs" : undefined}
               focusedLogId={focusedLogId}
               focusedTraceId={focusedTraceId}
               onFocusRawLog={focusRawLog}
@@ -159,21 +170,6 @@ export function PersonalObservabilityView({
         </div>
       </div>
     </div>
-  );
-}
-
-function ViewButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={classNames(
-        "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold",
-        active ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -732,7 +728,9 @@ function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedE
     if (!focusedEntryId) return;
     setRole("all");
     const frame = window.requestAnimationFrame(() => {
-      document.getElementById(`raw-log-${focusedEntryId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const target = document.getElementById(`raw-log-error-${focusedEntryId}`)
+        ?? document.getElementById(`raw-log-${focusedEntryId}`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [focusedEntryId]);
@@ -747,36 +745,68 @@ function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedE
         ))}
       </div>
       <div className="space-y-2 p-3">
-        {visible.map((entry) => {
-          const hasInput = entry.input != null;
-          const hasOutput = entry.output != null;
-          return <details
-            id={`raw-log-${entry.id}`}
-            key={entry.id}
-            open={focusedEntryId ? entry.id === focusedEntryId : undefined}
-            aria-label={`原始日志 ${entry.id}`}
-            className={classNames(
-              "overflow-hidden rounded-lg bg-app-soft/50",
-              entry.id === focusedEntryId && "ring-2 ring-accent/50",
-            )}
-          >
-            <summary className="flex cursor-pointer list-none items-center gap-2 bg-white/40 px-2.5 py-2">
-              <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent">{entry.role}</span>
-              <strong className="min-w-0 flex-1 truncate text-[11.5px] text-ink">{entry.title}</strong>
-              <span className="truncate text-[10.5px] text-ink-subtle">{entry.subtitle}</span>
-              <ChevronRight className="h-3.5 w-3.5 text-ink-subtle" />
-            </summary>
-            <div className={classNames("grid gap-2.5 p-2.5", hasInput && hasOutput && "xl:grid-cols-2")}>
-              {hasInput ? <JsonPayload label="原始输入" value={entry.input} /> : null}
-              {hasOutput ? <JsonPayload label="原始输出" value={entry.output} /> : null}
-              {entry.error != null ? <div className="xl:col-span-2"><JsonPayload label="错误" value={entry.error} danger /></div> : null}
-              {!hasInput && !hasOutput && entry.error == null ? <div className="py-4 text-center text-[11px] text-ink-subtle">该记录没有可用的原始 I/O。</div> : null}
-            </div>
-          </details>;
-        })}
+        {visible.map((entry) => (
+          <RawLogItem key={entry.id} entry={entry} focused={entry.id === focusedEntryId} />
+        ))}
         {visible.length === 0 ? <div className="py-8 text-center text-[12px] text-ink-muted">该角色没有原始日志。</div> : null}
       </div>
     </section>
+  );
+}
+
+function RawLogItem({ entry, focused }: { entry: RawLogEntry; focused: boolean }) {
+  const [view, setView] = useState<"input" | "output">("input");
+  const hasInput = entry.input != null;
+  const hasOutput = entry.output != null;
+  const showSwitch = hasInput && hasOutput;
+  return (
+    <details
+      id={`raw-log-${entry.id}`}
+      open={focused ? true : undefined}
+      aria-label={`原始日志 ${entry.id}`}
+      className={classNames(
+        "overflow-hidden rounded-lg bg-app-soft/50",
+        focused && "ring-2 ring-accent/50",
+      )}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 bg-white/40 px-2.5 py-2">
+        <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent">{entry.role}</span>
+        <strong className="min-w-0 flex-1 truncate text-[11.5px] text-ink">{entry.title}</strong>
+        <span className="truncate text-[10.5px] text-ink-subtle">{entry.subtitle}</span>
+        <ChevronRight className="h-3.5 w-3.5 text-ink-subtle" />
+      </summary>
+      <div className="space-y-2.5 p-2.5">
+        {showSwitch ? (
+          <div className="flex w-fit rounded-lg bg-slate-900 p-0.5">
+            <button
+              type="button"
+              onClick={() => setView("input")}
+              className={classNames("rounded-md px-2.5 py-1 text-[10.5px] font-bold transition-colors", view === "input" ? "bg-white text-slate-900" : "text-slate-400 hover:text-white")}
+            >
+              输入
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("output")}
+              className={classNames("rounded-md px-2.5 py-1 text-[10.5px] font-bold transition-colors", view === "output" ? "bg-white text-slate-900" : "text-slate-400 hover:text-white")}
+            >
+              输出
+            </button>
+          </div>
+        ) : null}
+        {view === "input" && hasInput ? <JsonPayload label="原始输入" value={entry.input} /> : null}
+        {view === "output" && hasOutput ? <JsonPayload label="原始输出" value={entry.output} /> : null}
+        {entry.error != null ? (
+          <div
+            id={focused ? `raw-log-error-${entry.id}` : undefined}
+            className={classNames("rounded-md", focused && "ring-2 ring-danger/60")}
+          >
+            <JsonPayload label="错误" value={entry.error} danger />
+          </div>
+        ) : null}
+        {!hasInput && !hasOutput && entry.error == null ? <div className="py-4 text-center text-[11px] text-ink-subtle">该记录没有可用的原始 I/O。</div> : null}
+      </div>
+    </details>
   );
 }
 
@@ -784,9 +814,57 @@ function JsonPayload({ label, value, className, danger = false }: { label?: stri
   return (
     <section>
       {label ? <div className={classNames("mb-1 text-[10.5px] font-bold", danger ? "text-danger" : "text-ink-muted")}>{label}</div> : null}
-      <pre className={classNames("overflow-auto whitespace-pre-wrap break-all rounded-md p-3 font-mono text-[10.5px] leading-relaxed", danger ? "bg-danger-soft text-danger-deep" : "bg-slate-950 text-slate-200", className)}>{JSON.stringify(value, null, 2) ?? String(value)}</pre>
+      <pre className={classNames("overflow-auto whitespace-pre-wrap break-all rounded-md p-3 font-mono text-[10.5px] leading-relaxed", danger ? "bg-danger-soft text-danger-deep" : "bg-slate-950 text-slate-200", className)}><JsonSyntax value={value} /></pre>
     </section>
   );
+}
+
+function JsonSyntax({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  const pad = (level: number) => "  ".repeat(level);
+  if (value === null) return <span className="text-rose-400">null</span>;
+  if (typeof value === "string") return <span className="text-emerald-400">{JSON.stringify(value)}</span>;
+  if (typeof value === "number") return <span className="text-amber-400">{String(value)}</span>;
+  if (typeof value === "boolean") return <span className="text-violet-400">{String(value)}</span>;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-slate-500">[]</span>;
+    return (
+      <>
+        <span className="text-slate-500">[</span>
+        {"\n"}
+        {value.map((item, index) => (
+          <span key={index}>
+            {pad(depth + 1)}
+            <JsonSyntax value={item} depth={depth + 1} />
+            {index < value.length - 1 ? <span className="text-slate-500">,</span> : null}
+            {"\n"}
+          </span>
+        ))}
+        {pad(depth)}<span className="text-slate-500">]</span>
+      </>
+    );
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return <span className="text-slate-500">{"{}"}</span>;
+    return (
+      <>
+        <span className="text-slate-500">{"{"}</span>
+        {"\n"}
+        {entries.map(([key, item], index) => (
+          <span key={key}>
+            {pad(depth + 1)}
+            <span className="text-sky-400">{JSON.stringify(key)}</span>
+            <span className="text-slate-500">: </span>
+            <JsonSyntax value={item} depth={depth + 1} />
+            {index < entries.length - 1 ? <span className="text-slate-500">,</span> : null}
+            {"\n"}
+          </span>
+        ))}
+        {pad(depth)}<span className="text-slate-500">{"}"}</span>
+      </>
+    );
+  }
+  return <span className="text-slate-400">{String(value)}</span>;
 }
 
 function PersonalOverview({ traces, calls }: { traces: TraceRecord[]; calls: LLMCallRecord[] }) {
