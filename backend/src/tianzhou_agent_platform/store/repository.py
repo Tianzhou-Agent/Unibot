@@ -12,6 +12,7 @@ from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaR
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
+from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
@@ -34,6 +35,7 @@ from tianzhou_agent_platform.core.repository import (
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
     USERS_RESOURCE,
+    FEEDBACKS_RESOURCE,
     InMemoryRepository,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores
@@ -74,6 +76,7 @@ repository_tables = {
         SANDBOXES_RESOURCE,
         SANDBOX_EXECUTIONS_RESOURCE,
         USERS_RESOURCE,
+        FEEDBACKS_RESOURCE,
     )
 }
 
@@ -107,6 +110,7 @@ class PersistentRepository(InMemoryRepository):
         sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
         sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
         users = await self._load_models(USERS_RESOURCE, UserRecord)
+        feedbacks = await self._load_models(FEEDBACKS_RESOURCE, FeedbackRecord)
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -130,6 +134,7 @@ class PersistentRepository(InMemoryRepository):
             self._sandboxes = {item.id: item for item in sandboxes}
             self._sandbox_executions = {item.id: item for item in sandbox_executions}
             self._users = {item.id: item for item in users}
+            self._feedbacks = {item.id: item for item in feedbacks}
 
     async def create_user(self, user: UserRecord) -> UserRecord:
         async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:

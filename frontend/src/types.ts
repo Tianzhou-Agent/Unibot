@@ -695,6 +695,76 @@ export interface TraceRecord {
   completed_at?: string | null;
 }
 
+export type FeedbackRating = "up" | "down";
+export type FeedbackCaseStatus = "pending" | "in_progress" | "resolved" | "closed";
+
+export interface FeedbackHistoryItem {
+  at: string;
+  actor_id: string;
+  actor_name: string;
+  action: string;
+}
+
+export interface FeedbackRecord {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  user_name: string;
+  user_email: string;
+  conversation_id: string;
+  message_id: string;
+  trace_id?: string | null;
+  agent_name: string;
+  agent_version: string;
+  rating: FeedbackRating;
+  reason: string;
+  comment: string;
+  active: boolean;
+  case_status: FeedbackCaseStatus;
+  assignee: string;
+  conclusion: string;
+  history: FeedbackHistoryItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FeedbackDetailRecord {
+  feedback: FeedbackRecord;
+  context_traces: TraceRecord[];
+}
+
+export interface FeedbackTrendPoint {
+  date: string;
+  feedback_count: number;
+  answer_count: number;
+  feedback_rate: number;
+  positive_rate: number;
+}
+
+export interface FeedbackReasonCount {
+  reason: string;
+  count: number;
+  percentage: number;
+}
+
+export interface FeedbackMetrics {
+  from_at: string;
+  to_at: string;
+  answer_count: number;
+  feedback_count: number;
+  positive_count: number;
+  pending_negative_count: number;
+  feedback_rate: number;
+  positive_feedback_rate: number;
+  positive_answer_rate: number;
+  feedback_rate_change: number;
+  positive_feedback_rate_change: number;
+  positive_answer_rate_change: number;
+  pending_negative_change: number;
+  trend: FeedbackTrendPoint[];
+  reasons: FeedbackReasonCount[];
+}
+
 export interface LLMCallRecord {
   call_id: string;
   trace_id?: string | null;

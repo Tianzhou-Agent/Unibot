@@ -30,7 +30,16 @@ import type {
   ChatResponse,
   ConversationRecord,
   LLMCallRecord,
+  TraceRecord,
+  TraceSpan,
 } from "@/types";
+
+interface MessageFailure {
+  kind: "llm" | "capability";
+  name: string;
+  error: string;
+  callId?: string;
+}
 
 export default function ChatModePage() {
   const { conversationId } = useParams<{ conversationId: string }>();
@@ -39,6 +48,7 @@ export default function ChatModePage() {
   const { profile } = useMockSession();
   const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
   const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
+  const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
@@ -63,23 +73,42 @@ export default function ChatModePage() {
     if (!conversationId) return;
     let active = true;
     const actorQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
-    void loadAllPersonalLlmCalls(actorQuery).then((calls) => {
-      if (active) setLlmCalls(calls);
+    const querySuffix = `?${actorQuery}`;
+    void Promise.all([
+      loadAllPersonalLlmCalls(actorQuery),
+      api.get<TraceRecord[]>(`/traces${querySuffix}`),
+    ]).then(([calls, traceData]) => {
+      if (active) {
+        setLlmCalls(calls);
+        setTraces(traceData);
+      }
     });
     return () => { active = false; };
   }, [conversationId, profile.actorUserId, profile.tenantId]);
 
-  const failedCallsByTrace = useMemo(() => {
-    const map = new Map<string, LLMCallRecord[]>();
+  const failuresByTrace = useMemo(() => {
+    const map = new Map<string, MessageFailure[]>();
+    const push = (traceId: string, failure: MessageFailure) => {
+      const list = map.get(traceId) ?? [];
+      list.push(failure);
+      map.set(traceId, list);
+    };
     for (const call of llmCalls) {
       if (call.status !== "failed" && !call.error) continue;
       if (!call.trace_id) continue;
-      const list = map.get(call.trace_id) ?? [];
-      list.push(call);
-      map.set(call.trace_id, list);
+      push(call.trace_id, { kind: "llm", name: call.model, error: call.error ?? "模型调用失败", callId: call.call_id });
+    }
+    for (const trace of traces) {
+      for (const span of trace.spans ?? []) {
+        if (span.kind !== "tool" && span.kind !== "aina") continue;
+        if (span.status !== "failed" && !span.error) continue;
+        const err = span.error;
+        const message = typeof err === "string" ? err : (err as Record<string, unknown> | null)?.message;
+        push(trace.trace_id, { kind: "capability", name: span.target_id || span.name, error: typeof message === "string" ? message : "能力调用失败" });
+      }
     }
     return map;
-  }, [llmCalls]);
+  }, [llmCalls, traces]);
 
   const errorTraceId = useMemo(() => (
     [...(conversation?.messages ?? [])].reverse().find((message) => message.trace_id)?.trace_id ?? null
@@ -434,7 +463,7 @@ export default function ChatModePage() {
                       onPrompt={sendMessage}
                       debugMode={debugMode}
                       conversationId={conversation?.id ?? ""}
-                      failedCalls={message.trace_id ? failedCallsByTrace.get(message.trace_id) ?? [] : []}
+                      failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
                     />
                   ))
                 : null}
@@ -488,23 +517,23 @@ function ConversationMessage({
   onPrompt,
   debugMode,
   conversationId,
-  failedCalls,
+  failures,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
   conversationId: string;
-  failedCalls: LLMCallRecord[];
+  failures: MessageFailure[];
 }) {
-  const failedCall = failedCalls[0] ?? null;
+  const failure = failures[0] ?? null;
   if (message.role === "system") return null;
   if (message.role === "user") {
     return (
       <div className="space-y-2">
         <UserMessage content={message.content} />
-        {failedCall && message.trace_id ? (
-          <FailedCallNotice conversationId={conversationId} traceId={message.trace_id} call={failedCall} />
+        {failure && message.trace_id ? (
+          <FailedCallNotice conversationId={conversationId} traceId={message.trace_id} failure={failure} />
         ) : null}
       </div>
     );
@@ -516,6 +545,7 @@ function ConversationMessage({
       {debugMode && hasToolCalls ? <ToolCallMessage message={message} /> : null}
       {message.content && (!hasToolCalls || debugMode) ? (
         <AssistantMessage
+          conversationId={conversationId}
           message={{
             id: message.id,
             role: "assistant",
@@ -524,9 +554,6 @@ function ConversationMessage({
             runState: "done",
           }}
         />
-      ) : null}
-      {failedCall && message.trace_id ? (
-        <FailedCallNotice conversationId={conversationId} traceId={message.trace_id} call={failedCall} />
       ) : null}
       {message.widgets?.map((widget) => (
         <SessionWidgetRenderer
@@ -540,15 +567,18 @@ function ConversationMessage({
   );
 }
 
-function FailedCallNotice({ conversationId, traceId, call }: { conversationId: string; traceId: string; call: LLMCallRecord }) {
+function FailedCallNotice({ conversationId, traceId, failure }: { conversationId: string; traceId: string; failure: MessageFailure }) {
+  const logHref = failure.kind === "capability"
+    ? `/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}`
+    : `/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}&logId=${encodeURIComponent(failure.callId ?? "")}`;
   return (
     <div className="flex items-center gap-2 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2">
       <AlertTriangle className="h-4 w-4 shrink-0 text-danger" />
       <span className="min-w-0 flex-1 truncate text-[12px] text-danger-deep">
-        调用失败：{call.error ?? "模型调用失败"}
+        {failure.kind === "capability" ? `能力调用失败：${failure.name} · ${failure.error}` : `调用失败：${failure.error}`}
       </span>
       <Link
-        to={`/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}&logId=${encodeURIComponent(call.call_id)}`}
+        to={logHref}
         className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline"
       >
         查看原始日志

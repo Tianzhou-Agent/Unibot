@@ -25,6 +25,7 @@ from tianzhou_agent_platform.aina.scheduler import (
 from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceEvent, TraceRecord, TraceSpan
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
+from tianzhou_agent_platform.core.feedback import FeedbackHistoryItem, FeedbackRecord
 from tianzhou_agent_platform.core.model_settings import (
     ModelDefinition,
     ModelProviderCreate,
@@ -52,6 +53,7 @@ DOCUMENT_EDIT_TASKS_RESOURCE = "document_edit_tasks"
 SANDBOXES_RESOURCE = "sandboxes"
 SANDBOX_EXECUTIONS_RESOURCE = "sandbox_executions"
 USERS_RESOURCE = "users"
+FEEDBACKS_RESOURCE = "feedbacks"
 
 
 class InMemoryRepository:
@@ -81,6 +83,7 @@ class InMemoryRepository:
         self._sandboxes: dict[str, SandboxRecord] = {}
         self._sandbox_executions: dict[str, SandboxExecution] = {}
         self._users: dict[str, UserRecord] = {}
+        self._feedbacks: dict[str, FeedbackRecord] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -130,6 +133,193 @@ class InMemoryRepository:
                 None,
             )
             return self._copy(user) if user else None
+
+    async def upsert_feedback(self, feedback: FeedbackRecord) -> FeedbackRecord:
+        async with self._lock:
+            existing = next(
+                (
+                    item
+                    for item in self._feedbacks.values()
+                    if item.user_id == feedback.user_id
+                    and item.tenant_id == feedback.tenant_id
+                    and item.message_id == feedback.message_id
+                ),
+                None,
+            )
+            now = datetime.now(UTC)
+            if existing is None:
+                stored = feedback
+            else:
+                reactivated = not existing.active
+                action = "重新提交反馈" if reactivated else "修改反馈"
+                stored = existing.model_copy(
+                    update={
+                        "user_name": feedback.user_name,
+                        "user_email": feedback.user_email,
+                        "conversation_id": feedback.conversation_id,
+                        "trace_id": feedback.trace_id,
+                        "agent_name": feedback.agent_name,
+                        "agent_version": feedback.agent_version,
+                        "rating": feedback.rating,
+                        "reason": feedback.reason,
+                        "comment": feedback.comment,
+                        "active": True,
+                        "case_status": "pending" if feedback.rating == "down" else existing.case_status,
+                        "created_at": now if reactivated else existing.created_at,
+                        "updated_at": now,
+                        "history": [
+                            *existing.history,
+                            FeedbackHistoryItem(
+                                actor_id=feedback.user_id,
+                                actor_name=feedback.user_name,
+                                action=action,
+                            ),
+                        ],
+                    },
+                    deep=True,
+                )
+            self._feedbacks[stored.id] = stored
+            await self._save_record(FEEDBACKS_RESOURCE, stored.id, stored)
+            return self._copy(stored)
+
+    async def get_feedback_for_message(
+        self,
+        message_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> FeedbackRecord | None:
+        async with self._lock:
+            item = next(
+                (
+                    feedback
+                    for feedback in self._feedbacks.values()
+                    if feedback.active
+                    and feedback.message_id == message_id
+                    and feedback.user_id == user_id
+                    and feedback.tenant_id == tenant_id
+                ),
+                None,
+            )
+            return self._copy(item) if item else None
+
+    async def get_feedback(self, feedback_id: str) -> FeedbackRecord:
+        async with self._lock:
+            item = self._feedbacks.get(feedback_id)
+            if item is None or not item.active:
+                raise not_found("Feedback", feedback_id)
+            return self._copy(item)
+
+    async def list_feedbacks(
+        self,
+        *,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        rating: str | None = None,
+        user_query: str | None = None,
+    ) -> list[FeedbackRecord]:
+        normalized = (user_query or "").strip().lower()
+        async with self._lock:
+            items = [
+                self._copy(item)
+                for item in self._feedbacks.values()
+                if item.active
+                and (from_at is None or item.created_at >= from_at)
+                and (to_at is None or item.created_at < to_at)
+                and (rating is None or item.rating == rating)
+                and (
+                    not normalized
+                    or normalized in item.user_name.lower()
+                    or normalized in item.user_email.lower()
+                )
+            ]
+        return sorted(items, key=lambda item: item.created_at, reverse=True)
+
+    async def cancel_feedback(
+        self,
+        message_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        actor_name: str,
+    ) -> None:
+        async with self._lock:
+            item = next(
+                (
+                    feedback
+                    for feedback in self._feedbacks.values()
+                    if feedback.active
+                    and feedback.message_id == message_id
+                    and feedback.user_id == user_id
+                    and feedback.tenant_id == tenant_id
+                ),
+                None,
+            )
+            if item is None:
+                return
+            updated = item.model_copy(
+                update={
+                    "active": False,
+                    "updated_at": datetime.now(UTC),
+                    "history": [
+                        *item.history,
+                        FeedbackHistoryItem(
+                            actor_id=user_id,
+                            actor_name=actor_name,
+                            action="取消反馈",
+                        ),
+                    ],
+                },
+                deep=True,
+            )
+            self._feedbacks[item.id] = updated
+            await self._save_record(FEEDBACKS_RESOURCE, item.id, updated)
+
+    async def update_feedback_case(
+        self,
+        feedback_id: str,
+        *,
+        status: str,
+        assignee: str,
+        conclusion: str,
+        actor_id: str,
+        actor_name: str,
+    ) -> FeedbackRecord:
+        async with self._lock:
+            item = self._feedbacks.get(feedback_id)
+            if item is None or not item.active:
+                raise not_found("Feedback", feedback_id)
+            updated = item.model_copy(
+                update={
+                    "case_status": status,
+                    "assignee": assignee,
+                    "conclusion": conclusion,
+                    "updated_at": datetime.now(UTC),
+                    "history": [
+                        *item.history,
+                        FeedbackHistoryItem(
+                            actor_id=actor_id,
+                            actor_name=actor_name,
+                            action=f"状态更新为 {status}，负责人：{assignee or '未分配'}",
+                        ),
+                        *(
+                            [
+                                FeedbackHistoryItem(
+                                    actor_id=actor_id,
+                                    actor_name=actor_name,
+                                    action=f"处理结论：{conclusion}",
+                                )
+                            ]
+                            if conclusion
+                            else []
+                        ),
+                    ],
+                },
+                deep=True,
+            )
+            self._feedbacks[item.id] = updated
+            await self._save_record(FEEDBACKS_RESOURCE, item.id, updated)
+            return self._copy(updated)
 
     async def upsert_github_user(
         self,

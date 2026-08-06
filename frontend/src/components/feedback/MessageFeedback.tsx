@@ -1,43 +1,57 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, MessageSquareText, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { classNames } from "@/lib/utils";
-import { useMockSession } from "@/lib/mockSession";
+import { api, apiErrorMessage } from "@/lib/api";
+import type { FeedbackRecord } from "@/types";
 
 type FeedbackRating = "up" | "down";
 
-interface StoredFeedback {
-  rating: FeedbackRating;
-  reason: string;
-  comment: string;
-}
-
 const DOWN_REASONS = ["事实或结论错误", "未理解用户意图", "回答不完整", "响应速度慢", "工具结果错误", "其他"];
 
-export function MessageFeedback({ messageId }: { messageId: string }) {
-  const { profile } = useMockSession();
-  const storageKey = useMemo(() => `unibot:mock-feedback:${profile.id}:${messageId}`, [messageId, profile.id]);
-  const [feedback, setFeedback] = useState<StoredFeedback | null>(null);
+export function MessageFeedback({ messageId, conversationId }: { messageId: string; conversationId: string }) {
+  const [feedback, setFeedback] = useState<FeedbackRecord | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [comment, setComment] = useState("");
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    setFeedback(readFeedback(storageKey));
+    let active = true;
+    void api.get<FeedbackRecord | null>(`/feedback/messages/${encodeURIComponent(messageId)}`)
+      .then((record) => { if (active) setFeedback(record); })
+      .catch((reason) => { if (active) setError(apiErrorMessage(reason)); });
     setEditorOpen(false);
     setSaved(false);
-  }, [storageKey]);
+    return () => { active = false; };
+  }, [messageId]);
 
-  function persist(next: StoredFeedback | null) {
-    if (next) window.localStorage.setItem(storageKey, JSON.stringify(next));
-    else window.localStorage.removeItem(storageKey);
-    setFeedback(next);
-    setSaved(Boolean(next));
-    window.setTimeout(() => setSaved(false), 1600);
+  async function persist(next: { rating: FeedbackRating; reason: string; comment: string } | null) {
+    setSaving(true);
+    setError("");
+    try {
+      if (next) {
+        const record = await api.put<FeedbackRecord>(`/feedback/messages/${encodeURIComponent(messageId)}`, {
+          conversation_id: conversationId,
+          ...next,
+        });
+        setFeedback(record);
+        setSaved(true);
+        window.setTimeout(() => setSaved(false), 1600);
+      } else {
+        await api.delete<void>(`/feedback/messages/${encodeURIComponent(messageId)}`);
+        setFeedback(null);
+      }
+    } catch (reason) {
+      setError(apiErrorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function chooseUp() {
-    persist({ rating: "up", reason: "", comment: "" });
+    void persist({ rating: "up", reason: "", comment: "" });
     setEditorOpen(false);
   }
 
@@ -49,16 +63,18 @@ export function MessageFeedback({ messageId }: { messageId: string }) {
 
   function saveDown() {
     if (!reason) return;
-    persist({ rating: "down", reason, comment: comment.trim() });
+    void persist({ rating: "down", reason, comment: comment.trim() });
     setEditorOpen(false);
   }
 
   return (
     <div className="relative flex items-center gap-1">
+      {error ? <span className="mr-1 max-w-40 truncate text-[10px] text-danger" title={error}>提交失败</span> : null}
       {saved ? <span className="mr-1 inline-flex items-center gap-1 text-[10.5px] font-semibold text-success"><Check className="h-3 w-3" />已记录</span> : null}
       <button
         type="button"
         onClick={chooseUp}
+        disabled={saving}
         aria-label={`点赞回答 ${messageId}`}
         aria-pressed={feedback?.rating === "up"}
         className={classNames("flex h-6 w-6 items-center justify-center rounded-md transition-colors", feedback?.rating === "up" ? "bg-success-soft text-success" : "text-ink-muted hover:bg-line/50 hover:text-success")}
@@ -68,13 +84,14 @@ export function MessageFeedback({ messageId }: { messageId: string }) {
       <button
         type="button"
         onClick={openDownEditor}
+        disabled={saving}
         aria-label={`点踩回答 ${messageId}`}
         aria-pressed={feedback?.rating === "down"}
         className={classNames("flex h-6 w-6 items-center justify-center rounded-md transition-colors", feedback?.rating === "down" ? "bg-danger-soft text-danger" : "text-ink-muted hover:bg-line/50 hover:text-danger")}
       >
         <ThumbsDown className="h-3.5 w-3.5" />
       </button>
-      {feedback ? <button type="button" onClick={() => persist(null)} aria-label={`取消评价 ${messageId}`} className="ml-0.5 text-[10px] font-semibold text-ink-subtle hover:text-ink">取消评价</button> : null}
+      {feedback ? <button type="button" disabled={saving} onClick={() => void persist(null)} aria-label={`取消评价 ${messageId}`} className="ml-0.5 text-[10px] font-semibold text-ink-subtle hover:text-ink">取消评价</button> : null}
 
       {editorOpen ? (
         <div role="dialog" aria-label="提交点踩反馈" className="absolute right-0 top-8 z-40 w-[310px] rounded-xl border border-line bg-white p-4 text-left shadow-lg">
@@ -92,15 +109,4 @@ export function MessageFeedback({ messageId }: { messageId: string }) {
       ) : null}
     </div>
   );
-}
-
-function readFeedback(key: string): StoredFeedback | null {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredFeedback;
-    return parsed.rating === "up" || parsed.rating === "down" ? parsed : null;
-  } catch {
-    return null;
-  }
 }

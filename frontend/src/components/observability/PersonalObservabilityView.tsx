@@ -222,7 +222,8 @@ function ConversationView({
         <>
           <ConversationOverview conversation={conversation} traces={traces} calls={calls} />
 
-          <div className="overflow-x-auto rounded-xl bg-app-soft p-1" role="tablist" aria-label="当前对话分析维度">
+          <div>
+            <div className="overflow-x-auto bg-app-bg px-1 pt-1 pb-px" role="tablist" aria-label="当前对话分析维度">
             <div className="flex min-w-max gap-1">
               <DimensionTab active={dimension === "models"} onClick={() => setDimension("models")}>模型性能</DimensionTab>
               <DimensionTab active={dimension === "capabilities"} onClick={() => setDimension("capabilities")}>能力调用</DimensionTab>
@@ -232,7 +233,7 @@ function ConversationView({
             </div>
           </div>
 
-          {dimension === "models" ? <section className="rounded-xl bg-white" aria-label="模型性能分析">
+          {dimension === "models" ? <section className="rounded-xl border border-line bg-white" aria-label="模型性能分析">
             <SectionHeader icon={<Brain />} title="AINA 与模型性能" note={`${modelMetrics.length} 个模型`} />
             <div className="overflow-x-auto">
               <table className="min-w-[820px] w-full text-left text-[11.5px]">
@@ -259,7 +260,7 @@ function ConversationView({
             </div>
           </section> : null}
 
-          {dimension === "capabilities" ? <section className="rounded-xl bg-white" aria-label="能力调用分析">
+          {dimension === "capabilities" ? <section className="rounded-xl border border-line bg-white" aria-label="能力调用分析">
             <SectionHeader icon={<Wrench />} title="工具 / Skill / MCP 调用分析" note={`${capabilities.reduce((sum, item) => sum + item.calls, 0)} 次逻辑调用`} />
             <div className="grid gap-2 p-2.5 sm:grid-cols-4">
               {(["AINA", "Tool", "Skill", "MCP"] as const).map((type) => (
@@ -289,7 +290,7 @@ function ConversationView({
             ) : null}
           </section> : null}
 
-          {dimension === "errors" ? <section className="rounded-xl bg-white" aria-label="错误诊断">
+          {dimension === "errors" ? <section className="rounded-xl border border-line bg-white" aria-label="错误诊断">
             <SectionHeader icon={<AlertTriangle />} title="错误诊断" note={errors.length ? `${errors.length} 个异常` : "当前对话正常"} />
             <div className="p-3">
               {errors.length ? <div className="space-y-2">{errors.map((item) => (
@@ -313,7 +314,7 @@ function ConversationView({
             </div>
           </section> : null}
 
-          {dimension === "spans" ? <section className="rounded-xl bg-white" aria-label="Span 调用树">
+          {dimension === "spans" ? <section className="rounded-xl border border-line bg-white" aria-label="Span 调用树">
             <SectionHeader icon={<Route />} title="Span 调用树" note={`${traces.length} 轮交互 · ${spanCount} 个 Span`} />
             <div className="divide-y divide-line">
               {traces.map((trace, index) => (
@@ -328,6 +329,7 @@ function ConversationView({
           </section> : null}
 
           {dimension === "logs" ? <RawLogs entries={rawLogs} focusedEntryId={resolvedFocusedLogId} /> : null}
+          </div>
         </>
       ) : (
         <div className="rounded-xl bg-white py-14 text-center text-[13px] text-ink-muted">暂无可展示的调用数据。</div>
@@ -494,8 +496,10 @@ function DimensionTab({ active, onClick, count, children }: { active: boolean; o
       aria-selected={active}
       onClick={onClick}
       className={classNames(
-        "inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11.5px] font-bold transition-colors",
-        active ? "bg-accent text-white shadow-sm" : "text-ink-muted hover:bg-white/70 hover:text-ink",
+        "inline-flex items-center gap-1.5 px-3 py-2 text-[11.5px] font-bold transition-colors",
+        active
+          ? "-mb-px rounded-t-lg border-t border-line bg-white text-accent"
+          : "rounded-lg text-ink-muted hover:bg-app-soft hover:text-ink",
       )}
     >
       {children}
@@ -735,7 +739,7 @@ function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedE
     return () => window.cancelAnimationFrame(frame);
   }, [focusedEntryId]);
   return (
-    <section className="rounded-xl bg-white" aria-label="原始日志">
+    <section className="rounded-xl border border-line bg-white" aria-label="原始日志">
       <SectionHeader icon={<TerminalSquare />} title="原始日志" note={`${visible.length} 条完整 I/O`} />
       <div className="flex flex-wrap gap-1.5 p-2.5" aria-label="原始日志角色筛选">
         {(["all", "user", "assistant", "tool", "system"] as const).map((item) => (

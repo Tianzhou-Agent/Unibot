@@ -11,6 +11,7 @@ interface MockState {
   approvals: JsonObject[];
   tools: JsonObject[];
   modelProviders: JsonObject[];
+  feedbacks: JsonObject[];
   legacySpanIo: boolean;
   streamDelayMs: number;
   staleFirstConversationLoadMs: number;
@@ -139,6 +140,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     approvals: initial.approvals ?? [],
     tools: initial.tools ?? [],
     modelProviders: initial.modelProviders ?? [],
+    feedbacks: initial.feedbacks ?? [],
     legacySpanIo: initial.legacySpanIo ?? false,
     streamDelayMs: initial.streamDelayMs ?? 0,
     staleFirstConversationLoadMs: initial.staleFirstConversationLoadMs ?? 0,
@@ -164,6 +166,41 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
 
     if (method === "GET" && path === "/auth/config") {
       return json(route, { auth_required: false, registration_enabled: true, github_enabled: false });
+    }
+
+    if (/^\/feedback\/messages\/[^/]+$/.test(path)) {
+      const messageId = decodeURIComponent(path.split("/")[3]);
+      const existing = state.feedbacks.find((item) => item.message_id === messageId && item.active !== false);
+      if (method === "GET") return json(route, existing ?? null);
+      if (method === "PUT") {
+        const payload = request.postDataJSON() as JsonObject;
+        const record = existing ?? {
+          id: `feedback-${messageId}`,
+          user_id: "anonymous",
+          tenant_id: "default",
+          user_name: "E2E 用户",
+          user_email: "e2e@example.com",
+          conversation_id: payload.conversation_id,
+          message_id: messageId,
+          trace_id: null,
+          agent_name: "Unibot",
+          agent_version: "",
+          active: true,
+          case_status: "pending",
+          assignee: "",
+          conclusion: "",
+          history: [],
+          created_at: NOW,
+          updated_at: NOW,
+        };
+        Object.assign(record, payload, { active: true, updated_at: NOW });
+        if (!existing) state.feedbacks.push(record);
+        return json(route, record);
+      }
+      if (method === "DELETE") {
+        if (existing) existing.active = false;
+        return route.fulfill({ status: 204, body: "" });
+      }
     }
 
     if (method === "POST" && path === "/sandboxes/ensure") {
@@ -1549,8 +1586,8 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
   await installMockApi(page, {
     conversations: [conversation({
       messages: [
-        { id: "msg-user-fail-e2e", role: "user", content: "触发一次失败调用", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
-        { id: "msg-asst-fail-e2e", role: "assistant", content: "抱歉，处理失败了。", content_type: "text", widgets: [], trace_id: "trace-msg-fail-e2e", created_at: NOW },
+        { id: "msg-user-fail-e2e", role: "user", content: "触发一次失败调用", content_type: "text", widgets: [], trace_id: "trace-msg-fail-e2e", created_at: NOW },
+        { id: "msg-asst-fail-e2e", role: "assistant", content: "抱歉，处理失败了。", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
       ],
     })],
   });
@@ -1578,6 +1615,49 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
   await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e");
   await chatLogLink.click();
   await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e$/);
+});
+
+test("FE-E2E-IR-005 能力调用失败在对话中持久展示并跳转原始日志", async ({ page }) => {
+  const conflictError = "The same capability call was already attempted in this run.";
+  await installMockApi(page, {
+    conversations: [conversation({
+      messages: [
+        { id: "msg-user-cap-fail", role: "user", content: "查看我的文档", content_type: "text", widgets: [], trace_id: "trace-cap-fail-e2e", created_at: NOW },
+        { id: "msg-asst-cap-fail", role: "assistant", content: "我查看了你的文档库，目前没有任何 Markdown 文档。", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
+      ],
+    })],
+  });
+  await page.route("**/api/traces*", (route) => json(route, [{
+    trace_id: "trace-cap-fail-e2e",
+    conversation_id: "conv-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    status: "completed",
+    events: [{ timestamp: NOW, kind: "user.request", status: "completed", details: { content: "查看我的文档" } }],
+    root_span_id: "span-cap-fail-e2e",
+    spans: [{
+      span_id: "span-cap-fail-e2e",
+      parent_span_id: null,
+      kind: "tool",
+      name: "builtin_document_list_81bfc296",
+      status: "failed",
+      target_id: "document.list",
+      started_at: NOW,
+      completed_at: NOW,
+      duration_ms: 120,
+      input: { query: "all" },
+      output: null,
+      attributes: {},
+      error: { code: "CONFLICT", message: conflictError, retryable: false },
+    }],
+  }]));
+
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText(`能力调用失败：document.list · ${conflictError}`, { exact: true })).toBeVisible();
+  const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
+  await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e");
+  await chatLogLink.click();
+  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e$/);
 });
 
 test("FE-E2E-IR-002 普通用户提交、修改和取消回答反馈", async ({ page }) => {

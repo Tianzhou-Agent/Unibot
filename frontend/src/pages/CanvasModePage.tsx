@@ -358,6 +358,7 @@ export default function CanvasModePage() {
                     onOpenAina={(id) => void openAina(id)}
                     onPrompt={(prompt) => void sendMessage(prompt)}
                     debugMode={debugMode}
+                    conversationId={conversationId ?? ""}
                   />
                 ))}
                 {streamText ? (
@@ -425,11 +426,13 @@ function CanvasMessage({
   onOpenAina,
   onPrompt,
   debugMode,
+  conversationId,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
+  conversationId: string;
 }) {
   if (message.role === "user") return <UserMessage content={message.content} />;
   if (message.role === "tool") {
@@ -448,6 +451,7 @@ function CanvasMessage({
     <div className="space-y-2">
       {message.content && (!hasToolCalls || debugMode) ? (
         <AssistantMessage
+          conversationId={conversationId}
           message={{
             id: message.id,
             role: "assistant",
