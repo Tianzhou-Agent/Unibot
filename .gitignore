@@ -8,4 +8,5 @@ frontend/playwright-report/
 frontend/test-results/
 frontend/frontend-run.log
 .env
+deploy/fnos/.env
 /data/

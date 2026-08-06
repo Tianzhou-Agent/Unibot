@@ -1,5 +1,7 @@
 # 容器化部署
 
+飞牛 fnOS 使用预构建镜像的专用方案见 [飞牛部署说明](../deploy/fnos/README.md)。
+
 根目录的 Docker Compose 会启动完整的 Unibot Web 平台：
 
 - `frontend`：React 静态页面与 `/api` 反向代理；
