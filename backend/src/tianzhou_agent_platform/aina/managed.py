@@ -9,9 +9,13 @@ from typing import Any
 
 from tianzhou_agent_platform.aina.project import AinaProjectRecord, validate_project_archive
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
+from tianzhou_agent_platform.aina.protocol.grants import (
+    build_invoke_request,
+    parse_invoke_response,
+    require_grants,
+)
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaInstallation,
-    AinaInvokeRequest,
     AinaInvokeResponse,
     AinaManifest,
     AinaRecord,
@@ -182,6 +186,8 @@ class ManagedAinaRuntime:
                             "project_id": record.id,
                             "archive_sha256": record.archive_sha256,
                         },
+                        owner_user_id=user_id,
+                        owner_tenant_id=tenant_id,
                     )
                 )
                 created_registration = True
@@ -217,6 +223,30 @@ class ManagedAinaRuntime:
         else:
             if registered.manifest.runtime.type != "managed":
                 raise conflict(f"AINA {record.manifest.aina.id!r} is not owned by this managed project")
+            if registered.owner_tenant_id is None or (
+                registered.owner_tenant_id != tenant_id or registered.owner_user_id != user_id
+            ):
+                # The registration predates ownership tracking or belongs to
+                # another user/tenant that deployed the same manifest; keep the
+                # shared registration so their deployment keeps working.
+                return await self.repository.set_aina_project_deployed(
+                    record.id,
+                    deployed=False,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
+            remaining_deployments = await self.repository.count_deployed_projects_for_aina(
+                record.manifest.aina.id
+            )
+            if remaining_deployments > 1:
+                # Other users/tenants still have deployments referencing this
+                # shared registration; keep it so their invocations keep working.
+                return await self.repository.set_aina_project_deployed(
+                    record.id,
+                    deployed=False,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
             await self.repository.remove_aina(record.manifest.aina.id)
         return await self.repository.set_aina_project_deployed(
             record.id,
@@ -236,14 +266,7 @@ class ManagedAinaRuntime:
         trace_id: str,
         available_tools: list[str],
     ) -> tuple[AinaInvokeResponse, float]:
-        missing_permissions = set(manifest.permissions) - set(installation.granted_permissions)
-        if missing_permissions:
-            raise PlatformError(
-                "PERMISSION_DENIED",
-                f"AINA is missing grants: {', '.join(sorted(missing_permissions))}",
-                status_code=403,
-                source="aina",
-            )
+        require_grants(manifest, installation.granted_permissions)
         projects = await self.projects.list_projects(
             user_id=installation.user_id,
             tenant_id=installation.tenant_id,
@@ -265,29 +288,20 @@ class ManagedAinaRuntime:
                 status_code=503,
                 source="aina",
             )
-        request = AinaInvokeRequest(
+        request = build_invoke_request(
             request_id=call_id,
             user_id=installation.user_id,
             tenant_id=installation.tenant_id,
             session_id=conversation_id,
             conversation_id=conversation_id,
             input=arguments,
-            context={"source": "agent"},
-            authorization={"permissions": installation.granted_permissions},
-            trace={"trace_id": trace_id},
             available_tools=available_tools,
+            granted_permissions=installation.granted_permissions,
+            trace_id=trace_id,
         )
         started = perf_counter()
         raw = await self._invoke_in_sandbox(record, request.model_dump_json())
-        try:
-            response = AinaInvokeResponse.model_validate(raw)
-        except ValueError as exc:
-            raise PlatformError(
-                "DEPENDENCY_FAILED",
-                "Managed AINA returned a response that does not match Protocol 1.0",
-                status_code=502,
-                source="aina",
-            ) from exc
+        response = parse_invoke_response(raw, label="Managed AINA")
         return response, (perf_counter() - started) * 1000
 
     async def _ensure_deployment(

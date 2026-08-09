@@ -61,6 +61,8 @@ def create_app(
     enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
+    if enforce_auth:
+        resolved_settings.ensure_secure_auth_secret()
     storage_stores: StorageStores | None = None
     resolved_repository: InMemoryRepository
     if repository is None and storage_settings is not None:

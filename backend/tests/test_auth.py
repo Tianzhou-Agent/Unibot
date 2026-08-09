@@ -259,3 +259,31 @@ async def test_github_identity_does_not_auto_link_an_unverified_local_email() ->
 
     assert error.value.status_code == 409
     assert error.value.user_message == "该邮箱已有账户，请先使用邮箱登录。"
+
+
+def test_enforce_auth_rejects_known_default_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("UNIBOT_AUTH_SECRET", raising=False)
+    monkeypatch.delenv("UNIBOT_AUTH_ALLOW_DEV_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="UNIBOT_AUTH_SECRET"):
+        create_app(settings=AgentSettings(_env_file=None), enforce_auth=True)
+
+
+def test_enforce_auth_allows_explicit_dev_secret_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("UNIBOT_AUTH_SECRET", raising=False)
+    monkeypatch.setenv("UNIBOT_AUTH_ALLOW_DEV_SECRET", "true")
+    app = create_app(settings=AgentSettings(_env_file=None), enforce_auth=True)
+    assert app is not None
+
+
+def test_enforce_auth_rejects_documented_placeholder_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("UNIBOT_AUTH_ALLOW_DEV_SECRET", raising=False)
+    with pytest.raises(RuntimeError, match="UNIBOT_AUTH_SECRET"):
+        create_app(
+            settings=AgentSettings(
+                _env_file=None,
+                auth_secret=SecretStr("CHANGE_ME_to_a_random_secret_of_at_least_32_characters"),
+            ),
+            enforce_auth=True,
+        )

@@ -10,6 +10,7 @@ from tianzhou_agent_platform.aina.project_service import AinaProjectService
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.agent import AgentRuntime
+from tianzhou_agent_platform.core.errors import require_service
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
@@ -154,27 +155,9 @@ def require_platform_admin(request: Request) -> UserRecord | None:
 
 def documents(request: Request) -> DocumentService:
     service = cast(DocumentService | None, request.app.state.document_service)
-    if service is None:
-        from tianzhou_agent_platform.core.errors import PlatformError
-
-        raise PlatformError(
-            "DEPENDENCY_FAILED",
-            "Document NAS storage is unavailable",
-            status_code=503,
-            source="storage",
-        )
-    return service
+    return require_service(service, message="Document NAS storage is unavailable", source="storage")
 
 
 def document_edit_tasks(request: Request) -> DocumentEditTaskService:
     service = cast(DocumentEditTaskService | None, request.app.state.document_edit_task_service)
-    if service is None:
-        from tianzhou_agent_platform.core.errors import PlatformError
-
-        raise PlatformError(
-            "DEPENDENCY_FAILED",
-            "Document edit tasks are unavailable",
-            status_code=503,
-            source="storage",
-        )
-    return service
+    return require_service(service, message="Document edit tasks are unavailable", source="storage")

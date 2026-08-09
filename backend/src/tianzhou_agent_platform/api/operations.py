@@ -117,7 +117,9 @@ def create_operations_router() -> APIRouter:
             else None
         )
         data_repository = repository(request)
-        conversations, tools, skills, ainas, installations, traces, memories, document_tasks = await asyncio.gather(
+        # asyncio.gather type inference degrades to object beyond five
+        # heterogeneous coroutines, so the calls are split into two groups.
+        conversations, tools, skills, ainas = await asyncio.gather(
             data_repository.list_conversations(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,
@@ -125,6 +127,8 @@ def create_operations_router() -> APIRouter:
             data_repository.list_tools(),
             data_repository.list_skills(),
             data_repository.list_ainas(),
+        )
+        installations, traces, memories, document_tasks = await asyncio.gather(
             data_repository.list_installations(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,

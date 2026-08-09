@@ -18,7 +18,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition, WidgetDocumentSection
 from tianzhou_agent_platform.aina.security.models import Authentication
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import PlatformError, unknown_tool_error
 
 UNIBOT_DOCUMENTS_ID = "unibot-documents"
 LIST_DOCUMENTS_TOOL_ID = "document.list"
@@ -564,7 +564,7 @@ async def invoke_document_tool(
         deleted = await service.delete_document(name, user_id=user_id, tenant_id=tenant_id)
         return {"deleted": deleted, "name": name}, []
     else:
-        raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown document tool {tool_id!r}", status_code=404)
+        raise unknown_tool_error(tool_id, kind="document")
     return {"document": document.model_dump(mode="json")}, []
 
 
@@ -640,7 +640,7 @@ async def invoke_document_edit_task_tool(
             tenant_id=tenant_id,
         )
     else:
-        raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown document edit task tool {tool_id!r}", status_code=404)
+        raise unknown_tool_error(tool_id, kind="document edit task")
     return {"task": task.model_dump(mode="json")}, []
 
 

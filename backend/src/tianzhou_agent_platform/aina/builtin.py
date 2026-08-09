@@ -37,9 +37,13 @@ from tianzhou_agent_platform.aina.vision.builtin import (
     UNIBOT_IMAGE_RECOGNITION_ID,
     unibot_image_recognition_record,
 )
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import (
+    PlatformError,
+    require_service,
+    unknown_tool_error,
+)
+from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode, storage_error_to_platform
 from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 from tianzhou_agent_platform.sandbox.service import SandboxService
 
 BUILTIN_AINA_IDS = {
@@ -98,13 +102,11 @@ async def invoke_builtin(
     sandbox_service: SandboxService | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
     if tool_id in CODE_RUNNER_TOOL_IDS:
-        if sandbox_service is None:
-            raise PlatformError(
-                "DEPENDENCY_FAILED",
-                "Sandbox execution is unavailable",
-                status_code=503,
-                source="sandbox",
-            )
+        sandbox_service = require_service(
+            sandbox_service,
+            message="Sandbox execution is unavailable",
+            source="sandbox",
+        )
         return await invoke_code_runner_tool(
             sandbox_service,
             tool_id,
@@ -113,21 +115,18 @@ async def invoke_builtin(
             tenant_id=tenant_id,
         )
     if tool_id in DOCUMENT_TOOL_IDS:
-        if document_service is None:
-            raise PlatformError(
-                "DEPENDENCY_FAILED",
-                "Document NAS storage is unavailable",
-                status_code=503,
-                source="storage",
-            )
+        document_service = require_service(
+            document_service,
+            message="Document NAS storage is unavailable",
+            source="storage",
+        )
         try:
             if tool_id in DOCUMENT_EDIT_TASK_TOOL_IDS:
-                if document_edit_task_service is None:
-                    raise PlatformError(
-                        "DEPENDENCY_FAILED",
-                        "Document edit tasks are unavailable",
-                        status_code=503,
-                    )
+                document_edit_task_service = require_service(
+                    document_edit_task_service,
+                    message="Document edit tasks are unavailable",
+                    source="storage",
+                )
                 return await invoke_document_edit_task_tool(
                     document_edit_task_service,
                     tool_id,
@@ -145,7 +144,7 @@ async def invoke_builtin(
         except StorageError as exc:
             raise _document_storage_error(exc, tool_id=tool_id, arguments=arguments) from exc
     if tool_id not in MEMORY_TOOL_IDS:
-        raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown built-in tool {tool_id!r}", status_code=404)
+        raise unknown_tool_error(tool_id, kind="built-in")
     return await invoke_memory_tool(
         repository,
         tool_id,
@@ -170,19 +169,12 @@ def _document_storage_error(
             status_code=404,
             source="storage",
         )
-    code, status_code, retryable = {
-        StorageErrorCode.VALIDATION_FAILURE: ("INVALID_REQUEST", 422, False),
-        StorageErrorCode.POLICY_VIOLATION: ("PERMISSION_DENIED", 403, False),
-        StorageErrorCode.TIMEOUT: ("TIMEOUT", 504, True),
-        StorageErrorCode.BACKEND_UNAVAILABLE: ("DEPENDENCY_FAILED", 503, True),
-        StorageErrorCode.UNSUPPORTED_CAPABILITY: ("DEPENDENCY_FAILED", 501, False),
-        StorageErrorCode.UNKNOWN_BACKEND_FAILURE: ("DEPENDENCY_FAILED", 500, True),
-    }[error.code]
+    platform_error = storage_error_to_platform(error)
     return PlatformError(
-        code,
+        platform_error.code,
         f"{tool_id} failed: {error.message}",
-        status_code=status_code,
-        retryable=retryable,
+        status_code=platform_error.status_code,
+        retryable=platform_error.retryable,
         source="storage",
     )
 

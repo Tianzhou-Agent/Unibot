@@ -75,6 +75,8 @@ services:
       UNIBOT_GITHUB_CALLBACK_URL: ${UNIBOT_GITHUB_CALLBACK_URL:-http://127.0.0.1:8080/api/auth/github/callback}
       UNIBOT_ADMIN_IDENTITIES: ${UNIBOT_ADMIN_IDENTITIES:-}
       UNIBOT_NODE_ID: ${UNIBOT_NODE_ID:-unibot-compose-1}
+      # Single-node trusted deployment: the local sandbox driver is intended here.
+      UNIBOT_ENV: development
       UNIBOT_SANDBOX_DRIVER: local
       UNIBOT_SANDBOX_WORKSPACE_ROOT: /data/sandboxes
       UNIBOT_VISION_BASE_URL: http://vision:8080

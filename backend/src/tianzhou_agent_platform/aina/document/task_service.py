@@ -562,7 +562,11 @@ class DocumentEditWorker:
                 pass
 
     async def tick(self) -> None:
-        tasks = await self.service.repository.list_document_edit_tasks()
+        # Only non-terminal tasks are candidates; terminal states are never
+        # revisited, so the worker no longer scans the full table every tick.
+        tasks = await self.service.repository.list_document_edit_tasks(
+            statuses={"queued", "reviewing", "running"},
+        )
         for task in tasks:
             if (
                 task.status == "running" or any(item.ai_status == "running" for item in task.sections)

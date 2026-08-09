@@ -12,7 +12,14 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
-from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, gateway, repository
+from tianzhou_agent_platform.api.dependencies import (
+    actor_scope,
+    bind_actor,
+    gateway,
+    repository,
+    request_actor,
+    require_platform_admin,
+)
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.builtin_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
@@ -23,49 +30,64 @@ def create_capability_router() -> APIRouter:
 
     @router.post("/tools", response_model=ToolRecord, status_code=status.HTTP_201_CREATED)
     async def register_tool(payload: ToolCreate, request: Request) -> ToolRecord:
+        admin = require_platform_admin(request)
         validate_schema(payload.input_schema, label="input_schema")
         if payload.output_schema:
             validate_schema(payload.output_schema, label="output_schema")
         values = {name: getattr(payload, name) for name in ToolCreate.model_fields}
-        return await repository(request).register_tool(ToolRecord(**values))
+        record = ToolRecord(**values)
+        record.owner_user_id = admin.id if admin else None
+        record.owner_tenant_id = admin.tenant_id if admin else None
+        return await repository(request).register_tool(record)
 
     @router.get("/tools", response_model=list[ToolRecord])
     async def list_tools(request: Request) -> list[ToolRecord]:
-        return await repository(request).list_tools()
+        actor = request_actor(request)
+        return await repository(request).list_tools(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.get("/tools/{tool_id}", response_model=ToolRecord)
     async def get_tool(tool_id: str, request: Request) -> ToolRecord:
-        return await repository(request).get_tool(tool_id)
+        actor = request_actor(request)
+        return await repository(request).get_tool(tool_id, user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.delete("/tools/{tool_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_tool(tool_id: str, request: Request) -> Response:
+        require_platform_admin(request)
         await repository(request).remove_tool(tool_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/skills", response_model=SkillRecord, status_code=status.HTTP_201_CREATED)
     async def register_skill(payload: SkillCreate, request: Request) -> SkillRecord:
+        admin = require_platform_admin(request)
         validate_schema(payload.input_schema, label="input_schema")
         validate_schema(payload.output_schema, label="output_schema")
         data_repository = repository(request)
         for tool_id in payload.tools:
             await data_repository.get_tool(tool_id)
-        return await data_repository.register_skill(SkillRecord(**payload.model_dump()))
+        record = SkillRecord(**payload.model_dump())
+        record.owner_user_id = admin.id if admin else None
+        record.owner_tenant_id = admin.tenant_id if admin else None
+        return await data_repository.register_skill(record)
 
     @router.get("/skills", response_model=list[SkillRecord])
     async def list_skills(request: Request) -> list[SkillRecord]:
-        return await repository(request).list_skills()
+        actor = request_actor(request)
+        return await repository(request).list_skills(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.get("/skills/{skill_id}", response_model=SkillRecord)
     async def get_skill(skill_id: str, request: Request) -> SkillRecord:
-        return await repository(request).get_skill(skill_id)
+        actor = request_actor(request)
+        return await repository(request).get_skill(skill_id, user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_skill(skill_id: str, request: Request) -> Response:
+        require_platform_admin(request)
         await repository(request).remove_skill(skill_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/ainas", response_model=AinaRecord, status_code=status.HTTP_201_CREATED)
     async def register_aina(payload: AinaManifest, request: Request) -> AinaRecord:
+        require_platform_admin(request)
         if payload.runtime.type != "remote":
             raise PlatformError(
                 "PERMISSION_DENIED",
@@ -75,7 +97,15 @@ def create_capability_router() -> APIRouter:
         for capability in [*payload.capabilities.skills, *payload.capabilities.tools]:
             validate_schema(capability.input_schema, label=f"capability {capability.id} input_schema")
         health = await gateway(request).probe_aina(payload)
-        return await repository(request).register_aina(AinaRecord(manifest=payload, last_health=health))
+        admin = require_platform_admin(request)
+        return await repository(request).register_aina(
+            AinaRecord(
+                manifest=payload,
+                last_health=health,
+                owner_user_id=admin.id if admin else None,
+                owner_tenant_id=admin.tenant_id if admin else None,
+            )
+        )
 
     @router.get("/ainas", response_model=list[AinaRecord])
     async def list_ainas(request: Request) -> list[AinaRecord]:
@@ -102,6 +132,7 @@ def create_capability_router() -> APIRouter:
 
     @router.delete("/ainas/{aina_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_aina(aina_id: str, request: Request) -> Response:
+        require_platform_admin(request)
         if aina_id in BUILTIN_AINA_IDS:
             raise PlatformError("PERMISSION_DENIED", "The system AINA cannot be deleted", status_code=403)
         data_repository = repository(request)

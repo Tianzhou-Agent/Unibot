@@ -6,8 +6,9 @@ React 18 + Vite 5 + TypeScript 前端，默认连接真实 FastAPI 后端。
 
 ```bash
 cd frontend
-npm ci
-npm run dev
+corepack enable && corepack prepare pnpm@9.15.9 --activate
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
 默认地址为 `http://127.0.0.1:5173`，Vite 会将 `/api` 代理到
@@ -38,5 +39,5 @@ Debug 模式默认关闭。关闭时不会展示 Tool 调用、原始参数、�
 ## 校验
 
 ```bash
-npm run build
+pnpm build
 ```

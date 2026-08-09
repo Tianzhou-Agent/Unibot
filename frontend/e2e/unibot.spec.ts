@@ -1471,7 +1471,6 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "可观测", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "反馈", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "运营", exact: true })).toBeVisible();
 
   await page.goto("/obs");
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
@@ -1481,8 +1480,6 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
 
   await page.getByRole("link", { name: "反馈", exact: true }).click();
   await expect(page.getByRole("heading", { name: "用户反馈", exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "运营", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "运营增长", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", async ({ page }) => {

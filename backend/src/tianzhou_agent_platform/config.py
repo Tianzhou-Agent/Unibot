@@ -9,6 +9,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
+#: Known development secret shipped as the default. Refused once auth is enforced.
+DEV_AUTH_SECRET = "unibot-development-secret-change-before-production"
+
+#: Well-known placeholder values that must never sign session tokens.
+_INSECURE_AUTH_SECRETS = frozenset(
+    {
+        DEV_AUTH_SECRET,
+        "CHANGE_ME_to_a_random_secret_of_at_least_32_characters",
+        "CHANGE_ME_auth_secret_at_least_32_characters",
+        "replace-with-a-long-random-production-secret",
+    }
+)
+
 
 class AgentSettings(BaseSettings):
     """Runtime settings for the OpenAI-compatible agent backend.
@@ -91,6 +104,10 @@ class AgentSettings(BaseSettings):
         default_factory=socket.gethostname,
         validation_alias=AliasChoices("UNIBOT_NODE_ID", "node_id"),
     )
+    env: Literal["development", "production"] = Field(
+        default="development",
+        validation_alias=AliasChoices("UNIBOT_ENV", "env"),
+    )
     sandbox_driver: Literal["local", "kubernetes"] = Field(
         default="local",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_DRIVER", "sandbox_driver"),
@@ -148,9 +165,13 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("UNIBOT_VISION_MAX_IMAGE_BYTES", "vision_max_image_bytes"),
     )
     auth_secret: SecretStr = Field(
-        default=SecretStr("unibot-development-secret-change-before-production"),
+        default=SecretStr(DEV_AUTH_SECRET),
         min_length=32,
         validation_alias=AliasChoices("UNIBOT_AUTH_SECRET", "auth_secret"),
+    )
+    auth_allow_dev_secret: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_AUTH_ALLOW_DEV_SECRET", "auth_allow_dev_secret"),
     )
     auth_issuer: str = Field(
         default="unibot",
@@ -204,6 +225,19 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("UNIBOT_SYSTEM_PROMPT", "system_prompt"),
     )
 
+    def ensure_secure_auth_secret(self) -> None:
+        """Fail fast when auth is enforced but the known development secret is in use.
+
+        A deployment that forgets ``UNIBOT_AUTH_SECRET`` would otherwise sign
+        session tokens with a public, well-known value. Local development may
+        opt out explicitly via ``UNIBOT_AUTH_ALLOW_DEV_SECRET=true``.
+        """
+        if not self.auth_allow_dev_secret and self.auth_secret.get_secret_value() in _INSECURE_AUTH_SECRETS:
+            raise RuntimeError(
+                "UNIBOT_AUTH_SECRET must be set to a unique high-entropy value; "
+                f"refusing to use the known default secret {DEV_AUTH_SECRET!r}"
+            )
+
     @property
     def chat_completions_url(self) -> str | None:
         if self.llm_base_url is None:
@@ -224,11 +258,7 @@ class AgentSettings(BaseSettings):
         email: str,
         github_login: str | None = None,
     ) -> bool:
-        allowed = {
-            identity.strip().casefold()
-            for identity in self.admin_identities.split(",")
-            if identity.strip()
-        }
+        allowed = {identity.strip().casefold() for identity in self.admin_identities.split(",") if identity.strip()}
         identities = {user_id.casefold(), email.casefold()}
         if github_login:
             identities.add(github_login.casefold())

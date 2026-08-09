@@ -138,10 +138,7 @@ def test_aina_protocol_version_is_rejected_with_standard_error() -> None:
 def test_builtin_aina_manifests_and_host_tool_inputs_are_exposed() -> None:
     llm = ScriptedLLM([assistant("Done."), assistant("Done."), assistant("Done.")])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
-        records = {
-            item["manifest"]["aina"]["id"]: item["manifest"]
-            for item in client.get("/ainas").json()
-        }
+        records = {item["manifest"]["aina"]["id"]: item["manifest"] for item in client.get("/ainas").json()}
         client.post("/chat", json={"message": "Describe it", "capability": "builtin:describe_aina"})
         client.post("/chat", json={"message": "Open it", "capability": "builtin:open_aina"})
         client.post("/chat", json={"message": "Ask me", "capability": "builtin:request_clarification"})
@@ -157,8 +154,7 @@ def test_builtin_aina_manifests_and_host_tool_inputs_are_exposed() -> None:
 
     assert "unibot-assistant" not in records
     host_tools = {
-        call["tools"][0]["function"]["name"].split("_")[1]: call["tools"][0]["function"]
-        for call in llm.calls
+        call["tools"][0]["function"]["name"].split("_")[1]: call["tools"][0]["function"] for call in llm.calls
     }
     assert host_tools["describe"]["parameters"]["required"] == ["aina_id"]
     assert host_tools["open"]["parameters"]["required"] == ["aina_id"]
@@ -199,3 +195,102 @@ def test_conversation_soft_delete_and_restore() -> None:
     assert missing.status_code == 404
     assert restored.status_code == 200
     assert restored.json()["status"] == "active"
+
+
+def _admin_settings() -> AgentSettings:
+    return AgentSettings(
+        _env_file=None,
+        llm_base_url="https://model.invalid/v1",
+        llm_api_key="test-key",
+        llm_model="test-model",
+        auth_secret="test-auth-secret-with-enough-entropy",
+        admin_identities="admin@example.com",
+    )
+
+
+def _register_user(client: TestClient, *, email: str) -> None:
+    response = client.post(
+        "/auth/register",
+        json={"name": "Test User", "email": email, "password": "correct-horse-battery"},
+    )
+    assert response.status_code == 201
+
+
+def _tool_payload() -> dict[str, Any]:
+    return {
+        "tool_id": "com.example.weather",
+        "name": "Weather",
+        "description": "Look up weather.",
+        "input_schema": {"type": "object"},
+        "endpoint": "https://tool.invalid/weather",
+    }
+
+
+def test_capability_writes_require_platform_admin() -> None:
+    app = create_app(settings=_admin_settings(), enforce_auth=True)
+    with TestClient(app) as client:
+        _register_user(client, email="user@example.com")
+
+        response = client.post("/tools", json=_tool_payload())
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "PERMISSION_DENIED"
+
+        response = client.post(
+            "/skills",
+            json={
+                "skill_id": "com.example.weather-skill",
+                "name": "Weather Skill",
+                "description": "Wrap the weather tool.",
+                "instructions": "Call the weather tool when asked about weather.",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+                "tools": [],
+            },
+        )
+        assert response.status_code == 403
+
+        response = client.post("/ainas", json=_manifest())
+        assert response.status_code == 403
+
+        response = client.delete("/tools/com.example.weather")
+        assert response.status_code == 403
+        response = client.delete("/skills/com.example.weather-skill")
+        assert response.status_code == 403
+        response = client.delete("/ainas/com.example.arithmetic")
+        assert response.status_code == 403
+
+
+def test_capability_writes_allowed_for_platform_admin() -> None:
+    app = create_app(settings=_admin_settings(), enforce_auth=True)
+    with TestClient(app) as client:
+        _register_user(client, email="admin@example.com")
+
+        response = client.post("/tools", json=_tool_payload())
+        assert response.status_code == 201
+        assert response.json()["tool_id"] == "com.example.weather"
+
+        response = client.delete("/tools/com.example.weather")
+        assert response.status_code == 204
+
+
+def test_private_tool_visibility_is_filtered_for_other_users() -> None:
+
+    app = create_app(settings=_admin_settings(), enforce_auth=True)
+    with TestClient(app) as client:
+        _register_user(client, email="admin@example.com")
+
+        response = client.post("/tools", json={**_tool_payload(), "visibility": "private"})
+        assert response.status_code == 201
+        tool_id = response.json()["tool_id"]
+
+        # The registering admin sees the private tool.
+        listed = client.get("/tools")
+        assert listed.status_code == 200
+        assert tool_id in [item["tool_id"] for item in listed.json()]
+
+        # A different user cannot see or fetch it.
+        _register_user(client, email="other@example.com")
+        listed = client.get("/tools")
+        assert tool_id not in [item["tool_id"] for item in listed.json()]
+        fetched = client.get(f"/tools/{tool_id}")
+        assert fetched.status_code == 404

@@ -3,28 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from time import perf_counter
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
 from tianzhou_agent_platform.aina.builtin import (
     FORGET_TOOL_ID,
-    RECALL_TOOL_ID,
-    REMEMBER_TOOL_ID,
-    UPDATE_TOOL_ID,
     UNIBOT_MEMORY_ID,
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
     UNIBOT_IMAGE_RECOGNITION_ID,
-    invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
     ABANDON_EDIT_SECTION_TOOL_ID,
-    CREATE_EDIT_TASK_TOOL_ID,
     DELETE_DOCUMENT_TOOL_ID,
     MERGE_EDIT_SECTION_TOOL_ID,
     UNIBOT_DOCUMENTS_ID,
@@ -34,19 +28,17 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.code_runner.builtin import code_runner_tool_capabilities
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
+from tianzhou_agent_platform.aina.memory.builtin import unibot_memory_record
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
-from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
-from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
-from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.base import Usage
+from tianzhou_agent_platform.core.capability import Capability
 from tianzhou_agent_platform.core.builtin_tools import (
     DESCRIBE_AINA_TOOL_ID,
     LIST_APP_TOOL_ID,
     OPEN_AINA_TOOL_ID,
-    PLATFORM_TOOL_IDS,
     REQUEST_CLARIFICATION_TOOL_ID,
-    invoke_platform_tool,
 )
 from tianzhou_agent_platform.core.chat import (
     ApprovalRecord,
@@ -68,7 +60,18 @@ from tianzhou_agent_platform.core.llm import EventSink, LLMClient
 from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.schema import validate_value
+from tianzhou_agent_platform.core.tool_execution import (
+    _aina_availability,
+    _aina_entry_description,
+    _capability_trace_details,
+    _function_name,
+    _is_routable_aina,
+    _manifest_capability_trace_details,
+    _model_message_trace_details,
+    _model_scope_trace_details,
+    _tool_call_trace_details,
+)
+from tianzhou_agent_platform.core.tool_executor import AgentState, ToolExecutor
 from tianzhou_agent_platform.sandbox.service import SandboxService
 
 _HIGH_RISK_MARKERS = (
@@ -84,56 +87,6 @@ _HIGH_RISK_MARKERS = (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class Capability:
-    kind: Literal["tool", "aina", "builtin"]
-    capability_id: str
-    function_name: str
-    display_name: str
-    description: str
-    input_schema: dict[str, Any]
-    requires_confirmation: bool
-    value: ToolRecord | tuple[AinaRecord, AinaInstallation] | str
-    owner_aina_id: str | None = None
-
-    def llm_definition(self) -> dict[str, Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": self.function_name,
-                "description": self.description,
-                "parameters": self.input_schema,
-            },
-        }
-
-
-class AgentState(TypedDict, total=False):
-    messages: list[dict[str, Any]]
-    capabilities: dict[str, Capability]
-    recovery_capabilities: dict[str, Capability]
-    tool_definitions: list[dict[str, Any]]
-    trace_id: str
-    root_span_id: str
-    conversation_id: str
-    user_id: str
-    tenant_id: str
-    iterations: int
-    max_iterations: int
-    forced_function: str | None
-    approved_call_ids: set[str]
-    resume: bool
-    event_sink: EventSink | None
-    usage_input: int
-    usage_output: int
-    final_content: str
-    final_status: Literal["completed", "approval_required", "failed"]
-    approval: ApprovalRecord | None
-    call_counts: dict[str, int]
-    tool_span_ids: dict[str, str]
-    widgets: list[WidgetDefinition]
-    memory_context: list[MemoryRecord]
 
 
 class AgentRuntime:
@@ -166,6 +119,18 @@ class AgentRuntime:
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
         self.sandbox_service = sandbox_service
+        self._tool_executor = ToolExecutor(
+            repository=repository,
+            observability=self.observability,
+            gateway=gateway,
+            document_service=document_service,
+            document_edit_task_service=document_edit_task_service,
+            sandbox_service=sandbox_service,
+            emit=self._emit,
+            append_tool_error=self._append_tool_error,
+            activate_builtin_aina_scope=self._activate_builtin_aina_scope,
+            activate_aina_model_scope=self._activate_aina_model_scope,
+        )
         graph = StateGraph(AgentState)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
@@ -351,418 +316,10 @@ class AgentRuntime:
         )
         if assistant is None:
             raise PlatformError("INTERNAL_ERROR", "No assistant tool-call message is available", status_code=500)
-        tool_calls = assistant.get("tool_calls") or []
-        capabilities = state["capabilities"]
-        approved = state.get("approved_call_ids", set())
-        risky_calls = []
-        risky_names = []
-        for call in tool_calls:
-            capability = capabilities.get((call.get("function") or {}).get("name", ""))
-            if capability and capability.requires_confirmation and call.get("id") not in approved:
-                function = call.get("function") or {}
-                arguments_text = function.get("arguments") or "{}"
-                try:
-                    arguments = (
-                        json.loads(arguments_text)
-                        if isinstance(arguments_text, str)
-                        else arguments_text
-                    )
-                    if not isinstance(arguments, dict):
-                        continue
-                    validate_value(
-                        arguments,
-                        capability.input_schema,
-                        label=f"Capability {capability.capability_id} arguments",
-                    )
-                except (TypeError, ValueError, json.JSONDecodeError, PlatformError):
-                    continue
-                risky_calls.append(call)
-                risky_names.append(capability.display_name)
-        if risky_calls:
-            approval = ApprovalRecord(
-                id=f"approval_{uuid4().hex}",
-                conversation_id=state["conversation_id"],
-                user_id=state["user_id"],
-                tenant_id=state["tenant_id"],
-                trace_id=state["trace_id"],
-                tool_calls=tool_calls,
-                capability_names=risky_names,
-            )
-            await self.repository.create_approval(approval)
-            await self.observability.record_event(
-                state["trace_id"],
-                kind="approval.required",
-                status="pending",
-                target_type="capability",
-                details={
-                    "approval_id": approval.id,
-                    "capabilities": risky_names,
-                    "calls": [_tool_call_trace_details(call, capabilities) for call in risky_calls],
-                },
-            )
-            await self._emit(
-                state,
-                {
-                    "type": "approval.required",
-                    "approval_id": approval.id,
-                    "capabilities": risky_names,
-                },
-            )
-            return {
-                **state,
-                "approval": approval,
-                "final_content": f"Approval is required before running: {', '.join(risky_names)}.",
-                "final_status": "approval_required",
-            }
-
-        call_counts = dict(state.get("call_counts", {}))
-        widgets = list(state.get("widgets", []))
-        async_task_message: str | None = None
-        tool_failed = False
-        next_capabilities = capabilities
-        scope_activated = False
-        available_tool_ids = [
-            capability.capability_id for capability in capabilities.values() if capability.kind == "tool"
-        ]
-        for call in tool_calls:
-            function = call.get("function") or {}
-            name = str(function.get("name") or "")
-            call_id = str(call.get("id") or f"call_{uuid4().hex}")
-            arguments_text = function.get("arguments") or "{}"
-            capability = capabilities.get(name)
-            tool_span_id = f"span_{uuid4().hex}"
-            state.setdefault("tool_span_ids", {})[call_id] = tool_span_id
-            await self.observability.start_span(
-                state["trace_id"],
-                span_id=tool_span_id,
-                parent_span_id=state["root_span_id"],
-                kind="aina" if capability is not None and capability.kind == "aina" else "tool",
-                name=name or "unknown",
-                target_id=capability.capability_id if capability is not None else name or None,
-                target_version=_capability_version(capability),
-                logical_call_id=call_id,
-                input_data=_tool_arguments_trace_data(arguments_text),
-                attributes={"function_name": name},
-            )
-            if capability is None:
-                tool_failed = True
-                recovery = _capability_scope_recovery(
-                    name,
-                    state.get("recovery_capabilities", {}),
-                )
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="CAPABILITY_SCOPE_REQUIRED" if recovery else "RESOURCE_NOT_FOUND",
-                    message=(
-                        f"Capability {name!r} belongs to AINA {recovery['owner_aina_id']!r}, which is not "
-                        "active in the current scope."
-                        if recovery
-                        else f"Capability {name!r} is unavailable."
-                    ),
-                    capability=recovery["capability"] if recovery else None,
-                    recovery=recovery,
-                )
-                continue
-            try:
-                arguments = json.loads(arguments_text) if isinstance(arguments_text, str) else arguments_text
-                if not isinstance(arguments, dict):
-                    raise ValueError("arguments must decode to an object")
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="INVALID_REQUEST",
-                    message=f"Invalid JSON arguments: {exc}",
-                )
-                continue
-
-            normalized_arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-            signature = hashlib.sha256(f"{name}:{normalized_arguments}".encode()).hexdigest()
-            call_counts[signature] = call_counts.get(signature, 0) + 1
-            if call_counts[signature] > 1:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="CONFLICT",
-                    message="The same capability call was already attempted in this run.",
-                )
-                continue
-
-            try:
-                validate_value(
-                    arguments,
-                    capability.input_schema,
-                    label=f"Capability {capability.capability_id} arguments",
-                )
-            except PlatformError as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code=exc.code,
-                    message=exc.message,
-                    capability=capability,
-                )
-                continue
-            except (TypeError, ValueError) as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="INVALID_REQUEST",
-                    message=f"Capability arguments failed validation: {exc}",
-                    capability=capability,
-                )
-                continue
-
-            if capability.kind == "aina":
-                aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-                if scope_activated:
-                    tool_failed = True
-                    await self._append_tool_error(
-                        state,
-                        messages,
-                        call_id=call_id,
-                        name=name,
-                        code="CONFLICT",
-                        message="Only one AINA scope can be activated per model response.",
-                        capability=capability,
-                    )
-                    continue
-                if aina.manifest.runtime.type == "builtin":
-                    next_capabilities = await self._activate_builtin_aina_scope(
-                        state,
-                        capability=capability,
-                        call_id=call_id,
-                        function_name=name,
-                        arguments=arguments,
-                        messages=messages,
-                    )
-                    await self.observability.finish_span(
-                        state["trace_id"],
-                        tool_span_id,
-                        "completed",
-                        input_data=arguments,
-                        output_data={"activated": True},
-                        attributes={
-                            "arguments": arguments,
-                            "activated": True,
-                        },
-                    )
-                    scope_activated = True
-                    continue
-
-            await self.observability.record_event(
-                state["trace_id"],
-                kind=f"{capability.kind}.requested",
-                status="started",
-                target_type=capability.kind,
-                target_id=capability.capability_id,
-                details={
-                    "call_id": call_id,
-                    "function_name": name,
-                    "argument_fields": sorted(arguments),
-                    "arguments": arguments,
-                },
-            )
-            await self._emit(
-                state,
-                {"type": "tool.requested", "kind": capability.kind, "id": capability.capability_id},
-            )
-            try:
-                call_started = perf_counter()
-                if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_AINA_TOOL_ID}:
-                    widgets = [widget for widget in widgets if widget.kind != "app_list"]
-                widgets_before = len(widgets)
-                if capability.kind == "tool":
-                    tool = cast(ToolRecord, capability.value)
-                    result, duration_ms = await self.gateway.invoke_tool(
-                        tool,
-                        arguments=arguments,
-                        call_id=call_id,
-                        user_id=state["user_id"],
-                        tenant_id=state["tenant_id"],
-                        conversation_id=state["conversation_id"],
-                        trace_id=state["trace_id"],
-                    )
-                    result_payload: Any = result
-                elif capability.kind == "aina":
-                    aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-                    response, duration_ms = await self.gateway.invoke_aina(
-                        aina.manifest,
-                        installation,
-                        arguments=arguments,
-                        call_id=call_id,
-                        conversation_id=state["conversation_id"],
-                        trace_id=state["trace_id"],
-                        available_tools=available_tool_ids,
-                    )
-                    result_payload = response.model_dump(mode="json")
-                    for output in response.outputs:
-                        if output.type == "widget":
-                            try:
-                                widgets.append(WidgetDefinition.model_validate(output.content))
-                            except ValueError as exc:
-                                raise PlatformError(
-                                    "DEPENDENCY_FAILED",
-                                    "AINA returned an invalid widget output",
-                                    status_code=502,
-                                    source="aina",
-                                ) from exc
-                    next_capabilities = await self._activate_aina_model_scope(
-                        state,
-                        capability=capability,
-                        call_id=call_id,
-                        function_name=name,
-                        arguments=arguments,
-                        messages=messages,
-                    )
-                    scope_activated = True
-                else:
-                    if capability.capability_id in PLATFORM_TOOL_IDS:
-                        result_payload, produced_widgets = await invoke_platform_tool(
-                            self.repository,
-                            cast(str, capability.value),
-                            arguments,
-                            user_id=state["user_id"],
-                            tenant_id=state["tenant_id"],
-                            conversation_id=state["conversation_id"],
-                        )
-                    else:
-                        result_payload, produced_widgets = await invoke_builtin(
-                            self.repository,
-                            cast(str, capability.value),
-                            arguments,
-                            user_id=state["user_id"],
-                            tenant_id=state["tenant_id"],
-                            conversation_id=state["conversation_id"],
-                            document_service=self.document_service,
-                            document_edit_task_service=self.document_edit_task_service,
-                            sandbox_service=self.sandbox_service,
-                        )
-                    widgets.extend(produced_widgets)
-                    duration_ms = (perf_counter() - call_started) * 1000
-                content = json.dumps(result_payload, ensure_ascii=False, default=str)
-                result_size_bytes = len(content.encode("utf-8"))
-                if len(content) > 50_000:
-                    content = f"{content[:50_000]}\n[tool output truncated]"
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": name,
-                        "tool_call_id": call_id,
-                        "content": content,
-                    }
-                )
-                await self.observability.record_event(
-                    state["trace_id"],
-                    kind=f"{capability.kind}.completed",
-                    status="completed",
-                    target_type=capability.kind,
-                    target_id=capability.capability_id,
-                    duration_ms=duration_ms,
-                    details={
-                        "call_id": call_id,
-                        "function_name": name,
-                        "result": result_payload,
-                        "result_size_bytes": result_size_bytes,
-                        "widgets": [
-                            {"id": widget.id, "kind": widget.kind} for widget in widgets[widgets_before:]
-                        ],
-                    },
-                )
-                await self.observability.finish_span(
-                    state["trace_id"],
-                    tool_span_id,
-                    "completed",
-                    input_data=arguments,
-                    output_data=result_payload,
-                    attributes={
-                        "arguments": arguments,
-                        "result": result_payload,
-                        "result_size_bytes": result_size_bytes,
-                    },
-                )
-                await self._emit(
-                    state,
-                    {"type": "tool.completed", "kind": capability.kind, "id": capability.capability_id},
-                )
-                if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
-                    task = result_payload.get("task") if isinstance(result_payload, dict) else None
-                    if isinstance(task, dict):
-                        title = str(task.get("title") or "文档修改任务")
-                        sections = task.get("sections")
-                        section_count = len(sections) if isinstance(sections, list) else 0
-                        async_task_message = (
-                            f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
-                            "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
-                            "正式文档会在您确认合并后才更新。"
-                        )
-            except PlatformError as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code=exc.code,
-                    message=exc.message,
-                    capability=capability,
-                )
-            except (TypeError, ValueError) as exc:
-                tool_failed = True
-                dependency_failure = capability.kind == "aina"
-                await self._append_tool_error(
-                    state,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="DEPENDENCY_FAILED" if dependency_failure else "INVALID_REQUEST",
-                    message=(
-                        f"The AINA returned invalid data: {exc}"
-                        if dependency_failure
-                        else f"Capability arguments produced invalid data: {exc}"
-                    ),
-                    capability=capability,
-                )
-
-        update: AgentState = {
-            **state,
-            "messages": messages,
-            "call_counts": call_counts,
-            "approval": None,
-            "widgets": widgets,
-            "capabilities": next_capabilities,
-            "tool_definitions": [item.llm_definition() for item in next_capabilities.values()],
-        }
-        if async_task_message is not None and not tool_failed:
-            messages.append({"role": "assistant", "content": async_task_message})
-            update["messages"] = messages
-            update["final_content"] = async_task_message
-            update["final_status"] = "completed"
-        elif state.get("iterations", 0) >= state["max_iterations"]:
-            limit_message = (
-                f"I stopped after {state['max_iterations']} model iterations because the capability loop "
-                "did not produce a final answer."
-            )
-            messages.append({"role": "assistant", "content": limit_message})
-            update["messages"] = messages
-            update["final_content"] = limit_message
-            update["final_status"] = "failed"
-        return update
+        return await self._tool_executor.execute(
+            state,
+            tool_calls=assistant.get("tool_calls") or [],
+        )
 
     async def _activate_builtin_aina_scope(
         self,
@@ -824,6 +381,8 @@ class AgentRuntime:
             "content": await self._system_prompt(
                 selected_aina,
                 memory_context=state.get("memory_context") or None,
+                user_id=state["user_id"],
+                tenant_id=state["tenant_id"],
             ),
         }
         await self.observability.record_event(
@@ -1119,7 +678,11 @@ class AgentRuntime:
                 forced_capability=requested_capability,
                 event_sink=event_sink,
                 capabilities={selected.function_name: selected},
-                system_prompt=await self._system_prompt(memory_context=memory_context),
+                system_prompt=await self._system_prompt(
+                    memory_context=memory_context,
+                    user_id=conversation.user_id,
+                    tenant_id=conversation.tenant_id,
+                ),
             )
 
         if preferred_aina_id is not None:
@@ -1168,7 +731,11 @@ class AgentRuntime:
             trace_id=trace_id,
             event_sink=event_sink,
             capabilities=await self._entry_capabilities(conversation),
-            system_prompt=await self._system_prompt(memory_context=memory_context),
+            system_prompt=await self._system_prompt(
+                memory_context=memory_context,
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+            ),
             memory_context=memory_context,
         )
 
@@ -1190,7 +757,12 @@ class AgentRuntime:
             forced_capability=f"aina:{selected.capability_id}" if direct and remote else None,
             event_sink=event_sink,
             capabilities=capabilities,
-            system_prompt=await self._system_prompt(aina, memory_context=memory_context),
+            system_prompt=await self._system_prompt(
+                aina,
+                memory_context=memory_context,
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+            ),
             memory_context=memory_context,
         )
 
@@ -1485,7 +1057,10 @@ class AgentRuntime:
                 ),
             },
         )
-        resolved_system_prompt = system_prompt or await self._system_prompt()
+        resolved_system_prompt = system_prompt or await self._system_prompt(
+            user_id=conversation.user_id,
+            tenant_id=conversation.tenant_id,
+        )
         tool_definitions = [item.llm_definition() for item in capabilities.values()]
         messages, compression_input_tokens, compression_output_tokens = await self._prepare_context(
             conversation=conversation,
@@ -1693,6 +1268,8 @@ class AgentRuntime:
         selected_aina: AinaRecord | None = None,
         *,
         memory_context: list[MemoryRecord] | None = None,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
     ) -> str:
         if selected_aina is not None:
             manifest = selected_aina.manifest
@@ -1735,7 +1312,11 @@ class AgentRuntime:
                 sections.append(_memory_context_block(memory_context))
             return "\n\n".join(sections)
 
-        platform_skills = [item for item in await self.repository.list_skills() if item.status == "published"]
+        platform_skills = [
+            item
+            for item in await self.repository.list_skills(user_id=user_id, tenant_id=tenant_id)
+            if item.status == "published"
+        ]
         sections = [
             self.settings.system_prompt,
             _platform_tool_guidance(),
@@ -1758,9 +1339,14 @@ class AgentRuntime:
             limit=8,
         )
 
-    async def _system_capabilities(self) -> dict[str, Capability]:
+    async def _system_capabilities(
+        self,
+        *,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+    ) -> dict[str, Capability]:
         capabilities: dict[str, Capability] = {}
-        for tool in await self.repository.list_tools():
+        for tool in await self.repository.list_tools(user_id=user_id, tenant_id=tenant_id):
             if tool.status != "published":
                 continue
             function_name = _function_name("tool", tool.tool_id)
@@ -1936,7 +1522,10 @@ class AgentRuntime:
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         return {
-            **await self._fallback_capabilities(),
+            **await self._fallback_capabilities(
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+            ),
             **await self._available_aina_capabilities(conversation),
         }
 
@@ -1944,7 +1533,10 @@ class AgentRuntime:
         """Expose direct host tools and only conversational AINA entrypoints on the first model turn."""
         aina_capabilities = await self._available_aina_capabilities(conversation)
         return {
-            **await self._system_capabilities(),
+            **await self._system_capabilities(
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+            ),
             **{
                 function_name: capability
                 for function_name, capability in aina_capabilities.items()
@@ -1952,10 +1544,15 @@ class AgentRuntime:
             },
         }
 
-    async def _fallback_capabilities(self) -> dict[str, Capability]:
+    async def _fallback_capabilities(
+        self,
+        *,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+    ) -> dict[str, Capability]:
         """Keep stable built-ins resolvable when their calls remain in conversation history."""
         return {
-            **await self._system_capabilities(),
+            **await self._system_capabilities(user_id=user_id, tenant_id=tenant_id),
             **self._memory_capabilities(),
             **self._document_capabilities(),
             **self._sandbox_capabilities(),
@@ -2031,107 +1628,45 @@ class AgentRuntime:
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected, **switch_capabilities}
         if declared_tool_ids:
-            for function_name, capability in (await self._system_capabilities()).items():
+            for function_name, capability in (
+                await self._system_capabilities(
+                    user_id=conversation.user_id,
+                    tenant_id=conversation.tenant_id,
+                )
+            ).items():
                 if capability.kind == "tool" and capability.capability_id in declared_tool_ids:
                     capabilities[function_name] = replace(
                         capability,
                         owner_aina_id=aina.manifest.aina.id,
                     )
         if any(item.kind == "form" for item in aina.manifest.capabilities.ui):
-            for function_name, capability in (await self._system_capabilities()).items():
+            for function_name, capability in (
+                await self._system_capabilities(
+                    user_id=conversation.user_id,
+                    tenant_id=conversation.tenant_id,
+                )
+            ).items():
                 if capability.capability_id == REQUEST_CLARIFICATION_TOOL_ID:
                     capabilities[function_name] = capability
         return capabilities, aina
 
     @staticmethod
     def _memory_capabilities() -> dict[str, Capability]:
-        remember_function = _function_name("builtin", REMEMBER_TOOL_ID)
-        recall_function = _function_name("builtin", RECALL_TOOL_ID)
-        update_function = _function_name("builtin", UPDATE_TOOL_ID)
-        forget_function = _function_name("builtin", FORGET_TOOL_ID)
-        return {
-            remember_function: Capability(
+        capabilities: dict[str, Capability] = {}
+        for tool in unibot_memory_record().manifest.capabilities.tools:
+            function_name = _function_name("builtin", tool.id)
+            capabilities[function_name] = Capability(
                 kind="builtin",
-                capability_id=REMEMBER_TOOL_ID,
-                function_name=remember_function,
-                display_name="Remember durable information",
-                description=(
-                    "Store one durable fact the user explicitly wants remembered. Do not store transient chat."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "A concise declarative memory."},
-                        "category": {
-                            "type": "string",
-                            "enum": ["fact", "preference", "goal", "instruction"],
-                        },
-                    },
-                    "required": ["content", "category"],
-                    "additionalProperties": False,
-                },
-                requires_confirmation=False,
-                value=REMEMBER_TOOL_ID,
+                capability_id=tool.id,
+                function_name=function_name,
+                display_name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+                requires_confirmation=tool.id == FORGET_TOOL_ID,
+                value=tool.id,
                 owner_aina_id=UNIBOT_MEMORY_ID,
-            ),
-            recall_function: Capability(
-                kind="builtin",
-                capability_id=RECALL_TOOL_ID,
-                function_name=recall_function,
-                display_name="Recall memory",
-                description="Retrieve durable memories relevant to a question; use an empty query to list recent memory.",
-                input_schema={
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "additionalProperties": False,
-                },
-                requires_confirmation=False,
-                value=RECALL_TOOL_ID,
-                owner_aina_id=UNIBOT_MEMORY_ID,
-            ),
-            update_function: Capability(
-                kind="builtin",
-                capability_id=UPDATE_TOOL_ID,
-                function_name=update_function,
-                display_name="Update memory",
-                description=(
-                    "Replace an existing memory in place when the user corrects or refines it and its exact id "
-                    "is available. Prefer this over forget followed by remember."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "memory_id": {"type": "string"},
-                        "content": {"type": "string", "description": "The complete updated memory."},
-                        "category": {
-                            "type": "string",
-                            "enum": ["fact", "preference", "goal", "instruction"],
-                        },
-                    },
-                    "required": ["memory_id", "content"],
-                    "additionalProperties": False,
-                },
-                requires_confirmation=False,
-                value=UPDATE_TOOL_ID,
-                owner_aina_id=UNIBOT_MEMORY_ID,
-            ),
-            forget_function: Capability(
-                kind="builtin",
-                capability_id=FORGET_TOOL_ID,
-                function_name=forget_function,
-                display_name="Forget memory",
-                description="Permanently delete one memory by exact memory_id after the user asks to forget it.",
-                input_schema={
-                    "type": "object",
-                    "properties": {"memory_id": {"type": "string"}},
-                    "required": ["memory_id"],
-                    "additionalProperties": False,
-                },
-                requires_confirmation=True,
-                value=FORGET_TOOL_ID,
-                owner_aina_id=UNIBOT_MEMORY_ID,
-            ),
-        }
+            )
+        return capabilities
 
     def _document_capabilities(self) -> dict[str, Capability]:
         if self.document_service is None:
@@ -2262,221 +1797,6 @@ def _provider_messages_for_scope(
             pending_stale_call_ids = set()
         scoped_messages.append(copied)
     return scoped_messages
-
-
-def _capability_scope_recovery(
-    requested_name: str,
-    capabilities: dict[str, Capability],
-) -> dict[str, Any] | None:
-    target = capabilities.get(requested_name)
-    if target is None:
-        matches = [
-            capability
-            for capability in capabilities.values()
-            if capability.capability_id == requested_name
-        ]
-        if len(matches) == 1:
-            target = matches[0]
-    if target is None:
-        matches = [
-            capability
-            for capability in capabilities.values()
-            if requested_name.startswith(f"{capability.function_name.rsplit('_', 1)[0]}_")
-        ]
-        if len(matches) == 1:
-            target = matches[0]
-    if target is None or target.owner_aina_id is None:
-        return None
-    entry = next(
-        (
-            capability
-            for capability in capabilities.values()
-            if capability.kind == "aina"
-            and capability.capability_id == target.owner_aina_id
-            and _is_routable_aina(capability)
-        ),
-        None,
-    )
-    if entry is None:
-        return None
-    return {
-        "capability": target,
-        "owner_aina_id": target.owner_aina_id,
-        "entry_function_name": entry.function_name,
-    }
-
-
-def _capability_trace_details(capability: Capability) -> dict[str, Any]:
-    return {
-        "id": capability.capability_id,
-        "kind": capability.kind,
-        "function_name": capability.function_name,
-        "display_name": capability.display_name,
-        "requires_confirmation": capability.requires_confirmation,
-        "owner_aina_id": capability.owner_aina_id,
-    }
-
-
-def _model_scope_trace_details(
-    capabilities: dict[str, Capability],
-    *,
-    forced_capability: str | None,
-    forced_function: str | None,
-) -> dict[str, Any]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    standalone: list[dict[str, Any]] = []
-    for capability in sorted(capabilities.values(), key=lambda item: (item.kind, item.capability_id)):
-        details = _capability_trace_details(capability)
-        if capability.owner_aina_id is None:
-            standalone.append(details)
-        else:
-            grouped.setdefault(capability.owner_aina_id, []).append(details)
-    return {
-        "counts": {
-            "remote_tool": sum(item.kind == "tool" for item in capabilities.values()),
-            "remote_aina": sum(item.kind == "aina" for item in capabilities.values()),
-            "builtin_capability": sum(item.kind == "builtin" for item in capabilities.values()),
-        },
-        "forced": forced_capability,
-        "forced_function": forced_function,
-        "by_aina": [
-            {"aina_id": aina_id, "capabilities": grouped[aina_id]}
-            for aina_id in sorted(grouped)
-        ],
-        "standalone": standalone,
-    }
-
-
-def _manifest_capability_trace_details(
-    capability: AinaCapability,
-    kind: str,
-    owned_scope: dict[str, Capability],
-) -> dict[str, Any]:
-    runtime_capability = owned_scope.get(capability.id)
-    return {
-        "id": capability.id,
-        "kind": kind,
-        "name": capability.name,
-        "description": capability.description,
-        "model_exposed": runtime_capability is not None,
-        "function_name": runtime_capability.function_name if runtime_capability else None,
-    }
-
-
-def _aina_availability(
-    record: AinaRecord,
-    installation: AinaInstallation | None,
-    conversation: Conversation,
-) -> tuple[bool, str, list[str]]:
-    manifest = record.manifest
-    if record.status != "registered":
-        return False, "disabled", []
-    if manifest.runtime.type == "builtin":
-        return True, "builtin", []
-    if installation is None:
-        return False, "not_installed", []
-    if installation.status != "active":
-        return False, "installation_disabled", []
-    if conversation.enabled_ainas and manifest.aina.id not in conversation.enabled_ainas:
-        return False, "disabled_for_conversation", []
-    missing_permissions = sorted(set(manifest.permissions) - set(installation.granted_permissions))
-    if missing_permissions:
-        return False, "missing_permissions", missing_permissions
-    return True, "installed", []
-
-
-def _is_routable_aina(capability: Capability) -> bool:
-    if capability.kind != "aina":
-        return False
-    aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-    if aina.manifest.runtime.type in {"remote", "managed"}:
-        return True
-    return aina.manifest.aina.id in {
-        UNIBOT_MEMORY_ID,
-        UNIBOT_DOCUMENTS_ID,
-        UNIBOT_CODE_RUNNER_ID,
-    }
-
-
-def _aina_entry_description(aina: AinaRecord, *, executable: bool) -> str:
-    description = aina.manifest.aina.description.rstrip(".。")
-    if executable:
-        return (
-            f"{description}. Invoke this AINA when it should perform the user's task. Pass the complete "
-            "request, preserving every important constraint instead of narrowing it to one planned subtask."
-        )
-    return (
-        f"{description}. Activate this built-in capability scope when the user wants work performed in this "
-        "domain, including listing, searching, reading, creating, or editing its data. This entrypoint takes no "
-        "arguments and does not execute the work itself. Do not use open_aina for data work."
-    )
-
-
-def _tool_call_trace_details(
-    call: dict[str, Any],
-    capabilities: dict[str, Capability],
-) -> dict[str, Any]:
-    function = call.get("function") or {}
-    function_name = str(function.get("name") or "")
-    capability = capabilities.get(function_name)
-    arguments_text = function.get("arguments") or "{}"
-
-    return {
-        "call_id": str(call.get("id") or ""),
-        "function_name": function_name,
-        "capability_id": capability.capability_id if capability else None,
-        "kind": capability.kind if capability else None,
-        "arguments": _tool_arguments_trace_data(arguments_text),
-    }
-
-
-def _tool_arguments_trace_data(arguments: Any) -> Any:
-    try:
-        parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
-    except (TypeError, ValueError, json.JSONDecodeError):
-        parsed = arguments
-    return parsed
-
-
-def _model_message_trace_details(
-    message: dict[str, Any],
-    capabilities: dict[str, Capability],
-) -> dict[str, Any]:
-    details: dict[str, Any] = {}
-    for key, value in message.items():
-        if key == "tool_calls" and isinstance(value, list):
-            details[key] = [
-                _tool_call_trace_details(call, capabilities)
-                for call in value
-                if isinstance(call, dict)
-            ]
-            continue
-        if key == "content" and isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                pass
-        details[key] = value
-    return details
-
-
-def _capability_version(capability: Capability | None) -> str | None:
-    if capability is None:
-        return None
-    if capability.kind == "tool":
-        return cast(ToolRecord, capability.value).version
-    if capability.kind == "aina":
-        aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-        return installation.installed_version or aina.manifest.aina.version
-    return None
-
-
-def _function_name(kind: str, capability_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", capability_id).strip("_") or "capability"
-    digest = hashlib.sha1(f"{kind}:{capability_id}".encode()).hexdigest()[:8]
-    prefix = f"{kind}_"
-    available = 64 - len(prefix) - len(digest) - 1
-    return f"{prefix}{safe[:available]}_{digest}"
 
 
 def _platform_tool_guidance() -> str:

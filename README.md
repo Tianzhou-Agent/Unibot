@@ -109,8 +109,9 @@ uv run tianzhou-agent-platform
 
 ```bash
 cd frontend
-npm ci
-npm run dev
+corepack enable && corepack prepare pnpm@9.15.9 --activate
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
 开发服务器默认打开 `http://127.0.0.1:5173`，并将 `/api` 代理到

@@ -15,7 +15,14 @@ def create_sandbox_service(
     repository: InMemoryRepository,
 ) -> SandboxService:
     if settings.sandbox_driver == "local":
-        driver = LocalProcessSandboxDriver(
+        if settings.env == "production":
+            raise RuntimeError(
+                "UNIBOT_SANDBOX_DRIVER=local executes processes on the host and "
+                "must never be enabled for production traffic; set "
+                "UNIBOT_SANDBOX_DRIVER=kubernetes (or UNIBOT_ENV=development "
+                "for local development)."
+            )
+        driver: LocalProcessSandboxDriver | KubernetesSandboxDriver = LocalProcessSandboxDriver(
             settings.sandbox_workspace_root,
             output_limit_bytes=settings.sandbox_output_limit_bytes,
         )
@@ -33,9 +40,7 @@ def create_sandbox_service(
             namespace=settings.sandbox_kubernetes_namespace,
             token=token_file.read_text(encoding="utf-8").strip(),
             ca_file=(
-                str(settings.sandbox_kubernetes_ca_file)
-                if settings.sandbox_kubernetes_ca_file.exists()
-                else None
+                str(settings.sandbox_kubernetes_ca_file) if settings.sandbox_kubernetes_ca_file.exists() else None
             ),
             runtime_class=settings.sandbox_runtime_class,
         )

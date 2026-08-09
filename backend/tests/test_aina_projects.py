@@ -745,3 +745,164 @@ async def test_nas_artifact_store_concurrent_writes_publish_one_complete_archive
         assert results.count(False) == 7
         assert await stores[0].read(path) == payload
     assert list(tmp_path.rglob("*.tmp-*")) == []
+
+
+def test_undeploy_keeps_shared_registration_owned_by_another_user() -> None:
+    import asyncio
+
+    from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
+    from tianzhou_agent_platform.aina.project import AinaProjectRecord
+    from tianzhou_agent_platform.aina.protocol.models import AinaManifest, AinaRecord
+    from tianzhou_agent_platform.core.repository import InMemoryRepository
+    from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxExecutionRequest
+
+    repository = InMemoryRepository()
+    manifest = AinaManifest.model_validate(_managed_manifest())
+    project = AinaProjectRecord(
+        id="aina_project_" + "a" * 32,
+        user_id="user_b",
+        tenant_id="default",
+        source_filename="proj.zip",
+        archive_sha256="b" * 64,
+        size_bytes=100,
+        uncompressed_size_bytes=100,
+        file_count=1,
+        manifest=manifest,
+        status="deployed",
+    )
+
+    class FakeProjects:
+        async def get_project(self, project_id, *, user_id, tenant_id):
+            return project.model_copy(update={"id": project_id})
+
+        async def set_aina_project_deployed(self, project_id, *, deployed, user_id, tenant_id):
+            project.status = "deployed" if deployed else "validated"
+            return project
+
+    class FakeSandboxes:
+        driver = type("Driver", (), {"name": "fake"})()
+
+        async def execute(self, request: SandboxExecutionRequest) -> SandboxExecution:
+            return SandboxExecution(
+                id="exec_1",
+                sandbox_id="sbx_1",
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                language="python",
+                script=request.script,
+                status="succeeded",
+                stdout="",
+                stderr="",
+                exit_code=0,
+                duration_ms=1.0,
+                started_at=project.created_at,
+            )
+
+    async def scenario() -> None:
+        # Shared registration owned by user A; user B undeploys their project.
+        await repository.register_aina(
+            AinaRecord(manifest=manifest, owner_user_id="user_a", owner_tenant_id="default")
+        )
+        await repository.create_aina_project(project)
+        await repository.create_aina_project(
+            project.model_copy(update={"id": "aina_project_" + "c" * 32, "user_id": "user_a"})
+        )
+        runtime = ManagedAinaRuntime(
+            settings=_settings(),
+            repository=repository,
+            projects=FakeProjects(),  # type: ignore[arg-type]
+            sandboxes=FakeSandboxes(),  # type: ignore[arg-type]
+        )
+        await runtime.undeploy(project.id, user_id="user_b", tenant_id="default")
+        # The shared registration survives because user B did not create it.
+        registered = await repository.get_aina(manifest.aina.id)
+        assert registered.owner_user_id == "user_a"
+
+        # The owning user's undeploy removes the registration.
+        project2 = project.model_copy(update={"id": "aina_project_" + "c" * 32})
+        await runtime.undeploy(project2.id, user_id="user_a", tenant_id="default")
+        from tianzhou_agent_platform.core.errors import PlatformError
+
+        try:
+            await repository.get_aina(manifest.aina.id)
+            raise AssertionError("registration should have been removed")
+        except PlatformError as exc:
+            assert exc.code == "RESOURCE_NOT_FOUND"
+
+    asyncio.run(scenario())
+
+
+def test_owner_undeploy_keeps_registration_while_sharer_still_deployed() -> None:
+    import asyncio
+
+    from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
+    from tianzhou_agent_platform.aina.project import AinaProjectRecord
+    from tianzhou_agent_platform.aina.protocol.models import AinaManifest, AinaRecord
+    from tianzhou_agent_platform.core.repository import InMemoryRepository
+    from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxExecutionRequest
+
+    repository = InMemoryRepository()
+    manifest = AinaManifest.model_validate(_managed_manifest())
+    owner_project = AinaProjectRecord(
+        id="aina_project_" + "d" * 32,
+        user_id="user_a",
+        tenant_id="default",
+        source_filename="proj.zip",
+        archive_sha256="e" * 64,
+        size_bytes=100,
+        uncompressed_size_bytes=100,
+        file_count=1,
+        manifest=manifest,
+        status="deployed",
+    )
+
+    class FakeProjects:
+        async def get_project(self, project_id, *, user_id, tenant_id):
+            return owner_project.model_copy(update={"id": project_id, "user_id": user_id})
+
+        async def set_aina_project_deployed(self, project_id, *, deployed, user_id, tenant_id):
+            return owner_project.model_copy(
+                update={"id": project_id, "user_id": user_id, "status": "deployed" if deployed else "validated"}
+            )
+
+    class FakeSandboxes:
+        driver = type("Driver", (), {"name": "fake"})()
+
+        async def execute(self, request: SandboxExecutionRequest) -> SandboxExecution:
+            return SandboxExecution(
+                id="exec_1",
+                sandbox_id="sbx_1",
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                language="python",
+                script=request.script,
+                status="succeeded",
+                stdout="",
+                stderr="",
+                exit_code=0,
+                duration_ms=1.0,
+                started_at=owner_project.created_at,
+            )
+
+    async def scenario() -> None:
+        await repository.register_aina(
+            AinaRecord(manifest=manifest, owner_user_id="user_a", owner_tenant_id="default")
+        )
+        # A sharer (user_b) also has a live deployment of the same manifest.
+        await repository.create_aina_project(
+            owner_project.model_copy(update={"id": "aina_project_" + "f" * 32, "user_id": "user_b"})
+        )
+        await repository.create_aina_project(owner_project)
+        runtime = ManagedAinaRuntime(
+            settings=_settings(),
+            repository=repository,
+            projects=FakeProjects(),  # type: ignore[arg-type]
+            sandboxes=FakeSandboxes(),  # type: ignore[arg-type]
+        )
+        await runtime.undeploy(owner_project.id, user_id="user_a", tenant_id="default")
+        # The owner's undeploy keeps the shared registration because user_b
+        # still has a deployed project referencing it.
+        registered = await repository.get_aina(manifest.aina.id)
+        assert registered.owner_user_id == "user_a"
+
+    asyncio.run(scenario())

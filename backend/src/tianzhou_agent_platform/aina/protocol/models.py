@@ -130,6 +130,10 @@ class AinaRecord(StrictModel):
     status: Literal["registered", "disabled"] = "registered"
     registered_at: datetime = Field(default_factory=utc_now)
     last_health: dict[str, Any] = Field(default_factory=dict)
+    #: Who registered this record. Managed deployments record their owner so
+    #: undeploy only removes registrations the caller actually created.
+    owner_user_id: str | None = None
+    owner_tenant_id: str | None = None
 
 
 class InstallationRequest(StrictModel):

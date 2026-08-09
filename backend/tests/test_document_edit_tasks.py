@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_models import (
+    DocumentEditTask,
     DocumentEditTaskCreate,
     DocumentSectionSelection,
 )
@@ -384,3 +386,35 @@ async def test_worker_recovers_a_task_interrupted_after_drafts_finished(tmp_path
     )
 
     assert recovered.status == "reviewing"
+
+
+def test_list_document_edit_tasks_filters_by_status() -> None:
+    repository = InMemoryRepository()
+    base = DocumentEditTask(
+        id="task_filter_1",
+        user_id="user_filter",
+        tenant_id="default",
+        document_name="filtered.md",
+        title="Filtered task",
+        description="Status filter test.",
+        base_revision="revision-1",
+        status="queued",
+        sections=[],
+    )
+    async def seed() -> None:
+        await repository.create_document_edit_task(base)
+        await repository.create_document_edit_task(
+            base.model_copy(update={"id": "task_filter_2", "status": "completed"})
+        )
+        await repository.create_document_edit_task(
+            base.model_copy(update={"id": "task_filter_3", "status": "running"})
+        )
+
+    async def verify() -> None:
+        await seed()
+        all_tasks = await repository.list_document_edit_tasks()
+        assert len(all_tasks) == 3
+        active = await repository.list_document_edit_tasks(statuses={"queued", "running"})
+        assert sorted(item.id for item in active) == ["task_filter_1", "task_filter_3"]
+
+    asyncio.run(verify())

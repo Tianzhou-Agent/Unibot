@@ -10,13 +10,13 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from tianzhou_agent_platform.aina.scheduler import (
-    AinaScheduler,
+from tianzhou_agent_platform.aina.protocol.schedule import (
     ScheduledAinaTask,
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
 )
+from tianzhou_agent_platform.aina.scheduler import AinaScheduler
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app

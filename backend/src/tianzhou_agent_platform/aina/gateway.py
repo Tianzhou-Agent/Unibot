@@ -11,9 +11,13 @@ from a2a.client import A2ACardResolver, A2AClientError, ClientCallContext, Clien
 from google.protobuf.json_format import MessageToDict, ParseDict  # type: ignore[import-untyped]
 from google.protobuf.struct_pb2 import Struct, Value  # type: ignore[import-untyped]
 
+from tianzhou_agent_platform.aina.protocol.grants import (
+    build_invoke_request,
+    parse_invoke_response,
+    require_grants,
+)
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaInstallation,
-    AinaInvokeRequest,
     AinaInvokeResponse,
     AinaManifest,
     AinaOutput,
@@ -202,25 +206,17 @@ class RemoteCapabilityGateway:
                 conversation_id=conversation_id,
                 trace_id=trace_id,
             )
-        missing_permissions = set(manifest.permissions) - set(installation.granted_permissions)
-        if missing_permissions:
-            raise PlatformError(
-                "PERMISSION_DENIED",
-                f"AINA is missing grants: {', '.join(sorted(missing_permissions))}",
-                status_code=403,
-                source="aina",
-            )
-        request = AinaInvokeRequest(
+        require_grants(manifest, installation.granted_permissions)
+        request = build_invoke_request(
             request_id=call_id or f"req_{uuid4().hex}",
             user_id=installation.user_id,
             tenant_id=installation.tenant_id,
             session_id=conversation_id,
             conversation_id=conversation_id,
             input=arguments,
-            context={"source": "agent"},
-            authorization={"permissions": installation.granted_permissions},
-            trace={"trace_id": trace_id},
             available_tools=available_tools,
+            granted_permissions=installation.granted_permissions,
+            trace_id=trace_id,
         )
         started = perf_counter()
         raw = await self._request_json(
@@ -233,15 +229,7 @@ class RemoteCapabilityGateway:
             json=request.model_dump(mode="json"),
             extra_headers={"Idempotency-Key": request.request_id},
         )
-        try:
-            response = AinaInvokeResponse.model_validate(raw)
-        except ValueError as exc:
-            raise PlatformError(
-                "DEPENDENCY_FAILED",
-                "AINA returned a response that does not match Protocol 1.0",
-                status_code=502,
-                source="aina",
-            ) from exc
+        response = parse_invoke_response(raw)
         return response, (perf_counter() - started) * 1000
 
     async def _resolve_a2a_card(self, manifest: AinaManifest) -> a2a_types.AgentCard:

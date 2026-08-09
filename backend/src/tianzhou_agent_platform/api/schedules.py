@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Query, Request, Response, status
+from typing import cast
 
-from tianzhou_agent_platform.aina.scheduler import (
-    ScheduledAinaDebugRequest,
+from tianzhou_agent_platform.aina.protocol.schedule import (
     ScheduledAinaExecution,
     ScheduledAinaTask,
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
 )
+from tianzhou_agent_platform.aina.scheduler import ScheduledAinaDebugRequest
 from tianzhou_agent_platform.api.dependencies import bind_actor, repository, request_actor, require_actor_ownership
 from tianzhou_agent_platform.core.errors import PlatformError
 
@@ -54,7 +55,11 @@ def create_schedule_router() -> APIRouter:
         task = await repository(request).get_scheduled_aina_task(task_id)
         require_actor_ownership(request, user_id=task.user_id, tenant_id=task.tenant_id)
         scheduler = request.app.state.aina_scheduler
-        return await scheduler.run_now(task_id, input_override=payload.invocation_input())
+
+        return cast(
+            ScheduledAinaTask,
+            await scheduler.run_now(task_id, input_override=payload.invocation_input()),
+        )
 
     @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_schedule(task_id: str, request: Request) -> Response:

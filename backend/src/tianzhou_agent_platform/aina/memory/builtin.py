@@ -12,7 +12,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.security.models import Authentication
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import PlatformError, unknown_tool_error
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 
 UNIBOT_MEMORY_ID = "unibot-memory"
@@ -53,7 +53,10 @@ def unibot_memory_record() -> AinaRecord:
                     AinaCapability(
                         id=REMEMBER_TOOL_ID,
                         name="记住信息",
-                        description="保存一条长期事实、偏好、目标或指令。",
+                        description=(
+                            "保存一条用户明确要求记住的长期事实、偏好、目标或指令；"
+                            "不要保存瞬时聊天内容。"
+                        ),
                         input_schema={
                             "type": "object",
                             "properties": {
@@ -114,7 +117,7 @@ def unibot_memory_record() -> AinaRecord:
                     AinaCapability(
                         id=FORGET_TOOL_ID,
                         name="删除记忆",
-                        description="根据准确的记忆 ID 删除一条记忆。",
+                        description="在用户明确要求遗忘后，根据准确的记忆 ID 永久删除一条记忆。",
                         input_schema={
                             "type": "object",
                             "properties": {
@@ -227,4 +230,4 @@ async def invoke_memory_tool(
             raise PlatformError("INVALID_REQUEST", "memory.forget requires memory_id")
         await repository.remove_memory(memory_id, user_id=user_id, tenant_id=tenant_id)
         return {"deleted": True, "memory_id": memory_id}, []
-    raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown memory tool {tool_id!r}", status_code=404)
+    raise unknown_tool_error(tool_id, kind="memory")

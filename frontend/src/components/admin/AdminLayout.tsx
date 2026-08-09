@@ -1,11 +1,10 @@
-import { Activity, BarChart3, MessageSquareText } from "lucide-react";
+import { Activity, MessageSquareText } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { classNames } from "@/lib/utils";
 
 const SECTIONS = [
   { to: "/admin/observability", label: "可观测", icon: Activity },
   { to: "/admin/feedback", label: "反馈", icon: MessageSquareText },
-  { to: "/admin/operations", label: "运营", icon: BarChart3 },
 ] as const;
 
 export function AdminLayout() {

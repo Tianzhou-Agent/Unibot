@@ -23,3 +23,5 @@ class SkillCreate(StrictModel):
 
 class SkillRecord(SkillCreate):
     created_at: datetime = Field(default_factory=utc_now)
+    owner_user_id: str | None = None
+    owner_tenant_id: str | None = None

@@ -3,6 +3,7 @@
 from typing import Any
 from urllib.parse import urlencode
 
+from tianzhou_agent_platform.aina.protocol.grants import require_grants
 from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import (
     WidgetAction,
@@ -10,7 +11,7 @@ from tianzhou_agent_platform.aina.protocol.widgets import (
     WidgetDefinition,
     WidgetField,
 )
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import PlatformError, unknown_tool_error
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 
 LIST_APP_TOOL_ID = "list_app"
@@ -109,13 +110,7 @@ async def open_aina(
         )
         if installation.status != "active":
             raise PlatformError("PERMISSION_DENIED", "The selected AINA is not active", status_code=403)
-        missing = set(record.manifest.permissions) - set(installation.granted_permissions)
-        if missing:
-            raise PlatformError(
-                "PERMISSION_DENIED",
-                f"AINA is missing grants: {', '.join(sorted(missing))}",
-                status_code=403,
-            )
+        require_grants(record.manifest, installation.granted_permissions)
 
     if conversation_id is not None:
         await repository.require_conversation_actor(
@@ -266,7 +261,7 @@ async def invoke_platform_tool(
             ],
         )
         return {"requested": True, "field_ids": [field.id for field in fields]}, [widget]
-    raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown platform tool {tool_id!r}", status_code=404)
+    raise unknown_tool_error(tool_id, kind="platform")
 
 
 def _default_main_widget(record: AinaRecord) -> WidgetDefinition:

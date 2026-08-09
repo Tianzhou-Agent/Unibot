@@ -129,9 +129,7 @@ async def test_concurrent_sandbox_ensure_reuses_one_actor_record(tmp_path) -> No
         default_image="unibot/sandboxd:test",
     )
 
-    records = await asyncio.gather(
-        *[service.ensure(SandboxEnsureRequest(user_id="same-user")) for _ in range(5)]
-    )
+    records = await asyncio.gather(*[service.ensure(SandboxEnsureRequest(user_id="same-user")) for _ in range(5)])
 
     assert len({record.id for record in records}) == 1
 
@@ -247,3 +245,24 @@ def test_sandbox_bounds_captured_output(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["truncated"] is True
     assert len(response.json()["stdout"].encode()) == 1_024
+
+
+def test_local_sandbox_driver_is_refused_in_production() -> None:
+    with pytest.raises(RuntimeError, match="UNIBOT_SANDBOX_DRIVER=local"):
+        create_app(
+            settings=AgentSettings(
+                sandbox_driver="local",
+                env="production",
+            ),
+        )
+
+
+def test_local_sandbox_driver_allowed_in_development(tmp_path) -> None:
+    app = create_app(
+        settings=AgentSettings(
+            sandbox_driver="local",
+            sandbox_workspace_root=tmp_path,
+            env="development",
+        ),
+    )
+    assert app is not None

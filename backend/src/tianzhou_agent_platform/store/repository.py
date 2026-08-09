@@ -9,6 +9,7 @@ from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.schedule import ScheduledAinaExecution, ScheduledAinaTask
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
@@ -16,7 +17,6 @@ from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
-from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
 from tianzhou_agent_platform.core.repository import (
     AINA_PROJECTS_RESOURCE,
     AINAS_RESOURCE,
@@ -392,6 +392,7 @@ class PersistentRepository(InMemoryRepository):
         user_id: str | None = None,
         tenant_id: str | None = None,
         document_name: str | None = None,
+        statuses: set[str] | None = None,
     ) -> list[DocumentEditTask]:
         tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
         async with self._lock:
@@ -400,6 +401,7 @@ class PersistentRepository(InMemoryRepository):
             user_id=user_id,
             tenant_id=tenant_id,
             document_name=document_name,
+            statuses=statuses,
         )
 
     async def put_document_edit_task(

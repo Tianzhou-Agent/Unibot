@@ -13,15 +13,15 @@ from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
-from tianzhou_agent_platform.aina.skill.models import SkillRecord
-from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.aina.scheduler import (
+from tianzhou_agent_platform.aina.protocol.schedule import (
     ScheduledAinaExecution,
     ScheduledAinaTask,
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
 )
+from tianzhou_agent_platform.aina.skill.models import SkillRecord
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceEvent, TraceRecord, TraceSpan
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
@@ -37,6 +37,25 @@ from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxReco
 
 CONVERSATIONS_RESOURCE = "conversations"
 MEMORIES_RESOURCE = "memories"
+
+
+def _visible_to(
+    record: ToolRecord | SkillRecord,
+    *,
+    user_id: str | None,
+    tenant_id: str | None,
+) -> bool:
+    """Visibility gate for platform capability records.
+
+    ``public`` records are visible to everyone; ``tenant`` records only inside
+    the owning tenant; ``private`` records only to their owner. Records without
+    an owner degrade to public visibility (legacy platform registrations).
+    """
+    if record.visibility == "public" or record.owner_user_id is None:
+        return True
+    if record.visibility == "tenant":
+        return record.owner_tenant_id is not None and record.owner_tenant_id == tenant_id
+    return record.owner_user_id == user_id
 TOOLS_RESOURCE = "tools"
 SKILLS_RESOURCE = "skills"
 AINAS_RESOURCE = "ainas"
@@ -667,6 +686,7 @@ class InMemoryRepository:
         user_id: str | None = None,
         tenant_id: str | None = None,
         document_name: str | None = None,
+        statuses: set[str] | None = None,
     ) -> list[DocumentEditTask]:
         async with self._lock:
             values = [
@@ -675,6 +695,7 @@ class InMemoryRepository:
                 if (user_id is None or item.user_id == user_id)
                 and (tenant_id is None or item.tenant_id == tenant_id)
                 and (document_name is None or item.document_name == document_name)
+                and (statuses is None or item.status in statuses)
             ]
         return sorted(values, key=lambda item: item.created_at, reverse=True)
 
@@ -1116,16 +1137,34 @@ class InMemoryRepository:
             await self._save_record(TOOLS_RESOURCE, tool.tool_id, tool)
         return self._copy(tool)
 
-    async def get_tool(self, tool_id: str) -> ToolRecord:
+    async def get_tool(
+        self,
+        tool_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> ToolRecord:
         async with self._lock:
             tool = self._tools.get(tool_id)
             if tool is None:
                 raise not_found("Tool", tool_id)
+            if user_id is not None and not _visible_to(tool, user_id=user_id, tenant_id=tenant_id):
+                raise not_found("Tool", tool_id)
             return self._copy(tool)
 
-    async def list_tools(self) -> list[ToolRecord]:
+    async def list_tools(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[ToolRecord]:
         async with self._lock:
-            return [self._copy(item) for item in self._tools.values()]
+            values = [
+                item
+                for item in self._tools.values()
+                if user_id is None or _visible_to(item, user_id=user_id, tenant_id=tenant_id)
+            ]
+            return [self._copy(item) for item in values]
 
     async def remove_tool(self, tool_id: str) -> None:
         async with self._lock:
@@ -1141,16 +1180,34 @@ class InMemoryRepository:
             await self._save_record(SKILLS_RESOURCE, skill.skill_id, skill)
         return self._copy(skill)
 
-    async def get_skill(self, skill_id: str) -> SkillRecord:
+    async def get_skill(
+        self,
+        skill_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> SkillRecord:
         async with self._lock:
             skill = self._skills.get(skill_id)
             if skill is None:
                 raise not_found("Skill", skill_id)
+            if user_id is not None and not _visible_to(skill, user_id=user_id, tenant_id=tenant_id):
+                raise not_found("Skill", skill_id)
             return self._copy(skill)
 
-    async def list_skills(self) -> list[SkillRecord]:
+    async def list_skills(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[SkillRecord]:
         async with self._lock:
-            return [self._copy(item) for item in self._skills.values()]
+            values = [
+                item
+                for item in self._skills.values()
+                if user_id is None or _visible_to(item, user_id=user_id, tenant_id=tenant_id)
+            ]
+            return [self._copy(item) for item in values]
 
     async def remove_skill(self, skill_id: str) -> None:
         async with self._lock:
@@ -1294,6 +1351,14 @@ class InMemoryRepository:
                 if project.user_id == user_id and project.tenant_id == tenant_id
             ]
         return sorted(projects, key=lambda project: project.created_at, reverse=True)
+
+    async def count_deployed_projects_for_aina(self, aina_id: str) -> int:
+        async with self._lock:
+            return sum(
+                1
+                for item in self._aina_projects.values()
+                if item.status == "deployed" and item.manifest.aina.id == aina_id
+            )
 
     async def remove_aina_project(
         self,

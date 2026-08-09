@@ -68,3 +68,8 @@ disallow_untyped_defs = true
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "types-python-jose>=3.5.0.20260408",
+]

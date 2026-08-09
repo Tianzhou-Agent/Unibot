@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.vision.models import VisionDetectionResponse, VisionHealth
@@ -13,6 +13,8 @@ _INVALID_IMAGE_MESSAGES = {
     415: "仅支持 JPEG、PNG 和 WebP 图片。",
     422: "图片数据无效或不安全。",
 }
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 class VisionClient:
@@ -100,7 +102,7 @@ class VisionClient:
         )
 
     @staticmethod
-    def _validate(model: type[VisionHealth] | type[VisionDetectionResponse], response: httpx.Response):
+    def _validate(model: type[_ModelT], response: httpx.Response) -> _ModelT:
         try:
             return model.model_validate(response.json())
         except (ValueError, ValidationError) as exc:

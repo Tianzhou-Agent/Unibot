@@ -7,7 +7,6 @@ import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
 import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
 import FeedbackAdminPage from "@/pages/FeedbackAdminPage";
-import OperationsAnalyticsPage from "@/pages/OperationsAnalyticsPage";
 import { AdminRoute } from "@/components/auth/AdminRoute";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import LoginPage from "@/pages/LoginPage";
@@ -32,7 +31,6 @@ export default function App() {
             <Route index element={<Navigate to="/admin/observability" replace />} />
             <Route path="observability" element={<DebugPage />} />
             <Route path="feedback" element={<FeedbackAdminPage />} />
-            <Route path="operations" element={<OperationsAnalyticsPage />} />
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/chat" replace />} />

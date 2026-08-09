@@ -9,7 +9,7 @@ import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import quote
 
 import httpx
@@ -146,6 +146,8 @@ class LocalProcessSandboxDriver(SandboxDriver):
         assert process.stdout is not None and process.stderr is not None
         stdout_task = asyncio.create_task(_read_limited(process.stdout, self.output_limit_bytes))
         stderr_task = asyncio.create_task(_read_limited(process.stderr, self.output_limit_bytes))
+        status: Literal["succeeded", "failed", "timed_out"]
+        exit_code: int | None
         try:
             await asyncio.wait_for(
                 process.wait(),
@@ -545,15 +547,20 @@ class KubernetesSandboxDriver(SandboxDriver):
             )
 
     @staticmethod
-    def _phase(value: str) -> str:
-        return {
-            "Ready": "ready",
-            "Running": "ready",
-            "Busy": "busy",
-            "Stopped": "stopped",
-            "Error": "error",
-            "Failed": "error",
-        }.get(value, "provisioning")
+    def _phase(
+        value: str,
+    ) -> Literal["provisioning", "ready", "busy", "stopped", "error"]:
+        return cast(
+            Literal["provisioning", "ready", "busy", "stopped", "error"],
+            {
+                "Ready": "ready",
+                "Running": "ready",
+                "Busy": "busy",
+                "Stopped": "stopped",
+                "Error": "error",
+                "Failed": "error",
+            }.get(value, "provisioning"),
+        )
 
 
 def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, cast
 
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCapabilities,
@@ -14,7 +14,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.security.models import Authentication
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import unknown_tool_error
 from tianzhou_agent_platform.sandbox.models import SandboxExecutionRequest
 from tianzhou_agent_platform.sandbox.service import SandboxService
 
@@ -121,13 +121,16 @@ async def invoke_code_runner_tool(
     user_id: str,
     tenant_id: str,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
-    language = {
-        RUN_PYTHON_TOOL_ID: "python",
-        RUN_BASH_TOOL_ID: "bash",
-        RUN_NODE_TOOL_ID: "node",
-    }.get(tool_id)
+    language: Literal["python", "bash", "shell", "node"] | None = cast(
+        Literal["python", "bash", "shell", "node"] | None,
+        {
+            RUN_PYTHON_TOOL_ID: "python",
+            RUN_BASH_TOOL_ID: "bash",
+            RUN_NODE_TOOL_ID: "node",
+        }.get(tool_id),
+    )
     if language is None:
-        raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown code runner tool {tool_id!r}", status_code=404)
+        raise unknown_tool_error(tool_id, kind="code runner")
     execution = await service.execute(
         SandboxExecutionRequest(
             user_id=user_id,
