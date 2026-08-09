@@ -1,16 +1,13 @@
 FROM node:22-alpine AS builder
 
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
-
-COPY package.json pnpm-lock.yaml ./
-COPY pnpm-workspace.docker.yaml ./pnpm-workspace.yaml
-RUN pnpm install --frozen-lockfile
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 ARG VITE_API_BASE_URL=/api
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
-RUN pnpm build
+RUN npm run build
 
 
 FROM nginx:1.27-alpine
