@@ -11,5 +11,7 @@ frontend/frontend-run.log
 deploy/fnos/.env
 /data/
 .reasonix/
+reasonix.toml
 backend/backend-live*.log
 frontend/debug.log
+backend/test-temp-folders*/
