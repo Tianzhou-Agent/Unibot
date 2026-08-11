@@ -14,4 +14,4 @@ deploy/fnos/.env
 reasonix.toml
 backend/backend-live*.log
 frontend/debug.log
-backend/test-temp-folders*/
+backend/test-temp*/
