@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Iterable
 from uuid import uuid4
@@ -932,6 +933,23 @@ class InMemoryRepository:
         except PlatformError as exc:
             if exc.code != "RESOURCE_NOT_FOUND":
                 raise
+            # Phase four: traces live in the OBS pipeline; resolve the real
+            # status instead of marking a possibly-finished run as failed.
+            resolver = getattr(self, "obs_trace_status_resolver", None)
+            if resolver is not None:
+                try:
+                    status = await resolver(conversation.active_trace_id)
+                except Exception:  # noqa: BLE001 - resolver must not break reconciliation
+                    status = None
+                if status is not None:
+                    if status == "running":
+                        return conversation
+                    resolved = "idle" if status == "completed" else status
+                    return await self.finish_conversation_run(
+                        conversation_id,
+                        status=resolved,
+                        error=INTERRUPTED_RUN_ERROR if resolved == "failed" else None,
+                    )
             return await self.finish_conversation_run(
                 conversation_id,
                 status="failed",

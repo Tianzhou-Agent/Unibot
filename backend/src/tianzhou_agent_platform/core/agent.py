@@ -127,6 +127,7 @@ class AgentState(TypedDict, total=False):
     event_sink: EventSink | None
     usage_input: int
     usage_output: int
+    usage_estimated: bool
     final_content: str
     final_status: Literal["completed", "approval_required", "failed"]
     approval: ApprovalRecord | None
@@ -301,6 +302,7 @@ class AgentRuntime:
             "content_length": len(str(message.get("content") or "")),
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
+            "usage_estimated": result.usage_estimated,
             "ttft_ms": result.ttft_ms,
         }
         await self.observability.finish_span(
@@ -329,6 +331,7 @@ class AgentRuntime:
                 "content_length": len(str(message.get("content") or "")),
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
+                "usage_estimated": result.usage_estimated,
             },
         )
         update: AgentState = {
@@ -337,6 +340,7 @@ class AgentRuntime:
             "iterations": iterations,
             "usage_input": state.get("usage_input", 0) + result.input_tokens,
             "usage_output": state.get("usage_output", 0) + result.output_tokens,
+            "usage_estimated": state.get("usage_estimated", False) or result.usage_estimated,
         }
         if not message.get("tool_calls"):
             update["final_content"] = message.get("content") or ""
@@ -1239,6 +1243,7 @@ class AgentRuntime:
             approval.trace_id,
             kind="approval.confirmed",
             status="completed",
+            conversation_id=conversation.id,
             details={"approval_id": approval_id},
         )
         try:
@@ -1290,6 +1295,7 @@ class AgentRuntime:
             approval.trace_id,
             kind="approval.denied",
             status="completed",
+            conversation_id=approval.conversation_id,
             details={"approval_id": approval_id},
         )
         await self.observability.finish_trace(approval.trace_id, "completed")
@@ -1513,6 +1519,7 @@ class AgentRuntime:
             "event_sink": event_sink,
             "usage_input": compression_input_tokens,
             "usage_output": compression_output_tokens,
+            "usage_estimated": False,
             "call_counts": {},
             "tool_span_ids": {},
             "approval": None,
@@ -1550,6 +1557,7 @@ class AgentRuntime:
                 "content_length": len(final_content),
                 "input_tokens": result.get("usage_input", 0),
                 "output_tokens": result.get("usage_output", 0),
+                "usage_estimated": result.get("usage_estimated", False),
                 "widgets": [{"id": widget.id, "kind": widget.kind} for widget in widgets],
             },
         )
@@ -1568,6 +1576,7 @@ class AgentRuntime:
                     "iterations": result.get("iterations", 0),
                     "input_tokens": result.get("usage_input", 0),
                     "output_tokens": result.get("usage_output", 0),
+                    "usage_estimated": result.get("usage_estimated", False),
                 },
             )
         await self.observability.finish_trace(trace_id, status)
@@ -1581,6 +1590,7 @@ class AgentRuntime:
             usage=Usage(
                 input_tokens=result.get("usage_input", 0),
                 output_tokens=result.get("usage_output", 0),
+                estimated=result.get("usage_estimated", False),
             ),
             approval=result.get("approval"),
             widgets=widgets,

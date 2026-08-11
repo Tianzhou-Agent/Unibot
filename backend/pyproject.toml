@@ -30,6 +30,8 @@ dependencies = [
     "tzdata>=2025.2",
     "pwdlib[argon2]>=0.3.0",
     "email-validator>=2.2.0",
+    "opentelemetry-api>=1.43.0",
+    "opentelemetry-sdk>=1.43.0",
 ]
 
 [project.scripts]

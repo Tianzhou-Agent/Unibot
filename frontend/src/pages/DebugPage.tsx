@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AppWindow,
@@ -29,7 +29,9 @@ import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
-import { loadAllPersonalLlmCalls } from "@/lib/obsData";
+import { getAdminObsSession, getObsOverview, getObsSession } from "@/lib/obsData";
+import type { ObsOverview, ObsSessionDetail } from "@/lib/obsData";
+import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import type {
   AdminSummary,
@@ -55,6 +57,9 @@ export default function DebugPage() {
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
+  const [obsOverview, setObsOverview] = useState<ObsOverview | null>(null);
+  const [obsSession, setObsSession] = useState<ObsSessionDetail | null>(null);
+  const [overviewPeriod, setOverviewPeriod] = useState<"day" | "week" | "month">("week");
   const [selectedTrace, setSelectedTrace] = useState<string | null>(requestedTrace);
   const [selectedLlmCall, setSelectedLlmCall] = useState<string | null>(null);
   const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("trace");
@@ -69,55 +74,63 @@ export default function DebugPage() {
         ? ""
         : `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
       const querySuffix = actorQuery ? `?${actorQuery}` : "";
-      const adminData = config.auth_required && showAdminView;
-      const summaryRequest: Promise<AdminSummary | null> = showAdminView
-        ? api.get<AdminSummary>(`/admin/summary${querySuffix}`)
-        : Promise.resolve(null);
-      const llmCallRequest = adminData
-        ? api.get<LLMCallRecord[]>("/admin/llm-calls?limit=500")
-        : showAdminView
-          ? api.get<LLMCallRecord[]>(`/llm-calls?${actorQuery}&limit=500`)
-        : loadAllPersonalLlmCalls(actorQuery);
-      const [healthData, summaryData, traceData, llmCallData, conversationData] = await Promise.all([
-        api.get<{ status: string }>("/health"),
-        summaryRequest,
-        api.get<TraceRecord[]>(adminData ? "/admin/traces" : `/traces${querySuffix}`),
-        llmCallRequest,
-        api.get<ConversationRecord[]>(adminData ? "/admin/conversations" : `/conversations${querySuffix}`),
-      ]);
-      const traceIds = new Set(traceData.map((trace) => trace.trace_id));
-      const contextIds = new Set(conversationData.map((conversation) => conversation.id));
-      const visibleLlmCalls = llmCallData.filter((call) => (
-        (call.trace_id != null && traceIds.has(call.trace_id))
-        || (call.context_id != null && contextIds.has(call.context_id))
-      ));
-      setHealth(healthData.status === "ok" ? "ok" : "error");
-      setSummary({
-        tools: summaryData?.tools ?? 0,
-        skills: summaryData?.skills ?? 0,
-        ainas: summaryData?.ainas ?? 0,
-        installations: summaryData?.installations ?? 0,
-        memories: summaryData?.memories ?? 0,
-        conversations: conversationData.length,
-        traces: traceData.length,
-        llm_calls: visibleLlmCalls.length,
-      });
-      setTraces(traceData);
-      setLlmCalls(visibleLlmCalls);
-      setConversations(conversationData);
-      setError(null);
-      setSelectedTrace((current) => {
-        if (requestedTrace && traceData.some((trace) => trace.trace_id === requestedTrace)) return requestedTrace;
-        if (current && !traceData.some((trace) => trace.trace_id === current)) return null;
-        return current;
-      });
+      const adminData = showAdminView;
+      if (adminData) {
+        // 管理员视图：统计来自 /admin/summary + /admin/obs/overview；
+        // Trace 按会话从 /admin/obs/sessions 按需加载（phase four）
+        const [healthData, summaryData, overviewData, conversationData] = await Promise.all([
+          api.get<{ status: string }>("/health"),
+          api.get<AdminSummary>(`/admin/summary${querySuffix}`),
+          api.get<ObsOverview>("/admin/obs/overview?range=week"),
+          api.get<ConversationRecord[]>("/admin/conversations"),
+        ]);
+        const llmCallCount = (overviewData?.per_model ?? []).reduce((sum, row) => sum + row.call_count, 0);
+        setHealth(healthData.status === "ok" ? "ok" : "error");
+        setSummary({
+          tools: summaryData?.tools ?? 0,
+          skills: summaryData?.skills ?? 0,
+          ainas: summaryData?.ainas ?? 0,
+          installations: summaryData?.installations ?? 0,
+          memories: summaryData?.memories ?? 0,
+          conversations: conversationData.length,
+          traces: overviewData?.trace_count ?? 0,
+          llm_calls: llmCallCount,
+        });
+        setTraces([]);
+        setLlmCalls([]);
+        setConversations(conversationData);
+        setError(null);
+      } else {
+        // 普通用户：后端聚合 DTO（design 12.2），不再全量加载 traces/llm-calls。
+        // OBS 查询失败时降级为空数据，不阻断 conversations/health 展示。
+        const sessionId = requestedSessionId ?? null;
+        let overviewData: ObsOverview | null = null;
+        let sessionData: ObsSessionDetail | null = null;
+        try {
+          if (sessionId) {
+            sessionData = await getObsSession(sessionId);
+          } else {
+            overviewData = await getObsOverview(overviewPeriod);
+          }
+        } catch {
+          overviewData = null;
+          sessionData = null;
+        }
+        const healthData = await api.get<{ status: string }>("/health").catch(() => ({ status: "error" as const }));
+        const conversationData = await api.get<ConversationRecord[]>(`/conversations${querySuffix}`).catch(() => []);
+        setHealth(healthData.status === "ok" ? "ok" : "error");
+        setConversations(conversationData);
+        setObsOverview(overviewData);
+        setObsSession(sessionData);
+        setError(null);
+      }
     } catch (loadError) {
       setHealth("error");
       setError(apiErrorMessage(loadError));
     } finally {
       setRefreshing(false);
     }
-  }, [config.auth_required, profile.actorUserId, profile.tenantId, requestedTrace, showAdminView]);
+  }, [config.auth_required, profile.actorUserId, profile.tenantId, requestedTrace, requestedSessionId, showAdminView, overviewPeriod]);
 
   useEffect(() => {
     void load();
@@ -142,9 +155,62 @@ export default function DebugPage() {
     [conversations],
   );
   const traceGroups = useMemo(
-    () => groupTracesByConversation(traces, conversationsById),
-    [conversationsById, traces],
+    () => {
+      const fromTraces = groupTracesByConversation(traces, conversationsById);
+      if (!showAdminView) return fromTraces;
+      // Phase four: admin 视图以会话为驱动，Trace 按需从 /admin/obs/sessions 加载
+      const keys = new Set(fromTraces.map((group) => group.key));
+      for (const conversation of conversations) {
+        if (keys.has(conversation.id)) continue;
+        fromTraces.push({
+          key: conversation.id,
+          conversationId: conversation.id,
+          title: conversation.title.trim() || "未命名会话",
+          traces: [],
+        });
+      }
+      return fromTraces;
+    },
+    [conversations, conversationsById, showAdminView, traces],
   );
+
+  const loadAdminSession = useCallback(async (conversationId: string) => {
+    try {
+      const session = await getAdminObsSession(conversationId);
+      if (!session) return;
+      const adapted = adaptSessionDetail(session);
+      setTraces(adapted.traces);
+      setLlmCalls(adapted.calls);
+    } catch (loadError) {
+      setError(apiErrorMessage(loadError));
+    }
+  }, []);
+
+  // 已尝试自动加载过的会话：防止空 traces 响应导致自动加载 effect 无限重取
+  const autoLoadedSessionsRef = useRef<Set<string>>(new Set());
+
+  const toggleTraceGroup = (conversationId: string | null, hasTraces: boolean) => {
+    setExpandedTraceGroups((current) => {
+      const key = traceGroupKey(conversationId);
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    if (showAdminView && conversationId && !hasTraces) {
+      void loadAdminSession(conversationId);
+    }
+  };
+
+  // Admin 视图默认展开第一个会话组：自动加载其 trace 一次（同一会话不重取，避免空响应时无限循环）
+  useEffect(() => {
+    const firstGroup = traceGroups[0];
+    if (showAdminView && firstGroup && firstGroup.traces.length === 0 && firstGroup.conversationId
+      && !autoLoadedSessionsRef.current.has(firstGroup.conversationId)) {
+      autoLoadedSessionsRef.current.add(firstGroup.conversationId);
+      void loadAdminSession(firstGroup.conversationId);
+    }
+  }, [showAdminView, traceGroups, loadAdminSession]);
 
   useEffect(() => {
     const selectedRecord = traces.find((trace) => trace.trace_id === selectedTrace);
@@ -187,6 +253,9 @@ export default function DebugPage() {
         conversations={conversations}
         traces={traces}
         llmCalls={llmCalls}
+        obsOverview={obsOverview}
+        obsSession={obsSession}
+        onOverviewPeriodChange={setOverviewPeriod}
       />
     );
   }
@@ -268,12 +337,7 @@ export default function DebugPage() {
                       group={group}
                       expanded={expandedTraceGroups.has(group.key)}
                       selectedTrace={selectedTrace}
-                      onToggle={() => setExpandedTraceGroups((current) => {
-                        const next = new Set(current);
-                        if (next.has(group.key)) next.delete(group.key);
-                        else next.add(group.key);
-                        return next;
-                      })}
+                      onToggle={() => toggleTraceGroup(group.conversationId, group.traces.length > 0)}
                       onSelectTrace={setSelectedTrace}
                     />
                   ))

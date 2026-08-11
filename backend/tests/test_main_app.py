@@ -8,4 +8,7 @@ def test_health() -> None:
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    # OBS pipeline status is discoverable (design 15); disabled without storage
+    assert body["obs"] == {"enabled": False}

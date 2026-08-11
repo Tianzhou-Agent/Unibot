@@ -10,3 +10,6 @@ frontend/frontend-run.log
 .env
 deploy/fnos/.env
 /data/
+.reasonix/
+backend/backend-live*.log
+frontend/debug.log

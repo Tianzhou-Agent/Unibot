@@ -5,10 +5,11 @@ from typing import Any
 
 import httpx
 import pytest
+from langchain_core.messages import AIMessage
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
-from tianzhou_agent_platform.core.llm import OpenAICompatibleClient
+from tianzhou_agent_platform.core.llm import OpenAICompatibleClient, _response_from_result, _result_from_message
 
 
 @pytest.mark.asyncio
@@ -165,7 +166,7 @@ async def test_named_tool_choice_uses_non_streaming_request_with_event_sink() ->
 
 
 @pytest.mark.asyncio
-async def test_langchain_streaming_emits_message_deltas() -> None:
+async def test_langchain_streaming_emits_message_deltas(caplog: pytest.LogCaptureFixture) -> None:
     recorded_calls: dict[str, LLMCallRecord] = {}
 
     async def record_call(call: LLMCallRecord) -> None:
@@ -209,6 +210,9 @@ async def test_langchain_streaming_emits_message_deltas() -> None:
     await http_client.aclose()
 
     assert result.message["content"] == "Hello world"
+    assert result.usage_estimated is True
+    assert result.input_tokens > 0
+    assert result.output_tokens > 0
     assert events == [
         {"type": "message.delta", "delta": "Hello"},
         {"type": "message.delta", "delta": " world"},
@@ -223,5 +227,27 @@ async def test_langchain_streaming_emits_message_deltas() -> None:
     assert result.ttft_ms == recorded.ttft_ms
     assert recorded.response is not None
     assert recorded.response["choices"][0]["message"]["content"] == "Hello world"
+    assert recorded.response["usage"]["estimated"] is True
+    assert recorded.response["usage"]["source"] == "estimated"
+    assert "completed without usage metadata" in caplog.text
     result.message["widgets"] = [{"id": "document-outline", "kind": "document_outline"}]
     assert "widgets" not in recorded.response["choices"][0]["message"]
+
+
+def test_reported_usage_remains_exact() -> None:
+    result = _result_from_message(
+        AIMessage(
+            content="Hello",
+            usage_metadata={"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+            response_metadata={"finish_reason": "stop"},
+        )
+    )
+
+    response = _response_from_result("test-model", result)
+
+    assert result.usage_estimated is False
+    assert response["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+    }

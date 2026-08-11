@@ -20,7 +20,8 @@ import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
-import { loadAllPersonalLlmCalls } from "@/lib/obsData";
+import { getObsSession } from "@/lib/obsData";
+import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
 import type {
@@ -73,15 +74,21 @@ export default function ChatModePage() {
     if (!conversationId) return;
     let active = true;
     const actorQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
-    const querySuffix = `?${actorQuery}`;
-    void Promise.all([
-      loadAllPersonalLlmCalls(actorQuery),
-      api.get<TraceRecord[]>(`/traces${querySuffix}`),
-    ]).then(([calls, traceData]) => {
-      if (active) {
-        setLlmCalls(calls);
-        setTraces(traceData);
+    void getObsSession(conversationId).then((session) => {
+      if (!active) return;
+      if (session) {
+        const adapted = adaptSessionDetail(session);
+        setLlmCalls(adapted.calls);
+        setTraces(adapted.traces);
+        return;
       }
+      // OBS 未启用或无数据：回退旧 /traces 路径，保持调试面板可用
+      void api.get<TraceRecord[]>(`/traces?${actorQuery}`).then((traceData) => {
+        if (active) {
+          setLlmCalls([]);
+          setTraces(traceData);
+        }
+      });
     });
     return () => { active = false; };
   }, [conversationId, profile.actorUserId, profile.tenantId]);
@@ -645,7 +652,7 @@ function RunSummary({ response }: { response: ChatResponse }) {
     <div className="flex items-center justify-end gap-2 text-[10.5px] text-ink-muted">
       <span>{response.iterations} 次模型迭代</span>
       <span>·</span>
-      <span>{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
+      <span>{response.usage.estimated ? "≈" : ""}{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
       <span>·</span>
       <Link to={`/obs?sessionId=${encodeURIComponent(response.conversation_id)}`} className="text-accent hover:underline">
         查看调用记录

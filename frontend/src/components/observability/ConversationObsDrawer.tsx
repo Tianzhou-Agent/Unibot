@@ -4,7 +4,8 @@ import { PersonalObservabilityView } from "@/components/observability/PersonalOb
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useMockSession } from "@/lib/mockSession";
-import { loadAllPersonalLlmCalls } from "@/lib/obsData";
+import { getObsSession } from "@/lib/obsData";
+import type { ObsSessionDetail } from "@/lib/obsData";
 import { classNames } from "@/lib/utils";
 import type { ConversationRecord, LLMCallRecord, TraceRecord } from "@/types";
 
@@ -16,6 +17,7 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
+  const [obsSession, setObsSession] = useState<ObsSessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,19 +30,19 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
       : `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
     const querySuffix = actorQuery ? `?${actorQuery}` : "";
     try {
-      const [traceData, llmCallData, conversationData] = await Promise.all([
-        api.get<TraceRecord[]>(`/traces${querySuffix}`),
-        loadAllPersonalLlmCalls(actorQuery),
+      const [sessionData, conversationData] = await Promise.all([
+        getObsSession(sessionId),
         api.get<ConversationRecord[]>(`/conversations${querySuffix}`),
       ]);
-      setTraces(traceData);
-      setLlmCalls(llmCallData);
+      setObsSession(sessionData);
+      setTraces([]);
+      setLlmCalls([]);
       setConversations(conversationData);
       setError(null);
     } catch (loadError) {
       setError(apiErrorMessage(loadError));
     }
-  }, [config.auth_required, profile.actorUserId, profile.tenantId]);
+  }, [config.auth_required, profile.actorUserId, profile.tenantId, sessionId]);
 
   useEffect(() => {
     void load();
@@ -89,6 +91,7 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
             conversations={conversations}
             traces={traces}
             llmCalls={llmCalls}
+            obsSession={obsSession}
             urlParams={false}
           />
         </div>

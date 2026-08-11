@@ -33,6 +33,7 @@ class LLMResult:
     message: dict[str, Any]
     input_tokens: int = 0
     output_tokens: int = 0
+    usage_estimated: bool = False
     finish_reason: str | None = None
     first_token_at: datetime | None = None
     ttft_ms: float | None = None
@@ -259,6 +260,20 @@ class OpenAICompatibleClient:
             await self._fail_call(call, started, error)
             raise error
         result = _result_from_message(aggregate)
+        if result.input_tokens == 0 and result.output_tokens == 0:
+            result.input_tokens = estimate_request_tokens(messages, tools)
+            result.output_tokens = estimate_request_tokens([result.message])
+            result.usage_estimated = True
+            logger.warning(
+                "Model stream completed without usage metadata; using estimates "
+                "call_id=%s model=%s finish_reason=%s output_chars=%d input_tokens=%d output_tokens=%d",
+                call.call_id,
+                call.model,
+                result.finish_reason,
+                len(str(result.message.get("content") or "")),
+                result.input_tokens,
+                result.output_tokens,
+            )
         result.first_token_at = first_token_at
         result.ttft_ms = ttft_ms
         await self._complete_call(call, started, result)
@@ -394,6 +409,13 @@ def _result_from_message(message: AIMessage | AIMessageChunk) -> LLMResult:
 
 
 def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
+    usage: dict[str, Any] = {
+        "prompt_tokens": result.input_tokens,
+        "completion_tokens": result.output_tokens,
+        "total_tokens": result.input_tokens + result.output_tokens,
+    }
+    if result.usage_estimated:
+        usage.update({"estimated": True, "source": "estimated"})
     return {
         "object": "chat.completion",
         "model": model,
@@ -404,11 +426,7 @@ def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
                 "finish_reason": result.finish_reason,
             }
         ],
-        "usage": {
-            "prompt_tokens": result.input_tokens,
-            "completion_tokens": result.output_tokens,
-            "total_tokens": result.input_tokens + result.output_tokens,
-        },
+        "usage": usage,
     }
 
 
