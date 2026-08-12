@@ -554,7 +554,7 @@ class ObservabilityAspect:
         trace_id: str,
         *,
         kind: str,
-        status: Literal["started", "completed", "failed", "pending"],
+        status: Literal["started", "completed", "failed", "pending", "approval_required"],
         conversation_id: str | None = None,
         target_type: str | None = None,
         target_id: str | None = None,

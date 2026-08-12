@@ -28,8 +28,8 @@ from tianzhou_agent_platform.api.auth import SESSION_COOKIE
 from tianzhou_agent_platform.api.dependencies import RequestActor
 from tianzhou_agent_platform.api.router import create_router
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
+from tianzhou_agent_platform.core.observation_interceptors import ObservedAgentRuntime
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.observability_query import ObsQueryService
 from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
@@ -268,7 +268,7 @@ def create_app(
     app.state.obs_wal_writer = obs_wal_writer
     app.state.obs_log_handler = obs_log_handler
     app.state.obs_query = obs_query_service or ObsQueryService(None, None)
-    app.state.agent_runtime = AgentRuntime(
+    app.state.agent_runtime = ObservedAgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,
         llm=resolved_llm,
