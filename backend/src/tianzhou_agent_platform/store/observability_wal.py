@@ -423,6 +423,11 @@ class WalWriter:
         self._directory = wal_root / producer_instance_id
         self._pending: deque[ObsRecord | None] = deque()
         self._cond = threading.Condition()
+        # Sequence assignment and the queue-full fallback form one ordered
+        # producer operation. Serializing submitters keeps file order aligned
+        # with sequence order even when multiple callback threads hit the
+        # synchronous fallback at once.
+        self._submit_lock = threading.Lock()
         # Serializes every file mutation (writer batches and synchronous
         # fallback appends) so frame order stays monotonic by sequence_no.
         self._file_lock = threading.Lock()
@@ -436,16 +441,23 @@ class WalWriter:
         self._segment: WalSegment | None = None
         self._task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._rotation_task: asyncio.Task[None] | None = None
+        self._rotation_stop = asyncio.Event()
+        self._closing = False
         self._closed = False
+        self._failure: WalError | None = None
+        self._active_fallbacks = 0
         self._last_heartbeat_at = 0.0
 
     @property
     def sequence_no(self) -> int:
-        return self._sequence_no
+        with self._cond:
+            return self._sequence_no
 
     @property
     def flushed_through(self) -> int:
-        return self._flushed_through
+        with self._cond:
+            return self._flushed_through
 
     @property
     def queue_depth(self) -> int:
@@ -467,6 +479,9 @@ class WalWriter:
         self._touch_heartbeat()
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(), name=f"wal-heartbeat-{self.producer_instance_id}"
+        )
+        self._rotation_task = asyncio.create_task(
+            self._rotation_loop(), name=f"wal-rotation-{self.producer_instance_id}"
         )
         self._task = asyncio.create_task(self._run(), name=f"wal-writer-{self.producer_instance_id}")
 
@@ -514,44 +529,49 @@ class WalWriter:
         ``queue_full_wait_seconds`` for the writer to drain, then fall back to
         a controlled synchronous append (design 7.5).
         """
-        if self._closed:
-            raise WalError("WAL writer is closed")
-        self._sequence_no += 1
-        record.sequence_no = self._sequence_no
-        with self._cond:
-            if len(self._pending) < self.metrics.queue_capacity:
-                self._pending.append(record)
-                self._cond.notify()
-                return record.sequence_no
-        # queue full: wait briefly for the writer to drain
+        with self._submit_lock:
+            return self._submit_serialized(record)
+
+    def _submit_serialized(self, record: ObsRecord) -> int:
         deadline = time.monotonic() + self.queue_full_wait_seconds
         with self._cond:
-            while len(self._pending) >= self.metrics.queue_capacity and time.monotonic() < deadline:
+            while (
+                len(self._pending) >= self.metrics.queue_capacity
+                and not self._closing
+                and self._failure is None
+                and time.monotonic() < deadline
+            ):
                 self._cond.wait(timeout=0.01)
+            if self._failure is not None:
+                raise self._failure
+            if self._closing or self._closed:
+                raise WalError("WAL writer is closed")
+            self._sequence_no += 1
+            record.sequence_no = self._sequence_no
             if len(self._pending) < self.metrics.queue_capacity:
                 self._pending.append(record)
                 self._cond.notify()
                 return record.sequence_no
+            # close() waits for accepted synchronous fallbacks before it
+            # appends the shutdown sentinel and lets the writer seal.
+            self._active_fallbacks += 1
         logger.warning("WAL queue still full after %.2fs; synchronous fallback append", self.queue_full_wait_seconds)
-        return self._submit_with_sync_fallback(record)
+        try:
+            return self._submit_with_sync_fallback(record)
+        finally:
+            with self._cond:
+                self._active_fallbacks -= 1
+                self._cond.notify_all()
 
     def _submit_with_sync_fallback(self, record: ObsRecord) -> int:
         # Wait until the writer finishes its in-flight batch so file order
         # stays monotonic, then drain and append synchronously.
-        deadline = time.monotonic() + self.queue_full_wait_seconds
         with self._cond:
-            while self._writer_processing and time.monotonic() < deadline:
+            while self._writer_processing and self._failure is None:
                 self._cond.wait(timeout=0.01)
-            if self._writer_processing:
-                # Never drop the record: put it back on the queue so the
-                # writer persists it once it catches up (the barrier will
-                # wait for it). Only genuine write failures are gaps.
-                with self._cond:
-                    self._pending.append(record)
-                    self._cond.notify()
-                logger.warning(
-                    "WAL sync fallback deferred (writer busy); record %d requeued", record.sequence_no
-                )
+            if self._failure is not None:
+                self.metrics.telemetry_gap_count += 1
+                self._record_gap(record.sequence_no)
                 return record.sequence_no
             pending = [item for item in self._pending if item is not None]
             if pending:
@@ -561,24 +581,42 @@ class WalWriter:
         try:
             with self._file_lock:
                 self._append_batch_locked(pending)
-        except Exception as exc:  # noqa: BLE001 - report and continue
+        except Exception:  # noqa: BLE001 - report and continue
             logger.exception("Synchronous WAL fallback append failed")
             self.metrics.append_failure_count += 1
-            self.metrics.telemetry_gap_count += 1
-            self._record_gap(record.sequence_no)
-            failure = WalError("WAL synchronous append failed")
-            failure.__cause__ = exc
-            self._fail_waiters_through(record.sequence_no, failure)
+            self.metrics.telemetry_gap_count += len(pending)
+            self._record_gaps(
+                [item.sequence_no for item in pending],
+                message="WAL synchronous append failed",
+            )
         return record.sequence_no
 
     def _record_gap(self, sequence_no: int) -> None:
         """Track a lost sequence number; capped so an extreme failure storm
         cannot grow the set unboundedly (review)."""
+        self._record_gaps([sequence_no])
+
+    def _record_gaps(self, sequence_nos: list[int], *, message: str = "WAL telemetry gap") -> None:
+        if not sequence_nos:
+            return
+        failed: list[asyncio.Future[None]] = []
         with self._cond:
-            self._gap_sequences.add(sequence_no)
+            self._gap_sequences.update(sequence_nos)
             if len(self._gap_sequences) > MAX_GAP_SEQUENCES:
                 for stale in sorted(self._gap_sequences)[: len(self._gap_sequences) - MAX_GAP_SEQUENCES]:
                     self._gap_sequences.discard(stale)
+            affected = [
+                key
+                for key in self._waiters
+                if any(gap <= key for gap in self._gap_sequences)
+            ]
+            for key in affected:
+                failed.extend(self._waiters.pop(key))
+        failure = WalGapError(
+            f"{message}; missing sequence(s): {', '.join(str(item) for item in sorted(sequence_nos))}"
+        )
+        for future in failed:
+            self._set_future_exception(future, failure)
 
     async def flush_through(self, sequence_no: int) -> None:
         """Wait until every record up to ``sequence_no`` has been fsynced.
@@ -592,39 +630,44 @@ class WalWriter:
         case; business barriers always pass the current maximum sequence
         number, which covers the newest (retained) gaps.
         """
-        with self._cond:
-            covering_gap = any(gap <= sequence_no for gap in self._gap_sequences)
-        if covering_gap:
-            raise WalGapError(
-                f"WAL flush_through({sequence_no}) blocked by a telemetry gap; data is not durable"
-            )
-        if sequence_no <= self._flushed_through:
-            return
         loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
-        self._waiters.setdefault(sequence_no, []).append(future)
+        with self._cond:
+            if any(gap <= sequence_no for gap in self._gap_sequences):
+                raise WalGapError(
+                    f"WAL flush_through({sequence_no}) blocked by a telemetry gap; data is not durable"
+                )
+            if sequence_no <= self._flushed_through:
+                return
+            if self._failure is not None:
+                raise self._failure
+            self._waiters.setdefault(sequence_no, []).append(future)
         try:
             await asyncio.wait_for(future, timeout=self.flush_timeout_seconds)
         except TimeoutError as exc:
             # the writer may have already popped and resolved the future;
             # only remove it if it is still registered
-            futures = self._waiters.get(sequence_no)
-            if futures is not None and future in futures:
-                futures.remove(future)
-                if not futures:
-                    self._waiters.pop(sequence_no, None)
+            with self._cond:
+                futures = self._waiters.get(sequence_no)
+                if futures is not None and future in futures:
+                    futures.remove(future)
+                    if not futures:
+                        self._waiters.pop(sequence_no, None)
             raise WalFlushTimeoutError(
                 f"WAL flush_through({sequence_no}) timed out after {self.flush_timeout_seconds}s"
             ) from exc
 
     def close(self) -> None:
         """Request graceful shutdown: drain, fsync and seal the active segment."""
-        if self._closed:
-            return
         with self._cond:
+            if self._closing or self._closed:
+                return
+            self._closing = True
+            while self._active_fallbacks:
+                self._cond.wait()
             self._closed = True
             self._pending.append(None)  # sentinel
-            self._cond.notify()
+            self._cond.notify_all()
 
     async def wait_closed(self) -> None:
         # keep the heartbeat alive until the writer has drained and sealed
@@ -634,6 +677,10 @@ class WalWriter:
         if self._task is not None:
             await self._task
             self._task = None
+        if self._rotation_task is not None:
+            self._rotation_stop.set()
+            await self._rotation_task
+            self._rotation_task = None
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             try:
@@ -652,18 +699,15 @@ class WalWriter:
                 self._maybe_heartbeat()
                 await self._publish(batch)
             # graceful shutdown: everything already drained; seal the segment
-            if self._segment is not None and self._segment.size_bytes > 0:
-                self._segment.seal()
-            elif self._segment is not None:
-                self._segment.close()
-        except Exception:
+            await asyncio.to_thread(self._seal_active_segment)
+        except Exception as exc:
             logger.exception("WAL writer crashed")
             # stop the liveness heartbeat too: a dead writer must not keep
             # its producer looking alive, or orphaned segments would never
             # be claimed by other instances (review round 3)
             if self._heartbeat_task is not None:
                 self._heartbeat_task.cancel()
-            self._fail_all_waiters()
+            self._mark_failed(exc)
 
     def _maybe_heartbeat(self) -> None:
         """Refresh the liveness heartbeat at most every 10 seconds."""
@@ -683,6 +727,35 @@ class WalWriter:
                 self._maybe_heartbeat()
         except asyncio.CancelledError:
             pass
+
+    async def _rotation_loop(self) -> None:
+        """Seal non-empty active segments on age even when traffic is idle."""
+        check_interval = max(0.01, min(self.rotation_interval_seconds / 2, 1.0))
+        while not self._rotation_stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._rotation_stop.wait(), timeout=check_interval
+                )
+            except TimeoutError:
+                try:
+                    await asyncio.to_thread(self._rotate_if_due)
+                except Exception:  # noqa: BLE001 - next append/shutdown retries safely
+                    logger.exception("Idle WAL segment rotation failed")
+
+    def _rotate_if_due(self) -> None:
+        with self._file_lock:
+            if self._segment is not None and self._segment.size_bytes > 0:
+                self._maybe_rotate(self._segment)
+
+    def _seal_active_segment(self) -> None:
+        with self._file_lock:
+            if self._segment is None:
+                return
+            if self._segment.size_bytes > 0:
+                self._segment.seal()
+            else:
+                self._segment.close()
+            self._segment = None
 
     def _take_batch(self) -> list[ObsRecord] | None:
         """Block until records or the shutdown sentinel are available."""
@@ -704,13 +777,21 @@ class WalWriter:
             return None
 
     def _append_batch_sync(self, batch: list[ObsRecord]) -> None:
-        with self._file_lock:
-            try:
+        try:
+            with self._file_lock:
                 self._append_batch_locked(batch)
-            finally:
-                with self._cond:
-                    self._writer_processing = False
-                    self._cond.notify_all()
+        except Exception:
+            self.metrics.append_failure_count += 1
+            self.metrics.telemetry_gap_count += len(batch)
+            self._record_gaps(
+                [record.sequence_no for record in batch],
+                message="WAL writer batch append failed",
+            )
+            raise
+        finally:
+            with self._cond:
+                self._writer_processing = False
+                self._cond.notify_all()
 
     def _append_batch_locked(self, batch: list[ObsRecord]) -> None:
         if self._segment is None:
@@ -727,9 +808,7 @@ class WalWriter:
         self.metrics.fsync_count += 1
         self.metrics.wal_bytes = self._segment.size_bytes
         self.metrics.sequence_no = batch[-1].sequence_no
-        self._flushed_through = max(self._flushed_through, batch[-1].sequence_no)
-        self.metrics.flushed_through = self._flushed_through
-        self._notify_waiters_through(self._flushed_through)
+        self._notify_waiters_through(batch[-1].sequence_no)
 
     async def _publish(self, batch: list[ObsRecord]) -> None:
         # Records are only published to the ingest side after fsync succeeded.
@@ -757,25 +836,65 @@ class WalWriter:
         self._segment = self._new_segment()
 
     def _notify_waiters_through(self, sequence_no: int) -> None:
-        resolved = [key for key in self._waiters if key <= sequence_no]
-        for key in resolved:
-            for future in self._waiters.pop(key):
-                if not future.done():
-                    future.get_loop().call_soon_threadsafe(future.set_result, None)
+        succeeded: list[asyncio.Future[None]] = []
+        failed: list[asyncio.Future[None]] = []
+        with self._cond:
+            self._flushed_through = max(self._flushed_through, sequence_no)
+            self.metrics.flushed_through = self._flushed_through
+            resolved = [key for key in self._waiters if key <= self._flushed_through]
+            for key in resolved:
+                futures = self._waiters.pop(key)
+                if any(gap <= key for gap in self._gap_sequences):
+                    failed.extend(futures)
+                else:
+                    succeeded.extend(futures)
+        for future in succeeded:
+            self._set_future_result(future)
+        failure = WalGapError("WAL barrier covered a telemetry gap; data is not durable")
+        for future in failed:
+            self._set_future_exception(future, failure)
 
-    def _fail_waiters_through(self, sequence_no: int, exc: Exception) -> None:
-        resolved = [key for key in self._waiters if key <= sequence_no]
-        for key in resolved:
-            for future in self._waiters.pop(key):
-                if not future.done():
-                    future.get_loop().call_soon_threadsafe(future.set_exception, exc)
+    def _mark_failed(self, exc: Exception) -> None:
+        failure = WalError("WAL writer stopped")
+        failure.__cause__ = exc
+        waiters: list[asyncio.Future[None]] = []
+        with self._cond:
+            self._failure = failure
+            self._closing = True
+            self._closed = True
+            pending = [item for item in self._pending if item is not None]
+            self._pending.clear()
+            self._gap_sequences.update(item.sequence_no for item in pending)
+            if len(self._gap_sequences) > MAX_GAP_SEQUENCES:
+                for stale in sorted(self._gap_sequences)[
+                    : len(self._gap_sequences) - MAX_GAP_SEQUENCES
+                ]:
+                    self._gap_sequences.discard(stale)
+            self.metrics.telemetry_gap_count += len(pending)
+            for futures in self._waiters.values():
+                waiters.extend(futures)
+            self._waiters.clear()
+            self._cond.notify_all()
+        for future in waiters:
+            self._set_future_exception(future, failure)
 
-    def _fail_all_waiters(self) -> None:
-        for futures in self._waiters.values():
-            for future in futures:
-                if not future.done():
-                    future.get_loop().call_soon_threadsafe(future.set_exception, WalError("WAL writer stopped"))
-        self._waiters.clear()
+    @staticmethod
+    def _set_future_result(future: asyncio.Future[None]) -> None:
+        future.get_loop().call_soon_threadsafe(WalWriter._set_result_if_pending, future)
+
+    @staticmethod
+    def _set_future_exception(future: asyncio.Future[None], exc: Exception) -> None:
+        future.get_loop().call_soon_threadsafe(WalWriter._set_exception_if_pending, future, exc)
+
+    @staticmethod
+    def _set_result_if_pending(future: asyncio.Future[None]) -> None:
+        if not future.done():
+            future.set_result(None)
+
+    @staticmethod
+    def _set_exception_if_pending(future: asyncio.Future[None], exc: Exception) -> None:
+        if not future.done():
+            future.set_exception(exc)
 
 
 def build_producer_instance_id(node_id: str, process_id: int | None = None, startup_uuid: str | None = None) -> str:

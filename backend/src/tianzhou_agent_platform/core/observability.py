@@ -178,7 +178,7 @@ class ObservabilityAspect:
         self._span_ids_by_trace: dict[str, set[str]] = {}
         self._trace_contexts: dict[str, TraceContext] = {}
         self._trace_seq: dict[str, int] = {}  # OTel trace_id -> next span sequence
-        self._pending_llm_calls: dict[str, LLMCallRecord] = {}  # span_id -> call
+        self._pending_llm_calls: dict[str, list[LLMCallRecord]] = {}  # span_id -> attempts
         # legacy trace_id -> (input, output, cache) conversation totals set on
         # the root span by finish_span (review P1-4)
         self._trace_token_totals: dict[str, tuple[int, int, int]] = {}
@@ -440,13 +440,27 @@ class ObservabilityAspect:
         user_id = cast(str, span.attributes.get(ATTR_USER_ID)) or "anonymous"
         tenant_id = cast(str, span.attributes.get(ATTR_TENANT_ID)) or "default"
         if kind == "model":
-            call = self._pending_llm_calls.pop(legacy_span_id, None)
+            calls = self._pending_llm_calls.pop(legacy_span_id, [])
+            call = calls[-1] if calls else None
             response = call.response if call is not None else output_data
             data: dict[str, Any] = {
                 "request": call.request if call is not None else input_data,
                 "response": response,
                 "usage": (response or {}).get("usage") if isinstance(response, dict) else None,
                 "error": call.error if call is not None else None,
+                "attempts": [
+                    {
+                        "call_id": attempt.call_id,
+                        "endpoint": attempt.endpoint,
+                        "model": attempt.model,
+                        "status": attempt.status,
+                        "request": attempt.request,
+                        "response": attempt.response,
+                        "error": attempt.error,
+                        "duration_ms": attempt.duration_ms,
+                    }
+                    for attempt in calls
+                ],
             }
         else:
             data = {"input": input_data, "output": output_data, "error": error}
@@ -607,7 +621,13 @@ class ObservabilityAspect:
         # New path: stage the call as raw-IO source for its Model Span; the
         # Span finished record will carry the raw_io reference.
         if self._enabled and call.trace_id in self._otel_trace_ids and call.span_id:
-            self._pending_llm_calls[call.span_id] = call
+            attempts = self._pending_llm_calls.setdefault(call.span_id, [])
+            for index, attempt in enumerate(attempts):
+                if attempt.call_id == call.call_id:
+                    attempts[index] = call
+                    break
+            else:
+                attempts.append(call)
 
     @observation_slice
     async def start_span(
@@ -740,9 +760,10 @@ class ObservabilityAspect:
         try:
             kind = cast(str, span.attributes.get(ATTR_SPAN_KIND)) or "internal"
             if kind == "model" and span_id in self._pending_llm_calls:
+                calls = self._pending_llm_calls[span_id]
                 span.set_attribute(
                     "gen_ai.response.model",
-                    self._pending_llm_calls[span_id].model,
+                    calls[-1].model,
                 )
             raw_ref: RawIoRef | None = None
             try:
@@ -913,9 +934,10 @@ class ObservabilityAspect:
             1 for event in events if event.kind in ("user.request", "final.response")
         )
         durable = True
+        terminal_sequence: int | None = None
         if self._wal_writer is not None:
             try:
-                self._wal_writer.submit(
+                terminal_sequence = self._wal_writer.submit(
                     ObsRecord(
                         record_type="trace_finished",
                         producer_instance_id=self._wal_writer.producer_instance_id,
@@ -963,16 +985,17 @@ class ObservabilityAspect:
             # the business returns its final answer (design 6.2). A barrier
             # failure is retried and, if permanent, reported loudly so the
             # gap is discoverable (design 15; review P1-5).
-            try:
-                await self._flush_with_retry(self._wal_writer.sequence_no)
-            except WalGapError:
-                logger.error(
-                    "WAL barrier failed for finished trace %s: telemetry gap, data is not durable", trace_id
-                )
-                durable = False
-            except WalError:
-                logger.exception("WAL barrier failed for finished trace %s", trace_id)
-                durable = False
+            if terminal_sequence is not None:
+                try:
+                    await self._flush_with_retry(terminal_sequence)
+                except WalGapError:
+                    logger.error(
+                        "WAL barrier failed for finished trace %s: telemetry gap, data is not durable", trace_id
+                    )
+                    durable = False
+                except WalError:
+                    logger.exception("WAL barrier failed for finished trace %s", trace_id)
+                    durable = False
         if not durable and self._obs_store is not None:
             # design 14 fallback: WAL/NAS unavailable but MySQL healthy ->
             # write the trace rows directly to OBS MySQL (review P1-4).
@@ -1131,8 +1154,8 @@ class ObservabilityAspect:
         self._trace_token_totals.pop(trace_id, None)
         if otel_trace_id is not None:
             self._trace_seq.pop(otel_trace_id, None)
-        for span_id, call in list(self._pending_llm_calls.items()):
-            if call.trace_id == trace_id:
+        for span_id, calls in list(self._pending_llm_calls.items()):
+            if any(call.trace_id == trace_id for call in calls):
                 self._pending_llm_calls.pop(span_id, None)
         for legacy_span_id, span in list(self._spans.items()):
             if span.attributes.get(ATTR_LEGACY_TRACE_ID) == trace_id:

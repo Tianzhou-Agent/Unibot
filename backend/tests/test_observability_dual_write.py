@@ -5,9 +5,12 @@ raw IO persistence and ingest segment recycling.
 
 from __future__ import annotations
 
+import asyncio
+import gzip
+import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +18,15 @@ import pytest
 
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
-from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, record_from_span, setup_tracer_provider
+from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, setup_tracer_provider
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
-from tianzhou_agent_platform.store.observability_wal import WalWriter, iter_segment_infos, validate_segment_file
+from tianzhou_agent_platform.store.observability_wal import (
+    ObsRecord,
+    WalWriter,
+    iter_segment_infos,
+)
 
 
 class FakeObsStore:
@@ -197,6 +204,50 @@ async def test_dual_write_produces_wal_records_and_barrier(pipeline) -> None:
 
 
 @pytest.mark.asyncio
+async def test_trace_barrier_uses_its_terminal_record_not_global_sequence(pipeline) -> None:
+    aspect = pipeline["aspect"]
+    wal = pipeline["wal"]
+    await aspect.create_agent_trace(
+        trace_id="trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        root_span_id="span_bbbbbbbbbbbbbbbbbbbb",
+        conversation_id="conv_1",
+        user_id="user_1",
+        tenant_id="tenant_1",
+        input_data={},
+        attributes={},
+    )
+
+    original_submit = wal.submit
+
+    def submit_with_unrelated_record(record: ObsRecord) -> int:
+        sequence = original_submit(record)
+        if record.record_type == "trace_finished":
+            original_submit(
+                ObsRecord(
+                    record_type="event",
+                    producer_instance_id=wal.producer_instance_id,
+                    sequence_no=0,
+                    trace_id="unrelated_trace",
+                    payload={"name": "unrelated"},
+                )
+            )
+        return sequence
+
+    barriers: list[int] = []
+
+    async def capture_barrier(sequence_no: int, *, attempts: int = 3) -> None:
+        del attempts
+        barriers.append(sequence_no)
+        await wal.flush_through(sequence_no)
+
+    wal.submit = submit_with_unrelated_record  # type: ignore[method-assign]
+    aspect._flush_with_retry = capture_barrier  # type: ignore[method-assign]
+    await aspect.finish_trace("trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "completed")
+
+    assert barriers == [wal.sequence_no - 1]
+
+
+@pytest.mark.asyncio
 async def test_ingest_worker_replays_sealed_segments(pipeline) -> None:
     wal = pipeline["wal"]
     store = pipeline["store"]
@@ -335,6 +386,144 @@ async def test_ingest_worker_skips_live_producer_with_fresh_heartbeat(pipeline) 
 
 
 @pytest.mark.asyncio
+async def test_ingest_worker_reconciles_only_stale_producers(tmp_path: Path) -> None:
+    from tianzhou_agent_platform.store.observability_wal import HEARTBEAT_NAME
+
+    class ReconcileStore(FakeObsStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reconciled: list[list[str]] = []
+
+        async def fail_interrupted_producers(
+            self,
+            producer_instance_ids: list[str],
+            *,
+            interrupted_at: datetime,
+        ) -> dict[str, int]:
+            assert interrupted_at.tzinfo is not None
+            self.reconciled.append(producer_instance_ids)
+            return {"traces": 1, "spans": 2}
+
+    wal_root = tmp_path / "wal"
+    stale_dir = wal_root / "stale-producer"
+    live_dir = wal_root / "live-producer"
+    current_dir = wal_root / "current-producer"
+    for directory in (stale_dir, live_dir, current_dir):
+        directory.mkdir(parents=True)
+        (directory / HEARTBEAT_NAME).write_text("alive", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(stale_dir / HEARTBEAT_NAME, (old, old))
+
+    store = ReconcileStore()
+    worker = ObsIngestWorker(
+        wal_root,
+        store,
+        "current-producer",
+        orphan_active_min_age_seconds=60,
+    )
+    await worker._reconcile_interrupted_producers()  # noqa: SLF001
+
+    assert store.reconciled == [["stale-producer"]]
+
+
+@pytest.mark.asyncio
+async def test_slow_live_ingest_does_not_block_later_wal_barriers(tmp_path: Path) -> None:
+    class BlockingStore(FakeObsStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def bulk_upsert(self, records: list) -> int:
+            self.entered.set()
+            await self.release.wait()
+            return await super().bulk_upsert(records)
+
+    wal_root = tmp_path / "wal"
+    store = BlockingStore()
+    worker = ObsIngestWorker(wal_root, store, "node-1-abc", scan_interval_seconds=1)
+    wal = WalWriter(wal_root, "node-1-abc", on_records_flushed=worker.on_records_flushed)
+    worker.start()
+    wal.start()
+    try:
+        first = wal.submit(
+            ObsRecord(
+                record_type="event",
+                producer_instance_id="node-1-abc",
+                sequence_no=0,
+                trace_id="trace_aaa",
+                payload={"name": "first"},
+            )
+        )
+        await wal.flush_through(first)
+        await asyncio.wait_for(store.entered.wait(), timeout=0.2)
+
+        second = wal.submit(
+            ObsRecord(
+                record_type="event",
+                producer_instance_id="node-1-abc",
+                sequence_no=0,
+                trace_id="trace_aaa",
+                payload={"name": "second"},
+            )
+        )
+        await asyncio.wait_for(wal.flush_through(second), timeout=0.2)
+    finally:
+        store.release.set()
+        wal.close()
+        await wal.wait_closed()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_failed_live_ingest_retries_without_new_wal_traffic(tmp_path: Path) -> None:
+    class FlakyStore(FakeObsStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.succeeded = asyncio.Event()
+
+        async def bulk_upsert(self, records: list) -> int:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("database unavailable")
+            result = await super().bulk_upsert(records)
+            self.succeeded.set()
+            return result
+
+    wal_root = tmp_path / "wal"
+    store = FlakyStore()
+    worker = ObsIngestWorker(
+        wal_root,
+        store,
+        "node-1-abc",
+        scan_interval_seconds=1,
+        retry_backoff_seconds=0.01,
+    )
+    wal = WalWriter(wal_root, "node-1-abc", on_records_flushed=worker.on_records_flushed)
+    worker.start()
+    wal.start()
+    try:
+        sequence = wal.submit(
+            ObsRecord(
+                record_type="event",
+                producer_instance_id="node-1-abc",
+                sequence_no=0,
+                trace_id="trace_aaa",
+                payload={"name": "retry"},
+            )
+        )
+        await wal.flush_through(sequence)
+        await asyncio.wait_for(store.succeeded.wait(), timeout=0.5)
+        assert store.attempts == 2
+        assert worker.metrics.ingest_retry_count == 1
+    finally:
+        wal.close()
+        await wal.wait_closed()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
 async def test_approval_resume_keeps_same_trace_and_cleans_up(pipeline) -> None:
     """approval_required exports the current root; confirmation builds a
     continuation root under the same trace id, and terminal finish cleans
@@ -415,7 +604,6 @@ async def test_cross_instance_approval_resume_rebuilds_trace_context(pipeline) -
     trace context from the OBS pipeline and keeps the same trace id for
     resumed spans (review round 3, P1)."""
     from tianzhou_agent_platform.core.observability import ObservabilityAspect as Aspect
-    from tianzhou_agent_platform.core.repository import InMemoryRepository as Repo
     from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor as Processor
     from tianzhou_agent_platform.core.telemetry import setup_tracer_provider as setup
 
@@ -481,8 +669,6 @@ async def test_fallback_records_use_real_otel_span_ids(pipeline) -> None:
     creation), not 37-char legacy ids that overflow VARCHAR(32)
     (review round 3, P1)."""
     from tianzhou_agent_platform.core.chat import TraceRecord, TraceSpan
-    from tianzhou_agent_platform.core.repository import InMemoryRepository as Repo
-
     aspect = pipeline["aspect"]
     aspect._otel_trace_ids["trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] = "a" * 32  # noqa: SLF001
     aspect._otel_span_ids["span_cccccccccccccccccccc"] = "b" * 16  # noqa: SLF001
@@ -925,6 +1111,84 @@ async def test_raw_io_not_written_when_disabled(tmp_path: Path) -> None:
     assert not raw_root.exists()
 
 
+@pytest.mark.asyncio
+async def test_model_raw_io_preserves_all_provider_attempts(tmp_path: Path) -> None:
+    raw_root = tmp_path / "raw"
+    wal = WalWriter(tmp_path / "wal", "node-1-abc")
+    provider = setup_tracer_provider(DurableWalSpanProcessor(wal), service_instance_id="node-1-abc")
+    aspect = ObservabilityAspect(
+        InMemoryRepository(),
+        wal_writer=wal,
+        tracer=provider.get_tracer("attempts"),
+        raw_io_writer=RawIoWriter(raw_root),
+    )
+    wal.start()
+    trace_id = "trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    span_id = "span_cccccccccccccccccccc"
+    await aspect.create_agent_trace(
+        trace_id=trace_id,
+        root_span_id="span_bbbbbbbbbbbbbbbbbbbb",
+        conversation_id="conv_1",
+        user_id="user_1",
+        tenant_id="tenant_1",
+        input_data={},
+        attributes={},
+    )
+    await aspect.start_span(
+        trace_id,
+        span_id=span_id,
+        parent_span_id="span_bbbbbbbbbbbbbbbbbbbb",
+        kind="model",
+        name="model.complete",
+    )
+    base = LLMCallRecord(
+        call_id="attempt_1",
+        trace_id=trace_id,
+        span_id=span_id,
+        endpoint="https://model.invalid/chat",
+        model="model-a",
+        request={"messages": [{"role": "user", "content": "hello"}]},
+    )
+    await aspect.record_llm_call(base)
+    await aspect.record_llm_call(
+        base.model_copy(
+            update={
+                "status": "failed",
+                "response": {"status_code": 400},
+                "error": "unsupported option",
+            }
+        )
+    )
+    second = base.model_copy(
+        update={
+            "call_id": "attempt_2",
+        }
+    )
+    await aspect.record_llm_call(second)
+    await aspect.record_llm_call(
+        second.model_copy(
+            update={
+                "status": "completed",
+                "response": {"content": "ok"},
+                "error": None,
+            }
+        )
+    )
+    await aspect.finish_span(trace_id, span_id, "completed", output_data={"content": "ok"})
+    await aspect.finish_trace(trace_id, "completed")
+    wal.close()
+    await wal.wait_closed()
+
+    raw_file = next(raw_root.rglob("*.json.gz"))
+    with gzip.open(raw_file, "rt", encoding="utf-8") as file:
+        document = json.load(file)
+    assert [attempt["status"] for attempt in document["attempts"]] == [
+        "failed",
+        "completed",
+    ]
+    assert document["response"] == {"content": "ok"}
+
+
 def test_span_to_record_mapping() -> None:
     """Direct mapping check: business attributes land in the right payload keys."""
     from opentelemetry.sdk.trace import TracerProvider
@@ -965,3 +1229,36 @@ def test_span_to_record_mapping() -> None:
     assert record.payload["tenant_id"] == "tenant_1"
     assert record.payload["input_tokens"] == 42
     assert record.payload["legacy_span_id"] == "span_bbbbbbbbbbbbbbbbbbbb"
+
+
+def test_span_suppression_is_captured_when_span_starts() -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from tianzhou_agent_platform.core.observation_context import suppress_observation
+
+    class FakeWal:
+        producer_instance_id = "node-1-abc"
+
+        def __init__(self) -> None:
+            self.records: list = []
+
+        def submit(self, record) -> int:
+            self.records.append(record)
+            return len(self.records)
+
+    wal = FakeWal()
+    provider = TracerProvider()
+    provider.add_span_processor(DurableWalSpanProcessor(wal))  # type: ignore[arg-type]
+    tracer = provider.get_tracer("test-suppression")
+    with suppress_observation():
+        suppressed = tracer.start_span("observability.internal")
+    suppressed.end()
+
+    normal = tracer.start_span("business.operation")
+    normal.set_attribute("unibot.trace_id", "trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    with suppress_observation():
+        normal.end()
+
+    assert [record.payload["name"] for record in wal.records] == [
+        "business.operation"
+    ]

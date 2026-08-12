@@ -17,11 +17,12 @@ migration (legacy fallback is handled by the API layer).
 from __future__ import annotations
 
 import asyncio
-import gzip
+import hashlib
+import hmac
 import json
 import logging
 import zlib
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -244,6 +245,13 @@ class ObsQueryService:
             return {"status": "too_large", "detail": None}
         try:
             content = await asyncio.to_thread(target.read_bytes)
+            expected_sha256 = span.get("raw_io_sha256")
+            if expected_sha256 and not hmac.compare_digest(
+                hashlib.sha256(content).hexdigest(),
+                str(expected_sha256),
+            ):
+                logger.error("raw log checksum mismatch for %s", raw_path)
+                return {"status": "failed", "detail": None}
             # bounded decompression: never trust the gzip stream size
             document = json.loads(_bounded_gzip_decompress(content, 64 * 1024 * 1024).decode("utf-8"))
         except (OSError, ValueError):

@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import re
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Iterable
 from uuid import uuid4

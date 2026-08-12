@@ -332,12 +332,65 @@ async def test_span_started_cannot_downgrade_finished(store: ObservabilityStore)
     assert span["input_tokens"] == 100
 
 
+async def test_stale_producer_running_rows_are_terminalized(store: ObservabilityStore) -> None:
+    interrupted_at = datetime(2026, 8, 6, 10, 0, 10, tzinfo=timezone.utc)
+    trace_started = ObsRecord(
+        record_type="trace_started",
+        producer_instance_id="dead-producer",
+        sequence_no=1,
+        trace_id="trace_interrupted",
+        payload={
+            "legacy_trace_id": "trace_interrupted",
+            "root_span_id": "span_root",
+            "session_id": "conv_1",
+            "user_id": "user_1",
+            "tenant_id": "tenant_1",
+            "status": "running",
+            "started_at": "2026-08-06T10:00:00Z",
+        },
+    )
+    span_started = ObsRecord(
+        record_type="span_started",
+        producer_instance_id="dead-producer",
+        sequence_no=2,
+        trace_id="trace_interrupted",
+        span_id="span_interrupted",
+        payload={
+            "legacy_span_id": "span_interrupted",
+            "parent_span_id": "span_root",
+            "sequence_no": 2,
+            "session_id": "conv_1",
+            "user_id": "user_1",
+            "tenant_id": "tenant_1",
+            "kind": "model",
+            "name": "chat.completions",
+            "status": "running",
+            "started_at": "2026-08-06T10:00:01Z",
+        },
+    )
+    await store.bulk_upsert([trace_started, span_started])
+
+    counts = await store.fail_interrupted_producers(
+        ["dead-producer"], interrupted_at=interrupted_at
+    )
+
+    trace = await store.get_trace("trace_interrupted")
+    span = await store.get_span("span_interrupted")
+    assert counts == {"traces": 1, "spans": 1}
+    assert trace is not None
+    assert trace["status"] == "failed"
+    assert trace["completed_at"] == interrupted_at.replace(tzinfo=None)
+    assert trace["attributes"]["unibot.interruption.reason"] == "process_restart"
+    assert span is not None
+    assert span["status"] == "failed"
+    assert span["completed_at"] == interrupted_at.replace(tzinfo=None)
+    assert span["attributes"]["unibot.interruption.reason"] == "process_restart"
+
+
 async def test_out_of_order_finished_does_not_overwrite_newer_state(store: ObservabilityStore) -> None:
     """finished->finished out-of-order replay must not regress a newer
     terminal state (review round 2, P1-2): only newer records apply."""
     from datetime import timedelta
-
-    from tianzhou_agent_platform.store.observability_wal import ObsRecord
 
     base = make_trace_finished(1, "trace_aaa")
     # newer: completed, written at T+2
@@ -359,8 +412,6 @@ async def test_retention_cleanup_deletes_terminal_traces_only(store: Observabili
     """Retention cleanup removes terminal traces (with their spans/events) by
     trace id; approval_required traces survive (review round 3, P1)."""
     from datetime import timedelta
-
-    from tianzhou_agent_platform.store.observability_wal import ObsRecord
 
     now = datetime.now(timezone.utc)
     old_finished = make_trace_finished(1, "trace_aaa")

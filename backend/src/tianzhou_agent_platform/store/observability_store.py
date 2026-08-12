@@ -32,6 +32,7 @@ from sqlalchemy import (
     func,
     select,
     text,
+    update,
 )
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -282,7 +283,12 @@ def _event_values(record: ObsRecord) -> dict[str, Any]:
     }
 
 
-def _upsert_statement(table: Table, rows: list[dict[str, Any]], *, ignore: bool = False):
+def _upsert_statement(
+    table: Table,
+    rows: list[dict[str, Any]],
+    *,
+    ignore: bool = False,
+) -> Any:
     """MySQL ``INSERT ... ON DUPLICATE KEY UPDATE`` with absolute values.
 
     Statistical columns are always overwritten with the incoming absolute
@@ -443,6 +449,56 @@ class ObservabilityStore:
             result = await session.execute(select(table).where(table.c.trace_id == trace_id))
             row = result.mappings().first()
             return dict(row) if row is not None else None
+
+    async def fail_interrupted_producers(
+        self,
+        producer_instance_ids: list[str],
+        *,
+        interrupted_at: datetime,
+    ) -> dict[str, int]:
+        """Terminalize running rows owned by producers proven stale."""
+        if not producer_instance_ids:
+            return {"traces": 0, "spans": 0}
+        trace_table = self.tables[TRACES_TABLE]
+        span_table = self.tables[SPANS_TABLE]
+        version = int(interrupted_at.timestamp() * 1_000_000)
+        reason_path = '$."unibot.interruption.reason"'
+        async with self._session_factory() as session:
+            async with session.begin():
+                traces = await session.execute(
+                    update(trace_table)
+                    .where(trace_table.c.producer_instance_id.in_(producer_instance_ids))
+                    .where(trace_table.c.status == "running")
+                    .values(
+                        status="failed",
+                        completed_at=interrupted_at,
+                        record_version=version,
+                        attributes=func.JSON_SET(
+                            func.coalesce(trace_table.c.attributes, func.JSON_OBJECT()),
+                            reason_path,
+                            "process_restart",
+                        ),
+                    )
+                )
+                spans = await session.execute(
+                    update(span_table)
+                    .where(span_table.c.producer_instance_id.in_(producer_instance_ids))
+                    .where(span_table.c.status == "running")
+                    .values(
+                        status="failed",
+                        completed_at=interrupted_at,
+                        record_version=version,
+                        attributes=func.JSON_SET(
+                            func.coalesce(span_table.c.attributes, func.JSON_OBJECT()),
+                            reason_path,
+                            "process_restart",
+                        ),
+                    )
+                )
+        return {
+            "traces": traces.rowcount or 0,
+            "spans": spans.rowcount or 0,
+        }
 
     async def list_traces(
         self,

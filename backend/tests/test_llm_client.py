@@ -234,6 +234,57 @@ async def test_langchain_streaming_emits_message_deltas(caplog: pytest.LogCaptur
     assert "widgets" not in recorded.response["choices"][0]["message"]
 
 
+@pytest.mark.asyncio
+async def test_call_sink_keeps_complete_redacted_model_io() -> None:
+    long_text = "x" * 5_000
+    recorded_calls: dict[str, LLMCallRecord] = {}
+
+    async def record_call(call: LLMCallRecord) -> None:
+        recorded_calls[call.call_id] = call
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": long_text},
+                    }
+                ]
+            },
+        )
+
+    settings = AgentSettings(
+        _env_file=None,
+        llm_base_url="https://provider.invalid/v1",
+        llm_api_key="test-key",
+        llm_model="test-model",
+    )
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
+    try:
+        await client.complete(
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Bearer secret-token {long_text}",
+                }
+            ],
+            tools=[],
+        )
+    finally:
+        await http_client.aclose()
+
+    recorded = next(iter(recorded_calls.values()))
+    request_content = recorded.request["messages"][0]["content"]
+    response_content = recorded.response["choices"][0]["message"]["content"]
+    assert request_content.startswith("Bearer [REDACTED] ")
+    assert request_content.endswith(long_text)
+    assert "TRUNCATED" not in request_content
+    assert response_content == long_text
+
+
 def test_reported_usage_remains_exact() -> None:
     result = _result_from_message(
         AIMessage(

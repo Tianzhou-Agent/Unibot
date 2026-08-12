@@ -4,8 +4,9 @@ DurableWalSpanProcessor that converts ended spans into immutable ObsRecords.
 Design (ir-01 section 4.2, 5, 6): the OTel SDK is used as the in-process
 Trace/Span data model; ``DurableWalSpanProcessor.on_end`` converts each ended
 span into an immutable ``ObsRecord`` and submits it to the WAL synchronously
-(``SpanProcessor.on_end`` has no await). Root spans additionally produce a
-``trace_finished`` record so the trace row carries aggregated absolute values.
+(``SpanProcessor.on_end`` has no await). Trace start/terminal records remain
+owned by the agent-run observer because they carry business aggregates and
+approval checkpoint semantics that cannot be inferred from a generic span.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult  # noqa: F401 - interface parity
 from opentelemetry.trace import StatusCode, get_tracer_provider, set_tracer_provider
 
+from tianzhou_agent_platform.core.observation_context import is_observation_suppressed
 from tianzhou_agent_platform.store.observability_wal import ObsRecord, WalError, WalWriter
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ ATTR_TRACE_STATUS = "unibot.trace_status"
 ATTR_MESSAGE_COUNT = "unibot.message_count"
 ATTR_COMPRESSION_COUNT = "unibot.compression_count"
 ATTR_ERROR_COUNT = "unibot.error_count"
+ATTR_OBSERVATION_SUPPRESSED = "unibot.observation.suppressed"
 
 # statuses reported by the business layer through unibot.status
 UNIBOT_STATUS_ATTR = "unibot.status"
@@ -98,6 +101,7 @@ _EXTRA_ATTRIBUTE_KEYS = {
     ATTR_MESSAGE_COUNT,
     ATTR_COMPRESSION_COUNT,
     ATTR_ERROR_COUNT,
+    ATTR_OBSERVATION_SUPPRESSED,
     UNIBOT_STATUS_ATTR,
 }
 
@@ -128,14 +132,15 @@ def otel_status_to_unibot(status: Any, business_status: str | None) -> str:
 def record_from_span(span: ReadableSpan, producer_instance_id: str, sequence_no: int) -> ObsRecord:
     """Convert one ended OTel span into its finished WAL record."""
     attributes = dict(span.attributes or {})
-    role = attributes.get(ATTR_SPAN_ROLE, "child")
-    business_status = attributes.get(UNIBOT_STATUS_ATTR)
+    raw_business_status = attributes.get(UNIBOT_STATUS_ATTR)
+    business_status = raw_business_status if isinstance(raw_business_status, str) else None
     unibot_status = otel_status_to_unibot(span.status, business_status)
     started_at = span.start_time
     ended_at = span.end_time
     started = datetime.fromtimestamp(started_at / 1e9, tz=timezone.utc) if started_at else datetime.now(timezone.utc)
     ended = datetime.fromtimestamp(ended_at / 1e9, tz=timezone.utc) if ended_at else None
     duration_ms = (ended_at - started_at) / 1e6 if ended_at and started_at else None
+    raw_error_json = attributes.get(ATTR_ERROR_JSON)
 
     span_payload: dict[str, Any] = {
         "legacy_span_id": attributes.get(ATTR_LEGACY_SPAN_ID),
@@ -171,7 +176,9 @@ def record_from_span(span: ReadableSpan, producer_instance_id: str, sequence_no:
         "attributes": {
             key: value for key, value in attributes.items() if key not in _EXTRA_ATTRIBUTE_KEYS
         },
-        "error": json.loads(attributes[ATTR_ERROR_JSON]) if attributes.get(ATTR_ERROR_JSON) else None,
+        "error": (
+            json.loads(raw_error_json) if isinstance(raw_error_json, str) else None
+        ),
         "raw_io_path": attributes.get(ATTR_RAW_IO_PATH),
         "raw_io_sha256": attributes.get(ATTR_RAW_IO_SHA256),
         "raw_io_size_bytes": attributes.get(ATTR_RAW_IO_SIZE),
@@ -195,20 +202,17 @@ class DurableWalSpanProcessor(SpanProcessor):
 
     def __init__(self, wal_writer: WalWriter) -> None:
         self._wal = wal_writer
-        self._last_sequence_by_trace: dict[str, int] = {}
-
-    @property
-    def last_sequence_by_trace(self) -> dict[str, int]:
-        return self._last_sequence_by_trace
 
     def on_start(self, span: Any, parent_context: Any | None = None) -> None:  # noqa: ANN401
-        return None
+        if is_observation_suppressed():
+            span.set_attribute(ATTR_OBSERVATION_SUPPRESSED, True)
 
     def on_end(self, span: ReadableSpan) -> None:
+        if (span.attributes or {}).get(ATTR_OBSERVATION_SUPPRESSED):
+            return
         try:
             record = record_from_span(span, self._wal.producer_instance_id, 0)
-            sequence = self._wal.submit(record)
-            self._last_sequence_by_trace[record.trace_id] = sequence
+            self._wal.submit(record)
         except WalError:
             logger.exception("WAL submit failed for ended span %s", span.name)
         except Exception:  # noqa: BLE001 - observability must never break business

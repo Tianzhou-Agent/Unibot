@@ -1,3 +1,9 @@
+import gzip
+import hashlib
+import json
+
+import pytest
+
 from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
 from tianzhou_agent_platform.core.observability_query import ObsQueryService
 
@@ -43,3 +49,70 @@ def test_span_dto_preserves_reported_usage() -> None:
     assert dto["input_tokens"] == 10
     assert dto["output_tokens"] == 5
     assert dto["attributes"] == {"provider": "test"}
+
+
+class _RawLogStore:
+    def __init__(self, row):
+        self._row = row
+
+    async def get_span(self, span_id: str):
+        return self._row if span_id == self._row["span_id"] else None
+
+
+@pytest.mark.asyncio
+async def test_raw_log_rejects_content_with_wrong_checksum(tmp_path) -> None:
+    content = gzip.compress(json.dumps({"request": "complete"}).encode())
+    raw_path = tmp_path / "trace" / "span.json.gz"
+    raw_path.parent.mkdir()
+    raw_path.write_bytes(content)
+    store = _RawLogStore(
+        {
+            "span_id": "span-1",
+            "trace_id": "trace-1",
+            "tenant_id": "tenant-1",
+            "user_id": "user-1",
+            "raw_io_path": "trace/span.json.gz",
+            "raw_io_status": "ready",
+            "raw_io_size_bytes": len(content),
+            "raw_io_sha256": "0" * 64,
+        }
+    )
+
+    result = await ObsQueryService(store, tmp_path).raw_log(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        trace_id="trace-1",
+        span_id="span-1",
+    )
+
+    assert result == {"status": "failed", "detail": None}
+
+
+@pytest.mark.asyncio
+async def test_raw_log_serves_content_with_matching_checksum(tmp_path) -> None:
+    document = {"request": "complete"}
+    content = gzip.compress(json.dumps(document).encode())
+    raw_path = tmp_path / "trace" / "span.json.gz"
+    raw_path.parent.mkdir()
+    raw_path.write_bytes(content)
+    store = _RawLogStore(
+        {
+            "span_id": "span-1",
+            "trace_id": "trace-1",
+            "tenant_id": "tenant-1",
+            "user_id": "user-1",
+            "raw_io_path": "trace/span.json.gz",
+            "raw_io_status": "ready",
+            "raw_io_size_bytes": len(content),
+            "raw_io_sha256": hashlib.sha256(content).hexdigest(),
+        }
+    )
+
+    result = await ObsQueryService(store, tmp_path).raw_log(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        trace_id="trace-1",
+        span_id="span-1",
+    )
+
+    assert result == {"status": "ready", "detail": document}

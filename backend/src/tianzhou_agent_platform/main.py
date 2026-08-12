@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Awaitable, cast
 from uuid import uuid4
 
 import httpx
@@ -32,6 +33,7 @@ from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.observability_query import ObsQueryService
 from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
+from tianzhou_agent_platform.core.observation_logging import ObservationLogHandler
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
@@ -147,6 +149,9 @@ def create_app(
         # P0 fix: the aspect needs a Tracer (start_span), not a TracerProvider.
         tracer=(tracer_provider.get_tracer("unibot") if tracer_provider is not None else None),
     )
+    obs_log_handler = (
+        ObservationLogHandler(obs_wal_writer) if obs_wal_writer is not None else None
+    )
     managed_aina_runtime = ManagedAinaRuntime(
         resolved_settings,
         resolved_repository,
@@ -194,6 +199,8 @@ def create_app(
                 resolved_settings.obs_raw_root.mkdir(parents=True, exist_ok=True)
                 await obs_store.create_tables()
                 obs_wal_writer.start()
+                if obs_log_handler is not None:
+                    logging.getLogger().addHandler(obs_log_handler)
                 if obs_ingest_worker is not None:
                     obs_ingest_worker.start()
             await ensure_builtin_ainas(
@@ -215,6 +222,8 @@ def create_app(
                 await asyncio.gather(*background_tasks, return_exceptions=True)
             # OBS shutdown order (design 16.2): stop records -> drain+seal WAL
             # -> ingest remaining -> close the dedicated pool last.
+            if obs_log_handler is not None:
+                logging.getLogger().removeHandler(obs_log_handler)
             if obs_wal_writer is not None:
                 obs_wal_writer.close()
                 await obs_wal_writer.wait_closed()
@@ -257,6 +266,7 @@ def create_app(
     app.state.obs_store = obs_store
     app.state.obs_ingest_worker = obs_ingest_worker
     app.state.obs_wal_writer = obs_wal_writer
+    app.state.obs_log_handler = obs_log_handler
     app.state.obs_query = obs_query_service or ObsQueryService(None, None)
     app.state.agent_runtime = AgentRuntime(
         settings=resolved_settings,
@@ -317,8 +327,13 @@ def _resolve_obs_trace_status(store: ObservabilityStore | None, trace_id: str) -
     async def resolver() -> str | None:
         if store is None:
             return None
+        canonical_trace_id = (
+            trace_id[6:]
+            if trace_id.startswith("trace_") and len(trace_id) == 38
+            else trace_id
+        )
         try:
-            trace = await store.get_trace(trace_id)
+            trace = await store.get_trace(canonical_trace_id)
         except Exception:  # noqa: BLE001 - resolver must never break reconciliation
             return None
         return trace["status"] if trace else None

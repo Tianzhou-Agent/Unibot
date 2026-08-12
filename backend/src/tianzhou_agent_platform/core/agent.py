@@ -20,7 +20,6 @@ from tianzhou_agent_platform.aina.builtin import (
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
     UNIBOT_IMAGE_RECOGNITION_ID,
-    invoke_builtin,
 )
 from tianzhou_agent_platform.aina.document.builtin import (
     ABANDON_EDIT_SECTION_TOOL_ID,
@@ -46,7 +45,6 @@ from tianzhou_agent_platform.core.builtin_tools import (
     OPEN_AINA_TOOL_ID,
     PLATFORM_TOOL_IDS,
     REQUEST_CLARIFICATION_TOOL_ID,
-    invoke_platform_tool,
 )
 from tianzhou_agent_platform.core.chat import (
     ApprovalRecord,
@@ -66,6 +64,17 @@ from tianzhou_agent_platform.core.conversation import Conversation, Conversation
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient
 from tianzhou_agent_platform.core.model_settings import current_model_runtime, use_model_runtime
+from tianzhou_agent_platform.core.observation_context import (
+    ObservationContext,
+    bind_observation_context,
+)
+from tianzhou_agent_platform.core.observation_interceptors import (
+    AgentEventPublisher,
+    AgentRunObserver,
+    InternalOperationObserver,
+    ObservedCapabilityGateway,
+    ObservedLLMClient,
+)
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.schema import validate_value
@@ -132,7 +141,6 @@ class AgentState(TypedDict, total=False):
     final_status: Literal["completed", "approval_required", "failed"]
     approval: ApprovalRecord | None
     call_counts: dict[str, int]
-    tool_span_ids: dict[str, str]
     widgets: list[WidgetDefinition]
     memory_context: list[MemoryRecord]
 
@@ -161,9 +169,19 @@ class AgentRuntime:
     ) -> None:
         self.settings = settings
         self.repository = repository
-        self.observability = observability or ObservabilityAspect(repository)
-        self.llm = llm
-        self.gateway = gateway
+        observation_adapter = observability or ObservabilityAspect(repository)
+        self.events = AgentEventPublisher(observation_adapter)
+        self.runs = AgentRunObserver(observation_adapter)
+        self.operations = InternalOperationObserver(observation_adapter)
+        self.llm = ObservedLLMClient(llm, observation_adapter)
+        self.gateway = ObservedCapabilityGateway(
+            gateway,
+            observation_adapter,
+            repository=repository,
+            document_service=document_service,
+            document_edit_task_service=document_edit_task_service,
+            sandbox_service=sandbox_service,
+        )
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
         self.sandbox_service = sandbox_service
@@ -200,7 +218,6 @@ class AgentRuntime:
         started = perf_counter()
         runtime_model = current_model_runtime()
         model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
-        model_span_id = f"span_{uuid4().hex}"
         provider_messages = _provider_messages_for_scope(
             state["messages"],
             active_function_names=set(state["capabilities"]),
@@ -211,29 +228,7 @@ class AgentRuntime:
                 "type": "function",
                 "function": {"name": state["forced_function"]},
             }
-        await self.observability.start_span(
-            state["trace_id"],
-            span_id=model_span_id,
-            parent_span_id=state["root_span_id"],
-            kind="model",
-            name="model.complete",
-            target_id=model_target_id,
-            logical_call_id=f"model_iteration_{iterations}",
-            input_data={
-                "messages": [
-                    _model_message_trace_details(message, state["capabilities"])
-                    for message in provider_messages
-                ],
-                "tools": state["tool_definitions"],
-                "tool_choice": tool_choice,
-            },
-            attributes={
-                "iteration": iterations,
-                "message_count": len(state["messages"]),
-                "streaming": state.get("event_sink") is not None,
-            },
-        )
-        await self.observability.record_event(
+        await self.events.emit(
             state["trace_id"],
             kind="model.requested",
             status="started",
@@ -257,22 +252,11 @@ class AgentRuntime:
                 tool_choice=tool_choice,
                 event_sink=state.get("event_sink"),
                 trace_id=state["trace_id"],
-                span_id=model_span_id,
                 context_type="conversation",
                 context_id=state["conversation_id"],
             )
         except PlatformError as exc:
-            await self.observability.finish_span(
-                state["trace_id"],
-                model_span_id,
-                "failed",
-                error={
-                    "code": exc.code,
-                    "message": exc.message,
-                    "retryable": exc.retryable,
-                },
-            )
-            await self.observability.record_event(
+            await self.events.emit(
                 state["trace_id"],
                 kind="model.failed",
                 status="failed",
@@ -295,25 +279,7 @@ class AgentRuntime:
         else:
             final_status = "completed"
         messages = [*state["messages"], message]
-        model_attributes = {
-            "iteration": iterations,
-            "finish_reason": result.finish_reason,
-            "tool_call_count": len(message.get("tool_calls") or []),
-            "content_length": len(str(message.get("content") or "")),
-            "input_tokens": result.input_tokens,
-            "output_tokens": result.output_tokens,
-            "usage_estimated": result.usage_estimated,
-            "ttft_ms": result.ttft_ms,
-        }
-        await self.observability.finish_span(
-            state["trace_id"],
-            model_span_id,
-            "completed",
-            output_data=_model_message_trace_details(message, state["capabilities"]),
-            attributes=model_attributes,
-            first_output_at=result.first_token_at,
-        )
-        await self.observability.record_event(
+        await self.events.emit(
             state["trace_id"],
             kind="model.completed",
             status="completed",
@@ -393,7 +359,7 @@ class AgentRuntime:
                 capability_names=risky_names,
             )
             await self.repository.create_approval(approval)
-            await self.observability.record_event(
+            await self.events.emit(
                 state["trace_id"],
                 kind="approval.required",
                 status="pending",
@@ -434,20 +400,6 @@ class AgentRuntime:
             call_id = str(call.get("id") or f"call_{uuid4().hex}")
             arguments_text = function.get("arguments") or "{}"
             capability = capabilities.get(name)
-            tool_span_id = f"span_{uuid4().hex}"
-            state.setdefault("tool_span_ids", {})[call_id] = tool_span_id
-            await self.observability.start_span(
-                state["trace_id"],
-                span_id=tool_span_id,
-                parent_span_id=state["root_span_id"],
-                kind="aina" if capability is not None and capability.kind == "aina" else "tool",
-                name=name or "unknown",
-                target_id=capability.capability_id if capability is not None else name or None,
-                target_version=_capability_version(capability),
-                logical_call_id=call_id,
-                input_data=_tool_arguments_trace_data(arguments_text),
-                attributes={"function_name": name},
-            )
             if capability is None:
                 tool_failed = True
                 recovery = _capability_scope_recovery(
@@ -555,21 +507,10 @@ class AgentRuntime:
                         arguments=arguments,
                         messages=messages,
                     )
-                    await self.observability.finish_span(
-                        state["trace_id"],
-                        tool_span_id,
-                        "completed",
-                        input_data=arguments,
-                        output_data={"activated": True},
-                        attributes={
-                            "arguments": arguments,
-                            "activated": True,
-                        },
-                    )
                     scope_activated = True
                     continue
 
-            await self.observability.record_event(
+            await self.events.emit(
                 state["trace_id"],
                 kind=f"{capability.kind}.requested",
                 status="started",
@@ -587,7 +528,6 @@ class AgentRuntime:
                 {"type": "tool.requested", "kind": capability.kind, "id": capability.capability_id},
             )
             try:
-                call_started = perf_counter()
                 if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_AINA_TOOL_ID}:
                     widgets = [widget for widget in widgets if widget.kind != "app_list"]
                 widgets_before = len(widgets)
@@ -637,28 +577,28 @@ class AgentRuntime:
                     scope_activated = True
                 else:
                     if capability.capability_id in PLATFORM_TOOL_IDS:
-                        result_payload, produced_widgets = await invoke_platform_tool(
-                            self.repository,
+                        result_payload, produced_widgets, duration_ms = await self.gateway.invoke_platform(
                             cast(str, capability.value),
-                            arguments,
+                            function_name=name,
+                            arguments=arguments,
+                            call_id=call_id,
                             user_id=state["user_id"],
                             tenant_id=state["tenant_id"],
                             conversation_id=state["conversation_id"],
+                            trace_id=state["trace_id"],
                         )
                     else:
-                        result_payload, produced_widgets = await invoke_builtin(
-                            self.repository,
+                        result_payload, produced_widgets, duration_ms = await self.gateway.invoke_builtin(
                             cast(str, capability.value),
-                            arguments,
+                            function_name=name,
+                            arguments=arguments,
+                            call_id=call_id,
                             user_id=state["user_id"],
                             tenant_id=state["tenant_id"],
                             conversation_id=state["conversation_id"],
-                            document_service=self.document_service,
-                            document_edit_task_service=self.document_edit_task_service,
-                            sandbox_service=self.sandbox_service,
+                            trace_id=state["trace_id"],
                         )
                     widgets.extend(produced_widgets)
-                    duration_ms = (perf_counter() - call_started) * 1000
                 content = json.dumps(result_payload, ensure_ascii=False, default=str)
                 result_size_bytes = len(content.encode("utf-8"))
                 if len(content) > 50_000:
@@ -671,7 +611,7 @@ class AgentRuntime:
                         "content": content,
                     }
                 )
-                await self.observability.record_event(
+                await self.events.emit(
                     state["trace_id"],
                     kind=f"{capability.kind}.completed",
                     status="completed",
@@ -686,18 +626,6 @@ class AgentRuntime:
                         "widgets": [
                             {"id": widget.id, "kind": widget.kind} for widget in widgets[widgets_before:]
                         ],
-                    },
-                )
-                await self.observability.finish_span(
-                    state["trace_id"],
-                    tool_span_id,
-                    "completed",
-                    input_data=arguments,
-                    output_data=result_payload,
-                    attributes={
-                        "arguments": arguments,
-                        "result": result_payload,
-                        "result_size_bytes": result_size_bytes,
                     },
                 )
                 await self._emit(
@@ -830,7 +758,7 @@ class AgentRuntime:
                 memory_context=state.get("memory_context") or None,
             ),
         }
-        await self.observability.record_event(
+        await self.events.emit(
             state["trace_id"],
             kind="routing.scope.activated",
             status="completed",
@@ -905,7 +833,7 @@ class AgentRuntime:
                 "content": json.dumps(payload, ensure_ascii=False),
             }
         )
-        await self.observability.record_event(
+        await self.events.emit(
             state["trace_id"],
             kind=f"{capability.kind if capability else 'tool'}.failed",
             status="failed",
@@ -927,18 +855,6 @@ class AgentRuntime:
                 ),
             },
         )
-        span_id = state.get("tool_span_ids", {}).get(call_id)
-        if span_id is not None:
-            await self.observability.finish_span(
-                state["trace_id"],
-                span_id,
-                "failed",
-                error={
-                    "code": code,
-                    "message": message,
-                    "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
-                },
-            )
         await self._emit(state, {"type": "error", "code": code, "source": "capability"})
 
     async def chat(self, request: ChatRequest, *, event_sink: EventSink | None = None) -> ChatResponse:
@@ -956,7 +872,7 @@ class AgentRuntime:
         root_span_id = f"span_{uuid4().hex}"
         trace_created = False
         try:
-            trace_created = bool(await self.observability.create_agent_trace(
+            trace_created = await self.runs.create(
                 trace_id=trace_id,
                 root_span_id=root_span_id,
                 conversation_id=conversation.id,
@@ -972,19 +888,19 @@ class AgentRuntime:
                     "requested_capability": request.capability,
                     "preferred_aina_id": request.preferred_aina_id,
                 },
-            ))
+            )
             await self.repository.start_conversation_run(conversation.id, trace_id)
             cancelled_approvals = await self.repository.close_dangling_tool_calls(
                 conversation.id,
                 trace_id=trace_id,
             )
-            await self.observability.record_cancelled_approvals(cancelled_approvals)
+            await self.events.cancelled_approvals(cancelled_approvals)
             appended_user = await self.repository.append_provider_messages(
                 conversation.id,
                 [{"role": "user", "content": request.message}],
                 trace_id=trace_id,
             )
-            await self.observability.record_event(
+            await self.events.emit(
                 trace_id,
                 kind="user.request",
                 status="completed",
@@ -1049,7 +965,7 @@ class AgentRuntime:
         error: str,
     ) -> None:
         if trace_created:
-            await self.observability.finish_trace(trace_id, "failed")
+            await self.runs.finish_trace(trace_id, "failed")
         try:
             conversation = await self.repository.get_conversation(conversation_id)
             if conversation.run_status == "running" and conversation.active_trace_id == trace_id:
@@ -1208,7 +1124,7 @@ class AgentRuntime:
         requested_capability: str | None,
         preferred_aina_id: str | None,
     ) -> None:
-        await self.observability.record_event(
+        await self.events.emit(
             trace_id,
             kind="routing.scope.resolved",
             status="completed",
@@ -1239,7 +1155,7 @@ class AgentRuntime:
             raise PlatformError("CONFLICT", "The approval no longer has a pending tool call", status_code=409)
         await self.repository.set_approval_status(approval_id, "approved")
         await self.repository.start_conversation_run(conversation.id, approval.trace_id)
-        await self.observability.record_event(
+        await self.events.emit(
             approval.trace_id,
             kind="approval.confirmed",
             status="completed",
@@ -1291,14 +1207,14 @@ class AgentRuntime:
         ]
         closing.append({"role": "assistant", "content": "The requested operation was cancelled."})
         await self.repository.append_provider_messages(approval.conversation_id, closing, trace_id=approval.trace_id)
-        await self.observability.record_event(
+        await self.events.emit(
             approval.trace_id,
             kind="approval.denied",
             status="completed",
             conversation_id=approval.conversation_id,
             details={"approval_id": approval_id},
         )
-        await self.observability.finish_trace(approval.trace_id, "completed")
+        await self.runs.finish_trace(approval.trace_id, "completed")
         await self.repository.finish_conversation_run(approval.conversation_id)
         return denied
 
@@ -1338,7 +1254,7 @@ class AgentRuntime:
         runtime_model = current_model_runtime()
         model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
         next_count = (plan.previous_state.count if plan.previous_state is not None else 0) + 1
-        await self.observability.start_span(
+        await self.operations.start(
             trace_id,
             span_id=span_id,
             parent_span_id=root_span_id,
@@ -1356,7 +1272,7 @@ class AgentRuntime:
                 "compression_count": next_count,
             },
         )
-        await self.observability.record_event(
+        await self.events.emit(
             trace_id,
             kind="context.compression.started",
             status="started",
@@ -1372,14 +1288,21 @@ class AgentRuntime:
         compression_input_tokens = 0
         compression_output_tokens = 0
         try:
-            result = await self.llm.complete(
-                messages=summary_request(plan),
-                tools=[],
-                trace_id=trace_id,
-                span_id=span_id,
-                context_type="compression",
-                context_id=conversation.id,
+            compression_context = ObservationContext(
+                legacy_trace_id=trace_id,
+                conversation_id=conversation.id,
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+                root_span_id=span_id,
             )
+            with bind_observation_context(compression_context):
+                result = await self.llm.complete(
+                    messages=summary_request(plan),
+                    tools=[],
+                    trace_id=trace_id,
+                    context_type="compression",
+                    context_id=conversation.id,
+                )
             compression_input_tokens = result.input_tokens
             compression_output_tokens = result.output_tokens
             raw_summary = result.message.get("content")
@@ -1417,17 +1340,16 @@ class AgentRuntime:
                 "input_tokens": compression_input_tokens,
                 "output_tokens": compression_output_tokens,
             }
-            await self.observability.finish_span(
+            await self.operations.complete(
                 trace_id,
                 span_id,
-                "completed",
                 output_data={
                     "through_message_id": plan.through_message_id,
                     "summary_length": len(summary),
                 },
                 attributes=attributes,
             )
-            await self.observability.record_event(
+            await self.events.emit(
                 trace_id,
                 kind="context.compacted",
                 status="completed",
@@ -1441,8 +1363,8 @@ class AgentRuntime:
                 extra={"trace_id": trace_id, "conversation_id": conversation.id},
             )
             error = {"type": type(exc).__name__, "message": str(exc)}
-            await self.observability.finish_span(trace_id, span_id, "failed", error=error)
-            await self.observability.record_event(
+            await self.operations.fail(trace_id, span_id, error=error)
+            await self.events.emit(
                 trace_id,
                 kind="context.compression.failed",
                 status="failed",
@@ -1468,7 +1390,7 @@ class AgentRuntime:
         system_prompt: str | None = None,
         memory_context: list[MemoryRecord] | None = None,
     ) -> ChatResponse:
-        root_span_id = await self.observability.ensure_agent_root_span(
+        root_span_id = await self.runs.ensure_root(
             trace_id,
             span_id=f"span_{uuid4().hex}",
             conversation_id=conversation.id,
@@ -1478,7 +1400,7 @@ class AgentRuntime:
         recovery_capabilities = await self._available_capabilities(conversation)
         forced_function = self._resolve_forced_capability(forced_capability, capabilities)
         aina_graph = await self._trace_aina_graph(conversation, capabilities)
-        await self.observability.record_event(
+        await self.events.emit(
             trace_id,
             kind="capability.discovery",
             status="completed",
@@ -1521,16 +1443,23 @@ class AgentRuntime:
             "usage_output": compression_output_tokens,
             "usage_estimated": False,
             "call_counts": {},
-            "tool_span_ids": {},
             "approval": None,
             "widgets": [],
             "memory_context": memory_context or [],
         }
-        try:
-            result = await self._graph.ainvoke(state)
-        except PlatformError:
-            await self.observability.finish_trace(trace_id, "failed")
-            raise
+        observation_context = ObservationContext(
+            legacy_trace_id=trace_id,
+            conversation_id=conversation.id,
+            user_id=conversation.user_id,
+            tenant_id=conversation.tenant_id,
+            root_span_id=root_span_id,
+        )
+        with bind_observation_context(observation_context):
+            try:
+                result = await self._graph.ainvoke(state)
+            except PlatformError:
+                await self.runs.finish_trace(trace_id, "failed")
+                raise
         new_messages = result["messages"][persist_from:]
         widgets = result.get("widgets", [])
         if widgets:
@@ -1546,7 +1475,7 @@ class AgentRuntime:
         status = result.get("final_status", "failed")
         last_assistant = next((item for item in reversed(appended) if item.role == "assistant"), None)
         final_content = result.get("final_content", "The agent stopped without a final response.")
-        await self.observability.record_event(
+        await self.events.emit(
             trace_id,
             kind="final.response",
             status=status,
@@ -1561,25 +1490,23 @@ class AgentRuntime:
                 "widgets": [{"id": widget.id, "kind": widget.kind} for widget in widgets],
             },
         )
-        if status != "approval_required":
-            await self.observability.finish_span(
-                trace_id,
-                root_span_id,
-                "completed" if status == "completed" else "failed",
-                output_data={
-                    "content": final_content,
-                    "status": status,
-                    "message_id": last_assistant.id if last_assistant else None,
-                    "widgets": [widget.model_dump(mode="json") for widget in widgets],
-                },
-                attributes={
-                    "iterations": result.get("iterations", 0),
-                    "input_tokens": result.get("usage_input", 0),
-                    "output_tokens": result.get("usage_output", 0),
-                    "usage_estimated": result.get("usage_estimated", False),
-                },
-            )
-        await self.observability.finish_trace(trace_id, status)
+        await self.runs.finish(
+            trace_id,
+            root_span_id,
+            status,
+            output_data={
+                "content": final_content,
+                "status": status,
+                "message_id": last_assistant.id if last_assistant else None,
+                "widgets": [widget.model_dump(mode="json") for widget in widgets],
+            },
+            attributes={
+                "iterations": result.get("iterations", 0),
+                "input_tokens": result.get("usage_input", 0),
+                "output_tokens": result.get("usage_output", 0),
+                "usage_estimated": result.get("usage_estimated", False),
+            },
+        )
         return ChatResponse(
             conversation_id=conversation.id,
             message_id=last_assistant.id if last_assistant else None,
@@ -2468,17 +2395,6 @@ def _model_message_trace_details(
                 pass
         details[key] = value
     return details
-
-
-def _capability_version(capability: Capability | None) -> str | None:
-    if capability is None:
-        return None
-    if capability.kind == "tool":
-        return cast(ToolRecord, capability.value).version
-    if capability.kind == "aina":
-        aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-        return installation.installed_version or aina.manifest.aina.version
-    return None
 
 
 def _function_name(kind: str, capability_id: str) -> str:

@@ -72,7 +72,11 @@ def test_long_context_is_summarized_without_deleting_conversation_messages() -> 
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
     assert response.status_code == 200
-    assert response.json()["usage"] == {"input_tokens": 160, "output_tokens": 25}
+    assert response.json()["usage"] == {
+        "input_tokens": 160,
+        "output_tokens": 25,
+        "estimated": False,
+    }
     assert len(llm.calls) == 2
     assert llm.calls[0]["context_type"] == "compression"
     assert llm.calls[0]["tools"] == []

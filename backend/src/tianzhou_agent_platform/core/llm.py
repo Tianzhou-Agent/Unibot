@@ -21,7 +21,7 @@ from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import current_model_runtime
-from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
+from tianzhou_agent_platform.core.trace_details import redact_trace_data
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 LLMCallSink = Callable[[LLMCallRecord], Awaitable[None]]
@@ -303,7 +303,7 @@ class OpenAICompatibleClient:
             request["tools"] = deepcopy(tools)
         if tool_choice is not None:
             request["tool_choice"] = deepcopy(tool_choice)
-        request = sanitize_trace_data(request)
+        request = redact_trace_data(request)
         call = LLMCallRecord(
             call_id=f"llm_{uuid4().hex}",
             trace_id=trace_id,
@@ -322,7 +322,7 @@ class OpenAICompatibleClient:
         completed = call.model_copy(
             update={
                 "status": "completed",
-                "response": sanitize_trace_data(_response_from_result(call.model, result)),
+                "response": redact_trace_data(_response_from_result(call.model, result)),
                 "duration_ms": (perf_counter() - started) * 1000,
                 "first_token_at": result.first_token_at,
                 "ttft_ms": result.ttft_ms,
@@ -336,9 +336,9 @@ class OpenAICompatibleClient:
         failed = call.model_copy(
             update={
                 "status": "failed",
-                "response": sanitize_trace_data(_response_from_error(exc)),
+                "response": redact_trace_data(_response_from_error(exc)),
                 "duration_ms": (perf_counter() - started) * 1000,
-                "error": sanitize_trace_data(str(exc)),
+                "error": redact_trace_data(str(exc)),
                 "completed_at": completed_at,
             }
         )

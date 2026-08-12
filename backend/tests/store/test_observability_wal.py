@@ -11,8 +11,6 @@ from pathlib import Path
 import pytest
 
 from tianzhou_agent_platform.store.observability_wal import (
-    MAGIC,
-    VERSION,
     WalError,
     WalFlushTimeoutError,
     WalMetrics,
@@ -159,10 +157,19 @@ async def test_writer_batches_and_fsyncs_in_order(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_concurrent_submits_preserve_order(tmp_path: Path) -> None:
-    writer = WalWriter(tmp_path, "node-1-abc")
+    writer = WalWriter(tmp_path, "node-1-abc", queue_capacity=1_000)
     writer.start()
-    for i in range(50):
-        writer.submit(make_record(0, trace_id=f"trace_{i}"))
+
+    def submit_batch(worker: int) -> list[int]:
+        return [
+            writer.submit(make_record(0, trace_id=f"trace_{worker}_{index}"))
+            for index in range(25)
+        ]
+
+    batches = await asyncio.gather(
+        *(asyncio.to_thread(submit_batch, worker) for worker in range(8))
+    )
+    sequences = [sequence for batch in batches for sequence in batch]
     await writer.flush_through(writer.sequence_no)
     writer.close()
     await writer.wait_closed()
@@ -173,8 +180,8 @@ async def test_concurrent_submits_preserve_order(tmp_path: Path) -> None:
         frames, corrupt, trailing = validate_segment_file(info.path)
         assert corrupt is None and not trailing
         all_frames.extend(frame.record.sequence_no for frame in frames)
-    assert all_frames == sorted(all_frames)
-    assert len(all_frames) == 50
+    assert sorted(sequences) == list(range(1, 201))
+    assert all_frames == list(range(1, 201))
 
 
 @pytest.mark.asyncio
@@ -231,6 +238,34 @@ async def test_rotation_by_size(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_rotation_by_age_does_not_require_another_append(tmp_path: Path) -> None:
+    writer = WalWriter(
+        tmp_path,
+        "node-1-abc",
+        rotation_interval_seconds=0.05,
+    )
+    writer.start()
+    sequence = writer.submit(make_record(0))
+    await writer.flush_through(sequence)
+
+    try:
+        async def segment_was_rotated() -> bool:
+            for _ in range(50):
+                if any(
+                    info.state == "sealed"
+                    for info in iter_segment_infos(writer._directory)  # type: ignore[attr-defined]
+                ):
+                    return True
+                await asyncio.sleep(0.01)
+            return False
+
+        assert await segment_was_rotated()
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_flush_through_times_out(tmp_path: Path) -> None:
     writer = WalWriter(tmp_path, "node-1-abc", flush_timeout_seconds=0.05)
     writer.start()
@@ -281,6 +316,25 @@ async def test_flush_through_blocked_by_gap(tmp_path: Path) -> None:
         await writer.flush_through(seq + 10)  # any barrier covering the gap
     writer.close()
     await writer.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_registered_barrier_fails_when_earlier_gap_is_recorded(tmp_path: Path) -> None:
+    """A barrier already waiting above a new gap must never be completed later."""
+    from tianzhou_agent_platform.store.observability_wal import WalGapError
+
+    writer = WalWriter(tmp_path, "node-1-abc", flush_timeout_seconds=0.2)
+    writer.start()
+    barrier = asyncio.create_task(writer.flush_through(2))
+    await asyncio.sleep(0)
+
+    try:
+        writer._record_gap(1)  # noqa: SLF001 - simulate an append failure after registration
+        with pytest.raises(WalGapError):
+            await asyncio.wait_for(barrier, timeout=0.1)
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 @pytest.mark.asyncio

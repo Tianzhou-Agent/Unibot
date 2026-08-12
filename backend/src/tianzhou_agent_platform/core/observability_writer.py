@@ -23,7 +23,7 @@ import logging
 import os
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ from tianzhou_agent_platform.store.observability_wal import (
     HEARTBEAT_NAME,
     ObsRecord,
     SEALED_SUFFIX,
+    WalSegmentInfo,
     iter_segment_infos,
     validate_segment_file,
 )
@@ -44,6 +45,7 @@ INGESTING_SUFFIX = ".ingesting"
 DEFAULT_SCAN_INTERVAL_SECONDS = 2.0
 DEFAULT_BATCH_MAX = 500
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_LIVE_QUEUE_CAPACITY = 1_000
 # an .active segment of another producer that has not been written for this
 # long is considered orphaned (crashed process) and gets sealed + replayed
 DEFAULT_ORPHAN_ACTIVE_MIN_AGE_SECONDS = 60.0
@@ -94,6 +96,8 @@ class ObsIngestWorker:
         *,
         scan_interval_seconds: float = DEFAULT_SCAN_INTERVAL_SECONDS,
         batch_max: int = DEFAULT_BATCH_MAX,
+        live_queue_capacity: int = DEFAULT_LIVE_QUEUE_CAPACITY,
+        retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
         orphan_active_min_age_seconds: float = DEFAULT_ORPHAN_ACTIVE_MIN_AGE_SECONDS,
         wal_max_bytes: int | None = None,
         retention_days: int | None = None,
@@ -104,30 +108,37 @@ class ObsIngestWorker:
         self.producer_instance_id = producer_instance_id
         self.scan_interval_seconds = scan_interval_seconds
         self.batch_max = batch_max
+        self.retry_backoff_seconds = retry_backoff_seconds
         self.orphan_active_min_age_seconds = orphan_active_min_age_seconds
         self.wal_max_bytes = wal_max_bytes
         self.retention_days = retention_days
         self.raw_root = raw_root
         self.metrics = IngestMetrics()
         self._stop = asyncio.Event()
+        self._live_queue: asyncio.Queue[list[ObsRecord]] = asyncio.Queue(
+            maxsize=live_queue_capacity
+        )
         self._task: asyncio.Task[None] | None = None
         self._last_cleanup_at = 0.0
 
     async def on_records_flushed(self, records: list[ObsRecord]) -> None:
         """Live ingest callback invoked by WalWriter after fsync (section 7.4).
 
-        Failures are tolerated: the records remain in the segment files and
-        the periodic scanner replays them once MySQL is back.
+        This callback deliberately performs no database I/O. WalWriter awaits
+        it immediately after fsync, so doing the UPSERT here would let a slow
+        MySQL connection block later WAL batches and their durability barriers.
+        A full queue is safe: the records remain in WAL and sealed-segment
+        replay is the fallback.
         """
         if not records:
             return
         try:
-            await self._ingest_batch(records)
-        except Exception:
+            self._live_queue.put_nowait(list(records))
+        except asyncio.QueueFull:
             self.metrics.ingest_retry_count += 1
-            self.metrics.ingest_failure_count += 1
             logger.warning(
-                "Live ingest of %d WAL records failed; segment replay will retry", len(records), exc_info=True
+                "Live ingest queue is full; %d WAL records will be recovered by segment replay",
+                len(records),
             )
 
     def start(self) -> None:
@@ -143,21 +154,59 @@ class ObsIngestWorker:
         self._task = None
 
     async def _run(self) -> None:
+        retry_batch: list[ObsRecord] | None = None
+        next_scan_at = 0.0
         try:
             await self._recover_claiming_segments()
             while not self._stop.is_set():
+                now = time.monotonic()
+                if now >= next_scan_at:
+                    try:
+                        await self._scan_and_replay()
+                    except Exception:
+                        logger.exception("OBS ingest scan failed")
+                    try:
+                        await self._reconcile_interrupted_producers()
+                    except Exception:
+                        logger.exception("OBS interrupted-producer reconciliation failed")
+                    try:
+                        await self._check_retention_cleanup()
+                    except Exception:
+                        logger.exception("OBS retention cleanup failed")
+                    next_scan_at = time.monotonic() + self.scan_interval_seconds
+
+                if retry_batch is not None:
+                    try:
+                        await asyncio.wait_for(
+                            self._stop.wait(), timeout=self.retry_backoff_seconds
+                        )
+                        break
+                    except TimeoutError:
+                        batch = retry_batch
+                else:
+                    timeout = max(0.0, next_scan_at - time.monotonic())
+                    try:
+                        batch = await asyncio.wait_for(
+                            self._live_queue.get(), timeout=timeout
+                        )
+                    except TimeoutError:
+                        continue
+
                 try:
-                    await self._scan_and_replay()
+                    await self._ingest_batch(batch)
                 except Exception:
-                    logger.exception("OBS ingest scan failed")
-                try:
-                    await self._check_retention_cleanup()
-                except Exception:
-                    logger.exception("OBS retention cleanup failed")
-                try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=self.scan_interval_seconds)
-                except TimeoutError:
-                    pass
+                    retry_batch = batch
+                    self.metrics.ingest_retry_count += 1
+                    self.metrics.ingest_failure_count += 1
+                    logger.warning(
+                        "Live ingest of %d WAL records failed; retrying in %.2fs",
+                        len(batch),
+                        self.retry_backoff_seconds,
+                        exc_info=True,
+                    )
+                else:
+                    retry_batch = None
+                    self._live_queue.task_done()
         finally:
             # drain any remaining sealed segments on shutdown (best effort)
             try:
@@ -178,6 +227,43 @@ class ObsIngestWorker:
         self.metrics.retention_deleted += sum(deleted.values())
         logger.info("OBS retention cleanup removed rows older than %s: %s", cutoff.date(), deleted)
         await self._cleanup_raw_files(cutoff)
+
+    async def _reconcile_interrupted_producers(self) -> None:
+        reconcile = getattr(self.store, "fail_interrupted_producers", None)
+        if reconcile is None or not self.wal_root.is_dir():
+            return
+        stale: list[str] = []
+        now = time.time()
+        for producer_dir in self.wal_root.iterdir():
+            if not producer_dir.is_dir() or producer_dir.name == self.producer_instance_id:
+                continue
+            heartbeat = producer_dir / HEARTBEAT_NAME
+            try:
+                heartbeat_age = now - (await asyncio.to_thread(heartbeat.stat)).st_mtime
+            except OSError:
+                mtimes: list[float] = []
+                for path in producer_dir.iterdir():
+                    try:
+                        mtimes.append((await asyncio.to_thread(path.stat)).st_mtime)
+                    except OSError:
+                        continue
+                producer_age = now - max(mtimes) if mtimes else float("inf")
+            else:
+                producer_age = heartbeat_age
+            if (
+                self.orphan_active_min_age_seconds <= 0
+                or producer_age >= self.orphan_active_min_age_seconds
+            ):
+                stale.append(producer_dir.name)
+        if not stale:
+            return
+        counts = await reconcile(stale, interrupted_at=datetime.now(timezone.utc))
+        if sum(counts.values()):
+            logger.warning(
+                "Marked interrupted OBS rows failed for %d stale producers: %s",
+                len(stale),
+                counts,
+            )
 
     async def _cleanup_raw_files(self, cutoff: datetime) -> None:
         if self.raw_root is None or not self.raw_root.is_dir():
@@ -275,7 +361,7 @@ class ObsIngestWorker:
         else:
             self.metrics.wal_water_level = "ok"
 
-    async def _claim_orphan_active(self, info) -> bool:
+    async def _claim_orphan_active(self, info: WalSegmentInfo) -> bool:
         producer_dir = info.path.parent
         # liveness check: a fresh heartbeat means the producer is still
         # alive (idle instances keep their heartbeat current), so its
@@ -285,14 +371,21 @@ class ObsIngestWorker:
             heartbeat_age = time.time() - (await asyncio.to_thread(heartbeat.stat)).st_mtime
         except OSError:
             heartbeat_age = None  # no heartbeat file -> assume crashed
-        if heartbeat_age is not None and heartbeat_age < self.orphan_active_min_age_seconds:
+        if (
+            self.orphan_active_min_age_seconds > 0
+            and heartbeat_age is not None
+            and heartbeat_age < self.orphan_active_min_age_seconds
+        ):
             return False
         try:
             stat = await asyncio.to_thread(info.path.stat)
         except OSError:
             return False
         # st_mtime is wall-clock (epoch); compare with time.time()
-        if time.time() - stat.st_mtime < self.orphan_active_min_age_seconds:
+        if (
+            self.orphan_active_min_age_seconds > 0
+            and time.time() - stat.st_mtime < self.orphan_active_min_age_seconds
+        ):
             return False
         # double-check the segment did not grow during the age check: a live
         # producer writes periodically, so growth means it is still active
