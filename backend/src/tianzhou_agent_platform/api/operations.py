@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -14,12 +15,116 @@ from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, Ch
 from tianzhou_agent_platform.core.conversation import Conversation
 
 
+def _obs_query(request: Request):
+    query = getattr(request.app.state, "obs_query", None)
+    if query is None:
+        raise RuntimeError("OBS query service is not initialized")
+    return query
+
+
 def create_operations_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health(request: Request) -> dict[str, Any]:
+        """Service health plus discoverable OBS pipeline status (design 15)."""
+        payload: dict[str, Any] = {"status": "ok"}
+        wal = getattr(request.app.state, "obs_wal_writer", None)
+        worker = getattr(request.app.state, "obs_ingest_worker", None)
+        settings = getattr(request.app.state, "settings", None)
+        if wal is not None:
+            payload["obs"] = wal.metrics.snapshot()
+            payload["obs"]["ingest"] = (
+                worker.metrics.snapshot() if worker is not None else {}
+            )
+            payload["obs"]["last_ingest_success_at"] = (
+                worker.metrics.ingest_last_success_at.isoformat()
+                if worker is not None and worker.metrics.ingest_last_success_at
+                else None
+            )
+            payload["obs"]["enabled"] = True
+            # operational bounds: WAL space cap and retention window
+            # (obs_wal_max_bytes / obs_retention_days usage points, review P2-2)
+            if settings is not None:
+                payload["obs"]["wal_max_bytes"] = settings.obs_wal_max_bytes
+                payload["obs"]["retention_days"] = settings.obs_retention_days
+                wal_bytes = (
+                    worker.metrics.wal_total_bytes
+                    if worker is not None
+                    else wal.metrics.wal_bytes or 0
+                )
+                payload["obs"]["wal_total_bytes"] = wal_bytes
+                payload["obs"]["wal_water_level"] = (
+                    worker.metrics.wal_water_level if worker is not None else "ok"
+                )
+                payload["obs"]["wal_usage_ratio"] = (
+                    round(wal_bytes / settings.obs_wal_max_bytes, 4)
+                    if settings.obs_wal_max_bytes > 0
+                    else 0.0
+                )
+        else:
+            payload["obs"] = {"enabled": False}
+        return payload
+
+    @router.get("/obs/overview")
+    async def obs_overview(request: Request, range: str = "week") -> dict:
+        actor = actor_scope(request)
+        return await _obs_query(request).personal_overview(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            range_name=range,
+        )
+
+    @router.get("/obs/sessions/{session_id}")
+    async def obs_session_detail(request: Request, session_id: str) -> dict | None:
+        actor = actor_scope(request)
+        return await _obs_query(request).session_detail(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            session_id=session_id,
+        )
+
+    @router.get("/obs/raw-logs")
+    async def obs_raw_logs(
+        request: Request,
+        trace_id: str,
+        span_id: str,
+    ) -> dict | None:
+        actor = actor_scope(request)
+        return await _obs_query(request).raw_log(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            trace_id=trace_id,
+            span_id=span_id,
+        )
+
+    @router.get("/admin/obs/overview")
+    async def admin_obs_overview(
+        request: Request,
+        range: str = "week",
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
+        require_platform_admin(request)
+        return await _obs_query(request).admin_overview(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            range_name=range,
+        )
+
+    @router.get("/admin/obs/sessions/{session_id}")
+    async def admin_obs_session_detail(
+        request: Request,
+        session_id: str,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict | None:
+        require_platform_admin(request)
+        return await _obs_query(request).admin_session_detail(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
 
     @router.post("/approvals/{approval_id}/confirm", response_model=ChatResponse)
     async def confirm_approval(

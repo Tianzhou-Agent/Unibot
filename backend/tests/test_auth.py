@@ -16,6 +16,8 @@ from tianzhou_agent_platform.main import create_app
 
 
 def _settings(**overrides: object) -> AgentSettings:
+    overrides.setdefault("github_oauth_client_id", None)
+    overrides.setdefault("github_oauth_client_secret", None)
     return AgentSettings(  # type: ignore[call-arg]
         _env_file=None,
         auth_secret=SecretStr("test-auth-secret-with-enough-entropy"),

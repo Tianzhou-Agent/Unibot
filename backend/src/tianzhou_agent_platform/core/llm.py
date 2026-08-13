@@ -21,7 +21,7 @@ from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import current_model_runtime
-from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
+from tianzhou_agent_platform.core.trace_details import redact_trace_data
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 LLMCallSink = Callable[[LLMCallRecord], Awaitable[None]]
@@ -33,6 +33,7 @@ class LLMResult:
     message: dict[str, Any]
     input_tokens: int = 0
     output_tokens: int = 0
+    usage_estimated: bool = False
     finish_reason: str | None = None
     first_token_at: datetime | None = None
     ttft_ms: float | None = None
@@ -259,6 +260,20 @@ class OpenAICompatibleClient:
             await self._fail_call(call, started, error)
             raise error
         result = _result_from_message(aggregate)
+        if result.input_tokens == 0 and result.output_tokens == 0:
+            result.input_tokens = estimate_request_tokens(messages, tools)
+            result.output_tokens = estimate_request_tokens([result.message])
+            result.usage_estimated = True
+            logger.warning(
+                "Model stream completed without usage metadata; using estimates "
+                "call_id=%s model=%s finish_reason=%s output_chars=%d input_tokens=%d output_tokens=%d",
+                call.call_id,
+                call.model,
+                result.finish_reason,
+                len(str(result.message.get("content") or "")),
+                result.input_tokens,
+                result.output_tokens,
+            )
         result.first_token_at = first_token_at
         result.ttft_ms = ttft_ms
         await self._complete_call(call, started, result)
@@ -288,7 +303,7 @@ class OpenAICompatibleClient:
             request["tools"] = deepcopy(tools)
         if tool_choice is not None:
             request["tool_choice"] = deepcopy(tool_choice)
-        request = sanitize_trace_data(request)
+        request = redact_trace_data(request)
         call = LLMCallRecord(
             call_id=f"llm_{uuid4().hex}",
             trace_id=trace_id,
@@ -307,7 +322,7 @@ class OpenAICompatibleClient:
         completed = call.model_copy(
             update={
                 "status": "completed",
-                "response": sanitize_trace_data(_response_from_result(call.model, result)),
+                "response": redact_trace_data(_response_from_result(call.model, result)),
                 "duration_ms": (perf_counter() - started) * 1000,
                 "first_token_at": result.first_token_at,
                 "ttft_ms": result.ttft_ms,
@@ -321,9 +336,9 @@ class OpenAICompatibleClient:
         failed = call.model_copy(
             update={
                 "status": "failed",
-                "response": sanitize_trace_data(_response_from_error(exc)),
+                "response": redact_trace_data(_response_from_error(exc)),
                 "duration_ms": (perf_counter() - started) * 1000,
-                "error": sanitize_trace_data(str(exc)),
+                "error": redact_trace_data(str(exc)),
                 "completed_at": completed_at,
             }
         )
@@ -394,6 +409,13 @@ def _result_from_message(message: AIMessage | AIMessageChunk) -> LLMResult:
 
 
 def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
+    usage: dict[str, Any] = {
+        "prompt_tokens": result.input_tokens,
+        "completion_tokens": result.output_tokens,
+        "total_tokens": result.input_tokens + result.output_tokens,
+    }
+    if result.usage_estimated:
+        usage.update({"estimated": True, "source": "estimated"})
     return {
         "object": "chat.completion",
         "model": model,
@@ -404,11 +426,7 @@ def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
                 "finish_reason": result.finish_reason,
             }
         ],
-        "usage": {
-            "prompt_tokens": result.input_tokens,
-            "completion_tokens": result.output_tokens,
-            "total_tokens": result.input_tokens + result.output_tokens,
-        },
+        "usage": usage,
     }
 
 

@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -49,6 +49,7 @@ MODEL_PROVIDERS_RESOURCE = "model_providers"
 SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
 SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
+OBS_TRACE_VISIBILITY_GRACE = timedelta(minutes=15)
 DOCUMENT_EDIT_TASKS_RESOURCE = "document_edit_tasks"
 SANDBOXES_RESOURCE = "sandboxes"
 SANDBOX_EXECUTIONS_RESOURCE = "sandbox_executions"
@@ -932,6 +933,33 @@ class InMemoryRepository:
         except PlatformError as exc:
             if exc.code != "RESOURCE_NOT_FOUND":
                 raise
+            # Phase four: traces live in the OBS pipeline; resolve the real
+            # status instead of marking a possibly-finished run as failed.
+            resolver = getattr(self, "obs_trace_status_resolver", None)
+            if resolver is not None:
+                try:
+                    status = await resolver(conversation.active_trace_id)
+                except Exception:  # noqa: BLE001 - resolver must not break reconciliation
+                    status = None
+                if status is not None:
+                    if status == "running":
+                        return conversation
+                    resolved = "idle" if status == "completed" else status
+                    return await self.finish_conversation_run(
+                        conversation_id,
+                        status=resolved,
+                        error=INTERRUPTED_RUN_ERROR if resolved == "failed" else None,
+                    )
+                # A WAL-fsynced trace may not be queryable from OBS MySQL yet,
+                # especially from another node. Keep the business run and its
+                # Redis lock intact for the same window as the run-lock TTL;
+                # absence is not proof that the producer was interrupted.
+                if (
+                    conversation.run_started_at is not None
+                    and datetime.now(UTC) - conversation.run_started_at
+                    < OBS_TRACE_VISIBILITY_GRACE
+                ):
+                    return conversation
             return await self.finish_conversation_run(
                 conversation_id,
                 status="failed",

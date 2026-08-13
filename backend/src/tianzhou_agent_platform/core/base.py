@@ -14,3 +14,4 @@ class StrictModel(BaseModel):
 class Usage(StrictModel):
     input_tokens: int = 0
     output_tokens: int = 0
+    estimated: bool = False

@@ -195,6 +195,31 @@ class AgentSettings(BaseSettings):
         default="",
         validation_alias=AliasChoices("UNIBOT_ADMIN_IDENTITIES", "admin_identities"),
     )
+    obs_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_OBS_ENABLED", "obs_enabled"),
+        description="Enable the OTel + WAL + OBS MySQL reliable observability pipeline.",
+    )
+    obs_wal_root: Path = Field(
+        default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "wal",
+        validation_alias=AliasChoices("UNIBOT_OBS_WAL_ROOT", "obs_wal_root"),
+    )
+    obs_wal_max_bytes: int = Field(
+        default=4 * 1024 * 1024 * 1024,
+        gt=0,
+        validation_alias=AliasChoices("UNIBOT_OBS_WAL_MAX_BYTES", "obs_wal_max_bytes"),
+        description="Upper bound for total WAL bytes before operational attention is required.",
+    )
+    obs_raw_root: Path = Field(
+        default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "raw",
+        validation_alias=AliasChoices("UNIBOT_OBS_RAW_ROOT", "obs_raw_root"),
+    )
+    obs_retention_days: int = Field(
+        default=90,
+        ge=1,
+        validation_alias=AliasChoices("UNIBOT_OBS_RETENTION_DAYS", "obs_retention_days"),
+        description="Retention for OBS detail rows and raw IO files (data governance decides).",
+    )
     system_prompt: str = Field(
         default=(
             "You are Unibot, a helpful assistant. Use an available capability when it is needed to answer "

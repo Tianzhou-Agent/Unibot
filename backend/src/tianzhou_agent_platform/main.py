@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Awaitable, cast
 from uuid import uuid4
 
 import httpx
@@ -27,11 +28,18 @@ from tianzhou_agent_platform.api.auth import SESSION_COOKIE
 from tianzhou_agent_platform.api.dependencies import RequestActor
 from tianzhou_agent_platform.api.router import create_router
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
+from tianzhou_agent_platform.core.observation_interceptors import ObservedAgentRuntime
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
+from tianzhou_agent_platform.core.observability_query import ObsQueryService
+from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
+from tianzhou_agent_platform.core.observation_logging import ObservationLogHandler
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
+from tianzhou_agent_platform.store.observability_raw import RawIoWriter
+from tianzhou_agent_platform.store.observability_store import ObservabilityStore
+from tianzhou_agent_platform.store.observability_wal import WalWriter, build_producer_instance_id
 from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
 from tianzhou_agent_platform.store.runtime_check import (
     RUNTIME_CHECK_RESOURCE,
@@ -63,6 +71,36 @@ def create_app(
     resolved_settings = settings or AgentSettings()
     storage_stores: StorageStores | None = None
     resolved_repository: InMemoryRepository
+
+    # OBS pipeline: dedicated MySQL pool, WAL and raw IO (design sections 10/11)
+    obs_store: ObservabilityStore | None = None
+    obs_wal_writer: WalWriter | None = None
+    obs_ingest_worker: ObsIngestWorker | None = None
+    obs_query_service: ObsQueryService | None = None
+    raw_io_writer: RawIoWriter | None = None
+    if resolved_settings.obs_enabled and storage_settings is not None:
+        obs_store = ObservabilityStore.from_dsn(storage_settings.mysql_dsn.get_secret_value())
+        raw_io_writer = RawIoWriter(
+            resolved_settings.obs_raw_root,
+            max_file_size_bytes=storage_settings.nas_max_file_size_bytes,
+        )
+        obs_wal_writer = WalWriter(
+            resolved_settings.obs_wal_root,
+            build_producer_instance_id(resolved_settings.node_id),
+            max_segment_bytes=32 * 1024 * 1024,
+            rotation_interval_seconds=30.0,
+        )
+        obs_ingest_worker = ObsIngestWorker(
+            resolved_settings.obs_wal_root,
+            obs_store,
+            obs_wal_writer.producer_instance_id,
+            wal_max_bytes=resolved_settings.obs_wal_max_bytes,
+            retention_days=resolved_settings.obs_retention_days,
+            raw_root=resolved_settings.obs_raw_root,
+        )
+        obs_wal_writer.on_records_flushed = obs_ingest_worker.on_records_flushed
+        obs_query_service = ObsQueryService(obs_store, resolved_settings.obs_raw_root)
+
     if repository is None and storage_settings is not None:
         storage_stores = create_storage_stores(
             storage_settings,
@@ -71,7 +109,17 @@ def create_app(
                 RUNTIME_CHECK_RESOURCE: runtime_check_table,
             },
         )
-        resolved_repository = PersistentRepository(storage_stores)
+        resolved_repository = PersistentRepository(
+            storage_stores,
+            # Disabling the OBS pipeline is also the rollback path: keep the
+            # legacy Trace/LLMCall tables writable and restart-recoverable.
+            persist_observability=not resolved_settings.obs_enabled,
+            obs_trace_status_resolver=(
+                (lambda trace_id: _resolve_obs_trace_status(obs_store, trace_id))
+                if obs_store is not None
+                else None
+            ),
+        )
     else:
         resolved_repository = repository or InMemoryRepository()
     resolved_document_service = document_service or (
@@ -87,7 +135,26 @@ def create_app(
         resolved_settings,
         resolved_repository,
     )
-    observability = ObservabilityAspect(resolved_repository)
+    tracer_provider = (
+        setup_tracer_provider(
+            DurableWalSpanProcessor(obs_wal_writer),
+            service_instance_id=obs_wal_writer.producer_instance_id,
+        )
+        if obs_wal_writer is not None
+        else None
+    )
+    observability = ObservabilityAspect(
+        resolved_repository,
+        wal_writer=obs_wal_writer,
+        raw_io_writer=raw_io_writer,
+        # design 14 fallback: direct OBS MySQL write when the WAL is down
+        obs_store=obs_store,
+        # P0 fix: the aspect needs a Tracer (start_span), not a TracerProvider.
+        tracer=(tracer_provider.get_tracer("unibot") if tracer_provider is not None else None),
+    )
+    obs_log_handler = (
+        ObservationLogHandler(obs_wal_writer) if obs_wal_writer is not None else None
+    )
     managed_aina_runtime = ManagedAinaRuntime(
         resolved_settings,
         resolved_repository,
@@ -129,6 +196,16 @@ def create_app(
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
+            if obs_wal_writer is not None and obs_store is not None:
+                # startup order (design 16.1): NAS roots -> OBS tables -> WAL -> worker
+                resolved_settings.obs_wal_root.mkdir(parents=True, exist_ok=True)
+                resolved_settings.obs_raw_root.mkdir(parents=True, exist_ok=True)
+                await obs_store.create_tables()
+                obs_wal_writer.start()
+                if obs_log_handler is not None:
+                    logging.getLogger().addHandler(obs_log_handler)
+                if obs_ingest_worker is not None:
+                    obs_ingest_worker.start()
             await ensure_builtin_ainas(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
@@ -146,6 +223,19 @@ def create_app(
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
+            # OBS shutdown order (design 16.2): stop records -> drain+seal WAL
+            # -> ingest remaining -> close the dedicated pool last.
+            if obs_log_handler is not None:
+                logging.getLogger().removeHandler(obs_log_handler)
+            if obs_wal_writer is not None:
+                obs_wal_writer.close()
+                await obs_wal_writer.wait_closed()
+            if obs_ingest_worker is not None:
+                await obs_ingest_worker.stop()
+            if obs_wal_writer is not None:
+                shutdown_tracer_provider()
+            if obs_store is not None:
+                await obs_store.close()
             await gateway.aclose()
             await resolved_sandbox_service.aclose()
             await vision_client.aclose()
@@ -176,7 +266,12 @@ def create_app(
     app.state.storage_stores = storage_stores
     app.state.storage_status = None
     app.state.observability = observability
-    app.state.agent_runtime = AgentRuntime(
+    app.state.obs_store = obs_store
+    app.state.obs_ingest_worker = obs_ingest_worker
+    app.state.obs_wal_writer = obs_wal_writer
+    app.state.obs_log_handler = obs_log_handler
+    app.state.obs_query = obs_query_service or ObsQueryService(None, None)
+    app.state.agent_runtime = ObservedAgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,
         llm=resolved_llm,
@@ -227,6 +322,26 @@ def create_app(
 
 
 app = create_app(storage_settings=StorageSettings(), enforce_auth=True)
+
+
+def _resolve_obs_trace_status(store: ObservabilityStore | None, trace_id: str) -> Awaitable[str | None]:
+    """Phase-four fallback: resolve a trace's status from the OBS pipeline."""
+
+    async def resolver() -> str | None:
+        if store is None:
+            return None
+        canonical_trace_id = (
+            trace_id[6:]
+            if trace_id.startswith("trace_") and len(trace_id) == 38
+            else trace_id
+        )
+        try:
+            trace = await store.get_trace(canonical_trace_id)
+        except Exception:  # noqa: BLE001 - resolver must never break reconciliation
+            return None
+        return trace["status"] if trace else None
+
+    return resolver()
 
 
 def run() -> None:

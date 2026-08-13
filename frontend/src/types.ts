@@ -426,7 +426,7 @@ export interface ChatResponse {
   status: "completed" | "approval_required" | "failed";
   trace_id: string;
   iterations: number;
-  usage: { input_tokens: number; output_tokens: number };
+  usage: { input_tokens: number; output_tokens: number; estimated?: boolean };
   approval?: ApprovalRecord | null;
   widgets: WidgetDefinition[];
 }
