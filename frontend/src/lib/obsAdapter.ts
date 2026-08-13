@@ -31,11 +31,13 @@ function adaptModelResponse(span: ObsSpan): Record<string, unknown> | undefined 
   };
 }
 
-function adaptSpan(span: ObsSpan): TraceSpan {
+function adaptSpan(span: ObsSpan, spanIdsByOtelId: ReadonlyMap<string, string>): TraceSpan {
   const hasTokenUsage = span.input_tokens > 0 || span.output_tokens > 0 || span.cache_read_tokens > 0;
   return {
     span_id: span.span_id,
-    parent_span_id: span.parent_span_id,
+    parent_span_id: span.parent_span_id
+      ? spanIdsByOtelId.get(span.parent_span_id) ?? span.parent_span_id
+      : null,
     kind: (span.kind as TraceSpan["kind"]) ?? "internal",
     name: span.name,
     status: (span.status as TraceSpan["status"]) ?? "completed",
@@ -86,10 +88,16 @@ function spanErrorMessage(error: unknown): string | undefined {
 }
 
 export function adaptSessionDetail(session: ObsSessionDetail): AdaptedSession {
+  const traceIdsByOtelId = new Map(
+    session.traces.map((trace) => [trace.trace_id, trace.legacy_trace_id || trace.trace_id]),
+  );
+  const spanIdsByOtelId = new Map(
+    session.spans.map((span) => [span.otel_span_id, span.span_id]),
+  );
   const spansByTrace = new Map<string, TraceSpan[]>();
   for (const span of session.spans) {
     const list = spansByTrace.get(span.trace_id) ?? [];
-    list.push(adaptSpan(span));
+    list.push(adaptSpan(span, spanIdsByOtelId));
     spansByTrace.set(span.trace_id, list);
   }
   const calls: LLMCallRecord[] = [];
@@ -97,7 +105,7 @@ export function adaptSessionDetail(session: ObsSessionDetail): AdaptedSession {
     if (span.kind !== "model") continue;
     calls.push({
       call_id: span.otel_span_id,
-      trace_id: span.trace_id,
+      trace_id: traceIdsByOtelId.get(span.trace_id) ?? span.trace_id,
       span_id: span.span_id,
       context_type: "conversation",
       context_id: session.session_id,
@@ -120,8 +128,10 @@ export function adaptSessionDetail(session: ObsSessionDetail): AdaptedSession {
       return left.trace_id.localeCompare(right.trace_id);
     })
     .map((trace) => ({
-    trace_id: trace.trace_id,
-    root_span_id: trace.root_span_id,
+    trace_id: traceIdsByOtelId.get(trace.trace_id) ?? trace.trace_id,
+    root_span_id: trace.root_span_id
+      ? spanIdsByOtelId.get(trace.root_span_id) ?? trace.root_span_id
+      : null,
     conversation_id: trace.session_id,
     user_id: trace.user_id,
     tenant_id: trace.tenant_id,

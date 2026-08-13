@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -14,7 +15,7 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.chat import ApprovalRecord
+from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
@@ -105,6 +106,9 @@ class PersistentRepository(InMemoryRepository):
         super().__init__()
         self.stores = stores
         self.persist_observability = persist_observability
+        self._legacy_observability_load_lock = asyncio.Lock()
+        self._legacy_traces_loaded = False
+        self._legacy_llm_calls_loaded = False
         # Phase four: conversation run reconciliation falls back to the OBS
         # pipeline when a trace is no longer in the in-memory repository.
         self.obs_trace_status_resolver = obs_trace_status_resolver
@@ -130,6 +134,16 @@ class PersistentRepository(InMemoryRepository):
         sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
         users = await self._load_models(USERS_RESOURCE, UserRecord)
         feedbacks = await self._load_models(FEEDBACKS_RESOURCE, FeedbackRecord)
+        traces = (
+            await self._load_models(TRACES_RESOURCE, TraceRecord)
+            if self.persist_observability
+            else []
+        )
+        llm_calls = (
+            await self._load_models(LLM_CALLS_RESOURCE, LLMCallRecord)
+            if self.persist_observability
+            else []
+        )
 
         async with self._lock:
             self._conversations = {item.id: item for item in conversations}
@@ -141,10 +155,13 @@ class PersistentRepository(InMemoryRepository):
             self._installations = {
                 (item.tenant_id, item.user_id, item.aina_id): item for item in installations
             }
-            # Phase four: Trace/LLMCall are no longer loaded at startup; the
-            # OBS pipeline serves them from the dedicated tables.
-            self._traces = {}
-            self._llm_calls = {}
+            # The normal OBS path does not load historical Trace/LLMCall rows
+            # at startup. The rollback switch restores the complete legacy
+            # behavior, including restart recovery.
+            self._traces = {item.trace_id: item for item in traces}
+            self._llm_calls = {item.call_id: item for item in llm_calls}
+            self._legacy_traces_loaded = self.persist_observability
+            self._legacy_llm_calls_loaded = self.persist_observability
             self._approvals = {item.id: item for item in approvals}
             self._model_providers = {item.id: item for item in model_providers}
             self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}
@@ -493,6 +510,91 @@ class PersistentRepository(InMemoryRepository):
         await self.stores.redis.delete("conversation-run", conversation_id)
         return conversation
 
+    async def get_trace(self, trace_id: str) -> TraceRecord:
+        try:
+            return await super().get_trace(trace_id)
+        except PlatformError as exc:
+            if exc.code != "RESOURCE_NOT_FOUND" or self._legacy_traces_loaded:
+                raise
+            # Migration fallback: look up one legacy row on demand without
+            # bringing the complete historical trace table into memory.
+            record = await self.stores.mysql.read(TRACES_RESOURCE, trace_id)
+            if record is None:
+                raise
+            trace = TraceRecord.model_validate(record.values["payload"])
+            async with self._lock:
+                self._traces.setdefault(trace.trace_id, trace)
+            return self._copy(trace)
+
+    async def list_traces(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[TraceRecord]:
+        await self._load_legacy_traces_on_demand()
+        return await super().list_traces(user_id=user_id, tenant_id=tenant_id)
+
+    async def list_llm_calls(
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        trace_ids: set[str] | None = None,
+        context_ids: set[str] | None = None,
+    ) -> list[LLMCallRecord]:
+        await self._load_legacy_llm_calls_on_demand()
+        return await super().list_llm_calls(
+            limit=limit,
+            offset=offset,
+            trace_ids=trace_ids,
+            context_ids=context_ids,
+        )
+
+    async def count_llm_calls(
+        self,
+        *,
+        trace_ids: set[str] | None = None,
+        context_ids: set[str] | None = None,
+    ) -> int:
+        await self._load_legacy_llm_calls_on_demand()
+        return await super().count_llm_calls(
+            trace_ids=trace_ids,
+            context_ids=context_ids,
+        )
+
+    async def _load_legacy_traces_on_demand(self) -> None:
+        if self._legacy_traces_loaded:
+            return
+        async with self._legacy_observability_load_lock:
+            if self._legacy_traces_loaded:
+                return
+            traces = await self._load_models(
+                TRACES_RESOURCE,
+                TraceRecord,
+                cache_in_redis=False,
+            )
+            async with self._lock:
+                for trace in traces:
+                    self._traces.setdefault(trace.trace_id, trace)
+            self._legacy_traces_loaded = True
+
+    async def _load_legacy_llm_calls_on_demand(self) -> None:
+        if self._legacy_llm_calls_loaded:
+            return
+        async with self._legacy_observability_load_lock:
+            if self._legacy_llm_calls_loaded:
+                return
+            calls = await self._load_models(
+                LLM_CALLS_RESOURCE,
+                LLMCallRecord,
+                cache_in_redis=False,
+            )
+            async with self._lock:
+                for call in calls:
+                    self._llm_calls.setdefault(call.call_id, call)
+            self._legacy_llm_calls_loaded = True
+
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         if not isinstance(value, BaseModel):
             raise TypeError(f"Persistent repository value for {resource!r} is not a Pydantic model")
@@ -519,6 +621,8 @@ class PersistentRepository(InMemoryRepository):
         self,
         resource: str,
         model: type[ModelT],
+        *,
+        cache_in_redis: bool = True,
     ) -> list[ModelT]:
         values: list[ModelT] = []
         offset = 0
@@ -528,7 +632,8 @@ class PersistentRepository(InMemoryRepository):
                 payload = record.values["payload"]
                 item = model.model_validate(payload)
                 values.append(item)
-                await self.stores.redis.set(f"repository:{resource}", str(record.id), payload)
+                if cache_in_redis:
+                    await self.stores.redis.set(f"repository:{resource}", str(record.id), payload)
             if len(page.items) < page.limit:
                 break
             offset += len(page.items)

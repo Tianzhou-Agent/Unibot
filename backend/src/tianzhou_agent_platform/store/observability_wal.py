@@ -533,6 +533,19 @@ class WalWriter:
             return self._submit_serialized(record)
 
     def _submit_serialized(self, record: ObsRecord) -> int:
+        # Validate the exact record (including its assigned sequence number)
+        # before it can enter the queue.  Otherwise one oversized or
+        # unserializable payload raises from the writer task and permanently
+        # stops WAL persistence for every later record.
+        candidate_sequence = self._sequence_no + 1
+        record.sequence_no = candidate_sequence
+        try:
+            encode_frame(record)
+        except Exception as exc:  # noqa: BLE001 - isolate a single bad record
+            self.metrics.append_failure_count += 1
+            self.metrics.telemetry_gap_count += 1
+            raise WalError(f"WAL record rejected before enqueue: {exc}") from exc
+
         deadline = time.monotonic() + self.queue_full_wait_seconds
         with self._cond:
             while (
@@ -546,8 +559,7 @@ class WalWriter:
                 raise self._failure
             if self._closing or self._closed:
                 raise WalError("WAL writer is closed")
-            self._sequence_no += 1
-            record.sequence_no = self._sequence_no
+            self._sequence_no = candidate_sequence
             if len(self._pending) < self.metrics.queue_capacity:
                 self._pending.append(record)
                 self._cond.notify()

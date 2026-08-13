@@ -29,7 +29,14 @@ import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { classNames, timeAgo } from "@/lib/utils";
 import { useDebugMode } from "@/lib/debugMode";
-import { getAdminObsSession, getObsOverview, getObsSession } from "@/lib/obsData";
+import {
+  getAdminObsSession,
+  getObsOverview,
+  getObsSession,
+  loadLegacyAdminObsSession,
+  loadLegacyPersonalObsData,
+  loadLegacyPersonalObsSession,
+} from "@/lib/obsData";
 import type { ObsOverview, ObsSessionDetail } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
@@ -66,6 +73,8 @@ export default function DebugPage() {
   const [expandedTraceGroups, setExpandedTraceGroups] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const adminSessionRequestRef = useRef(0);
+  const autoLoadedSessionsRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -98,28 +107,51 @@ export default function DebugPage() {
         });
         setTraces([]);
         setLlmCalls([]);
+        adminSessionRequestRef.current += 1;
+        autoLoadedSessionsRef.current.clear();
         setConversations(conversationData);
         setError(null);
       } else {
-        // 普通用户：后端聚合 DTO（design 12.2），不再全量加载 traces/llm-calls。
-        // OBS 查询失败时降级为空数据，不阻断 conversations/health 展示。
+        // 普通用户优先使用后端聚合 DTO；仅在 OBS 未启用、查询失败或会话尚未迁移时读取旧数据。
+        const healthData: { status: string; obs?: { enabled?: boolean } } = await api.get<{
+          status: string;
+          obs?: { enabled?: boolean };
+        }>("/health")
+          .catch(() => ({ status: "error" as const }));
         const sessionId = requestedSessionId ?? null;
         let overviewData: ObsOverview | null = null;
         let sessionData: ObsSessionDetail | null = null;
-        try {
-          if (sessionId) {
-            sessionData = await getObsSession(sessionId);
-          } else {
-            overviewData = await getObsOverview(overviewPeriod);
+        let legacyTraces: TraceRecord[] = [];
+        let legacyCalls: LLMCallRecord[] = [];
+        if (healthData.obs?.enabled !== false) {
+          try {
+            if (sessionId) {
+              sessionData = await getObsSession(sessionId);
+            } else {
+              overviewData = await getObsOverview(overviewPeriod);
+            }
+          } catch {
+            overviewData = null;
+            sessionData = null;
           }
-        } catch {
-          overviewData = null;
-          sessionData = null;
         }
-        const healthData = await api.get<{ status: string }>("/health").catch(() => ({ status: "error" as const }));
+        if (sessionId && !sessionData) {
+          const legacy = await loadLegacyPersonalObsSession(sessionId, actorQuery).catch(() => null);
+          legacyTraces = legacy?.traces ?? [];
+          legacyCalls = legacy?.calls ?? [];
+        } else if (!sessionId && (!overviewData || overviewData.trace_count === 0)) {
+          const legacy = await loadLegacyPersonalObsData(actorQuery).catch(() => null);
+          legacyTraces = legacy?.traces ?? [];
+          legacyCalls = legacy?.calls ?? [];
+          if (legacyTraces.length > 0 || legacyCalls.length > 0) {
+            overviewData = null;
+          }
+        }
         const conversationData = await api.get<ConversationRecord[]>(`/conversations${querySuffix}`).catch(() => []);
         setHealth(healthData.status === "ok" ? "ok" : "error");
         setConversations(conversationData);
+        setTraces(legacyTraces);
+        setLlmCalls(legacyCalls);
         setObsOverview(overviewData);
         setObsSession(sessionData);
         setError(null);
@@ -160,6 +192,15 @@ export default function DebugPage() {
       if (!showAdminView) return fromTraces;
       // Phase four: admin 视图以会话为驱动，Trace 按需从 /admin/obs/sessions 加载
       const keys = new Set(fromTraces.map((group) => group.key));
+      if (requestedSessionId && !keys.has(requestedSessionId)) {
+        fromTraces.push({
+          key: requestedSessionId,
+          conversationId: requestedSessionId,
+          title: conversationsById.get(requestedSessionId)?.title.trim() || "已删除或不可用的会话",
+          traces: [],
+        });
+        keys.add(requestedSessionId);
+      }
       for (const conversation of conversations) {
         if (keys.has(conversation.id)) continue;
         fromTraces.push({
@@ -171,24 +212,26 @@ export default function DebugPage() {
       }
       return fromTraces;
     },
-    [conversations, conversationsById, showAdminView, traces],
+    [conversations, conversationsById, requestedSessionId, showAdminView, traces],
   );
 
   const loadAdminSession = useCallback(async (conversationId: string) => {
+    const requestId = ++adminSessionRequestRef.current;
     try {
-      const session = await getAdminObsSession(conversationId);
-      if (!session) return;
-      const adapted = adaptSessionDetail(session);
-      setTraces(adapted.traces);
-      setLlmCalls(adapted.calls);
+      const session = await getAdminObsSession(conversationId).catch(() => null);
+      const data = session
+        ? adaptSessionDetail(session)
+        : await loadLegacyAdminObsSession(conversationId);
+      if (requestId !== adminSessionRequestRef.current) return;
+      setTraces(data.traces);
+      setLlmCalls(data.calls);
     } catch (loadError) {
+      if (requestId !== adminSessionRequestRef.current) return;
       setError(apiErrorMessage(loadError));
     }
   }, []);
 
   // 已尝试自动加载过的会话：防止空 traces 响应导致自动加载 effect 无限重取
-  const autoLoadedSessionsRef = useRef<Set<string>>(new Set());
-
   const toggleTraceGroup = (conversationId: string | null, hasTraces: boolean) => {
     setExpandedTraceGroups((current) => {
       const key = traceGroupKey(conversationId);
@@ -204,25 +247,32 @@ export default function DebugPage() {
 
   // Admin 视图默认展开第一个会话组：自动加载其 trace 一次（同一会话不重取，避免空响应时无限循环）
   useEffect(() => {
-    const firstGroup = traceGroups[0];
-    if (showAdminView && firstGroup && firstGroup.traces.length === 0 && firstGroup.conversationId
-      && !autoLoadedSessionsRef.current.has(firstGroup.conversationId)) {
-      autoLoadedSessionsRef.current.add(firstGroup.conversationId);
-      void loadAdminSession(firstGroup.conversationId);
+    const targetGroup = requestedSessionId
+      ? traceGroups.find((group) => group.conversationId === requestedSessionId)
+      : traceGroups[0];
+    if (showAdminView && targetGroup && targetGroup.traces.length === 0 && targetGroup.conversationId
+      && !autoLoadedSessionsRef.current.has(targetGroup.conversationId)) {
+      autoLoadedSessionsRef.current.add(targetGroup.conversationId);
+      void loadAdminSession(targetGroup.conversationId);
     }
-  }, [showAdminView, traceGroups, loadAdminSession]);
+  }, [showAdminView, traceGroups, loadAdminSession, requestedSessionId]);
 
   useEffect(() => {
     const selectedRecord = traces.find((trace) => trace.trace_id === selectedTrace);
-    const groupKey = selectedRecord ? traceGroupKey(selectedRecord.conversation_id) : traceGroups[0]?.key;
+    const requestedGroup = showAdminView && requestedSessionId
+      ? traceGroups.find((group) => group.conversationId === requestedSessionId)
+      : null;
+    const groupKey = selectedRecord
+      ? traceGroupKey(selectedRecord.conversation_id)
+      : requestedGroup?.key ?? traceGroups[0]?.key;
     if (!groupKey) return;
     setExpandedTraceGroups((current) => {
-      if (current.has(groupKey) || (!selectedRecord && current.size > 0)) return current;
+      if (current.has(groupKey) || (!selectedRecord && !requestedGroup && current.size > 0)) return current;
       const next = new Set(current);
       next.add(groupKey);
       return next;
     });
-  }, [selectedTrace, traceGroups, traces]);
+  }, [requestedSessionId, selectedTrace, showAdminView, traceGroups, traces]);
 
   useEffect(() => {
     setTraceDetailView("trace");
@@ -328,7 +378,7 @@ export default function DebugPage() {
                 <span className="ml-auto text-[11.5px] text-ink-muted">{traces.length} 条 Trace</span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Trace 列表">
-                {traces.length === 0 ? (
+                {traceGroups.length === 0 ? (
                   <div className="py-20 text-center text-[12px] text-ink-muted">完成一次对话后，调用记录会显示在这里。</div>
                 ) : (
                   traceGroups.map((group) => (

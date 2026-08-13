@@ -23,27 +23,45 @@ _SENSITIVE_KEYS = {
     "id_token",
     "password",
     "passwd",
+    "private_key",
     "proxy_authorization",
     "refresh_token",
     "secret",
+    "secret_access_key",
     "set_cookie",
+    "signing_key",
+    "ssh_key",
+    "ssh_private_key",
     "access_token",
+    "aws_secret_access_key",
+    "cloud_secret_access_key",
 }
 _SENSITIVE_SUFFIXES = (
     "_api_key",
     "_credential",
     "_credentials",
     "_password",
+    "_private_key",
     "_secret",
+    "_secret_access_key",
+    "_signing_key",
+    "_ssh_key",
     "_token",
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
 _OPENAI_STYLE_KEY_RE = re.compile(r"\bsk-[a-zA-Z0-9_-]{8,}\b")
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|secret)\b"
+    r"(?i)\b(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|"
+    r"(?:[a-z0-9]+[ _-])?secret[ _-]?access[ _-]?key|private[ _-]?key|"
+    r"signing[ _-]?key|ssh(?:[ _-]?private)?[ _-]?key|secret)\b"
     r"(\s*(?:=|:|\bis\b)\s*)([^\s,;]+)"
 )
 _CHINESE_SECRET_ASSIGNMENT_RE = re.compile(r"(密码|密钥|令牌)(\s*(?:是|=|：|:)\s*)([^\s，,；;]+)")
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN (?P<label>(?:[A-Z0-9][A-Z0-9 ._/-]* )?PRIVATE KEY)-----.*?"
+    r"-----END (?P=label)-----",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 def redact_trace_data(value: Any, *, _depth: int = 0) -> Any:
@@ -122,7 +140,8 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _redact_text(value: str) -> str:
-    redacted = _BEARER_RE.sub("Bearer [REDACTED]", value)
+    redacted = _PEM_BLOCK_RE.sub(REDACTED, value)
+    redacted = _BEARER_RE.sub("Bearer [REDACTED]", redacted)
     redacted = _OPENAI_STYLE_KEY_RE.sub(REDACTED, redacted)
     redacted = _SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}{REDACTED}", redacted)
     return _CHINESE_SECRET_ASSIGNMENT_RE.sub(

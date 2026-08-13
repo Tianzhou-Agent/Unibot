@@ -111,6 +111,9 @@ def create_app(
         )
         resolved_repository = PersistentRepository(
             storage_stores,
+            # Disabling the OBS pipeline is also the rollback path: keep the
+            # legacy Trace/LLMCall tables writable and restart-recoverable.
+            persist_observability=not resolved_settings.obs_enabled,
             obs_trace_status_resolver=(
                 (lambda trace_id: _resolve_obs_trace_status(obs_store, trace_id))
                 if obs_store is not None

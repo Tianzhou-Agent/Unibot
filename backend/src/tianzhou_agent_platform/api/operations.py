@@ -122,7 +122,7 @@ def create_operations_router() -> APIRouter:
         require_platform_admin(request)
         return await _obs_query(request).admin_session_detail(
             session_id=session_id,
-            tenant_id=tenant_id or "default",
+            tenant_id=tenant_id,
             user_id=user_id,
         )
 

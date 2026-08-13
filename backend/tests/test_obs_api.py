@@ -76,6 +76,28 @@ def test_admin_obs_endpoints_block_non_admin() -> None:
         assert client.get("/admin/obs/sessions/conv_1").status_code == 401
 
 
+def test_admin_obs_session_does_not_force_default_tenant() -> None:
+    class RecordingQuery:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def admin_session_detail(self, **kwargs):
+            self.calls.append(kwargs)
+            return None
+
+    app = create_app(settings=_settings(), repository=InMemoryRepository())
+    query = RecordingQuery()
+    app.state.obs_query = query
+    with TestClient(app) as client:
+        assert client.get("/admin/obs/sessions/conv_1").status_code == 200
+        assert client.get(
+            "/admin/obs/sessions/conv_1", params={"tenant_id": "tenant_2"}
+        ).status_code == 200
+
+    assert query.calls[0]["tenant_id"] is None
+    assert query.calls[1]["tenant_id"] == "tenant_2"
+
+
 def test_admin_feedback_detail_falls_back_to_legacy() -> None:
     """With the OBS store disabled, admin feedback detail still works via the
     legacy repository path (migration fallback)."""

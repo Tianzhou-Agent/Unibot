@@ -186,6 +186,25 @@ class ObservabilityAspect:
         # rebuild the same continuation root span twice (review round 3)
         self._restore_lock = asyncio.Lock()
 
+    def add_trace_token_usage(
+        self,
+        trace_id: str,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int = 0,
+    ) -> None:
+        """Accumulate usage across approval checkpoints of one interaction."""
+
+        if not self._enabled:
+            return
+        previous = self._trace_token_totals.get(trace_id, (0, 0, 0))
+        self._trace_token_totals[trace_id] = (
+            previous[0] + input_tokens,
+            previous[1] + output_tokens,
+            previous[2] + cache_read_tokens,
+        )
+
     async def _ensure_trace_context(
         self,
         trace_id: str,
@@ -248,6 +267,14 @@ class ObservabilityAspect:
             if row is not None:
                 otel_trace_id = row["trace_id"]
                 root_span_id = row.get("root_span_id")
+                self._trace_token_totals.setdefault(
+                    trace_id,
+                    (
+                        int(row.get("input_tokens") or 0),
+                        int(row.get("output_tokens") or 0),
+                        int(row.get("cache_read_tokens") or 0),
+                    ),
+                )
                 context = TraceContext(
                     conversation_id=row.get("session_id"),
                     user_id=row.get("user_id") or "anonymous",
@@ -1007,7 +1034,7 @@ class ObservabilityAspect:
                 durable = True
             except Exception:
                 logger.exception("OBS direct-write fallback failed for trace %s", trace_id)
-        if durable and status != STATUS_APPROVAL_REQUIRED:
+        if status != STATUS_APPROVAL_REQUIRED:
             self._cleanup_trace_state(trace_id)
 
     def _build_fallback_records(

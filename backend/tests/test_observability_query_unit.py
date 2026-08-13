@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -49,6 +50,91 @@ def test_span_dto_preserves_reported_usage() -> None:
     assert dto["input_tokens"] == 10
     assert dto["output_tokens"] == 5
     assert dto["attributes"] == {"provider": "test"}
+
+
+class _SessionStore:
+    def __init__(self) -> None:
+        self.trace = {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "legacy_trace_id": "trace_0123456789abcdef0123456789abcdef",
+            "root_span_id": "1111111111111111",
+            "session_id": "conv_1",
+            "user_id": "user_1",
+            "tenant_id": "tenant_1",
+            "status": "completed",
+            "started_at": datetime.now(timezone.utc),
+        }
+        self.spans = [
+            {
+                **_model_span_row(
+                    span_id="1111111111111111",
+                    legacy_span_id="span_root",
+                    trace_id=self.trace["trace_id"],
+                    parent_span_id=None,
+                    kind="agent",
+                ),
+                "name": "agent.run",
+            },
+            _model_span_row(
+                span_id="2222222222222222",
+                legacy_span_id="span_model",
+                trace_id=self.trace["trace_id"],
+                parent_span_id="1111111111111111",
+            ),
+        ]
+
+    async def list_traces(self, **_: object):
+        return [self.trace]
+
+    async def list_spans(self, trace_id: str):
+        return self.spans if trace_id == self.trace["trace_id"] else []
+
+    async def list_events(self, trace_id: str):
+        if trace_id != self.trace["trace_id"]:
+            return []
+        return [
+            {
+                "event_id": "event_1",
+                "trace_id": trace_id,
+                "span_id": "2222222222222222",
+                "name": "model.completed",
+                "status": "completed",
+                "occurred_at": datetime.now(timezone.utc),
+                "attributes": {},
+            }
+        ]
+
+
+@pytest.mark.asyncio
+async def test_session_and_feedback_dtos_use_one_legacy_span_id_namespace() -> None:
+    store = _SessionStore()
+    query = ObsQueryService(store, None)  # type: ignore[arg-type]
+
+    session = await query.session_detail(
+        tenant_id="tenant_1",
+        user_id="user_1",
+        session_id="conv_1",
+    )
+    assert session is not None
+    assert session["traces"][0]["trace_id"] == store.trace["trace_id"]
+    assert session["traces"][0]["root_span_id"] == "span_root"
+    child = next(span for span in session["spans"] if span["span_id"] == "span_model")
+    assert child["parent_span_id"] == "span_root"
+    assert child["otel_span_id"] == "2222222222222222"
+    assert child["parent_otel_span_id"] == "1111111111111111"
+    assert session["events"][0]["span_id"] == "span_model"
+    assert session["events"][0]["otel_span_id"] == "2222222222222222"
+
+    feedback = await query.feedback_context(
+        tenant_id="tenant_1",
+        user_id="user_1",
+        session_id="conv_1",
+        before=datetime.now(timezone.utc),
+    )
+    assert feedback[0]["trace_id"] == store.trace["legacy_trace_id"]
+    assert feedback[0]["root_span_id"] == "span_root"
+    feedback_child = next(span for span in feedback[0]["spans"] if span["span_id"] == "span_model")
+    assert feedback_child["parent_span_id"] == "span_root"
 
 
 class _RawLogStore:

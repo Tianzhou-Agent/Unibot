@@ -539,6 +539,11 @@ async def test_approval_resume_keeps_same_trace_and_cleans_up(pipeline) -> None:
         input_data={},
         attributes={},
     )
+    aspect.add_trace_token_usage(
+        "trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        input_tokens=7,
+        output_tokens=4,
+    )
     # The paused run exports its root so a restart cannot orphan its children.
     await aspect.finish_trace("trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "approval_required")
     assert "span_bbbbbbbbbbbbbbbbbbbb" not in aspect._spans  # noqa: SLF001
@@ -564,6 +569,11 @@ async def test_approval_resume_keeps_same_trace_and_cleans_up(pipeline) -> None:
         "completed",
         attributes={"input_tokens": 5, "output_tokens": 3},
     )
+    aspect.add_trace_token_usage(
+        "trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        input_tokens=5,
+        output_tokens=3,
+    )
     await aspect.finish_trace("trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "completed")
 
     # terminal cleanup: per-trace runtime maps are dropped
@@ -580,6 +590,8 @@ async def test_approval_resume_keeps_same_trace_and_cleans_up(pipeline) -> None:
     store = pipeline["store"]
     trace = store.traces["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
     assert trace["status"] == "completed"
+    assert trace["input_tokens"] == 12
+    assert trace["output_tokens"] == 7
     roots = [span for span in store.spans.values() if span["kind"] == "agent"]
     assert {span["legacy_span_id"] for span in roots} == {
         "span_bbbbbbbbbbbbbbbbbbbb",
@@ -867,6 +879,44 @@ async def test_terminal_cleanup_drops_span_id_mappings(pipeline) -> None:
     assert aspect._span_ids_by_trace == {}  # noqa: SLF001
     wal.close()
     await wal.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_terminal_trace_cleans_runtime_state_when_wal_and_mysql_fallback_fail(
+    pipeline, monkeypatch
+) -> None:
+    class FailingStore:
+        async def bulk_upsert(self, records: list[ObsRecord]) -> int:
+            raise RuntimeError("OBS MySQL unavailable")
+
+    aspect = pipeline["aspect"]
+    trace_id = "trace_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    root_span_id = "span_ffffffffffffffffffffffffffffffff"
+    await aspect.create_agent_trace(
+        trace_id=trace_id,
+        root_span_id=root_span_id,
+        conversation_id="conv_1",
+        user_id="user_1",
+        tenant_id="tenant_1",
+        input_data={},
+        attributes={},
+    )
+    aspect.add_trace_token_usage(trace_id, input_tokens=2, output_tokens=1)
+
+    async def fail_barrier(sequence_no: int, *, attempts: int = 3) -> None:
+        from tianzhou_agent_platform.store.observability_wal import WalGapError
+
+        raise WalGapError(f"forced gap at {sequence_no}")
+
+    monkeypatch.setattr(aspect, "_flush_with_retry", fail_barrier)
+    aspect._obs_store = FailingStore()  # noqa: SLF001
+
+    await aspect.finish_trace(trace_id, "completed")
+
+    assert trace_id not in aspect._otel_trace_ids  # noqa: SLF001
+    assert trace_id not in aspect._trace_contexts  # noqa: SLF001
+    assert trace_id not in aspect._trace_token_totals  # noqa: SLF001
+    assert root_span_id not in aspect._spans  # noqa: SLF001
 
 
 @pytest.mark.asyncio

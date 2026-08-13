@@ -4,7 +4,7 @@ import { PersonalObservabilityView } from "@/components/observability/PersonalOb
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useMockSession } from "@/lib/mockSession";
-import { getObsSession } from "@/lib/obsData";
+import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import type { ObsSessionDetail } from "@/lib/obsData";
 import { classNames } from "@/lib/utils";
 import type { ConversationRecord, LLMCallRecord, TraceRecord } from "@/types";
@@ -31,12 +31,18 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
     const querySuffix = actorQuery ? `?${actorQuery}` : "";
     try {
       const [sessionData, conversationData] = await Promise.all([
-        getObsSession(sessionId),
+        getObsSession(sessionId).catch(() => null),
         api.get<ConversationRecord[]>(`/conversations${querySuffix}`),
       ]);
       setObsSession(sessionData);
-      setTraces([]);
-      setLlmCalls([]);
+      if (sessionData) {
+        setTraces([]);
+        setLlmCalls([]);
+      } else {
+        const legacy = await loadLegacyPersonalObsSession(sessionId, actorQuery);
+        setTraces(legacy.traces);
+        setLlmCalls(legacy.calls);
+      }
       setConversations(conversationData);
       setError(null);
     } catch (loadError) {

@@ -200,14 +200,25 @@ class ObsQueryService:
         trace_ids = [row["trace_id"] for row in traces]
         span_lists = await asyncio.gather(*(self._store.list_spans(trace_id) for trace_id in trace_ids))
         event_lists = await asyncio.gather(*(self._store.list_events(trace_id) for trace_id in trace_ids))
+        span_id_maps = {
+            trace_id: self._span_identity_map(trace_spans)
+            for trace_id, trace_spans in zip(trace_ids, span_lists, strict=True)
+        }
         spans: list[dict[str, Any]] = [span for spans_for_trace in span_lists for span in spans_for_trace]
         events: list[dict[str, Any]] = [event for events_for_trace in event_lists for event in events_for_trace]
         spans.sort(key=lambda row: (row.get("sequence_no") or 0, _iso(row.get("started_at")) or ""))
         return {
             "session_id": session_id,
-            "traces": [self._trace_dto(row) for row in traces],
-            "spans": [self._span_dto(row) for row in spans],
-            "events": [self._event_dto(row) for row in events],
+            "traces": [
+                self._trace_dto(row, span_id_maps.get(row["trace_id"])) for row in traces
+            ],
+            "spans": [
+                self._span_dto(row, span_id_maps.get(row["trace_id"])) for row in spans
+            ],
+            "events": [
+                self._event_dto(row, span_id_maps.get(row["trace_id"]))
+                for row in events
+            ],
         }
 
     async def raw_log(
@@ -360,15 +371,26 @@ class ObsQueryService:
         trace_ids = [row["trace_id"] for row in all_traces]
         spans: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
+        span_id_maps: dict[str, dict[str, str]] = {}
         for trace_id in trace_ids:
-            spans.extend(await self._store.list_spans(trace_id))
+            trace_spans = await self._store.list_spans(trace_id)
+            span_id_maps[trace_id] = self._span_identity_map(trace_spans)
+            spans.extend(trace_spans)
             events.extend(await self._store.list_events(trace_id))
         spans.sort(key=lambda row: (row.get("sequence_no") or 0, _iso(row.get("started_at")) or ""))
         return {
             "session_id": session_id,
-            "traces": [self._trace_dto(row) for row in all_traces],
-            "spans": [self._span_dto(row) for row in spans],
-            "events": [self._event_dto(row) for row in events],
+            "traces": [
+                self._trace_dto(row, span_id_maps.get(row["trace_id"]))
+                for row in all_traces
+            ],
+            "spans": [
+                self._span_dto(row, span_id_maps.get(row["trace_id"])) for row in spans
+            ],
+            "events": [
+                self._event_dto(row, span_id_maps.get(row["trace_id"]))
+                for row in events
+            ],
         }
 
     async def feedback_context(
@@ -402,33 +424,42 @@ class ObsQueryService:
                 self._store.list_spans(row["trace_id"]),
                 self._store.list_events(row["trace_id"]),
             )
+            span_id_map = self._span_identity_map(spans)
+            root_span_id = row.get("root_span_id")
             result.append(
                 {
-                    "trace_id": row["trace_id"],
-                    "root_span_id": row.get("root_span_id"),
+                    "trace_id": row.get("legacy_trace_id") or row["trace_id"],
+                    "root_span_id": self._display_span_id(root_span_id, span_id_map),
                     "conversation_id": row.get("session_id"),
                     "user_id": row["user_id"],
                     "tenant_id": row["tenant_id"],
                     "status": row["status"],
                     "created_at": _iso(row.get("started_at")) or datetime.now(timezone.utc).isoformat(),
                     "completed_at": _iso(row.get("completed_at")),
-                    "spans": [self._legacy_span_dict(span) for span in spans],
+                    "spans": [self._legacy_span_dict(span, span_id_map) for span in spans],
                     "events": [self._legacy_event_dict(event) for event in events],
                 }
             )
         return result
 
     @staticmethod
-    def _legacy_span_dict(span: dict[str, Any]) -> dict[str, Any]:
+    def _legacy_span_dict(
+        span: dict[str, Any],
+        span_id_map: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         kind = span.get("kind")
         if kind not in ("agent", "model", "tool", "aina", "internal"):
             kind = "internal"
         status = span.get("status")
         if status not in ("running", "completed", "failed", "cancelled", "approval_required"):
             status = "completed"
+        parent_span_id = span.get("parent_span_id")
         return {
             "span_id": span.get("legacy_span_id") or span["span_id"],
-            "parent_span_id": span.get("parent_span_id"),
+            "parent_span_id": ObsQueryService._display_span_id(
+                parent_span_id,
+                span_id_map,
+            ),
             "kind": kind,
             "name": span.get("name") or "",
             "status": status,
@@ -477,11 +508,32 @@ class ObsQueryService:
         }
 
     @staticmethod
-    def _trace_dto(row: dict[str, Any]) -> dict[str, Any]:
+    def _span_identity_map(spans: list[dict[str, Any]]) -> dict[str, str]:
+        return {
+            str(span["span_id"]): str(span.get("legacy_span_id") or span["span_id"])
+            for span in spans
+        }
+
+    @staticmethod
+    def _display_span_id(
+        span_id: Any,
+        span_id_map: dict[str, str] | None,
+    ) -> str | None:
+        if span_id is None:
+            return None
+        raw_span_id = str(span_id)
+        return (span_id_map or {}).get(raw_span_id, raw_span_id)
+
+    @staticmethod
+    def _trace_dto(
+        row: dict[str, Any],
+        span_id_map: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        root_span_id = row.get("root_span_id")
         return {
             "trace_id": row["trace_id"],
             "legacy_trace_id": row.get("legacy_trace_id"),
-            "root_span_id": row.get("root_span_id"),
+            "root_span_id": ObsQueryService._display_span_id(root_span_id, span_id_map),
             "session_id": row.get("session_id"),
             "user_id": row["user_id"],
             "tenant_id": row["tenant_id"],
@@ -499,15 +551,23 @@ class ObsQueryService:
         }
 
     @staticmethod
-    def _span_dto(row: dict[str, Any]) -> dict[str, Any]:
+    def _span_dto(
+        row: dict[str, Any],
+        span_id_map: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         input_preview = _preview_json(row.get("input_preview"))
         output_preview = _preview_json(row.get("output_preview"))
         input_tokens, output_tokens, attributes = _span_usage(row, input_preview, output_preview)
+        parent_otel_span_id = row.get("parent_span_id")
         return {
             "span_id": row.get("legacy_span_id") or row["span_id"],
             "otel_span_id": row["span_id"],
             "trace_id": row["trace_id"],
-            "parent_span_id": row.get("parent_span_id"),
+            "parent_span_id": ObsQueryService._display_span_id(
+                parent_otel_span_id,
+                span_id_map,
+            ),
+            "parent_otel_span_id": parent_otel_span_id,
             "sequence_no": int(row.get("sequence_no") or 0),
             "kind": row["kind"],
             "name": row["name"],
@@ -531,11 +591,16 @@ class ObsQueryService:
         }
 
     @staticmethod
-    def _event_dto(row: dict[str, Any]) -> dict[str, Any]:
+    def _event_dto(
+        row: dict[str, Any],
+        span_id_map: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        otel_span_id = row.get("span_id")
         return {
             "event_id": row["event_id"],
             "trace_id": row["trace_id"],
-            "span_id": row.get("span_id"),
+            "span_id": ObsQueryService._display_span_id(otel_span_id, span_id_map),
+            "otel_span_id": otel_span_id,
             "name": row["name"],
             "status": row.get("status"),
             "occurred_at": _iso(row.get("occurred_at")),

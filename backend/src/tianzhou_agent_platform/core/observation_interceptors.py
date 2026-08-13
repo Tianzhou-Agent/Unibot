@@ -522,6 +522,11 @@ class ObservedAgentRuntime(AgentRuntime):
 
     async def _finish_response(self, response: ChatResponse, root_span_id: str) -> None:
         widget_refs = [{"id": widget.id, "kind": widget.kind} for widget in response.widgets]
+        self._observability.add_trace_token_usage(
+            response.trace_id,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
         await self._observability.record_event(
             response.trace_id,
             kind="final.response",

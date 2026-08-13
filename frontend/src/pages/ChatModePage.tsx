@@ -20,7 +20,7 @@ import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
-import { getObsSession } from "@/lib/obsData";
+import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
@@ -74,7 +74,7 @@ export default function ChatModePage() {
     if (!conversationId) return;
     let active = true;
     const actorQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
-    void getObsSession(conversationId).then((session) => {
+    void getObsSession(conversationId).catch(() => null).then(async (session) => {
       if (!active) return;
       if (session) {
         const adapted = adaptSessionDetail(session);
@@ -82,13 +82,15 @@ export default function ChatModePage() {
         setTraces(adapted.traces);
         return;
       }
-      // OBS 未启用或无数据：回退旧 /traces 路径，保持调试面板可用
-      void api.get<TraceRecord[]>(`/traces?${actorQuery}`).then((traceData) => {
-        if (active) {
-          setLlmCalls([]);
-          setTraces(traceData);
-        }
-      });
+      // OBS 未启用或会话尚未迁移：只在此时读取旧 Trace/LLM Call。
+      const legacy = await loadLegacyPersonalObsSession(conversationId, actorQuery);
+      if (!active) return;
+      setLlmCalls(legacy.calls);
+      setTraces(legacy.traces);
+    }).catch(() => {
+      if (!active) return;
+      setLlmCalls([]);
+      setTraces([]);
     });
     return () => { active = false; };
   }, [conversationId, profile.actorUserId, profile.tenantId]);

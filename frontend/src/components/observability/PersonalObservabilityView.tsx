@@ -956,7 +956,7 @@ function PersonalOverview({
       calls: row.call_count,
       input: row.input_tokens,
       output: row.output_tokens,
-      total: row.input_tokens + row.output_tokens + row.cache_read_tokens,
+      total: row.input_tokens + row.output_tokens,
     }));
     const dailySamples: TokenSample[] = overview.daily.map((row) => ({
       id: row.day ?? "unknown",
@@ -965,7 +965,7 @@ function PersonalOverview({
       createdAt: row.day ?? new Date().toISOString(),
       input: row.input_tokens,
       output: row.output_tokens,
-      total: row.input_tokens + row.output_tokens + row.cache_read_tokens,
+      total: row.input_tokens + row.output_tokens,
       measured: true,
       estimated: false,
     }));

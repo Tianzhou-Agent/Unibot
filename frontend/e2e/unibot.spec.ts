@@ -1,6 +1,10 @@
 import { expect, test, type Page, type Route } from "playwright/test";
 
 const NOW = "2026-07-12T04:00:00.000Z";
+const OBS_TRACE_ID = "11111111111111111111111111111111";
+const OBS_ROOT_SPAN_ID = "aaaaaaaaaaaaaaaa";
+const OBS_MODEL_SPAN_ID = "bbbbbbbbbbbbbbbb";
+const OBS_TOOL_SPAN_ID = "cccccccccccccccc";
 
 type JsonObject = Record<string, unknown>;
 
@@ -137,7 +141,7 @@ function obsSpan(overrides: JsonObject = {}): JsonObject {
   return {
     span_id: "span-e2e-1",
     otel_span_id: "span-e2e-1",
-    trace_id: "trace-e2e-1",
+    trace_id: OBS_TRACE_ID,
     parent_span_id: null,
     sequence_no: 1,
     kind: "internal",
@@ -177,9 +181,9 @@ function obsSessionDetail(sessionId: string, overrides: JsonObject = {}): JsonOb
 function successfulObsSession(sessionId: string): JsonObject {
   return obsSessionDetail(sessionId, {
     traces: [{
-      trace_id: "trace-e2e-1",
-      legacy_trace_id: null,
-      root_span_id: "span-agent-e2e-1",
+      trace_id: OBS_TRACE_ID,
+      legacy_trace_id: "trace-e2e-1",
+      root_span_id: OBS_ROOT_SPAN_ID,
       session_id: sessionId,
       user_id: "anonymous",
       tenant_id: "default",
@@ -196,15 +200,15 @@ function successfulObsSession(sessionId: string): JsonObject {
       attributes: {},
     }],
     events: [
-      { event_id: "ev-1", trace_id: "trace-e2e-1", span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "排查模型调用", requested_capability: null, preferred_aina_id: null } },
-      { event_id: "ev-2", trace_id: "trace-e2e-1", span_id: null, name: "context.compacted", status: "completed", occurred_at: NOW, attributes: { before_tokens: 110, after_tokens: 90 } },
-      { event_id: "ev-3", trace_id: "trace-e2e-1", span_id: null, name: "agent.completed", status: "completed", occurred_at: NOW, attributes: {} },
-      { event_id: "ev-4", trace_id: "trace-e2e-1", span_id: null, name: "final.response", status: "completed", occurred_at: NOW, attributes: { content: "模型返回正常", input_tokens: 90, output_tokens: 30 } },
+      { event_id: "ev-1", trace_id: OBS_TRACE_ID, span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "排查模型调用", requested_capability: null, preferred_aina_id: null } },
+      { event_id: "ev-2", trace_id: OBS_TRACE_ID, span_id: null, name: "context.compacted", status: "completed", occurred_at: NOW, attributes: { before_tokens: 110, after_tokens: 90 } },
+      { event_id: "ev-3", trace_id: OBS_TRACE_ID, span_id: null, name: "agent.completed", status: "completed", occurred_at: NOW, attributes: {} },
+      { event_id: "ev-4", trace_id: OBS_TRACE_ID, span_id: null, name: "final.response", status: "completed", occurred_at: NOW, attributes: { content: "模型返回正常", input_tokens: 90, output_tokens: 30 } },
     ],
     spans: [
       obsSpan({
         span_id: "span-agent-e2e-1",
-        otel_span_id: "otel-agent-e2e-1",
+        otel_span_id: OBS_ROOT_SPAN_ID,
         parent_span_id: null,
         sequence_no: 1,
         kind: "agent",
@@ -218,9 +222,9 @@ function successfulObsSession(sessionId: string): JsonObject {
       }),
       obsSpan({
         span_id: "span-model-e2e-1",
-        otel_span_id: "llm-e2e-1",
-        trace_id: "trace-e2e-1",
-        parent_span_id: "span-agent-e2e-1",
+        otel_span_id: OBS_MODEL_SPAN_ID,
+        trace_id: OBS_TRACE_ID,
+        parent_span_id: OBS_ROOT_SPAN_ID,
         sequence_no: 2,
         kind: "model",
         name: "model.complete",
@@ -244,8 +248,8 @@ function successfulObsSession(sessionId: string): JsonObject {
       }),
       obsSpan({
         span_id: "span-tool-e2e-1",
-        otel_span_id: "otel-tool-e2e-1",
-        parent_span_id: "span-agent-e2e-1",
+        otel_span_id: OBS_TOOL_SPAN_ID,
+        parent_span_id: OBS_ROOT_SPAN_ID,
         sequence_no: 3,
         kind: "tool",
         name: "demo.lookup",
@@ -826,6 +830,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       });
     }
     if (method === "GET" && path === "/admin/conversations") return json(route, state.conversations);
+    if (method === "GET" && path === "/admin/traces") return json(route, []);
     if (method === "GET" && path === "/admin/llm-calls") return json(route, []);
     if (method === "GET" && path === "/admin/summary") {
       return json(route, { conversations: 2, tools: 1, skills: 1, ainas: 2, installations: 1, traces: 1, llm_calls: 1, memories: 3 });
@@ -1383,6 +1388,8 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await expect(spanTree.getByText("agent.run", { exact: true })).toBeVisible();
   await expect(spanTree.getByText("model.complete", { exact: true })).toBeVisible();
   await expect(spanTree.getByText("TTFT 42 ms", { exact: true })).toBeVisible();
+  await expect(spanTree.getByText("model.complete", { exact: true }).locator("..").locator(".."))
+    .toHaveAttribute("style", "margin-left: 24px;");
   await spanTree.getByText("agent.run", { exact: true }).click();
   await expect(spanTree.getByLabel("agent.run 输入")).toContainText("排查模型调用");
   await expect(spanTree.getByLabel("agent.run 输出")).toContainText("模型返回正常");
@@ -1402,7 +1409,7 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await expect(page.getByText("总耗时 129 ms · 120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "复制 Conversation ID conv-e2e-1", exact: true }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
-  await expect(page.getByRole("heading", { name: "llm-e2e-1", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: OBS_MODEL_SPAN_ID, exact: true })).toBeVisible();
   const requestJson = page.getByLabel("模型请求 JSON");
   await expect(requestJson).toContainText("排查模型调用");
   await expect(requestJson.locator("pre")).toHaveClass(/whitespace-pre-wrap/);
@@ -1414,6 +1421,32 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await expect(requestMessage).toHaveCount(0);
   await page.getByRole("button", { name: "响应", exact: true }).click();
   await expect(page.getByLabel("模型响应 JSON")).toContainText("模型返回正常");
+});
+
+test("FE-E2E-004A 管理员按目标会话加载且保留无 OBS 数据的会话组", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("unibot:mock-role", "admin");
+    window.localStorage.setItem("unibot:debug-mode", "true");
+  });
+  await installMockApi(page, {
+    conversations: [
+      conversation({ id: "conv-empty", title: "旧会话无 OBS" }),
+      conversation({ id: "conv-loaded", title: "目标会话" }),
+    ],
+    obsSessions: { "conv-loaded": successfulObsSession("conv-loaded") },
+  });
+
+  await page.goto("/admin/observability");
+
+  const traceList = page.getByLabel("Trace 列表");
+  await expect(traceList.getByText("旧会话无 OBS", { exact: true })).toBeVisible();
+  await expect(traceList.getByText("目标会话", { exact: true })).toBeVisible();
+  await traceList.getByRole("button", { name: /目标会话 0 Trace conv-loaded/ }).click();
+  await expect(traceList.getByText("trace-e2e-1", { exact: true })).toBeVisible();
+
+  await page.goto("/admin/observability?sessionId=conv-loaded");
+  await expect(traceList.getByText("trace-e2e-1", { exact: true })).toBeVisible();
+  await expect(traceList.getByRole("button", { name: /目标会话 1 Trace conv-loaded/ })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ page }) => {
@@ -1635,6 +1668,10 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("button", { name: "月", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "自定义", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Token 消耗日历")).toBeVisible();
+  const modelOverviewRow = page.getByLabel("不同模型 Token 消耗").getByRole("row", { name: /debug-model/ });
+  await expect(modelOverviewRow.getByRole("cell").nth(4)).toHaveText("120");
+  await expect(modelOverviewRow.getByRole("cell").nth(5)).toHaveText("100.0%");
+  await expect(page.getByLabel("每日 Token 热力图").getByLabel("2026-07-12 120 Token")).toBeVisible();
 
   await page.goto("/admin/observability");
 
@@ -1654,6 +1691,27 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "用户反馈", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "运营", exact: true }).click();
   await expect(page.getByRole("heading", { name: "运营增长", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-IR-001A empty new overview falls back to legacy history", async ({ page }) => {
+  await installMockApi(page);
+  await page.route("**/api/obs/overview*", (route) => json(route, {
+    range: "week",
+    trace_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    total_tokens: 0,
+    error_count: 0,
+    active_days: 0,
+    conversation_count: 0,
+    per_model: [],
+    daily: [],
+  }));
+
+  await page.goto("/obs");
+
+  await expect(page.getByLabel("每日 Token 热力图").getByLabel("2026-07-12 120 Token")).toBeVisible();
 });
 
 test("FE-E2E-IR-001B OBS 会话在短暂写入延迟后自动可见", async ({ page }) => {
@@ -1741,6 +1799,8 @@ test("FE-E2E-IR-001C OBS 交互轮次按开始时间正序展示", async ({ page
 
 test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", async ({ page }) => {
   const providerError = "The model provider returned HTTP 503";
+  const otelTraceId = "22222222222222222222222222222222";
+  const otelRootSpanId = "dddddddddddddddd";
   await installMockApi(page, {
     conversations: [conversation({
       run_status: "failed",
@@ -1758,9 +1818,9 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
     obsSessions: {
       "conv-e2e-1": obsSessionDetail("conv-e2e-1", {
         traces: [{
-          trace_id: "trace-error-e2e",
-          legacy_trace_id: null,
-          root_span_id: "span-agent-error-e2e",
+          trace_id: otelTraceId,
+          legacy_trace_id: "trace-error-e2e",
+          root_span_id: otelRootSpanId,
           session_id: "conv-e2e-1",
           user_id: "anonymous",
           tenant_id: "default",
@@ -1777,13 +1837,13 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
           attributes: {},
         }],
         events: [
-          { event_id: "ev-err-1", trace_id: "trace-error-e2e", span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "复现模型错误" } },
+          { event_id: "ev-err-1", trace_id: otelTraceId, span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "复现模型错误" } },
         ],
         spans: [
           obsSpan({
             span_id: "span-agent-error-e2e",
-            otel_span_id: "otel-agent-error-e2e",
-            trace_id: "trace-error-e2e",
+            otel_span_id: otelRootSpanId,
+            trace_id: otelTraceId,
             parent_span_id: null,
             sequence_no: 1,
             kind: "agent",
@@ -1798,8 +1858,8 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
           obsSpan({
             span_id: "span-model-error-e2e",
             otel_span_id: "llm-error-e2e",
-            trace_id: "trace-error-e2e",
-            parent_span_id: "span-agent-error-e2e",
+            trace_id: otelTraceId,
+            parent_span_id: otelRootSpanId,
             sequence_no: 2,
             kind: "model",
             name: "model.complete",
@@ -1904,50 +1964,34 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
         { id: "msg-asst-fail-e2e", role: "assistant", content: "抱歉，处理失败了。", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
       ],
     })],
-    obsSessions: {
-      "conv-e2e-1": obsSessionDetail("conv-e2e-1", {
-        traces: [{
-          trace_id: "trace-msg-fail-e2e",
-          legacy_trace_id: null,
-          root_span_id: "span-model-msg-fail-e2e",
-          session_id: "conv-e2e-1",
-          user_id: "anonymous",
-          tenant_id: "default",
-          status: "failed",
-          started_at: NOW,
-          completed_at: NOW,
-          duration_ms: 96,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_read_tokens: 0,
-          message_count: 1,
-          compression_count: 0,
-          error_count: 1,
-          attributes: {},
-        }],
-        events: [],
-        spans: [
-          obsSpan({
-            span_id: "span-model-msg-fail-e2e",
-            otel_span_id: "llm-msg-fail-e2e",
-            trace_id: "trace-msg-fail-e2e",
-            parent_span_id: null,
-            sequence_no: 1,
-            kind: "model",
-            name: "model.complete",
-            target_id: "debug-model",
-            model: "debug-model",
-            status: "failed",
-            duration_ms: 96,
-            ttft_ms: null,
-            input: { model: "debug-model", messages: [{ role: "user", content: "触发一次失败调用" }], stream: true },
-            output: null,
-            error: { message: providerError },
-          }),
-        ],
-      }),
-    },
   });
+  await page.route("**/api/traces*", (route) => json(route, [{
+    trace_id: "trace-msg-fail-e2e",
+    conversation_id: "conv-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    status: "failed",
+    events: [],
+    root_span_id: "span-model-msg-fail-e2e",
+    spans: [{
+      span_id: "span-model-msg-fail-e2e",
+      parent_span_id: null,
+      kind: "model",
+      name: "model.complete",
+      status: "failed",
+      target_id: "debug-model",
+      attempt_no: 1,
+      started_at: NOW,
+      completed_at: NOW,
+      duration_ms: 96,
+      input: { model: "debug-model", messages: [{ role: "user", content: "触发一次失败调用" }] },
+      output: null,
+      attributes: {},
+      error: { message: providerError },
+    }],
+    created_at: NOW,
+    completed_at: NOW,
+  }]));
   await page.route("**/api/llm-calls*", (route) => json(route, [{
     call_id: "llm-msg-fail-e2e",
     trace_id: "trace-msg-fail-e2e",
@@ -1972,6 +2016,9 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
   await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e");
   await chatLogLink.click();
   await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e$/);
+  const legacyTargetLog = page.getByLabel("原始日志 llm-msg-fail-e2e", { exact: true });
+  await expect(legacyTargetLog).toHaveAttribute("open", "");
+  await expect(legacyTargetLog).toContainText(providerError);
 });
 
 test("FE-E2E-IR-005 能力调用失败在对话中持久展示并跳转原始日志", async ({ page }) => {

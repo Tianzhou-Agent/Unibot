@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from tianzhou_agent_platform.store.observability_wal import (
+    MAX_PAYLOAD_LENGTH,
     WalError,
     WalFlushTimeoutError,
     WalMetrics,
@@ -363,6 +364,27 @@ async def test_writer_rejects_submit_after_close(tmp_path: Path) -> None:
     writer.close()
     with pytest.raises(WalError):
         writer.submit(make_record(1))
+
+
+@pytest.mark.asyncio
+async def test_oversized_record_is_rejected_without_stopping_writer(tmp_path: Path) -> None:
+    writer = WalWriter(tmp_path, "node-1-abc")
+    writer.start()
+    oversized = make_record(0)
+    oversized.payload = {"content": "x" * (MAX_PAYLOAD_LENGTH + 1)}
+
+    try:
+        with pytest.raises(WalError, match="record rejected before enqueue"):
+            writer.submit(oversized)
+
+        sequence_no = writer.submit(make_record(0))
+        await writer.flush_through(sequence_no)
+        assert sequence_no == 1
+        assert writer._failure is None  # noqa: SLF001
+        assert writer.metrics.telemetry_gap_count == 1
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 def test_producer_instance_id_shape() -> None:
