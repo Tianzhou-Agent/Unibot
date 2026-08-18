@@ -51,6 +51,8 @@ from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
 from tianzhou_agent_platform.auth.service import AuthService
+from tianzhou_agent_platform.tasks.service import TaskService
+from tianzhou_agent_platform.tasks.store import InMemorySessionTaskStore, MySqlSessionTaskStore
 
 
 def create_app(
@@ -188,6 +190,12 @@ def create_app(
         repository=resolved_repository,
         github_http_client=github_auth_http_client,
     )
+    task_store = (
+        MySqlSessionTaskStore(storage_stores.mysql, storage_stores.redis)
+        if storage_stores is not None
+        else InMemorySessionTaskStore()
+    )
+    task_service = TaskService(resolved_repository, task_store)
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -196,6 +204,7 @@ def create_app(
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
+            await task_service.initialize()
             if obs_wal_writer is not None and obs_store is not None:
                 # startup order (design 16.1): NAS roots -> OBS tables -> WAL -> worker
                 resolved_settings.obs_wal_root.mkdir(parents=True, exist_ok=True)
@@ -280,12 +289,14 @@ def create_app(
         document_service=resolved_document_service,
         document_edit_task_service=document_edit_task_service,
         sandbox_service=resolved_sandbox_service,
+        task_service=task_service,
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service
     app.state.vision_client = vision_client
     app.state.auth_service = auth_service
+    app.state.task_service = task_service
     app.state.auth_enforced = enforce_auth
 
     @app.middleware("http")

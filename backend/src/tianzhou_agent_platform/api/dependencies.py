@@ -16,6 +16,7 @@ from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.auth.service import AuthService
+from tianzhou_agent_platform.tasks.service import TaskService
 
 
 class RequestActor(StrictModel):
@@ -89,6 +90,10 @@ def settings(request: Request) -> AgentSettings:
 
 def runtime(request: Request) -> AgentRuntime:
     return cast(AgentRuntime, request.app.state.agent_runtime)
+
+
+def task_runtime(request: Request) -> TaskService:
+    return cast(TaskService, request.app.state.task_service)
 
 
 def gateway(request: Request) -> RemoteCapabilityGateway:

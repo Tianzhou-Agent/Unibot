@@ -380,7 +380,7 @@ def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_pat
 
     assert response.status_code == 200
     assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
-    assert len(llm.calls[0]["tools"]) == 7
+    assert len(llm.calls[0]["tools"]) == 11
     assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["details"]["source"] == "unified_entry"
@@ -459,7 +459,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    assert len(llm.calls[0]["tools"]) == 8
+    assert len(llm.calls[0]["tools"]) == 12
     entry_names = [item["function"]["name"] for item in llm.calls[0]["tools"]]
     assert any(name.startswith("builtin_list_app_") for name in entry_names)
     assert any(name.startswith("tool_report_data_") for name in entry_names)
@@ -467,7 +467,10 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     scoped_names = [item["function"]["name"] for item in llm.calls[1]["tools"]]
     assert any(name.startswith("aina_") for name in scoped_names)
     assert any(name.startswith("tool_report_data_") for name in scoped_names)
-    assert not any(name.startswith("builtin_") for name in scoped_names)
+    assert all(
+        not name.startswith("builtin_") or name.startswith("builtin_task_")
+        for name in scoped_names
+    )
     assert "Use a concise summary followed by risks and next steps." in llm.calls[1]["messages"][0]["content"]
     assert invoked[0]["input"]["input"] == "Create a project status report"
     assert any(
@@ -484,7 +487,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 3,
-        "builtin_capability": 4,
+            "builtin_capability": 8,
     }
     assert remote_aina["availability"] == "installed"
     assert remote_aina["routing_candidate"] is True

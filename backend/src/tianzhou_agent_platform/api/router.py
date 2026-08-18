@@ -14,6 +14,7 @@ from tianzhou_agent_platform.api.operations import create_operations_router
 from tianzhou_agent_platform.api.schedules import create_schedule_router
 from tianzhou_agent_platform.api.sandboxes import create_sandbox_router
 from tianzhou_agent_platform.api.vision import create_vision_router
+from tianzhou_agent_platform.api.tasks import create_task_router
 
 
 def create_router() -> APIRouter:
@@ -32,4 +33,5 @@ def create_router() -> APIRouter:
     router.include_router(create_schedule_router())
     router.include_router(create_sandbox_router())
     router.include_router(create_vision_router())
+    router.include_router(create_task_router())
     return router
