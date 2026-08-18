@@ -11,6 +11,8 @@ from time import perf_counter
 from typing import Any, cast
 from uuid import uuid4
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
@@ -48,6 +50,7 @@ from tianzhou_agent_platform.core.observation_context import (
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.tasks.service import TaskService
 
 
 @dataclass(slots=True)
@@ -343,6 +346,8 @@ class ObservedAgentRuntime(AgentRuntime):
         document_service: DocumentService | None = None,
         document_edit_task_service: DocumentEditTaskService | None = None,
         sandbox_service: SandboxService | None = None,
+        task_service: TaskService | None = None,
+        checkpointer: BaseCheckpointSaver[Any] | None = None,
     ) -> None:
         self._observability = observability
         observed_repository = cast(
@@ -357,6 +362,8 @@ class ObservedAgentRuntime(AgentRuntime):
             document_service=document_service,
             document_edit_task_service=document_edit_task_service,
             sandbox_service=sandbox_service,
+            task_service=task_service,
+            checkpointer=checkpointer,
         )
 
     async def chat(
@@ -659,6 +666,7 @@ class ObservedAgentRuntime(AgentRuntime):
         self,
         *,
         state: AgentState,
+        event_sink: EventSink | None,
         capability: Capability,
         call_id: str,
         function_name: str,
@@ -673,6 +681,7 @@ class ObservedAgentRuntime(AgentRuntime):
         if context is None or context.root_span_id is None:
             return await super()._invoke_resolved_capability(
                 state=state,
+                event_sink=event_sink,
                 capability=capability,
                 call_id=call_id,
                 function_name=function_name,
@@ -708,6 +717,7 @@ class ObservedAgentRuntime(AgentRuntime):
         try:
             outcome = await super()._invoke_resolved_capability(
                 state=state,
+                event_sink=event_sink,
                 capability=capability,
                 call_id=call_id,
                 function_name=function_name,
@@ -782,6 +792,7 @@ class ObservedAgentRuntime(AgentRuntime):
     async def _append_tool_error(
         self,
         state: AgentState,
+        event_sink: EventSink | None,
         messages: list[dict[str, Any]],
         *,
         call_id: str,
@@ -807,6 +818,7 @@ class ObservedAgentRuntime(AgentRuntime):
             )
         await super()._append_tool_error(
             state,
+            event_sink,
             messages,
             call_id=call_id,
             name=name,
@@ -856,6 +868,7 @@ class ObservedAgentRuntime(AgentRuntime):
         self,
         state: AgentState,
         *,
+        event_sink: EventSink | None,
         capability: Capability,
         call_id: str,
         function_name: str,
@@ -864,6 +877,7 @@ class ObservedAgentRuntime(AgentRuntime):
     ) -> dict[str, Capability]:
         capabilities = await super()._activate_aina_model_scope(
             state,
+            event_sink=event_sink,
             capability=capability,
             call_id=call_id,
             function_name=function_name,

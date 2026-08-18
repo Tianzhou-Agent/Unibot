@@ -150,6 +150,16 @@ class MySqlStore:
         except SQLAlchemyError as exc:
             raise self._map_sqlalchemy_error(exc) from exc
 
+    @property
+    def session_factory(self) -> async_sessionmaker[Any]:
+        """Expose the configured transaction factory to specialized domain stores."""
+
+        return self._session_factory
+
+    @property
+    def engine(self) -> AsyncEngine:
+        return self._engine
+
     def _table_for(self, resource: str) -> Table:
         table = self._resource_tables.get(resource)
         if table is None:

@@ -9,7 +9,10 @@ from time import perf_counter
 from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
 
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
 
 from tianzhou_agent_platform.aina.builtin import (
     FORGET_TOOL_ID,
@@ -69,6 +72,8 @@ from tianzhou_agent_platform.core.model_settings import use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.schema import validate_value
 from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, task_tool_specs
+from tianzhou_agent_platform.tasks.service import TaskService
 
 _HIGH_RISK_MARKERS = (
     "send",
@@ -121,8 +126,6 @@ class ResolvedCapabilityOutcome:
 
 class AgentState(TypedDict, total=False):
     messages: list[dict[str, Any]]
-    capabilities: dict[str, Capability]
-    recovery_capabilities: dict[str, Capability]
     tool_definitions: list[dict[str, Any]]
     trace_id: str
     conversation_id: str
@@ -133,16 +136,22 @@ class AgentState(TypedDict, total=False):
     forced_function: str | None
     approved_call_ids: set[str]
     resume: bool
-    event_sink: EventSink | None
     usage_input: int
     usage_output: int
     usage_estimated: bool
     final_content: str
-    final_status: Literal["completed", "approval_required", "failed"]
+    final_status: Literal["completed", "approval_required", "failed"] | None
     approval: ApprovalRecord | None
     call_counts: dict[str, int]
     widgets: list[WidgetDefinition]
     memory_context: list[MemoryRecord]
+    base_system_prompt: str
+
+
+class AgentContext(TypedDict):
+    capabilities: dict[str, Capability]
+    recovery_capabilities: dict[str, Capability]
+    event_sink: EventSink | None
 
 
 class AgentRuntime:
@@ -165,6 +174,8 @@ class AgentRuntime:
         document_service: DocumentService | None = None,
         document_edit_task_service: DocumentEditTaskService | None = None,
         sandbox_service: SandboxService | None = None,
+        task_service: TaskService | None = None,
+        checkpointer: BaseCheckpointSaver[Any] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -173,13 +184,15 @@ class AgentRuntime:
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
         self.sandbox_service = sandbox_service
-        graph = StateGraph(AgentState)
+        self.task_service = task_service
+        self.checkpointer = checkpointer
+        graph = StateGraph(AgentState, context_schema=AgentContext)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
         graph.add_conditional_edges(START, self._entry_route, {"model": "model", "tools": "tools"})
         graph.add_conditional_edges("model", self._after_model, {"tools": "tools", "end": END})
         graph.add_conditional_edges("tools", self._after_tools, {"model": "model", "end": END})
-        self._graph = graph.compile()
+        self._graph = graph.compile(checkpointer=checkpointer)
 
     @staticmethod
     def _entry_route(state: AgentState) -> str:
@@ -196,16 +209,19 @@ class AgentRuntime:
             return "end"
         return "model"
 
-    async def _publish_progress(self, state: AgentState, event: dict[str, Any]) -> None:
-        sink = state.get("event_sink")
+    @staticmethod
+    async def _emit(sink: EventSink | None, event: dict[str, Any]) -> None:
         if sink is not None:
             await sink(event)
 
-    async def _model_node(self, state: AgentState) -> AgentState:
+    async def _model_node(self, state: AgentState, runtime: Runtime[AgentContext]) -> AgentState:
+        capabilities = runtime.context["capabilities"]
+        event_sink = runtime.context.get("event_sink")
         iterations = state.get("iterations", 0) + 1
+        messages_with_tasks = await self._messages_with_task_projection(state)
         provider_messages = _provider_messages_for_scope(
-            state["messages"],
-            active_function_names=set(state["capabilities"]),
+            messages_with_tasks,
+            active_function_names=set(capabilities),
         )
         tool_choice: dict[str, Any] | str | None = None
         if iterations == 1 and state.get("forced_function"):
@@ -217,7 +233,7 @@ class AgentRuntime:
             messages=provider_messages,
             tools=state["tool_definitions"],
             tool_choice=tool_choice,
-            event_sink=state.get("event_sink"),
+            event_sink=event_sink,
             trace_id=state["trace_id"],
             context_type="conversation",
             context_id=state["conversation_id"],
@@ -243,7 +259,7 @@ class AgentRuntime:
             update["final_status"] = final_status
         return update
 
-    async def _tool_node(self, state: AgentState) -> AgentState:
+    async def _tool_node(self, state: AgentState, runtime: Runtime[AgentContext]) -> AgentState:
         messages = list(state["messages"])
         assistant = next(
             (item for item in reversed(messages) if item.get("role") == "assistant" and item.get("tool_calls")),
@@ -252,7 +268,8 @@ class AgentRuntime:
         if assistant is None:
             raise PlatformError("INTERNAL_ERROR", "No assistant tool-call message is available", status_code=500)
         tool_calls = assistant.get("tool_calls") or []
-        capabilities = state["capabilities"]
+        capabilities = runtime.context["capabilities"]
+        event_sink = runtime.context.get("event_sink")
         approved = state.get("approved_call_ids", set())
         risky_calls = []
         risky_names = []
@@ -289,8 +306,8 @@ class AgentRuntime:
                 capability_names=risky_names,
             )
             await self.repository.create_approval(approval)
-            await self._publish_progress(
-                state,
+            await self._emit(
+                event_sink,
                 {
                     "type": "approval.required",
                     "approval_id": approval.id,
@@ -323,10 +340,11 @@ class AgentRuntime:
                 tool_failed = True
                 recovery = _capability_scope_recovery(
                     name,
-                    state.get("recovery_capabilities", {}),
+                    runtime.context["recovery_capabilities"],
                 )
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -349,6 +367,7 @@ class AgentRuntime:
                 tool_failed = True
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -364,6 +383,7 @@ class AgentRuntime:
                 tool_failed = True
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -382,6 +402,7 @@ class AgentRuntime:
                 tool_failed = True
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -394,6 +415,7 @@ class AgentRuntime:
                 tool_failed = True
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -409,6 +431,7 @@ class AgentRuntime:
                     tool_failed = True
                     await self._append_tool_error(
                         state,
+                        event_sink,
                         messages,
                         call_id=call_id,
                         name=name,
@@ -420,6 +443,7 @@ class AgentRuntime:
                 if aina.manifest.runtime.type == "builtin":
                     next_capabilities = await self._activate_builtin_aina_scope(
                         state,
+                        event_sink=event_sink,
                         capability=capability,
                         call_id=call_id,
                         function_name=name,
@@ -429,14 +453,15 @@ class AgentRuntime:
                     scope_activated = True
                     continue
 
-            await self._publish_progress(
-                state,
+            await self._emit(
+                event_sink,
                 {"type": "tool.requested", "kind": capability.kind, "id": capability.capability_id},
             )
 
             try:
                 outcome = await self._invoke_resolved_capability(
                     state=state,
+                    event_sink=event_sink,
                     capability=capability,
                     call_id=call_id,
                     function_name=name,
@@ -450,8 +475,8 @@ class AgentRuntime:
                     next_capabilities = outcome.next_capabilities
                 scope_activated = scope_activated or outcome.activated_scope
                 result_payload = outcome.result
-                await self._publish_progress(
-                    state,
+                await self._emit(
+                    event_sink,
                     {"type": "tool.completed", "kind": capability.kind, "id": capability.capability_id},
                 )
                 if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
@@ -469,6 +494,7 @@ class AgentRuntime:
                 tool_failed = True
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -481,6 +507,7 @@ class AgentRuntime:
                 dependency_failure = capability.kind == "aina"
                 await self._append_tool_error(
                     state,
+                    event_sink,
                     messages,
                     call_id=call_id,
                     name=name,
@@ -493,13 +520,13 @@ class AgentRuntime:
                     capability=capability,
                 )
 
+        runtime.context["capabilities"] = next_capabilities
         update: AgentState = {
             **state,
             "messages": messages,
             "call_counts": call_counts,
             "approval": None,
             "widgets": widgets,
-            "capabilities": next_capabilities,
             "tool_definitions": [item.llm_definition() for item in next_capabilities.values()],
         }
         if async_task_message is not None and not tool_failed:
@@ -522,6 +549,7 @@ class AgentRuntime:
         self,
         *,
         state: AgentState,
+        event_sink: EventSink | None,
         capability: Capability,
         call_id: str,
         function_name: str,
@@ -571,6 +599,7 @@ class AgentRuntime:
                         ) from exc
             next_capabilities = await self._activate_aina_model_scope(
                 state,
+                event_sink=event_sink,
                 capability=capability,
                 call_id=call_id,
                 function_name=function_name,
@@ -588,6 +617,8 @@ class AgentRuntime:
                     user_id=state["user_id"],
                     tenant_id=state["tenant_id"],
                     conversation_id=state["conversation_id"],
+                    task_service=self.task_service,
+                    tool_execution_id=call_id,
                 )
             else:
                 result_payload, produced_widgets = await invoke_builtin(
@@ -631,6 +662,7 @@ class AgentRuntime:
         self,
         state: AgentState,
         *,
+        event_sink: EventSink | None,
         capability: Capability,
         call_id: str,
         function_name: str,
@@ -639,6 +671,7 @@ class AgentRuntime:
     ) -> dict[str, Capability]:
         scoped_capabilities = await self._activate_aina_model_scope(
             state,
+            event_sink=event_sink,
             capability=capability,
             call_id=call_id,
             function_name=function_name,
@@ -666,14 +699,15 @@ class AgentRuntime:
         self,
         state: AgentState,
         *,
+        event_sink: EventSink | None,
         capability: Capability,
         call_id: str,
         function_name: str,
         arguments: dict[str, Any],
         messages: list[dict[str, Any]],
     ) -> dict[str, Capability]:
-        await self._publish_progress(
-            state,
+        await self._emit(
+            event_sink,
             {"type": "routing.started", "candidate_count": 1},
         )
         conversation = await self.repository.bind_conversation_aina(
@@ -689,8 +723,9 @@ class AgentRuntime:
                 memory_context=state.get("memory_context") or None,
             ),
         }
-        await self._publish_progress(
-            state,
+        state["base_system_prompt"] = messages[0]["content"]
+        await self._emit(
+            event_sink,
             {
                 "type": "routing.completed",
                 "kind": "aina",
@@ -702,6 +737,7 @@ class AgentRuntime:
     async def _append_tool_error(
         self,
         state: AgentState,
+        event_sink: EventSink | None,
         messages: list[dict[str, Any]],
         *,
         call_id: str,
@@ -739,8 +775,8 @@ class AgentRuntime:
                 "content": json.dumps(payload, ensure_ascii=False),
             }
         )
-        await self._publish_progress(
-            state,
+        await self._emit(
+            event_sink,
             {"type": "error", "code": code, "source": "capability"},
         )
 
@@ -1107,8 +1143,6 @@ class AgentRuntime:
         persist_from = len(messages)
         state: AgentState = {
             "messages": messages,
-            "capabilities": capabilities,
-            "recovery_capabilities": recovery_capabilities,
             "tool_definitions": tool_definitions,
             "trace_id": trace_id,
             "conversation_id": conversation.id,
@@ -1119,16 +1153,39 @@ class AgentRuntime:
             "forced_function": forced_function,
             "approved_call_ids": approved_call_ids or set(),
             "resume": resume,
-            "event_sink": event_sink,
             "usage_input": compression_input_tokens,
             "usage_output": compression_output_tokens,
             "usage_estimated": False,
             "call_counts": {},
             "approval": None,
+            "final_content": "",
+            "final_status": None,
             "widgets": [],
             "memory_context": memory_context or [],
+            "base_system_prompt": resolved_system_prompt,
         }
-        result = await self._graph.ainvoke(state)
+        graph_config: RunnableConfig = {
+            "configurable": {
+                "thread_id": trace_id,
+            },
+            "metadata": {
+                "conversation_id": conversation.id,
+                "trace_id": trace_id,
+                "user_id": conversation.user_id,
+                "tenant_id": conversation.tenant_id,
+            },
+        }
+        context: AgentContext = {
+            "capabilities": capabilities,
+            "recovery_capabilities": recovery_capabilities,
+            "event_sink": event_sink,
+        }
+        result = await self._graph.ainvoke(
+            state,
+            config=graph_config,
+            context=context,
+            durability="sync",
+        )
         new_messages = result["messages"][persist_from:]
         widgets = result.get("widgets", [])
         if widgets:
@@ -1141,7 +1198,10 @@ class AgentRuntime:
             new_messages,
             trace_id=trace_id,
         )
-        status = result.get("final_status", "failed")
+        status = cast(
+            Literal["completed", "approval_required", "failed"],
+            result.get("final_status") or "failed",
+        )
         last_assistant = next((item for item in reversed(appended) if item.role == "assistant"), None)
         final_content = result.get("final_content", "The agent stopped without a final response.")
         return ChatResponse(
@@ -1196,6 +1256,7 @@ class AgentRuntime:
                     f"The request was routed to AINA {manifest.aina.name} ({manifest.aina.id}). "
                     f"{scope_guidance}"
                 ),
+                _task_tool_guidance(),
             ]
             if aina_skills:
                 sections.append(f"AINA skills:\n{aina_skills}")
@@ -1221,6 +1282,24 @@ class AgentRuntime:
         if memory_context:
             sections.append(_memory_context_block(memory_context))
         return "\n\n".join(sections)
+
+    async def _messages_with_task_projection(self, state: AgentState) -> list[dict[str, Any]]:
+        messages = [dict(message) for message in state["messages"]]
+        if not messages or messages[0].get("role") != "system":
+            return messages
+        base_prompt = state.get("base_system_prompt") or str(messages[0].get("content") or "")
+        projection = ""
+        if self.task_service is not None:
+            projection = await self.task_service.context_projection(
+                state["conversation_id"],
+                user_id=state["user_id"],
+                tenant_id=state["tenant_id"],
+            )
+        messages[0] = {
+            **messages[0],
+            "content": f"{base_prompt}\n\n{projection}" if projection else base_prompt,
+        }
+        return messages
 
     async def _memory_context(self, conversation: Conversation, query: str) -> list[MemoryRecord]:
         return await self.repository.search_memories(
@@ -1352,6 +1431,18 @@ class AgentRuntime:
             requires_confirmation=False,
             value=REQUEST_CLARIFICATION_TOOL_ID,
         )
+        for spec in task_tool_specs():
+            function_name = _function_name("builtin", spec["id"])
+            capabilities[function_name] = Capability(
+                kind="builtin",
+                capability_id=spec["id"],
+                function_name=function_name,
+                display_name=spec["display_name"],
+                description=spec["description"],
+                input_schema=spec["input_schema"],
+                requires_confirmation=False,
+                value=spec["id"],
+            )
         return capabilities
 
     async def _available_aina_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
@@ -1486,22 +1577,28 @@ class AgentRuntime:
             and capability.capability_id != aina.manifest.aina.id
             and _is_routable_aina(capability)
         }
+        task_capabilities = {
+            function_name: capability
+            for function_name, capability in (await self._system_capabilities()).items()
+            if capability.capability_id in TASK_TOOL_IDS
+        }
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
-            return {**self._memory_capabilities(), **switch_capabilities}, aina
+            return {**self._memory_capabilities(), **task_capabilities, **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
             return {
                 **self._document_capabilities(),
                 **self._memory_capabilities(),
+                **task_capabilities,
                 **switch_capabilities,
             }, aina
         if aina.manifest.aina.id == UNIBOT_CODE_RUNNER_ID:
-            return {**self._sandbox_capabilities(), **switch_capabilities}, aina
+            return {**self._sandbox_capabilities(), **task_capabilities, **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_SCHEDULER_ID:
-            return switch_capabilities, aina
+            return {**task_capabilities, **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_IMAGE_RECOGNITION_ID:
-            return switch_capabilities, aina
+            return {**task_capabilities, **switch_capabilities}, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
-        capabilities = {selected.function_name: selected, **switch_capabilities}
+        capabilities = {selected.function_name: selected, **task_capabilities, **switch_capabilities}
         if declared_tool_ids:
             for function_name, capability in (await self._system_capabilities()).items():
                 if capability.kind == "tool" and capability.capability_id in declared_tool_ids:
@@ -1827,9 +1924,20 @@ def _platform_tool_guidance() -> str:
         "the conversation. Select an AINA entrypoint only when the user wants that AINA to perform work; do not "
         "select an AINA merely to list, inspect, or open applications, and never combine an AINA entrypoint with "
         "another capability in the same response. Memory tools stay available across turns so historical tool "
-        "calls remain valid. Call "
-        "memory.remember only when the user explicitly asks to remember something or clearly supplies a durable "
+        "calls remain valid. "
+        + _task_tool_guidance()
+        + " Call memory.remember only when the user explicitly asks to remember something or clearly supplies a durable "
         "personal fact during an ongoing memory-collection exchange; never store transient chat or inferred facts."
+    )
+
+
+def _task_tool_guidance() -> str:
+    return (
+        "For complex multi-step work, use the structured task tools to create and maintain a small deliverable-"
+        "oriented plan. Do not create tasks for individual reads, searches, or tool calls. Keep at most one leaf "
+        "in progress, update with expected_version, and request completion with status=verifying; never claim or "
+        "attempt to write completed directly. Query the full tree when the injected task projection lacks needed "
+        "detail."
     )
 
 
