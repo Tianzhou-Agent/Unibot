@@ -10,6 +10,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from langgraph.checkpoint.memory import InMemorySaver
 
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
@@ -37,6 +38,7 @@ from tianzhou_agent_platform.core.observation_logging import ObservationLogHandl
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
+from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
 from tianzhou_agent_platform.store.observability_wal import WalWriter, build_producer_instance_id
@@ -108,6 +110,7 @@ def create_app(
             storage_settings,
             mysql_resource_tables={
                 **repository_tables,
+                **graph_checkpoint_tables,
                 RUNTIME_CHECK_RESOURCE: runtime_check_table,
             },
         )
@@ -201,6 +204,11 @@ def create_app(
         event_broker=TaskEventBroker(storage_stores.redis if storage_stores is not None else None),
         verification_timeout_seconds=resolved_settings.capability_timeout_seconds,
     )
+    agent_checkpointer = (
+        MySqlCheckpointSaver(storage_stores.mysql)
+        if storage_stores is not None
+        else InMemorySaver()
+    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -208,6 +216,7 @@ def create_app(
             if storage_stores is not None and storage_settings is not None:
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
+                await cast(MySqlCheckpointSaver, agent_checkpointer).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
             await task_service.initialize()
             if obs_wal_writer is not None and obs_store is not None:
@@ -285,6 +294,7 @@ def create_app(
     app.state.obs_wal_writer = obs_wal_writer
     app.state.obs_log_handler = obs_log_handler
     app.state.obs_query = obs_query_service or ObsQueryService(None, None)
+    app.state.agent_checkpointer = agent_checkpointer
     app.state.agent_runtime = ObservedAgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,
@@ -295,6 +305,7 @@ def create_app(
         document_edit_task_service=document_edit_task_service,
         sandbox_service=resolved_sandbox_service,
         task_service=task_service,
+        checkpointer=agent_checkpointer,
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
