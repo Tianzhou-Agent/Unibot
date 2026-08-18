@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from tianzhou_agent_platform.store import RedisStore, StorageValidationError
@@ -8,6 +10,7 @@ class FakeRedisClient:
         self.values: dict[str, str] = {}
         self.expirations: dict[str, int] = {}
         self.locked: set[str] = set()
+        self.subscribers: dict[str, set["FakeRedisPubSub"]] = {}
         self.closed = False
 
     async def get(self, key: str) -> str | None:
@@ -20,6 +23,25 @@ class FakeRedisClient:
         if ex is not None:
             self.expirations[key] = ex
         return True
+
+    async def eval(self, script: str, key_count: int, key: str, value: str, ttl: str) -> int:
+        assert key_count == 1
+        current = self.values.get(key)
+        if current is not None and int(current) >= int(value):
+            return 0
+        self.values[key] = value
+        if ttl:
+            self.expirations[key] = int(ttl)
+        return 1
+
+    async def publish(self, channel: str, value: str) -> int:
+        subscribers = list(self.subscribers.get(channel, set()))
+        for subscriber in subscribers:
+            subscriber.queue.put_nowait({"type": "message", "data": value})
+        return len(subscribers)
+
+    def pubsub(self) -> "FakeRedisPubSub":
+        return FakeRedisPubSub(self)
 
     async def delete(self, key: str) -> int:
         existed = key in self.values
@@ -62,6 +84,31 @@ class FakeRedisLock:
         self.client.locked.remove(self.key)
 
 
+class FakeRedisPubSub:
+    def __init__(self, client: FakeRedisClient) -> None:
+        self.client = client
+        self.channels: set[str] = set()
+        self.queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+
+    async def subscribe(self, channel: str) -> None:
+        self.channels.add(channel)
+        self.client.subscribers.setdefault(channel, set()).add(self)
+
+    async def unsubscribe(self, channel: str) -> None:
+        self.channels.discard(channel)
+        subscribers = self.client.subscribers.get(channel)
+        if subscribers is not None:
+            subscribers.discard(self)
+
+    async def listen(self):  # type: ignore[no-untyped-def]
+        while True:
+            yield await self.queue.get()
+
+    async def aclose(self) -> None:
+        for channel in list(self.channels):
+            await self.unsubscribe(channel)
+
+
 @pytest.mark.asyncio
 async def test_redis_store_crud() -> None:
     client = FakeRedisClient()
@@ -98,6 +145,28 @@ async def test_redis_store_set_if_absent_is_atomic() -> None:
 
     assert first.written is True
     assert second.written is False
+
+
+@pytest.mark.asyncio
+async def test_redis_store_set_max_int_never_regresses() -> None:
+    store = RedisStore(FakeRedisClient())
+
+    assert (await store.set_max_int("revision", "session", 2)).written is True
+    assert (await store.set_max_int("revision", "session", 1)).written is False
+    assert (await store.set_max_int("revision", "session", 3)).written is True
+
+    entry = await store.get("revision", "session")
+    assert entry is not None
+    assert entry.value == 3
+
+
+@pytest.mark.asyncio
+async def test_redis_store_publish_subscribe_round_trip() -> None:
+    store = RedisStore(FakeRedisClient())
+
+    async with store.subscribe("events", "session") as messages:
+        assert await store.publish("events", "session", 7) == 1
+        assert await anext(messages) == 7
 
 
 @pytest.mark.asyncio

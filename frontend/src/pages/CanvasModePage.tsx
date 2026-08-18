@@ -344,7 +344,6 @@ export default function CanvasModePage() {
               </header>
 
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-app-bg p-3" aria-live="polite">
-                <TaskTreeWidget sessionId={conversationId} />
                 {!visibleMessages.length && !sending ? (
                   <div className="flex min-h-[260px] items-center justify-center text-center">
                     <div>
@@ -391,7 +390,12 @@ export default function CanvasModePage() {
                 {error ? <p className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">{error}</p> : null}
                 <div ref={endRef} />
               </div>
-              <CanvasComposer disabled={sending} context={documentTaskContext} onSend={(text) => void sendMessage(text)} />
+              <CanvasComposer
+                disabled={sending}
+                context={documentTaskContext}
+                sessionId={conversationId}
+                onSend={(text) => void sendMessage(text)}
+              />
             </section>
 
             <section className={classNames(
@@ -470,9 +474,10 @@ function CanvasMessage({
   );
 }
 
-function CanvasComposer({ disabled, context, onSend }: {
+function CanvasComposer({ disabled, context, sessionId, onSend }: {
   disabled: boolean;
   context: DocumentTaskContext | null;
+  sessionId: string | null;
   onSend: (text: string) => void;
 }) {
   const [text, setText] = useState("");
@@ -486,8 +491,9 @@ function CanvasComposer({ disabled, context, onSend }: {
   }
 
   return (
-    <form onSubmit={submit} className="border-t border-line bg-white p-3">
-      <div className="rounded-xl border border-line-strong p-2 focus-within:border-accent">
+    <div className="space-y-2 border-t border-line bg-white p-3">
+      <TaskTreeWidget sessionId={sessionId} />
+      <form onSubmit={submit} className="rounded-xl border border-line-strong p-2 shadow-soft focus-within:border-accent">
         {context ? <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[9.5px] text-accent">
           <Sparkles className="h-3 w-3 shrink-0" />
           <span className="truncate">对话上下文：{context.taskTitle} / {context.sectionHeading}</span>
@@ -521,8 +527,8 @@ function CanvasComposer({ disabled, context, onSend }: {
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
         </div>
-      </div>
-    </form>
+      </form>
+    </div>
   );
 }
 

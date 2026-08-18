@@ -272,7 +272,7 @@ class MySqlSessionTaskStore:
 
     async def _cache_revision(self, session_id: str, revision: int) -> None:
         try:
-            await self._redis.set("task:revision", session_id, revision)
+            await self._redis.set_max_int("task:revision", session_id, revision)
         except StorageError:
             pass
 

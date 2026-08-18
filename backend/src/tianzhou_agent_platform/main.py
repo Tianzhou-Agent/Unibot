@@ -43,7 +43,7 @@ from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
 from tianzhou_agent_platform.auth.service import AuthService
-from tianzhou_agent_platform.tasks.service import TaskService
+from tianzhou_agent_platform.tasks.service import TaskEventBroker, TaskService
 from tianzhou_agent_platform.tasks.store import InMemorySessionTaskStore, MySqlSessionTaskStore
 
 
@@ -128,7 +128,12 @@ def create_app(
         if storage_stores is not None
         else InMemorySessionTaskStore()
     )
-    task_service = TaskService(resolved_repository, task_store)
+    task_service = TaskService(
+        resolved_repository,
+        task_store,
+        event_broker=TaskEventBroker(storage_stores.redis if storage_stores is not None else None),
+        verification_timeout_seconds=resolved_settings.capability_timeout_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:

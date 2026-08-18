@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from datetime import datetime
+from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from uuid import uuid4
 
 from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.errors import StorageError
+from tianzhou_agent_platform.store.redis.client import RedisStore
 from tianzhou_agent_platform.tasks.models import (
     GateResult,
     SessionTask,
@@ -36,11 +38,17 @@ class CompletionGate(Protocol):
 
 class AutoCompletionGate:
     async def verify(self, task: SessionTask, evidence: list[dict[str, Any]]) -> GateResult:
+        if not any(item for item in evidence):
+            return GateResult(
+                status="failed",
+                reason="Completion evidence is required before a task can be completed.",
+            )
         return GateResult(status="passed", reason="V1 AutoGate accepted the completion request.")
 
 
 class TaskEventBroker:
-    def __init__(self) -> None:
+    def __init__(self, redis: RedisStore | None = None) -> None:
+        self._redis = redis
         self._subscribers: dict[str, set[asyncio.Queue[int]]] = defaultdict(set)
         self._lock = asyncio.Lock()
 
@@ -48,27 +56,59 @@ class TaskEventBroker:
         async with self._lock:
             queues = list(self._subscribers.get(session_id, set()))
         for queue in queues:
-            if queue.full():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            queue.put_nowait(revision)
+            self._offer(queue, revision)
+        if self._redis is not None:
+            try:
+                await self._redis.publish("task:events", session_id, revision)
+            except StorageError:
+                pass
 
     @asynccontextmanager
     async def subscribe(self, session_id: str) -> AsyncIterator[asyncio.Queue[int]]:
         queue: asyncio.Queue[int] = asyncio.Queue(maxsize=1)
         async with self._lock:
             self._subscribers[session_id].add(queue)
+        redis_context: Any | None = None
+        relay_task: asyncio.Task[None] | None = None
+        if self._redis is not None:
+            try:
+                redis_context = self._redis.subscribe("task:events", session_id)
+                messages = await redis_context.__aenter__()
+
+                async def relay() -> None:
+                    try:
+                        async for value in messages:
+                            self._offer(queue, int(value))
+                    except (StorageError, TypeError, ValueError):
+                        return
+
+                relay_task = asyncio.create_task(relay())
+            except StorageError:
+                redis_context = None
         try:
             yield queue
         finally:
+            if relay_task is not None:
+                relay_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await relay_task
+            if redis_context is not None:
+                await redis_context.__aexit__(None, None, None)
             async with self._lock:
                 subscribers = self._subscribers.get(session_id)
                 if subscribers is not None:
                     subscribers.discard(queue)
                     if not subscribers:
                         self._subscribers.pop(session_id, None)
+
+    @staticmethod
+    def _offer(queue: asyncio.Queue[int], revision: int) -> None:
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        queue.put_nowait(revision)
 
 
 class TaskService:
@@ -79,11 +119,15 @@ class TaskService:
         *,
         completion_gate: CompletionGate | None = None,
         event_broker: TaskEventBroker | None = None,
+        verification_timeout_seconds: float = 60.0,
     ) -> None:
+        if verification_timeout_seconds <= 0:
+            raise ValueError("verification_timeout_seconds must be greater than zero")
         self.repository = repository
         self.store = store
         self.completion_gate = completion_gate or AutoCompletionGate()
         self.events = event_broker or TaskEventBroker()
+        self.verification_timeout_seconds = verification_timeout_seconds
 
     async def initialize(self) -> None:
         await self.store.initialize()
@@ -98,6 +142,27 @@ class TaskService:
         await self._authorize(session_id, user_id=user_id, tenant_id=tenant_id)
         tasks, revision = await self.store.read(session_id)
         self._validate_task_owners(tasks, user_id)
+        if any(_verification_is_stale(task, self.verification_timeout_seconds) for task in tasks):
+            now = utc_now()
+
+            def recover(tasks_to_recover: list[SessionTask]) -> MutationDecision[None]:
+                changed = False
+                for task in tasks_to_recover:
+                    if not _verification_is_stale(task, self.verification_timeout_seconds, now=now):
+                        continue
+                    task.status = "in_progress"
+                    task.verification_status = "error"
+                    task.verification_reason = "Verification lease expired; returned to in_progress for retry."
+                    task.verified_at = now
+                    task.version += 1
+                    task.updated_at = now
+                    changed = True
+                if changed:
+                    _derive_all_parent_statuses(tasks_to_recover, now=now)
+                return MutationDecision(None, changed=changed)
+
+            recovered = await self._mutate(session_id, user_id, recover)
+            tasks, revision = recovered.tasks, recovered.revision
         return _snapshot(session_id, tasks, revision)
 
     async def create(
@@ -227,6 +292,15 @@ class TaskService:
                     409,
                     debug={"current_version": task.version},
                 )
+            changed_fields = request.model_fields_set - {"task_id", "expected_version"}
+            if task.status == "verifying" and (
+                request.status != "in_progress" or not changed_fields <= {"status", "reason"}
+            ):
+                raise _task_error(
+                    "TASK_VERIFICATION_IN_PROGRESS",
+                    "A verifying task only accepts an explicit status=in_progress cancellation",
+                    409,
+                )
             children = _children_map(tasks)
             has_children = bool(children.get(task.task_id))
             if has_children and request.status is not None:
@@ -268,17 +342,22 @@ class TaskService:
                 task.reason = request.reason
             if request.evidence is not None:
                 task.evidence = request.evidence
+            now = utc_now()
             if request.status is not None:
+                previous_status = task.status
                 task.status = request.status
                 if request.status == "verifying":
                     task.verification_status = "pending"
                     task.verification_reason = ""
                     task.verified_at = None
+                elif previous_status == "verifying" and request.status == "in_progress":
+                    task.verification_status = "error"
+                    task.verification_reason = request.reason or "Verification was cancelled and can be retried."
+                    task.verified_at = now
                 elif request.status != "in_progress":
                     task.verification_status = "none"
                     task.verification_reason = ""
                     task.verified_at = None
-            now = utc_now()
             task.version += 1
             task.updated_at = now
             _derive_all_parent_statuses(tasks, now=now)
@@ -294,8 +373,23 @@ class TaskService:
             )
 
         verifying_task = _task_by_id(initial.tasks, task_id)
+        cancelled_error: asyncio.CancelledError | None = None
         try:
-            gate_result = await self.completion_gate.verify(verifying_task, verifying_task.evidence)
+            gate_result = await asyncio.wait_for(
+                self.completion_gate.verify(verifying_task, verifying_task.evidence),
+                timeout=self.verification_timeout_seconds,
+            )
+        except TimeoutError:
+            gate_result = GateResult(
+                status="error",
+                reason=f"Completion Gate timed out after {self.verification_timeout_seconds:g} seconds.",
+            )
+        except asyncio.CancelledError as exc:
+            cancelled_error = exc
+            gate_result = GateResult(
+                status="error",
+                reason="Completion Gate was interrupted; returned to in_progress for retry.",
+            )
         except Exception as exc:
             gate_result = GateResult(status="error", reason=f"Completion Gate error: {exc}")
 
@@ -320,7 +414,9 @@ class TaskService:
             _derive_all_parent_statuses(tasks, now=now)
             return MutationDecision(task_id)
 
-        completed = await self._mutate(session_id, user_id, gate_mutation)
+        completed = await asyncio.shield(self._mutate(session_id, user_id, gate_mutation))
+        if cancelled_error is not None:
+            raise cancelled_error
         return TaskMutationResponse(
             affected_task_ids=[task_id],
             snapshot=_snapshot(session_id, completed.tasks, completed.revision),
@@ -484,11 +580,26 @@ def _validate_single_active_leaf(tasks: list[SessionTask], *, exclude_task_id: s
         )
 
 
+def _verification_is_stale(
+    task: SessionTask,
+    timeout_seconds: float,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if task.status != "verifying":
+        return False
+    checked_at = now or utc_now()
+    updated_at = task.updated_at
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    return updated_at <= checked_at - timedelta(seconds=timeout_seconds)
+
+
 def _validate_transition(current: TaskStatus, target: TaskStatus) -> None:
     allowed: dict[TaskStatus, set[TaskStatus]] = {
         "pending": {"in_progress", "skipped"},
         "in_progress": {"pending", "verifying", "skipped", "failed"},
-        "verifying": set(),
+        "verifying": {"in_progress"},
         "completed": set(),
         "skipped": set(),
         "failed": {"pending"},
