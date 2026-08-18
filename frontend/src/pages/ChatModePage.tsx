@@ -459,7 +459,6 @@ export default function ChatModePage() {
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5" aria-live="polite">
           <div className="max-w-4xl mx-auto space-y-3">
-              <TaskTreeWidget sessionId={conversation?.id ?? conversationId ?? null} />
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
@@ -507,6 +506,7 @@ export default function ChatModePage() {
           {!deleted ? (
             <ChatComposer
               disabled={sending || loading}
+              sessionId={conversation?.id ?? conversationId ?? null}
               onSend={sendMessage}
             />
           ) : null}
@@ -680,9 +680,11 @@ function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; det
 
 function ChatComposer({
   disabled,
+  sessionId,
   onSend,
 }: {
   disabled: boolean;
+  sessionId: string | null;
   onSend: (text: string) => void;
 }) {
   const [text, setText] = useState("");
@@ -696,41 +698,47 @@ function ChatComposer({
   }
 
   return (
-    <form onSubmit={submit} className="border-t border-line bg-white px-5 py-3">
-      <div className="max-w-4xl mx-auto rounded-xl border border-line-strong bg-white p-2.5 shadow-soft focus-within:border-accent">
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              submit(event);
-            }
-          }}
-          disabled={disabled}
-          rows={2}
-          placeholder="给 Unibot 发消息；Enter 发送，Shift+Enter 换行"
-          aria-label="消息"
-          className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <ModelSelector disabled={disabled} />
-          <button
-            type="submit"
-            disabled={disabled || !text.trim()}
-            className={classNames(
-              "w-9 h-9 rounded-lg flex items-center justify-center text-white transition-colors",
-              !disabled && text.trim()
-                ? "bg-accent hover:bg-accent-hover"
-                : "bg-ink-subtle cursor-not-allowed",
-            )}
-            aria-label="发送消息"
-          >
-            <ArrowUp className="w-4 h-4" />
-          </button>
-        </div>
+    <div className="border-t border-line bg-white px-5 py-3">
+      <div className="mx-auto max-w-4xl space-y-2">
+        <TaskTreeWidget sessionId={sessionId} />
+        <form
+          onSubmit={submit}
+          className="rounded-xl border border-line-strong bg-white p-2.5 shadow-soft focus-within:border-accent"
+        >
+          <textarea
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submit(event);
+              }
+            }}
+            disabled={disabled}
+            rows={2}
+            placeholder="给 Unibot 发消息；Enter 发送，Shift+Enter 换行"
+            aria-label="消息"
+            className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
+          />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <ModelSelector disabled={disabled} />
+            <button
+              type="submit"
+              disabled={disabled || !text.trim()}
+              className={classNames(
+                "w-9 h-9 rounded-lg flex items-center justify-center text-white transition-colors",
+                !disabled && text.trim()
+                  ? "bg-accent hover:bg-accent-hover"
+                  : "bg-ink-subtle cursor-not-allowed",
+              )}
+              aria-label="发送消息"
+            >
+              <ArrowUp className="w-4 h-4" />
+            </button>
+          </div>
+        </form>
       </div>
-    </form>
+    </div>
   );
 }
 

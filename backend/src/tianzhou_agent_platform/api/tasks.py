@@ -31,23 +31,39 @@ def create_task_router() -> APIRouter:
     ) -> StreamingResponse:
         actor = request_actor(request)
         service = task_runtime(request)
-        snapshot = await service.query(
+        await service.query(
             session_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
         )
 
         async def stream() -> AsyncIterator[str]:
-            yield _event(snapshot.revision)
             async with service.events.subscribe(session_id) as queue:
+                snapshot = await service.query(
+                    session_id,
+                    user_id=actor.user_id,
+                    tenant_id=actor.tenant_id,
+                )
+                last_revision = snapshot.revision
+                yield _event(last_revision)
                 while True:
                     if await request.is_disconnected():
                         return
                     try:
                         revision = await asyncio.wait_for(queue.get(), timeout=15)
                     except TimeoutError:
-                        yield ": keepalive\n\n"
+                        current = await service.query(
+                            session_id,
+                            user_id=actor.user_id,
+                            tenant_id=actor.tenant_id,
+                        )
+                        revision = current.revision
+                        if revision <= last_revision:
+                            yield ": keepalive\n\n"
+                            continue
+                    if revision <= last_revision:
                         continue
+                    last_revision = revision
                     yield _event(revision)
 
         return StreamingResponse(
