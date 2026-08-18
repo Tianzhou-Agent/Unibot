@@ -70,6 +70,8 @@ from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.schema import validate_value
 from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, task_tool_specs
+from tianzhou_agent_platform.tasks.service import TaskService
 
 _HIGH_RISK_MARKERS = (
     "send",
@@ -134,6 +136,7 @@ class AgentState(TypedDict, total=False):
     tool_span_ids: dict[str, str]
     widgets: list[WidgetDefinition]
     memory_context: list[MemoryRecord]
+    base_system_prompt: str
 
 
 class AgentRuntime:
@@ -157,6 +160,7 @@ class AgentRuntime:
         document_service: DocumentService | None = None,
         document_edit_task_service: DocumentEditTaskService | None = None,
         sandbox_service: SandboxService | None = None,
+        task_service: TaskService | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -166,6 +170,7 @@ class AgentRuntime:
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
         self.sandbox_service = sandbox_service
+        self.task_service = task_service
         graph = StateGraph(AgentState)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
@@ -200,8 +205,9 @@ class AgentRuntime:
         runtime_model = current_model_runtime()
         model_target_id = runtime_model.model if runtime_model else self.settings.llm_model
         model_span_id = f"span_{uuid4().hex}"
+        messages_with_tasks = await self._messages_with_task_projection(state)
         provider_messages = _provider_messages_for_scope(
-            state["messages"],
+            messages_with_tasks,
             active_function_names=set(state["capabilities"]),
         )
         tool_choice: dict[str, Any] | str | None = None
@@ -640,6 +646,8 @@ class AgentRuntime:
                             user_id=state["user_id"],
                             tenant_id=state["tenant_id"],
                             conversation_id=state["conversation_id"],
+                            task_service=self.task_service,
+                            tool_execution_id=call_id,
                         )
                     else:
                         result_payload, produced_widgets = await invoke_builtin(
@@ -826,6 +834,7 @@ class AgentRuntime:
                 memory_context=state.get("memory_context") or None,
             ),
         }
+        state["base_system_prompt"] = messages[0]["content"]
         await self.observability.record_event(
             state["trace_id"],
             kind="routing.scope.activated",
@@ -1518,6 +1527,7 @@ class AgentRuntime:
             "approval": None,
             "widgets": [],
             "memory_context": memory_context or [],
+            "base_system_prompt": resolved_system_prompt,
         }
         try:
             result = await self._graph.ainvoke(state)
@@ -1724,6 +1734,7 @@ class AgentRuntime:
                     f"The request was routed to AINA {manifest.aina.name} ({manifest.aina.id}). "
                     f"{scope_guidance}"
                 ),
+                _task_tool_guidance(),
             ]
             if aina_skills:
                 sections.append(f"AINA skills:\n{aina_skills}")
@@ -1749,6 +1760,24 @@ class AgentRuntime:
         if memory_context:
             sections.append(_memory_context_block(memory_context))
         return "\n\n".join(sections)
+
+    async def _messages_with_task_projection(self, state: AgentState) -> list[dict[str, Any]]:
+        messages = [dict(message) for message in state["messages"]]
+        if not messages or messages[0].get("role") != "system":
+            return messages
+        base_prompt = state.get("base_system_prompt") or str(messages[0].get("content") or "")
+        projection = ""
+        if self.task_service is not None:
+            projection = await self.task_service.context_projection(
+                state["conversation_id"],
+                user_id=state["user_id"],
+                tenant_id=state["tenant_id"],
+            )
+        messages[0] = {
+            **messages[0],
+            "content": f"{base_prompt}\n\n{projection}" if projection else base_prompt,
+        }
+        return messages
 
     async def _memory_context(self, conversation: Conversation, query: str) -> list[MemoryRecord]:
         return await self.repository.search_memories(
@@ -1880,6 +1909,18 @@ class AgentRuntime:
             requires_confirmation=False,
             value=REQUEST_CLARIFICATION_TOOL_ID,
         )
+        for spec in task_tool_specs():
+            function_name = _function_name("builtin", spec["id"])
+            capabilities[function_name] = Capability(
+                kind="builtin",
+                capability_id=spec["id"],
+                function_name=function_name,
+                display_name=spec["display_name"],
+                description=spec["description"],
+                input_schema=spec["input_schema"],
+                requires_confirmation=False,
+                value=spec["id"],
+            )
         return capabilities
 
     async def _available_aina_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
@@ -2014,22 +2055,28 @@ class AgentRuntime:
             and capability.capability_id != aina.manifest.aina.id
             and _is_routable_aina(capability)
         }
+        task_capabilities = {
+            function_name: capability
+            for function_name, capability in (await self._system_capabilities()).items()
+            if capability.capability_id in TASK_TOOL_IDS
+        }
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
-            return {**self._memory_capabilities(), **switch_capabilities}, aina
+            return {**self._memory_capabilities(), **task_capabilities, **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_DOCUMENTS_ID:
             return {
                 **self._document_capabilities(),
                 **self._memory_capabilities(),
+                **task_capabilities,
                 **switch_capabilities,
             }, aina
         if aina.manifest.aina.id == UNIBOT_CODE_RUNNER_ID:
-            return {**self._sandbox_capabilities(), **switch_capabilities}, aina
+            return {**self._sandbox_capabilities(), **task_capabilities, **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_SCHEDULER_ID:
-            return switch_capabilities, aina
+            return {**task_capabilities, **switch_capabilities}, aina
         if aina.manifest.aina.id == UNIBOT_IMAGE_RECOGNITION_ID:
-            return switch_capabilities, aina
+            return {**task_capabilities, **switch_capabilities}, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
-        capabilities = {selected.function_name: selected, **switch_capabilities}
+        capabilities = {selected.function_name: selected, **task_capabilities, **switch_capabilities}
         if declared_tool_ids:
             for function_name, capability in (await self._system_capabilities()).items():
                 if capability.kind == "tool" and capability.capability_id in declared_tool_ids:
@@ -2493,9 +2540,20 @@ def _platform_tool_guidance() -> str:
         "the conversation. Select an AINA entrypoint only when the user wants that AINA to perform work; do not "
         "select an AINA merely to list, inspect, or open applications, and never combine an AINA entrypoint with "
         "another capability in the same response. Memory tools stay available across turns so historical tool "
-        "calls remain valid. Call "
-        "memory.remember only when the user explicitly asks to remember something or clearly supplies a durable "
+        "calls remain valid. "
+        + _task_tool_guidance()
+        + " Call memory.remember only when the user explicitly asks to remember something or clearly supplies a durable "
         "personal fact during an ongoing memory-collection exchange; never store transient chat or inferred facts."
+    )
+
+
+def _task_tool_guidance() -> str:
+    return (
+        "For complex multi-step work, use the structured task tools to create and maintain a small deliverable-"
+        "oriented plan. Do not create tasks for individual reads, searches, or tool calls. Keep at most one leaf "
+        "in progress, update with expected_version, and request completion with status=verifying; never claim or "
+        "attempt to write completed directly. Query the full tree when the injected task projection lacks needed "
+        "detail."
     )
 
 

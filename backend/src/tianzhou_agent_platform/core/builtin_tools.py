@@ -12,6 +12,8 @@ from tianzhou_agent_platform.aina.protocol.widgets import (
 )
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, invoke_task_operation
+from tianzhou_agent_platform.tasks.service import TaskService
 
 LIST_APP_TOOL_ID = "list_app"
 DESCRIBE_AINA_TOOL_ID = "describe_aina"
@@ -22,7 +24,7 @@ PLATFORM_TOOL_IDS = {
     DESCRIBE_AINA_TOOL_ID,
     OPEN_AINA_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
-}
+} | TASK_TOOL_IDS
 
 
 async def list_app_widget(
@@ -188,7 +190,21 @@ async def invoke_platform_tool(
     user_id: str,
     tenant_id: str,
     conversation_id: str,
+    task_service: TaskService | None = None,
+    tool_execution_id: str = "",
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
+    if tool_id in TASK_TOOL_IDS:
+        if task_service is None:
+            raise PlatformError("DEPENDENCY_FAILED", "Structured task runtime is unavailable", status_code=503)
+        return await invoke_task_operation(
+            task_service,
+            tool_id,
+            arguments,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=conversation_id,
+            tool_execution_id=tool_execution_id,
+        ), []
     if tool_id == LIST_APP_TOOL_ID:
         widget = await list_app_widget(repository, user_id=user_id, tenant_id=tenant_id)
         return {"count": len(widget.apps), "aina_ids": [item.aina_id for item in widget.apps]}, [widget]

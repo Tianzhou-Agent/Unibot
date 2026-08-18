@@ -5,6 +5,7 @@ import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { Topbar } from "@/components/layout/Topbar";
+import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
@@ -343,6 +344,7 @@ export default function CanvasModePage() {
               </header>
 
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-app-bg p-3" aria-live="polite">
+                <TaskTreeWidget sessionId={conversationId} />
                 {!visibleMessages.length && !sending ? (
                   <div className="flex min-h-[260px] items-center justify-center text-center">
                     <div>

@@ -827,3 +827,33 @@ export interface CapabilityOption {
   label: string;
   kind: "tool" | "aina" | "builtin";
 }
+
+export type TaskStatus = "pending" | "in_progress" | "verifying" | "completed" | "skipped" | "failed";
+export type TaskVerificationStatus = "none" | "pending" | "passed" | "failed" | "error";
+
+export interface SessionTaskNode {
+  task_id: string;
+  session_id: string;
+  owner_user_id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  reason: string;
+  evidence: Record<string, unknown>[];
+  verification_status: TaskVerificationStatus;
+  verification_reason: string;
+  verified_at?: string | null;
+  parent_task_id?: string | null;
+  depth: number;
+  sort_order: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  children: SessionTaskNode[];
+}
+
+export interface TaskTreeSnapshot {
+  session_id: string;
+  revision: number;
+  tasks: SessionTaskNode[];
+}

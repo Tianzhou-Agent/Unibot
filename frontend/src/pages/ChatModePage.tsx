@@ -18,6 +18,7 @@ import { ConversationObsDrawer } from "@/components/observability/ConversationOb
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { loadAllPersonalLlmCalls } from "@/lib/obsData";
@@ -449,6 +450,7 @@ export default function ChatModePage() {
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5" aria-live="polite">
           <div className="max-w-4xl mx-auto space-y-3">
+              <TaskTreeWidget sessionId={conversation?.id ?? conversationId ?? null} />
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
