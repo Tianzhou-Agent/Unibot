@@ -196,6 +196,16 @@ class PersistentRepository(InMemoryRepository):
         await self._refresh_users()
         return await super().find_user_by_email(email)
 
+    async def list_users(
+        self,
+        *,
+        query: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserRecord]:
+        await self._refresh_users()
+        return await super().list_users(query=query, limit=limit, offset=offset)
+
     async def upsert_github_user(
         self,
         *,

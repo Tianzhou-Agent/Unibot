@@ -66,8 +66,19 @@ export async function loadLegacyAdminObsSession(sessionId: string): Promise<Lega
   return sessionData(sessionId, traces, calls);
 }
 
-export { getAdminObsSession, getObsOverview, getObsSession, getRawLogs } from "@/lib/obsApi";
+export {
+  getAdminObsSession,
+  getAdminObsTrace,
+  getAdminObsTraces,
+  getAdminUsers,
+  getObsOverview,
+  getObsSession,
+  getRawLogs,
+} from "@/lib/obsApi";
 export type {
+  AdminObsTracePage,
+  AdminUserPage,
+  AdminUserSummary,
   ObsEvent,
   ObsOverview,
   ObsRawLog,

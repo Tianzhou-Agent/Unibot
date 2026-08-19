@@ -5,7 +5,6 @@ import {
   Bot,
   Brain,
   Braces,
-  Bug,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -13,13 +12,17 @@ import {
   Clock3,
   Code2,
   Copy,
-  Database,
+  Mail,
   MessageSquareText,
   RefreshCw,
   Route,
+  Search,
   Server,
   ShieldCheck,
+  UserRound,
+  Users,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react";
 import { useLocation, useSearchParams } from "react-router-dom";
@@ -28,20 +31,19 @@ import { PersonalObservabilityView } from "@/components/observability/PersonalOb
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { classNames, timeAgo } from "@/lib/utils";
-import { useDebugMode } from "@/lib/debugMode";
 import {
-  getAdminObsSession,
+  getAdminObsTrace,
+  getAdminObsTraces,
+  getAdminUsers,
   getObsOverview,
   getObsSession,
-  loadLegacyAdminObsSession,
   loadLegacyPersonalObsData,
   loadLegacyPersonalObsSession,
 } from "@/lib/obsData";
-import type { ObsOverview, ObsSessionDetail } from "@/lib/obsData";
+import type { AdminUserSummary, ObsOverview, ObsSessionDetail, ObsTrace } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import type {
-  AdminSummary,
   ConversationRecord,
   LLMCallRecord,
   TraceEvent,
@@ -50,7 +52,6 @@ import type {
 } from "@/types";
 
 export default function DebugPage() {
-  const { debugMode, setDebugMode } = useDebugMode();
   const { user, config } = useAuth();
   const { isAdmin: mockIsAdmin, profile } = useMockSession();
   const isAdmin = config.auth_required ? Boolean(user?.is_admin) : mockIsAdmin;
@@ -58,26 +59,16 @@ export default function DebugPage() {
   const showAdminView = isAdmin && location.pathname.startsWith("/admin/");
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("sessionId");
-  const requestedTrace = searchParams.get("trace");
   const [health, setHealth] = useState<"checking" | "ok" | "error">("checking");
-  const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [obsOverview, setObsOverview] = useState<ObsOverview | null>(null);
   const [obsSession, setObsSession] = useState<ObsSessionDetail | null>(null);
   const [overviewPeriod, setOverviewPeriod] = useState<"day" | "week" | "month">("week");
-  const [selectedTrace, setSelectedTrace] = useState<string | null>(requestedTrace);
-  const [selectedLlmCall, setSelectedLlmCall] = useState<string | null>(null);
-  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("trace");
-  const [expandedTraceGroups, setExpandedTraceGroups] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const adminSessionRequestRef = useRef(0);
-  const autoLoadedSessionsRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
-    setRefreshing(true);
     try {
       const actorQuery = config.auth_required
         ? ""
@@ -85,31 +76,12 @@ export default function DebugPage() {
       const querySuffix = actorQuery ? `?${actorQuery}` : "";
       const adminData = showAdminView;
       if (adminData) {
-        // 管理员视图：统计来自 /admin/summary + /admin/obs/overview；
-        // Trace 按会话从 /admin/obs/sessions 按需加载（phase four）
-        const [healthData, summaryData, overviewData, conversationData] = await Promise.all([
-          api.get<{ status: string }>("/health"),
-          api.get<AdminSummary>(`/admin/summary${querySuffix}`),
-          api.get<ObsOverview>("/admin/obs/overview?range=week"),
-          api.get<ConversationRecord[]>("/admin/conversations"),
-        ]);
-        const llmCallCount = (overviewData?.per_model ?? []).reduce((sum, row) => sum + row.call_count, 0);
+        // 管理员调用记录由 AdminObservabilityView 按用户 ID 查询；这里仅检查服务状态。
+        const healthData = await api.get<{ status: string }>("/health");
         setHealth(healthData.status === "ok" ? "ok" : "error");
-        setSummary({
-          tools: summaryData?.tools ?? 0,
-          skills: summaryData?.skills ?? 0,
-          ainas: summaryData?.ainas ?? 0,
-          installations: summaryData?.installations ?? 0,
-          memories: summaryData?.memories ?? 0,
-          conversations: conversationData.length,
-          traces: overviewData?.trace_count ?? 0,
-          llm_calls: llmCallCount,
-        });
         setTraces([]);
         setLlmCalls([]);
-        adminSessionRequestRef.current += 1;
-        autoLoadedSessionsRef.current.clear();
-        setConversations(conversationData);
+        setConversations([]);
         setError(null);
       } else {
         // 普通用户优先使用后端聚合 DTO；仅在 OBS 未启用、查询失败或会话尚未迁移时读取旧数据。
@@ -159,247 +131,462 @@ export default function DebugPage() {
     } catch (loadError) {
       setHealth("error");
       setError(apiErrorMessage(loadError));
-    } finally {
-      setRefreshing(false);
     }
-  }, [config.auth_required, profile.actorUserId, profile.tenantId, requestedTrace, requestedSessionId, showAdminView, overviewPeriod]);
+  }, [config.auth_required, profile.actorUserId, profile.tenantId, requestedSessionId, showAdminView, overviewPeriod]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const selected = useMemo(
-    () => traces.find((trace) => trace.trace_id === selectedTrace) ?? null,
-    [selectedTrace, traces],
-  );
-  const selectedTraceCalls = useMemo(
-    () => llmCalls
-      .filter((call) => call.trace_id === selected?.trace_id)
-      .sort((left, right) => left.created_at.localeCompare(right.created_at)),
-    [llmCalls, selected?.trace_id],
-  );
-  const selectedCall = useMemo(
-    () => selectedTraceCalls.find((call) => call.call_id === selectedLlmCall) ?? null,
-    [selectedLlmCall, selectedTraceCalls],
-  );
-  const conversationsById = useMemo(
-    () => new Map(conversations.map((conversation) => [conversation.id, conversation])),
-    [conversations],
-  );
-  const traceGroups = useMemo(
-    () => {
-      const fromTraces = groupTracesByConversation(traces, conversationsById);
-      if (!showAdminView) return fromTraces;
-      // Phase four: admin 视图以会话为驱动，Trace 按需从 /admin/obs/sessions 加载
-      const keys = new Set(fromTraces.map((group) => group.key));
-      if (requestedSessionId && !keys.has(requestedSessionId)) {
-        fromTraces.push({
-          key: requestedSessionId,
-          conversationId: requestedSessionId,
-          title: conversationsById.get(requestedSessionId)?.title.trim() || "已删除或不可用的会话",
-          traces: [],
-        });
-        keys.add(requestedSessionId);
-      }
-      for (const conversation of conversations) {
-        if (keys.has(conversation.id)) continue;
-        fromTraces.push({
-          key: conversation.id,
-          conversationId: conversation.id,
-          title: conversation.title.trim() || "未命名会话",
-          traces: [],
-        });
-      }
-      return fromTraces;
-    },
-    [conversations, conversationsById, requestedSessionId, showAdminView, traces],
-  );
+  if (showAdminView) return <AdminObservabilityView initialHealth={health} />;
 
-  const loadAdminSession = useCallback(async (conversationId: string) => {
-    const requestId = ++adminSessionRequestRef.current;
+  return (
+    <PersonalObservabilityView
+      error={error}
+      sessionId={requestedSessionId}
+      conversations={conversations}
+      traces={traces}
+      llmCalls={llmCalls}
+      obsOverview={obsOverview}
+      obsSession={obsSession}
+      onOverviewPeriodChange={setOverviewPeriod}
+    />
+  );
+}
+
+type ObsRange = "day" | "week" | "month";
+
+function AdminObservabilityView({
+  initialHealth,
+}: {
+  initialHealth: "checking" | "ok" | "error";
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [query, setQuery] = useState("");
+  const [users, setUsers] = useState<AdminUserSummary[]>([]);
+  const [selectedUser, setSelectedUser] = useState<AdminUserSummary | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listRequestRef = useRef(0);
+  const userCountRef = useRef(0);
+  const deepLinkLoadedRef = useRef(false);
+
+  const loadUsers = useCallback(async (lookupQuery: string, append = false) => {
+    const requestId = ++listRequestRef.current;
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+    setError(null);
     try {
-      const session = await getAdminObsSession(conversationId).catch(() => null);
-      const data = session
-        ? adaptSessionDetail(session)
-        : await loadLegacyAdminObsSession(conversationId);
-      if (requestId !== adminSessionRequestRef.current) return;
-      setTraces(data.traces);
-      setLlmCalls(data.calls);
+      const page = await getAdminUsers(lookupQuery.trim(), append ? userCountRef.current : 0);
+      if (requestId !== listRequestRef.current) return;
+      setUsers((current) => {
+        const next = append ? [...current, ...page.items] : page.items;
+        userCountRef.current = next.length;
+        return next;
+      });
+      setHasMore(page.has_more);
     } catch (loadError) {
-      if (requestId !== adminSessionRequestRef.current) return;
+      if (requestId !== listRequestRef.current) return;
       setError(apiErrorMessage(loadError));
+      if (!append) {
+        userCountRef.current = 0;
+        setUsers([]);
+      }
+    } finally {
+      if (requestId === listRequestRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
-  // 已尝试自动加载过的会话：防止空 traces 响应导致自动加载 effect 无限重取
-  const toggleTraceGroup = (conversationId: string | null, hasTraces: boolean) => {
-    setExpandedTraceGroups((current) => {
-      const key = traceGroupKey(conversationId);
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-    if (showAdminView && conversationId && !hasTraces) {
-      void loadAdminSession(conversationId);
-    }
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadUsers(query), 250);
+    return () => window.clearTimeout(timer);
+  }, [loadUsers, query]);
+
+  useEffect(() => {
+    if (deepLinkLoadedRef.current) return;
+    deepLinkLoadedRef.current = true;
+    const requestedUserId = searchParams.get("userId")?.trim();
+    if (!requestedUserId) return;
+    void getAdminUsers(requestedUserId)
+      .then((page) => {
+        const matched = page.items.find((user) => user.id === requestedUserId);
+        if (matched) setSelectedUser(matched);
+      })
+      .catch((loadError) => setError(apiErrorMessage(loadError)));
+  }, [searchParams]);
+
+  const openUser = (user: AdminUserSummary) => {
+    setSelectedUser(user);
+    setSearchParams({ userId: user.id }, { replace: true });
   };
 
-  // Admin 视图默认展开第一个会话组：自动加载其 trace 一次（同一会话不重取，避免空响应时无限循环）
-  useEffect(() => {
-    const targetGroup = requestedSessionId
-      ? traceGroups.find((group) => group.conversationId === requestedSessionId)
-      : traceGroups[0];
-    if (showAdminView && targetGroup && targetGroup.traces.length === 0 && targetGroup.conversationId
-      && !autoLoadedSessionsRef.current.has(targetGroup.conversationId)) {
-      autoLoadedSessionsRef.current.add(targetGroup.conversationId);
-      void loadAdminSession(targetGroup.conversationId);
-    }
-  }, [showAdminView, traceGroups, loadAdminSession, requestedSessionId]);
-
-  useEffect(() => {
-    const selectedRecord = traces.find((trace) => trace.trace_id === selectedTrace);
-    const requestedGroup = showAdminView && requestedSessionId
-      ? traceGroups.find((group) => group.conversationId === requestedSessionId)
-      : null;
-    const groupKey = selectedRecord
-      ? traceGroupKey(selectedRecord.conversation_id)
-      : requestedGroup?.key ?? traceGroups[0]?.key;
-    if (!groupKey) return;
-    setExpandedTraceGroups((current) => {
-      if (current.has(groupKey) || (!selectedRecord && !requestedGroup && current.size > 0)) return current;
-      const next = new Set(current);
-      next.add(groupKey);
-      return next;
-    });
-  }, [requestedSessionId, selectedTrace, showAdminView, traceGroups, traces]);
-
-  useEffect(() => {
-    setTraceDetailView("trace");
-  }, [selectedTrace]);
-
-  useEffect(() => {
-    if (selectedTraceCalls.length === 0) {
-      setSelectedLlmCall(null);
-      setTraceDetailView("llm");
-      return;
-    }
-    setSelectedLlmCall((current) => (
-      current && selectedTraceCalls.some((call) => call.call_id === current)
-        ? current
-        : selectedTraceCalls[0].call_id
-    ));
-  }, [selectedTraceCalls]);
-
-  const selectedConversationTitle = selected?.conversation_id
-    ? conversationsById.get(selected.conversation_id)?.title ?? "已删除或不可用的会话"
-    : "未关联会话";
-
-  if (!showAdminView) {
-    return (
-      <PersonalObservabilityView
-        error={error}
-        sessionId={requestedSessionId}
-        conversations={conversations}
-        traces={traces}
-        llmCalls={llmCalls}
-        obsOverview={obsOverview}
-        obsSession={obsSession}
-        onOverviewPeriodChange={setOverviewPeriod}
-      />
-    );
-  }
+  const closeUser = () => {
+    setSelectedUser(null);
+    setSearchParams({}, { replace: true });
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-bg">
       <Topbar
         title="OBS"
-        badge={health === "ok" ? undefined : {
-          label: health === "checking" ? "检查中" : "后端异常",
-          tone: health === "checking" ? "thinking" : "warning",
+        badge={initialHealth === "ok" ? undefined : {
+          label: initialHealth === "checking" ? "检查中" : "后端异常",
+          tone: initialHealth === "checking" ? "thinking" : "warning",
         }}
-        actions={
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-lg bg-app-soft p-0.5">
-              <button
-                type="button"
-                onClick={() => setDebugMode(false)}
-                className={classNames(
-                  "rounded-md px-3 py-1.5 text-[12px] font-bold",
-                  !debugMode ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-                )}
-              >
-                关闭
-              </button>
-              <button
-                type="button"
-                onClick={() => setDebugMode(true)}
-                className={classNames(
-                  "rounded-md px-3 py-1.5 text-[12px] font-bold",
-                  debugMode ? "bg-white text-accent shadow-sm" : "text-ink-muted",
-                )}
-              >
-                开启
-              </button>
-            </div>
-            <button type="button" onClick={() => void load()} disabled={refreshing} className="btn-outline h-8">
-              <RefreshCw className={classNames("w-3.5 h-3.5", refreshing && "animate-spin")} />刷新
-            </button>
-          </div>
-        }
+        actions={(
+          <button type="button" onClick={() => void loadUsers(query)} disabled={loading} className="btn-outline h-8">
+            <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} />刷新
+          </button>
+        )}
       />
-      <div className="flex min-h-0 flex-1 overflow-hidden p-2.5 md:p-3">
-        <div className="flex h-full min-h-0 w-full flex-col gap-2.5 md:gap-3">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 md:p-4">
+        <div className="mx-auto max-w-7xl space-y-3">
+          {error ? (
+            <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[12.5px] text-danger-deep">{error}</div>
+          ) : null}
+
+          <section className="rounded-xl border border-line bg-white p-3 shadow-card" aria-label="搜索用户">
+            <div className="flex items-center gap-2">
+              <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-app-soft px-3 focus-within:border-accent">
+                <Search className="h-4 w-4 shrink-0 text-ink-subtle" />
+                <input
+                  aria-label="搜索用户"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  maxLength={160}
+                  placeholder="搜索用户 ID、姓名、邮箱或租户"
+                  className="min-w-0 flex-1 bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-subtle"
+                />
+              </label>
+              <span className="hidden shrink-0 text-[11px] text-ink-subtle sm:block">
+                {loading ? "正在加载…" : `当前 ${users.length}${hasMore ? "+" : ""} 位用户`}
+              </span>
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-xl border border-line bg-white shadow-card" aria-label="用户列表">
+            <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+              <Users className="h-4 w-4 text-accent" />
+              <h2 className="text-[13px] font-extrabold text-ink">所有用户</h2>
+              <span className="text-[11px] text-ink-subtle">点击用户查看观测数据</span>
+            </div>
+            {loading ? (
+              <div className="py-20 text-center text-[12px] text-ink-muted">正在加载用户列表…</div>
+            ) : users.length === 0 ? (
+              <div className="py-20 text-center text-[12px] text-ink-muted">
+                {query.trim() ? "没有匹配的用户。" : "还没有已注册用户。"}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-px bg-line">
+                {users.map((user) => (
+                  <button
+                    key={user.id}
+                    type="button"
+                    onClick={() => openUser(user)}
+                    className="group flex min-w-0 items-center gap-3 bg-white px-4 py-3 text-left transition-colors hover:bg-app-soft"
+                  >
+                    <UserAvatar user={user} />
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-[12.5px] text-ink">{user.name}</strong>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10.5px] text-ink-muted">
+                        <Mail className="h-3 w-3 shrink-0" /><span className="truncate">{user.email}</span>
+                      </span>
+                      <span className="mt-1 block truncate font-mono text-[10px] text-ink-subtle">{user.id} · {user.tenant_id}</span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-ink-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {hasMore ? (
+              <button
+                type="button"
+                onClick={() => void loadUsers(query, true)}
+                disabled={loadingMore}
+                className="w-full border-t border-line px-4 py-2.5 text-[11px] font-semibold text-accent hover:bg-app-soft disabled:text-ink-subtle"
+              >
+                {loadingMore ? "加载中…" : "加载更多用户"}
+              </button>
+            ) : null}
+          </section>
+        </div>
+      </div>
+
+      {selectedUser ? (
+        <AdminUserObservabilityDrawer
+          key={selectedUser.id}
+          user={selectedUser}
+          onClose={closeUser}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function UserAvatar({ user }: { user: AdminUserSummary }) {
+  if (user.avatar_url) {
+    return <img src={user.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />;
+  }
+  return (
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[13px] font-extrabold text-accent">
+      {user.name.trim().slice(0, 1).toUpperCase() || <UserRound className="h-4 w-4" />}
+    </span>
+  );
+}
+
+function AdminUserObservabilityDrawer({
+  user,
+  onClose,
+}: {
+  user: AdminUserSummary;
+  onClose: () => void;
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialRange = searchParams.get("range");
+  const [period, setPeriod] = useState<ObsRange>(
+    initialRange === "day" || initialRange === "month" ? initialRange : "week",
+  );
+  const [mounted, setMounted] = useState(false);
+  const [overview, setOverview] = useState<ObsOverview | null>(null);
+  const [records, setRecords] = useState<ObsTrace[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [detail, setDetail] = useState<ObsSessionDetail | null>(null);
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [selectedLlmCall, setSelectedLlmCall] = useState<string | null>(null);
+  const [traceDetailView, setTraceDetailView] = useState<"trace" | "llm">("trace");
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const searchRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+  const initialSearchRef = useRef(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const loadTraceDetail = useCallback(async (traceId: string, lookupUserId: string) => {
+    const requestId = ++detailRequestRef.current;
+    setSelectedTraceId(traceId);
+    setDetail(null);
+    setDetailLoading(true);
+    setTraceDetailView("trace");
+    try {
+      const data = await getAdminObsTrace(traceId, lookupUserId);
+      if (requestId !== detailRequestRef.current) return;
+      setDetail(data);
+      if (!data) setError("该调用记录不存在，或已不属于当前查询用户。");
+    } catch (loadError) {
+      if (requestId !== detailRequestRef.current) return;
+      setError(apiErrorMessage(loadError));
+    } finally {
+      if (requestId === detailRequestRef.current) setDetailLoading(false);
+    }
+  }, []);
+
+  const runSearch = useCallback(async (
+    lookupPeriod: ObsRange,
+    preferredTraceId?: string | null,
+  ) => {
+    const requestId = ++searchRequestRef.current;
+    detailRequestRef.current += 1;
+    setLoading(true);
+    setLoadingMore(false);
+    setDetailLoading(false);
+    setError(null);
+    setDetail(null);
+    setSelectedTraceId(null);
+    try {
+      const [overviewData, page] = await Promise.all([
+        api.get<ObsOverview>(
+          `/admin/obs/overview?range=${encodeURIComponent(lookupPeriod)}&user_id=${encodeURIComponent(user.id)}`,
+        ),
+        getAdminObsTraces(user.id, lookupPeriod),
+      ]);
+      if (requestId !== searchRequestRef.current) return;
+      setOverview(overviewData);
+      setRecords(page.items);
+      setHasMore(page.has_more);
+      const targetRecord = preferredTraceId
+        ? page.items.find((record) => (
+          record.trace_id === preferredTraceId || record.legacy_trace_id === preferredTraceId
+        ))
+        : null;
+      const targetTraceId = targetRecord?.trace_id ?? page.items[0]?.trace_id ?? null;
+      setSearchParams({
+        userId: user.id,
+        range: lookupPeriod,
+        ...(targetTraceId ? { traceId: targetTraceId } : {}),
+      }, { replace: true });
+      if (targetTraceId) await loadTraceDetail(targetTraceId, user.id);
+    } catch (loadError) {
+      if (requestId !== searchRequestRef.current) return;
+      setError(apiErrorMessage(loadError));
+      setOverview(null);
+      setRecords([]);
+      setHasMore(false);
+    } finally {
+      if (requestId === searchRequestRef.current) setLoading(false);
+    }
+  }, [loadTraceDetail, setSearchParams, user.id]);
+
+  useEffect(() => {
+    if (initialSearchRef.current) return;
+    initialSearchRef.current = true;
+    const preferredTraceId = searchParams.get("traceId") ?? searchParams.get("trace");
+    void runSearch(period, preferredTraceId);
+  }, [period, runSearch, searchParams]);
+
+  const adapted = useMemo(() => detail ? adaptSessionDetail(detail) : null, [detail]);
+  const selected = adapted?.traces[0] ?? null;
+  const selectedTraceCalls = useMemo(
+    () => [...(adapted?.calls ?? [])].sort((left, right) => left.created_at.localeCompare(right.created_at)),
+    [adapted],
+  );
+  const selectedCall = selectedTraceCalls.find((call) => call.call_id === selectedLlmCall)
+    ?? selectedTraceCalls[0]
+    ?? null;
+
+  useEffect(() => {
+    setSelectedLlmCall(selectedTraceCalls[0]?.call_id ?? null);
+  }, [selectedTraceCalls]);
+
+  const selectTrace = (traceId: string) => {
+    if (traceId === selectedTraceId) return;
+    setError(null);
+    setSearchParams({ userId: user.id, range: period, traceId }, { replace: true });
+    void loadTraceDetail(traceId, user.id);
+  };
+
+  const changePeriod = (nextPeriod: ObsRange) => {
+    setPeriod(nextPeriod);
+    void runSearch(nextPeriod);
+  };
+
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    const requestId = searchRequestRef.current;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const page = await getAdminObsTraces(user.id, period, records.length);
+      if (requestId !== searchRequestRef.current) return;
+      setRecords((current) => [...current, ...page.items]);
+      setHasMore(page.has_more);
+    } catch (loadError) {
+      if (requestId !== searchRequestRef.current) return;
+      setError(apiErrorMessage(loadError));
+    } finally {
+      if (requestId === searchRequestRef.current) setLoadingMore(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div
+        className={classNames("absolute inset-0 bg-black/30 transition-opacity duration-300", mounted ? "opacity-100" : "opacity-0")}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        role="dialog"
+        aria-label={`${user.name} 的观测数据`}
+        className={classNames(
+          "absolute inset-y-0 right-0 flex w-full max-w-[1180px] flex-col bg-app-bg shadow-2xl transition-transform duration-300",
+          mounted ? "translate-x-0" : "translate-x-full",
+        )}
+      >
+        <div className="flex shrink-0 items-center gap-2 border-b border-line bg-white px-3 py-2.5 md:px-4">
+          <UserAvatar user={user} />
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-extrabold text-ink">{user.name}</div>
+            <div className="truncate text-[10.5px] text-ink-muted">{user.email} · <span className="font-mono">{user.id}</span></div>
+          </div>
+          <span className="hidden rounded-md bg-app-soft px-2 py-1 font-mono text-[10.5px] text-ink-muted md:block">租户 {user.tenant_id}</span>
+          <select
+            aria-label="查询时间范围"
+            value={period}
+            onChange={(event) => changePeriod(event.target.value as ObsRange)}
+            className="ml-auto h-8 max-w-[104px] rounded-lg border border-line bg-white px-2 text-[11px] text-ink sm:max-w-none sm:px-2.5"
+          >
+            <option value="day">最近 1 天</option>
+            <option value="week">最近 7 天</option>
+            <option value="month">最近 30 天</option>
+          </select>
+          <button type="button" onClick={() => void runSearch(period, selectedTraceId)} disabled={loading} className="btn-outline h-8 px-2 sm:px-3">
+            <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} /><span className="hidden sm:inline">刷新</span>
+          </button>
+          <button type="button" onClick={onClose} aria-label="关闭用户观测抽屉" className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-app-soft hover:text-ink">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden p-2.5 md:gap-3 md:p-3">
           {error ? (
             <div className="shrink-0 rounded-lg border border-danger-ring bg-danger-soft p-3 text-[12.5px] text-danger-deep">
               {error}
             </div>
           ) : null}
-
-          <section
-            className="grid shrink-0 grid-flow-col auto-cols-[minmax(112px,1fr)] gap-2 overflow-x-auto xl:grid-flow-row xl:grid-cols-8"
-            aria-label="运行统计"
-          >
-            <SummaryCard icon={<Bot />} label="对话" value={summary?.conversations} tone="blue" />
-            <SummaryCard icon={<Wrench />} label="工具" value={summary?.tools} tone="indigo" />
-            <SummaryCard icon={<Code2 />} label="技能" value={summary?.skills} tone="slate" />
-            <SummaryCard icon={<AppWindow />} label="AINA" value={summary?.ainas} tone="green" />
-            <SummaryCard icon={<Database />} label="安装" value={summary?.installations} tone="amber" />
-            <SummaryCard icon={<Brain />} label="记忆" value={summary?.memories} tone="indigo" />
-            {debugMode ? <SummaryCard icon={<Route />} label="调用记录" value={summary?.traces} tone="blue" /> : null}
-            {debugMode ? <SummaryCard icon={<Braces />} label="模型请求" value={summary?.llm_calls} tone="slate" /> : null}
+          <section className="grid shrink-0 grid-flow-col auto-cols-[minmax(128px,1fr)] gap-2 overflow-x-auto xl:grid-flow-row xl:grid-cols-6" aria-label="用户调用统计">
+            <SummaryCard icon={<Route />} label="调用记录" value={overview?.trace_count} tone="blue" />
+            <SummaryCard icon={<MessageSquareText />} label="关联会话" value={overview?.conversation_count} tone="green" />
+            <SummaryCard icon={<Braces />} label="总 Token" value={overview?.total_tokens} tone="indigo" />
+            <SummaryCard icon={<Activity />} label="输入 Token" value={overview?.input_tokens} tone="slate" />
+            <SummaryCard icon={<Activity />} label="输出 Token" value={overview?.output_tokens} tone="slate" />
+            <SummaryCard icon={<XCircle />} label="错误" value={overview?.error_count} tone="amber" />
           </section>
 
-          {debugMode ? <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
+          <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line bg-white lg:grid-cols-[minmax(260px,1fr)_minmax(0,4fr)] lg:grid-rows-1">
             <div className="flex min-h-0 flex-col overflow-hidden lg:border-r lg:border-line">
               <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
                 <Activity className="h-3.5 w-3.5 text-accent" />
                 <span className="text-[12px] font-bold text-ink">调用记录</span>
-                <span className="ml-auto text-[11.5px] text-ink-muted">{traces.length} 条 Trace</span>
+                <span className="ml-auto text-[11.5px] text-ink-muted">
+                  {`${records.length}${hasMore ? "+" : ""} 条 Trace`}
+                </span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Trace 列表">
-                {traceGroups.length === 0 ? (
-                  <div className="py-20 text-center text-[12px] text-ink-muted">完成一次对话后，调用记录会显示在这里。</div>
+                {loading ? (
+                  <div className="px-4 py-20 text-center text-[12px] text-ink-muted">正在查询 OBS 数据…</div>
+                ) : records.length === 0 ? (
+                  <div className="px-4 py-20 text-center text-[12px] text-ink-muted">当前时间范围内没有调用记录。</div>
                 ) : (
-                  traceGroups.map((group) => (
-                    <ConversationTraceGroup
-                      key={group.key}
-                      group={group}
-                      expanded={expandedTraceGroups.has(group.key)}
-                      selectedTrace={selectedTrace}
-                      onToggle={() => toggleTraceGroup(group.conversationId, group.traces.length > 0)}
-                      onSelectTrace={setSelectedTrace}
-                    />
-                  ))
+                  <>
+                    {records.map((record) => (
+                      <AdminTraceRow
+                        key={record.trace_id}
+                        trace={record}
+                        active={record.trace_id === selectedTraceId}
+                        onClick={() => selectTrace(record.trace_id)}
+                      />
+                    ))}
+                    {hasMore ? (
+                      <button
+                        type="button"
+                        onClick={() => void loadMore()}
+                        disabled={loadingMore}
+                        className="w-full border-t border-line px-3 py-2 text-[11px] font-semibold text-accent hover:bg-app-soft disabled:text-ink-subtle"
+                      >
+                        {loadingMore ? "加载中…" : "加载更多"}
+                      </button>
+                    ) : null}
+                  </>
                 )}
               </div>
             </div>
 
             <div className="min-h-0 overflow-hidden">
-              {selected ? (
+              {detailLoading ? (
+                <div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载调用详情…</div>
+              ) : selected ? (
                 <TraceDetail
                   trace={selected}
-                  conversationTitle={selectedConversationTitle}
+                  conversationTitle={selected.conversation_id ?? "未关联会话"}
                   calls={selectedTraceCalls}
                   selectedCall={selectedCall}
                   view={traceDetailView}
@@ -408,17 +595,43 @@ export default function DebugPage() {
                 />
               ) : <NoTraceSelected />}
             </div>
-          </section> : (
-            <section className="px-6 py-10 text-center" aria-label="调试模式说明">
-              <Bug className="mx-auto h-8 w-8 text-ink-subtle" />
-              <h2 className="mt-3 text-[15px] font-extrabold text-ink">调试模式已关闭</h2>
-              <p className="mx-auto mt-2 max-w-lg text-[12px] leading-relaxed text-ink-muted">
-                普通使用界面不会显示工具调用、模型迭代、Token 数或调用记录。需要排查问题时，可在页面右上角临时开启。
-              </p>
-            </section>
-          )}
+          </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AdminTraceRow({ trace, active, onClick }: { trace: ObsTrace; active: boolean; onClick: () => void }) {
+  return (
+    <div className="relative border-b border-line last:border-b-0">
+      <button
+        type="button"
+        onClick={onClick}
+        className={classNames(
+          "w-full border-l-2 px-3 py-2.5 pr-10 text-left transition-colors",
+          active ? "border-accent bg-accent-soft" : "border-transparent hover:bg-app-soft",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <TraceStatus status={trace.status as TraceRecord["status"]} />
+          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink">{trace.trace_id}</span>
+        </div>
+        <div className="mt-1 truncate font-mono text-[10.5px] text-ink-muted">租户 {trace.tenant_id} · 会话 {trace.session_id ?? "—"}</div>
+        <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-ink-subtle">
+          <span>{formatTokenCount(trace.input_tokens + trace.output_tokens)} Token</span>
+          <span>·</span>
+          <span>{trace.duration_ms != null ? formatDuration(trace.duration_ms) : "进行中"}</span>
+          <span>·</span>
+          <span>{trace.started_at ? timeAgo(trace.started_at) : "时间未知"}</span>
+        </div>
+      </button>
+      <CopyIdButton
+        value={trace.trace_id}
+        label={`复制 Trace ID ${trace.trace_id}`}
+        compact
+        className="absolute right-2 top-2.5"
+      />
     </div>
   );
 }
@@ -450,116 +663,6 @@ function SummaryCard({
         <div className="text-[17px] font-extrabold leading-none text-ink">{value ?? "—"}</div>
         <div className="mt-0.5 truncate text-[10.5px] font-semibold text-ink-muted">{label}</div>
       </div>
-    </div>
-  );
-}
-
-interface ConversationTraceGroupData {
-  key: string;
-  conversationId: string | null;
-  title: string;
-  traces: TraceRecord[];
-}
-
-function ConversationTraceGroup({
-  group,
-  expanded,
-  selectedTrace,
-  onToggle,
-  onSelectTrace,
-}: {
-  group: ConversationTraceGroupData;
-  expanded: boolean;
-  selectedTrace: string | null;
-  onToggle: () => void;
-  onSelectTrace: (traceId: string) => void;
-}) {
-  const containsSelected = group.traces.some((trace) => trace.trace_id === selectedTrace);
-  return (
-    <section className="border-b border-line last:border-b-0">
-      <div className="relative">
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          className={classNames(
-            "flex w-full items-start gap-2.5 px-3 py-2 pr-11 text-left transition-colors hover:bg-app-soft",
-            containsSelected && "bg-accent-soft/60",
-          )}
-        >
-          <span className={classNames(
-            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-            containsSelected ? "bg-white text-accent shadow-sm" : "bg-app-soft text-ink-muted",
-          )}>
-            <MessageSquareText className="h-3.5 w-3.5" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">
-              <strong className="min-w-0 flex-1 truncate text-[13px] text-ink">{group.title}</strong>
-              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10.5px] font-bold text-ink-muted shadow-sm">
-                {group.traces.length} Trace
-              </span>
-            </span>
-            <span className="mt-1 block truncate pr-7 font-mono text-[11px] text-ink-subtle">
-              {group.conversationId ?? "无 Conversation ID"}
-            </span>
-          </span>
-          {expanded ? <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-accent" /> : <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-ink-subtle" />}
-        </button>
-        {group.conversationId ? (
-          <CopyIdButton
-            value={group.conversationId}
-            label={`复制 Conversation ID ${group.conversationId}`}
-            compact
-            className="absolute bottom-2 right-10"
-          />
-        ) : null}
-      </div>
-      {expanded ? (
-        <div className="border-t border-line bg-white">
-          {group.traces.map((trace) => (
-            <TraceRow
-              key={trace.trace_id}
-              trace={trace}
-              active={trace.trace_id === selectedTrace}
-              onClick={() => onSelectTrace(trace.trace_id)}
-            />
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function TraceRow({ trace, active, onClick }: { trace: TraceRecord; active: boolean; onClick: () => void }) {
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={onClick}
-        className={classNames(
-          "w-full border-l-2 py-2 pl-3 pr-10 text-left transition-colors",
-          active ? "border-accent bg-accent-soft" : "border-transparent hover:bg-app-soft",
-        )}
-      >
-        <div className="flex items-center gap-2">
-          <TraceStatus status={trace.status} />
-          <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{trace.trace_id}</span>
-        </div>
-        <div className="mt-1 flex items-center gap-2 text-[11.5px] text-ink-muted">
-          <span>{trace.spans?.length ?? 0} 个 Span</span>
-          <span>·</span>
-          <span>{trace.events.length} 个事件</span>
-          <span>·</span>
-          <span>{timeAgo(trace.created_at)}</span>
-        </div>
-      </button>
-      <CopyIdButton
-        value={trace.trace_id}
-        label={`复制 Trace ID ${trace.trace_id}`}
-        compact
-        className="absolute right-2 top-2.5"
-      />
     </div>
   );
 }
@@ -1223,39 +1326,6 @@ function EventRow({ event, last }: { event: TraceEvent; last: boolean }) {
       </div>
     </div>
   );
-}
-
-function traceGroupKey(conversationId: string | null | undefined): string {
-  return conversationId ?? "__unassigned__";
-}
-
-function groupTracesByConversation(
-  traces: TraceRecord[],
-  conversationsById: Map<string, ConversationRecord>,
-): ConversationTraceGroupData[] {
-  const groups = new Map<string, ConversationTraceGroupData>();
-  for (const trace of traces) {
-    const conversationId = trace.conversation_id ?? null;
-    const key = traceGroupKey(conversationId);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.traces.push(trace);
-      continue;
-    }
-    const conversation = conversationId ? conversationsById.get(conversationId) : null;
-    groups.set(key, {
-      key,
-      conversationId,
-      title: conversation?.title.trim() || (conversationId ? "已删除或不可用的会话" : "未关联会话"),
-      traces: [trace],
-    });
-  }
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      traces: [...group.traces].sort((left, right) => right.created_at.localeCompare(left.created_at)),
-    }))
-    .sort((left, right) => right.traces[0].created_at.localeCompare(left.traces[0].created_at));
 }
 
 interface DiscoveryCapability {
