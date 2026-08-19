@@ -135,6 +135,29 @@ class InMemoryRepository:
             )
             return self._copy(user) if user else None
 
+    async def list_users(
+        self,
+        *,
+        query: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserRecord]:
+        normalized = (query or "").strip().lower()
+        async with self._lock:
+            users = list(self._users.values())
+        if normalized:
+            users = [
+                user
+                for user in users
+                if normalized in user.id.lower()
+                or normalized in user.name.lower()
+                or normalized in str(user.email).lower()
+                or normalized in user.tenant_id.lower()
+            ]
+        users.sort(key=lambda user: (user.created_at, user.id), reverse=True)
+        start = max(0, offset)
+        return [self._copy(user) for user in users[start : start + max(1, limit)]]
+
     async def upsert_feedback(self, feedback: FeedbackRecord) -> FeedbackRecord:
         async with self._lock:
             existing = next(

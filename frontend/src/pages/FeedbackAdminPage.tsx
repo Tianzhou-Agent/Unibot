@@ -267,7 +267,7 @@ function FeedbackDetail({ record, onUpdate }: { record: FeedbackRecord; onUpdate
         <div>
           <div className="flex items-center gap-2"><h3 className="text-[11.5px] font-bold text-ink">反馈时上下文</h3><span className="text-[10px] text-ink-subtle">仅展示反馈前的 Trace</span></div>
           <div className="mt-2 space-y-2">
-            {detail?.context_traces.map((trace, index) => <TraceContext key={trace.trace_id} trace={trace} index={index} conversationId={current.conversation_id} />)}
+            {detail?.context_traces.map((trace, index) => <TraceContext key={trace.trace_id} trace={trace} index={index} />)}
             {detail && !detail.context_traces.length ? <EmptyState text="反馈发生前没有可用 Trace" /> : null}
             {!detail ? <EmptyState text="正在读取上下文…" /> : null}
           </div>
@@ -290,7 +290,7 @@ function FeedbackDetail({ record, onUpdate }: { record: FeedbackRecord; onUpdate
   );
 }
 
-function TraceContext({ trace, index, conversationId }: { trace: TraceRecord; index: number; conversationId: string }) {
+function TraceContext({ trace, index }: { trace: TraceRecord; index: number }) {
   const root = trace.spans.find((span) => span.span_id === trace.root_span_id) ?? trace.spans[0];
   const prompt = extractText(root?.input) || extractEventText(trace, "user");
   const response = extractText(root?.output) || extractEventText(trace, "final");
@@ -304,7 +304,7 @@ function TraceContext({ trace, index, conversationId }: { trace: TraceRecord; in
       <div className="mt-2 space-y-2 border-t border-line pt-2 text-[10.5px]">
         <ContextLine label="用户输入" text={prompt || "未采集"} />
         <ContextLine label="最终回复" text={response || "未采集"} />
-        <Link to={`/admin/observability?sessionId=${encodeURIComponent(conversationId)}&traceId=${encodeURIComponent(trace.trace_id)}&tab=spans`} className="inline-flex font-semibold text-accent hover:text-accent-hover">查看完整 Trace</Link>
+        <Link to={`/admin/observability?userId=${encodeURIComponent(trace.user_id)}&traceId=${encodeURIComponent(trace.trace_id)}`} className="inline-flex font-semibold text-accent hover:text-accent-hover">查看完整 Trace</Link>
       </div>
     </details>
   );

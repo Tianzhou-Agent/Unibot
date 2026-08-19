@@ -91,10 +91,29 @@ export interface ObsTrace {
 }
 
 export interface ObsSessionDetail {
-  session_id: string;
+  session_id: string | null;
   traces: ObsTrace[];
   spans: ObsSpan[];
   events: ObsEvent[];
+}
+
+export interface AdminObsTracePage {
+  items: ObsTrace[];
+  has_more: boolean;
+}
+
+export interface AdminUserSummary {
+  id: string;
+  email: string;
+  name: string;
+  avatar_url: string | null;
+  tenant_id: string;
+  created_at: string;
+}
+
+export interface AdminUserPage {
+  items: AdminUserSummary[];
+  has_more: boolean;
 }
 
 export interface ObsRawLog {
@@ -122,6 +141,31 @@ export async function getObsSession(sessionId: string): Promise<ObsSessionDetail
 
 export async function getAdminObsSession(sessionId: string): Promise<ObsSessionDetail | null> {
   return getObsSessionEventually(`/admin/obs/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function getAdminObsTraces(
+  userId: string,
+  range: string,
+  offset = 0,
+): Promise<AdminObsTracePage> {
+  return api.get<AdminObsTracePage>(
+    `/admin/obs/traces?user_id=${encodeURIComponent(userId)}&range=${encodeURIComponent(range)}&limit=100&offset=${offset}`,
+  );
+}
+
+export async function getAdminUsers(query: string, offset = 0): Promise<AdminUserPage> {
+  return api.get<AdminUserPage>(
+    `/admin/users?query=${encodeURIComponent(query)}&limit=100&offset=${offset}`,
+  );
+}
+
+export async function getAdminObsTrace(
+  traceId: string,
+  userId: string,
+): Promise<ObsSessionDetail | null> {
+  return api.get<ObsSessionDetail | null>(
+    `/admin/obs/traces/${encodeURIComponent(traceId)}?user_id=${encodeURIComponent(userId)}`,
+  );
 }
 
 export async function getRawLogs(traceId: string, spanId: string): Promise<ObsRawLog | null> {

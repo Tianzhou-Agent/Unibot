@@ -104,6 +104,9 @@ class _SessionStore:
             }
         ]
 
+    async def get_trace(self, trace_id: str):
+        return self.trace if trace_id == self.trace["trace_id"] else None
+
 
 @pytest.mark.asyncio
 async def test_session_and_feedback_dtos_use_one_legacy_span_id_namespace() -> None:
@@ -135,6 +138,55 @@ async def test_session_and_feedback_dtos_use_one_legacy_span_id_namespace() -> N
     assert feedback[0]["root_span_id"] == "span_root"
     feedback_child = next(span for span in feedback[0]["spans"] if span["span_id"] == "span_model")
     assert feedback_child["parent_span_id"] == "span_root"
+
+
+@pytest.mark.asyncio
+async def test_admin_trace_list_is_bounded_and_scoped_to_exact_user() -> None:
+    class RecordingStore(_SessionStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.list_kwargs: dict[str, object] = {}
+
+        async def list_traces(self, **kwargs):
+            self.list_kwargs = kwargs
+            return [self.trace]
+
+    store = RecordingStore()
+    result = await ObsQueryService(store, None).admin_trace_list(  # type: ignore[arg-type]
+        user_id="user_1",
+        tenant_id="tenant_1",
+        range_name="month",
+        limit=25,
+        offset=5,
+    )
+
+    assert [item["trace_id"] for item in result["items"]] == [store.trace["trace_id"]]
+    assert result["has_more"] is False
+    assert store.list_kwargs["user_id"] == "user_1"
+    assert store.list_kwargs["tenant_id"] == "tenant_1"
+    assert store.list_kwargs["limit"] == 26
+    assert store.list_kwargs["offset"] == 5
+    assert store.list_kwargs["started_after"] < store.list_kwargs["started_before"]
+
+
+@pytest.mark.asyncio
+async def test_admin_trace_detail_rejects_a_different_user() -> None:
+    store = _SessionStore()
+    query = ObsQueryService(store, None)  # type: ignore[arg-type]
+
+    assert await query.admin_trace_detail(
+        trace_id=store.trace["trace_id"],
+        user_id="user_2",
+    ) is None
+
+    detail = await query.admin_trace_detail(
+        trace_id=store.trace["trace_id"],
+        user_id="user_1",
+    )
+    assert detail is not None
+    assert detail["session_id"] == "conv_1"
+    assert detail["traces"][0]["user_id"] == "user_1"
+    assert len(detail["spans"]) == 2
 
 
 class _RawLogStore:

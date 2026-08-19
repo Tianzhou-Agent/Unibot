@@ -342,6 +342,60 @@ class ObsQueryService:
             ],
         }
 
+    async def admin_trace_list(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str | None = None,
+        range_name: str = "week",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return a bounded OBS Trace page for an exact admin user lookup."""
+        if self._store is None:
+            return {"items": [], "has_more": False}
+        start, end = range_bounds(range_name)
+        page_size = max(1, min(limit, 200))
+        traces = await self._store.list_traces(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            started_after=start,
+            started_before=end,
+            limit=page_size + 1,
+            offset=max(0, offset),
+        )
+        return {
+            "items": [self._trace_dto(row) for row in traces[:page_size]],
+            "has_more": len(traces) > page_size,
+        }
+
+    async def admin_trace_detail(
+        self,
+        *,
+        trace_id: str,
+        user_id: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Load one OBS Trace after verifying it belongs to the queried user."""
+        if self._store is None:
+            return None
+        trace = await self._store.get_trace(trace_id)
+        if trace is None or trace["user_id"] != user_id:
+            return None
+        if tenant_id is not None and trace["tenant_id"] != tenant_id:
+            return None
+        spans, events = await asyncio.gather(
+            self._store.list_spans(trace_id),
+            self._store.list_events(trace_id),
+        )
+        span_id_map = self._span_identity_map(spans)
+        return {
+            "session_id": trace.get("session_id"),
+            "traces": [self._trace_dto(trace, span_id_map)],
+            "spans": [self._span_dto(row, span_id_map) for row in spans],
+            "events": [self._event_dto(row, span_id_map) for row in events],
+        }
+
     async def admin_session_detail(
         self,
         *,

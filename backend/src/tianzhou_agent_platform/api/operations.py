@@ -11,6 +11,7 @@ from tianzhou_agent_platform.api.dependencies import (
     require_platform_admin,
     runtime,
 )
+from tianzhou_agent_platform.auth.models import AdminUserSummary
 from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.observability_query import ObsQueryService
@@ -95,7 +96,7 @@ def create_operations_router() -> APIRouter:
     @router.get("/admin/obs/overview")
     async def admin_obs_overview(
         request: Request,
-        range: str = "week",
+        range: str = Query(default="week", pattern="^(day|week|month)$"),
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict:
@@ -104,6 +105,60 @@ def create_operations_router() -> APIRouter:
             tenant_id=tenant_id,
             user_id=user_id,
             range_name=range,
+        )
+
+    @router.get("/admin/users")
+    async def admin_users(
+        request: Request,
+        query: str | None = Query(default=None, max_length=160),
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        require_platform_admin(request)
+        page_size = max(1, min(limit, 200))
+        users = await repository(request).list_users(
+            query=query,
+            limit=page_size + 1,
+            offset=offset,
+        )
+        return {
+            "items": [
+                AdminUserSummary.from_record(user).model_dump(mode="json")
+                for user in users[:page_size]
+            ],
+            "has_more": len(users) > page_size,
+        }
+
+    @router.get("/admin/obs/traces")
+    async def admin_obs_traces(
+        request: Request,
+        user_id: str = Query(min_length=1, max_length=160),
+        tenant_id: str | None = Query(default=None, max_length=160),
+        range: str = Query(default="week", pattern="^(day|week|month)$"),
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        require_platform_admin(request)
+        return await _obs_query(request).admin_trace_list(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            range_name=range,
+            limit=limit,
+            offset=offset,
+        )
+
+    @router.get("/admin/obs/traces/{trace_id}")
+    async def admin_obs_trace_detail(
+        request: Request,
+        trace_id: str,
+        user_id: str = Query(min_length=1, max_length=160),
+        tenant_id: str | None = Query(default=None, max_length=160),
+    ) -> dict[str, Any] | None:
+        require_platform_admin(request)
+        return await _obs_query(request).admin_trace_detail(
+            trace_id=trace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
 
     @router.get("/admin/obs/sessions/{session_id}")

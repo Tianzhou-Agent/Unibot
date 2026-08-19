@@ -48,6 +48,26 @@ class UserView(StrictModel):
         )
 
 
+class AdminUserSummary(StrictModel):
+    id: str
+    email: EmailStr
+    name: str
+    avatar_url: str | None = None
+    tenant_id: str
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, user: UserRecord) -> "AdminUserSummary":
+        return cls(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            avatar_url=user.avatar_url,
+            tenant_id=user.tenant_id,
+            created_at=user.created_at,
+        )
+
+
 class RegisterRequest(StrictModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
