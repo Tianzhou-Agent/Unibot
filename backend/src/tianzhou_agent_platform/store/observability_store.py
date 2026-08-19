@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
@@ -28,6 +28,8 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
+    or_,
     delete as sa_delete,
     func,
     select,
@@ -37,7 +39,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from tianzhou_agent_platform.store.observability_wal import ObsRecord, RecordType
+from tianzhou_agent_platform.store.observability_buffer import ObsRecord, RecordType
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,9 @@ OBS_METADATA = MetaData()
 TRACES_TABLE = "unibot_obs_traces"
 SPANS_TABLE = "unibot_obs_spans"
 EVENTS_TABLE = "unibot_obs_events"
+OPS_USER_EVENTS_TABLE = "unibot_ops_user_events"
+OPS_REQUEST_AGENTS_TABLE = "unibot_ops_request_agents"
+OPS_FIRST_USE_TABLE = "unibot_ops_first_use"
 
 
 def _build_traces_table() -> Table:
@@ -73,7 +78,7 @@ def _build_traces_table() -> Table:
         # only applies when the incoming record is newer, so out-of-order
         # finished records cannot overwrite a newer terminal state (P1-2)
         Column("record_version", BigInteger(), nullable=False, server_default="0"),
-        Column("attributes", JSON, nullable=True),
+        Column("attributes", JSON(none_as_null=True), nullable=True),
         Index("idx_obs_traces_tenant_user_time", "tenant_id", "user_id", "started_at"),
         Index("idx_obs_traces_tenant_session_time", "tenant_id", "session_id", "started_at"),
         Index("idx_obs_traces_status_time", "status", "started_at"),
@@ -94,9 +99,11 @@ def _build_spans_table() -> Table:
         Column("session_id", String(160), nullable=True),
         Column("user_id", String(160), nullable=False),
         Column("tenant_id", String(160), nullable=False),
+        Column("producer_instance_id", String(255), nullable=True),
         Column("kind", String(32), nullable=False),
         Column("name", String(255), nullable=False),
         Column("target_id", String(255), nullable=True),
+        Column("target_version", String(255), nullable=True),
         Column("model", String(255), nullable=True),
         Column("status", String(32), nullable=False),
         Column("started_at", DateTime(timezone=True), nullable=False),
@@ -111,8 +118,8 @@ def _build_spans_table() -> Table:
         Column("output_preview", Text(), nullable=True),
         # per-record version guard (same semantics as unibot_obs_traces)
         Column("record_version", BigInteger(), nullable=False, server_default="0"),
-        Column("attributes", JSON, nullable=True),
-        Column("error", JSON, nullable=True),
+        Column("attributes", JSON(none_as_null=True), nullable=True),
+        Column("error", JSON(none_as_null=True), nullable=True),
         Column("raw_io_path", String(1024), nullable=True),
         Column("raw_io_sha256", String(64), nullable=True),
         Column("raw_io_size_bytes", BigInteger(), nullable=True),
@@ -144,20 +151,75 @@ def _build_events_table() -> Table:
         # Microsecond event order survives MySQL DATETIME's default
         # second-level precision and remains valid across producer restarts.
         Column("record_version", BigInteger(), nullable=False, server_default="0"),
-        # WAL order only breaks ties inside the same microsecond; it is not
+        # Buffer order only breaks ties inside the same microsecond; it is not
         # used as the primary key because it restarts per producer instance.
         Column("sequence_no", BigInteger(), nullable=False, server_default="0"),
-        Column("attributes", JSON, nullable=True),
+        Column("attributes", JSON(none_as_null=True), nullable=True),
         Index("idx_obs_events_trace_time", "trace_id", "occurred_at"),
         Index("idx_obs_events_tenant_user_time", "tenant_id", "user_id", "occurred_at"),
     )
     return table
 
 
+def _build_ops_user_events_table() -> Table:
+    return Table(
+        OPS_USER_EVENTS_TABLE,
+        OBS_METADATA,
+        Column("trace_id", String(64), primary_key=True),
+        Column("request_id", String(64), nullable=False),
+        Column("session_id", String(160), nullable=True),
+        Column("user_id", String(160), nullable=False),
+        Column("tenant_id", String(160), nullable=False),
+        Column("source", String(32), nullable=False, server_default="chat"),
+        Column("status", String(32), nullable=False),
+        Column("started_at", DateTime(timezone=True), nullable=False),
+        Column("completed_at", DateTime(timezone=True), nullable=True),
+        Column("record_version", BigInteger(), nullable=False, server_default="0"),
+        Column("metric_version", String(32), nullable=False, server_default="v1"),
+        Index("idx_ops_events_tenant_time", "tenant_id", "started_at"),
+        Index("idx_ops_events_tenant_user_time", "tenant_id", "user_id", "started_at"),
+        Index("idx_ops_events_status_time", "status", "started_at"),
+    )
+
+
+def _build_ops_request_agents_table() -> Table:
+    return Table(
+        OPS_REQUEST_AGENTS_TABLE,
+        OBS_METADATA,
+        Column("trace_id", String(64), primary_key=True),
+        Column("agent_id", String(255), primary_key=True),
+        Column("agent_version", String(255), nullable=True),
+        Column("user_id", String(160), nullable=False),
+        Column("tenant_id", String(160), nullable=False),
+        Column("used_at", DateTime(timezone=True), nullable=False),
+        Column("record_version", BigInteger(), nullable=False, server_default="0"),
+        Index("idx_ops_request_agents_tenant_agent_time", "tenant_id", "agent_id", "used_at"),
+        Index("idx_ops_request_agents_tenant_user_time", "tenant_id", "user_id", "used_at"),
+    )
+
+
+def _build_ops_first_use_table() -> Table:
+    return Table(
+        OPS_FIRST_USE_TABLE,
+        OBS_METADATA,
+        Column("tenant_id", String(160), primary_key=True),
+        Column("user_id", String(160), primary_key=True),
+        Column("scope_type", String(16), primary_key=True),
+        Column("scope_id", String(255), primary_key=True),
+        Column("trace_id", String(64), nullable=False),
+        Column("agent_version", String(255), nullable=True),
+        Column("first_at", DateTime(timezone=True), nullable=False),
+        Index("idx_ops_first_use_tenant_scope_time", "tenant_id", "scope_type", "scope_id", "first_at"),
+    )
+
+
 OBS_TABLES: dict[str, Table] = {
     TRACES_TABLE: _build_traces_table(),
     SPANS_TABLE: _build_spans_table(),
     EVENTS_TABLE: _build_events_table(),
+    OPS_USER_EVENTS_TABLE: _build_ops_user_events_table(),
+    OPS_REQUEST_AGENTS_TABLE: _build_ops_request_agents_table(),
+    OPS_FIRST_USE_TABLE: _build_ops_first_use_table(),
 }
 
 
@@ -240,9 +302,11 @@ def _span_values(record: ObsRecord) -> dict[str, Any]:
         "session_id": payload.get("session_id"),
         "user_id": payload.get("user_id"),
         "tenant_id": payload.get("tenant_id"),
+        "producer_instance_id": record.producer_instance_id,
         "kind": payload.get("kind") or "internal",
         "name": payload.get("name") or "",
         "target_id": payload.get("target_id"),
+        "target_version": payload.get("target_version"),
         "model": payload.get("model"),
         "status": payload.get("status") or "running",
         "started_at": _as_datetime(payload.get("started_at")) or record.occurred_at,
@@ -283,6 +347,62 @@ def _event_values(record: ObsRecord) -> dict[str, Any]:
     }
 
 
+def _operation_event_values(record: ObsRecord) -> dict[str, Any]:
+    payload = record.payload
+    return {
+        "trace_id": record.trace_id,
+        "request_id": payload.get("legacy_trace_id") or record.trace_id,
+        "session_id": payload.get("session_id"),
+        "user_id": payload.get("user_id") or "anonymous",
+        "tenant_id": payload.get("tenant_id") or "default",
+        "source": payload.get("request_source") or "chat",
+        "status": payload.get("status") or "failed",
+        "started_at": _as_datetime(payload.get("started_at")) or record.occurred_at,
+        "completed_at": _as_datetime(payload.get("completed_at")),
+        "record_version": _record_version(record),
+        "metric_version": payload.get("metric_version") or "v1",
+    }
+
+
+def _request_agent_values(record: ObsRecord) -> dict[str, Any]:
+    payload = record.payload
+    return {
+        "trace_id": record.trace_id,
+        "agent_id": payload.get("target_id"),
+        "agent_version": payload.get("target_version"),
+        "user_id": payload.get("user_id") or "anonymous",
+        "tenant_id": payload.get("tenant_id") or "default",
+        "used_at": _as_datetime(payload.get("started_at")) or record.occurred_at,
+        "record_version": _record_version(record),
+    }
+
+
+def _platform_first_use_values(record: ObsRecord) -> dict[str, Any]:
+    payload = record.payload
+    return {
+        "tenant_id": payload.get("tenant_id") or "default",
+        "user_id": payload.get("user_id") or "anonymous",
+        "scope_type": "platform",
+        "scope_id": "platform",
+        "trace_id": record.trace_id,
+        "agent_version": None,
+        "first_at": _as_datetime(payload.get("started_at")) or record.occurred_at,
+    }
+
+
+def _agent_first_use_values(record: ObsRecord) -> dict[str, Any]:
+    payload = record.payload
+    return {
+        "tenant_id": payload.get("tenant_id") or "default",
+        "user_id": payload.get("user_id") or "anonymous",
+        "scope_type": "agent",
+        "scope_id": payload.get("target_id"),
+        "trace_id": record.trace_id,
+        "agent_version": payload.get("target_version"),
+        "first_at": _as_datetime(payload.get("started_at")) or record.occurred_at,
+    }
+
+
 def _upsert_statement(
     table: Table,
     rows: list[dict[str, Any]],
@@ -318,6 +438,97 @@ def _upsert_statement(
         else:
             update_columns[column.name] = new_value
     return statement.on_duplicate_key_update(**update_columns)
+
+
+def _first_use_upsert_statement(table: Table, rows: list[dict[str, Any]]) -> Any:
+    statement = mysql_insert(table).values(rows)
+    is_earlier = statement.inserted.first_at < table.c.first_at
+    return statement.on_duplicate_key_update(
+        trace_id=func.if_(is_earlier, statement.inserted.trace_id, table.c.trace_id),
+        agent_version=func.if_(is_earlier, statement.inserted.agent_version, table.c.agent_version),
+        first_at=func.least(statement.inserted.first_at, table.c.first_at),
+    )
+
+
+def _record_time(row: dict[str, Any]) -> datetime:
+    version = int(row.get("record_version") or 0)
+    if version > 0:
+        return datetime.fromtimestamp(version / 1_000_000, tz=timezone.utc)
+    return _as_datetime(row.get("completed_at")) or _as_datetime(row.get("started_at")) or datetime.now(timezone.utc)
+
+
+def _trace_record_from_row(row: dict[str, Any]) -> ObsRecord:
+    return ObsRecord(
+        record_type="trace_finished",
+        producer_instance_id=row.get("producer_instance_id") or "operations-backfill",
+        sequence_no=0,
+        occurred_at=_record_time(row),
+        trace_id=row["trace_id"],
+        payload={
+            "legacy_trace_id": row.get("legacy_trace_id"),
+            "root_span_id": row.get("root_span_id"),
+            "session_id": row.get("session_id"),
+            "user_id": row.get("user_id"),
+            "tenant_id": row.get("tenant_id"),
+            "status": row.get("status"),
+            "started_at": row.get("started_at"),
+            "completed_at": row.get("completed_at"),
+            "duration_ms": row.get("duration_ms"),
+            "input_tokens": row.get("input_tokens"),
+            "output_tokens": row.get("output_tokens"),
+            "cache_read_tokens": row.get("cache_read_tokens"),
+            "message_count": row.get("message_count"),
+            "compression_count": row.get("compression_count"),
+            "error_count": row.get("error_count"),
+            "attributes": row.get("attributes"),
+            "request_source": "chat",
+            "metric_version": "v1",
+        },
+    )
+
+
+def _span_record_from_row(row: dict[str, Any]) -> ObsRecord:
+    return ObsRecord(
+        record_type="span_finished",
+        producer_instance_id="operations-backfill",
+        sequence_no=0,
+        occurred_at=_record_time(row),
+        trace_id=row["trace_id"],
+        span_id=row["span_id"],
+        payload={
+            key: row.get(key)
+            for key in (
+                "legacy_span_id",
+                "parent_span_id",
+                "sequence_no",
+                "session_id",
+                "user_id",
+                "tenant_id",
+                "kind",
+                "name",
+                "target_id",
+                "target_version",
+                "model",
+                "status",
+                "started_at",
+                "first_output_at",
+                "completed_at",
+                "duration_ms",
+                "ttft_ms",
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "input_preview",
+                "output_preview",
+                "attributes",
+                "error",
+                "raw_io_path",
+                "raw_io_sha256",
+                "raw_io_size_bytes",
+                "raw_io_status",
+            )
+        },
+    )
 
 
 class ObservabilityStore:
@@ -372,12 +583,14 @@ class ObservabilityStore:
         for attempt in range(3):
             try:
                 migrations = [
-                    (TRACES_TABLE, "record_version"),
-                    (SPANS_TABLE, "record_version"),
-                    (EVENTS_TABLE, "record_version"),
-                    (EVENTS_TABLE, "sequence_no"),
+                    (TRACES_TABLE, "record_version", "BIGINT NOT NULL DEFAULT 0"),
+                    (SPANS_TABLE, "record_version", "BIGINT NOT NULL DEFAULT 0"),
+                    (SPANS_TABLE, "producer_instance_id", "VARCHAR(255) NULL"),
+                    (SPANS_TABLE, "target_version", "VARCHAR(255) NULL"),
+                    (EVENTS_TABLE, "record_version", "BIGINT NOT NULL DEFAULT 0"),
+                    (EVENTS_TABLE, "sequence_no", "BIGINT NOT NULL DEFAULT 0"),
                 ]
-                for table_name, column_name in migrations:
+                for table_name, column_name, column_type in migrations:
                     result = await connection.execute(
                         text(
                             "SELECT COUNT(*) FROM information_schema.columns "
@@ -392,7 +605,7 @@ class ObservabilityStore:
                         await connection.execute(
                             text(
                                 f"ALTER TABLE {table_name} "
-                                f"ADD COLUMN {column_name} BIGINT NOT NULL DEFAULT 0"
+                                f"ADD COLUMN {column_name} {column_type}"
                             )
                         )
                         logger.info("Migrated %s: added %s column", table_name, column_name)
@@ -409,7 +622,7 @@ class ObservabilityStore:
                 raise
 
     async def bulk_upsert(self, records: list[ObsRecord]) -> int:
-        """Persist a batch of WAL records in one transaction. Returns row count."""
+        """Persist buffered records in one transaction. Returns row count."""
         if not records:
             return 0
         grouped: dict[RecordType, list[dict[str, Any]]] = {
@@ -419,11 +632,24 @@ class ObservabilityStore:
             "span_finished": [],
             "event": [],
         }
+        operation_events: list[dict[str, Any]] = []
+        request_agents: list[dict[str, Any]] = []
+        first_uses: list[dict[str, Any]] = []
         for record in records:
             if record.record_type in ("trace_started", "trace_finished"):
                 grouped[record.record_type].append(_trace_values(record))
+                if record.record_type == "trace_finished":
+                    operation_events.append(_operation_event_values(record))
+                    first_uses.append(_platform_first_use_values(record))
             elif record.record_type in ("span_started", "span_finished"):
                 grouped[record.record_type].append(_span_values(record))
+                if (
+                    record.record_type == "span_finished"
+                    and record.payload.get("kind") == "aina"
+                    and record.payload.get("target_id")
+                ):
+                    request_agents.append(_request_agent_values(record))
+                    first_uses.append(_agent_first_use_values(record))
             elif record.record_type == "event":
                 grouped["event"].append(_event_values(record))
 
@@ -439,7 +665,173 @@ class ObservabilityStore:
                     ignore = record_type in ("trace_started", "span_started")
                     result = await session.execute(_upsert_statement(table, rows, ignore=ignore))
                     total += result.rowcount or 0
+                if operation_events:
+                    result = await session.execute(
+                        _upsert_statement(self.tables[OPS_USER_EVENTS_TABLE], operation_events)
+                    )
+                    total += result.rowcount or 0
+                if request_agents:
+                    result = await session.execute(
+                        _upsert_statement(self.tables[OPS_REQUEST_AGENTS_TABLE], request_agents)
+                    )
+                    total += result.rowcount or 0
+                if first_uses:
+                    result = await session.execute(
+                        _first_use_upsert_statement(self.tables[OPS_FIRST_USE_TABLE], first_uses)
+                    )
+                    total += result.rowcount or 0
         return total
+
+    async def backfill_operations(self, *, batch_size: int = 500) -> dict[str, int]:
+        """Project terminal OBS history into the operations facts after upgrade."""
+        traces = self.tables[TRACES_TABLE]
+        spans = self.tables[SPANS_TABLE]
+        operation_events = self.tables[OPS_USER_EVENTS_TABLE]
+        request_agents = self.tables[OPS_REQUEST_AGENTS_TABLE]
+        counts = {"events": 0, "agents": 0}
+
+        while True:
+            statement = (
+                select(traces)
+                .select_from(traces.outerjoin(operation_events, traces.c.trace_id == operation_events.c.trace_id))
+                .where(operation_events.c.trace_id.is_(None))
+                .where(traces.c.status != "running")
+                .order_by(traces.c.started_at.asc(), traces.c.trace_id.asc())
+                .limit(batch_size)
+            )
+            async with self._session_factory() as session:
+                rows = [dict(row) for row in (await session.execute(statement)).mappings().all()]
+            if not rows:
+                break
+            records = [_trace_record_from_row(row) for row in rows]
+            await self.bulk_upsert(records)
+            counts["events"] += len(records)
+
+        while True:
+            join_condition = and_(
+                spans.c.trace_id == request_agents.c.trace_id,
+                spans.c.target_id == request_agents.c.agent_id,
+            )
+            statement = (
+                select(spans)
+                .select_from(spans.outerjoin(request_agents, join_condition))
+                .where(request_agents.c.trace_id.is_(None))
+                .where(spans.c.kind == "aina")
+                .where(spans.c.target_id.is_not(None))
+                .where(spans.c.target_id != "")
+                .order_by(spans.c.started_at.asc(), spans.c.span_id.asc())
+                .limit(batch_size)
+            )
+            async with self._session_factory() as session:
+                rows = [dict(row) for row in (await session.execute(statement)).mappings().all()]
+            if not rows:
+                break
+            records = [_span_record_from_row(row) for row in rows]
+            await self.bulk_upsert(records)
+            counts["agents"] += len(records)
+
+        if sum(counts.values()):
+            logger.info("Backfilled operations facts from OBS history: %s", counts)
+        return counts
+
+    async def list_operation_events(
+        self,
+        *,
+        tenant_id: str | None,
+        started_after: datetime,
+        started_before: datetime,
+    ) -> list[dict[str, Any]]:
+        table = self.tables[OPS_USER_EVENTS_TABLE]
+        statement = (
+            select(table)
+            .where(table.c.started_at >= started_after)
+            .where(table.c.started_at < started_before)
+            .order_by(table.c.started_at.asc())
+        )
+        if tenant_id is not None:
+            statement = statement.where(table.c.tenant_id == tenant_id)
+        async with self._session_factory() as session:
+            result = await session.execute(statement)
+            return [dict(row) for row in result.mappings().all()]
+
+    async def list_operation_agent_events(
+        self,
+        *,
+        tenant_id: str | None,
+        started_after: datetime,
+        started_before: datetime,
+    ) -> list[dict[str, Any]]:
+        events = self.tables[OPS_USER_EVENTS_TABLE]
+        agents = self.tables[OPS_REQUEST_AGENTS_TABLE]
+        statement = (
+            select(
+                events.c.trace_id,
+                events.c.user_id,
+                events.c.tenant_id,
+                events.c.status,
+                events.c.started_at,
+                agents.c.agent_id,
+                agents.c.agent_version,
+            )
+            .select_from(events.join(agents, events.c.trace_id == agents.c.trace_id))
+            .where(events.c.started_at >= started_after)
+            .where(events.c.started_at < started_before)
+            .order_by(events.c.started_at.asc())
+        )
+        if tenant_id is not None:
+            statement = statement.where(events.c.tenant_id == tenant_id)
+        async with self._session_factory() as session:
+            result = await session.execute(statement)
+            return [dict(row) for row in result.mappings().all()]
+
+    async def list_platform_first_uses(
+        self,
+        *,
+        tenant_id: str | None,
+        first_after: datetime,
+        first_before: datetime,
+    ) -> list[dict[str, Any]]:
+        table = self.tables[OPS_FIRST_USE_TABLE]
+        statement = (
+            select(table.c.tenant_id, table.c.user_id, table.c.first_at)
+            .where(table.c.scope_type == "platform")
+            .where(table.c.scope_id == "platform")
+            .where(table.c.first_at >= first_after)
+            .where(table.c.first_at < first_before)
+            .order_by(table.c.first_at.asc())
+        )
+        if tenant_id is not None:
+            statement = statement.where(table.c.tenant_id == tenant_id)
+        async with self._session_factory() as session:
+            result = await session.execute(statement)
+            return [dict(row) for row in result.mappings().all()]
+
+    async def list_agent_first_uses(
+        self,
+        *,
+        tenant_id: str | None,
+        first_after: datetime,
+        first_before: datetime,
+    ) -> list[dict[str, Any]]:
+        table = self.tables[OPS_FIRST_USE_TABLE]
+        statement = (
+            select(
+                table.c.tenant_id,
+                table.c.user_id,
+                table.c.scope_id.label("agent_id"),
+                table.c.agent_version,
+                table.c.first_at,
+            )
+            .where(table.c.scope_type == "agent")
+            .where(table.c.first_at >= first_after)
+            .where(table.c.first_at < first_before)
+            .order_by(table.c.first_at.asc())
+        )
+        if tenant_id is not None:
+            statement = statement.where(table.c.tenant_id == tenant_id)
+        async with self._session_factory() as session:
+            result = await session.execute(statement)
+            return [dict(row) for row in result.mappings().all()]
 
     # ---- queries (used by ObsQueryService; design section 12) ----
 
@@ -474,7 +866,14 @@ class ObservabilityStore:
                         completed_at=interrupted_at,
                         record_version=version,
                         attributes=func.JSON_SET(
-                            func.coalesce(trace_table.c.attributes, func.JSON_OBJECT()),
+                            func.if_(
+                                or_(
+                                    trace_table.c.attributes.is_(None),
+                                    func.json_type(trace_table.c.attributes) == "NULL",
+                                ),
+                                func.JSON_OBJECT(),
+                                trace_table.c.attributes,
+                            ),
                             reason_path,
                             "process_restart",
                         ),
@@ -489,7 +888,14 @@ class ObservabilityStore:
                         completed_at=interrupted_at,
                         record_version=version,
                         attributes=func.JSON_SET(
-                            func.coalesce(span_table.c.attributes, func.JSON_OBJECT()),
+                            func.if_(
+                                or_(
+                                    span_table.c.attributes.is_(None),
+                                    func.json_type(span_table.c.attributes) == "NULL",
+                                ),
+                                func.JSON_OBJECT(),
+                                span_table.c.attributes,
+                            ),
                             reason_path,
                             "process_restart",
                         ),

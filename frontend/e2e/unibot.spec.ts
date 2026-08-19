@@ -832,6 +832,57 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "GET" && path === "/admin/conversations") return json(route, state.conversations);
     if (method === "GET" && path === "/admin/traces") return json(route, []);
     if (method === "GET" && path === "/admin/llm-calls") return json(route, []);
+    if (method === "GET" && path === "/admin/operations/overview") {
+      return json(route, {
+        range: "week",
+        context: {
+          version: "v1",
+          timezone: "Asia/Shanghai",
+          window: "最近 7 个自然日",
+          from_at: "2026-08-08T00:00:00+08:00",
+          to_at: NOW,
+          as_of: NOW,
+        },
+        availability: { operations: true, eligible_users: false, department: false, user_type: false },
+        summary: {
+          dau: 2,
+          wau: 3,
+          mau: 4,
+          dau_mau: 50,
+          request_count: 6,
+          successful_requests: 5,
+          failed_requests: 1,
+          pending_requests: 0,
+          active_users: 3,
+          requests_per_active_user: 2,
+          platform_penetration: null,
+          d7_retention: 50,
+        },
+        trend: [
+          { date: "2026-08-13", requests: 2, active_users: 1 },
+          { date: "2026-08-14", requests: 4, active_users: 2 },
+        ],
+        retention: {
+          d1: { rate: 75, cohort_users: 4 },
+          d7: { rate: 50, cohort_users: 2 },
+          d30: { rate: null, cohort_users: 0 },
+        },
+        agents: [{
+          agent_id: "document-assistant",
+          agent_version: "1.0.0",
+          eligible_users: null,
+          active_users: 2,
+          penetration: null,
+          requests: 5,
+          positive_rate: 80,
+          d7_retention: 50,
+        }],
+        cohorts: {
+          week: [{ cohort: "2026-08-10", users: 2, retention: [100, null, null, null, null] }],
+          month: [{ cohort: "2026-08-01", users: 4, retention: [100, null, null, null, null] }],
+        },
+      });
+    }
     if (method === "GET" && path === "/admin/summary") {
       return json(route, { conversations: 2, tools: 1, skills: 1, ainas: 2, installations: 1, traces: 1, llm_calls: 1, memories: 3 });
     }
@@ -1691,6 +1742,10 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "用户反馈", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "运营", exact: true }).click();
   await expect(page.getByRole("heading", { name: "运营增长", exact: true })).toBeVisible();
+  await expect(page.getByLabel("运营核心指标").getByText("2", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("document-assistant", { exact: true })).toBeVisible();
+  await expect(page.getByText("权限用户分母尚未接入", { exact: true })).toBeVisible();
+  await expect(page.getByText("Mock 数据", { exact: true })).toHaveCount(0);
 });
 
 test("FE-E2E-IR-001A empty new overview falls back to legacy history", async ({ page }) => {

@@ -1,7 +1,7 @@
 import asyncio
-from typing import Any
+from typing import Any, cast
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
@@ -13,13 +13,22 @@ from tianzhou_agent_platform.api.dependencies import (
 )
 from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.core.conversation import Conversation
+from tianzhou_agent_platform.core.observability_query import ObsQueryService
+from tianzhou_agent_platform.core.operations_analytics import OperationsAnalyticsService, operations_bounds
 
 
-def _obs_query(request: Request):
+def _obs_query(request: Request) -> ObsQueryService:
     query = getattr(request.app.state, "obs_query", None)
     if query is None:
         raise RuntimeError("OBS query service is not initialized")
-    return query
+    return cast(ObsQueryService, query)
+
+
+def _operations_analytics(request: Request) -> OperationsAnalyticsService:
+    service = getattr(request.app.state, "operations_analytics", None)
+    if service is None:
+        raise RuntimeError("Operations analytics service is not initialized")
+    return cast(OperationsAnalyticsService, service)
 
 
 def create_operations_router() -> APIRouter:
@@ -29,11 +38,11 @@ def create_operations_router() -> APIRouter:
     async def health(request: Request) -> dict[str, Any]:
         """Service health plus discoverable OBS pipeline status (design 15)."""
         payload: dict[str, Any] = {"status": "ok"}
-        wal = getattr(request.app.state, "obs_wal_writer", None)
+        buffer = getattr(request.app.state, "obs_buffer", None)
         worker = getattr(request.app.state, "obs_ingest_worker", None)
         settings = getattr(request.app.state, "settings", None)
-        if wal is not None:
-            payload["obs"] = wal.metrics.snapshot()
+        if buffer is not None:
+            payload["obs"] = buffer.metrics.snapshot()
             payload["obs"]["ingest"] = (
                 worker.metrics.snapshot() if worker is not None else {}
             )
@@ -43,25 +52,10 @@ def create_operations_router() -> APIRouter:
                 else None
             )
             payload["obs"]["enabled"] = True
-            # operational bounds: WAL space cap and retention window
-            # (obs_wal_max_bytes / obs_retention_days usage points, review P2-2)
             if settings is not None:
-                payload["obs"]["wal_max_bytes"] = settings.obs_wal_max_bytes
+                payload["obs"]["stream_key"] = settings.obs_redis_stream_key
+                payload["obs"]["consumer_group"] = settings.obs_redis_group_name
                 payload["obs"]["retention_days"] = settings.obs_retention_days
-                wal_bytes = (
-                    worker.metrics.wal_total_bytes
-                    if worker is not None
-                    else wal.metrics.wal_bytes or 0
-                )
-                payload["obs"]["wal_total_bytes"] = wal_bytes
-                payload["obs"]["wal_water_level"] = (
-                    worker.metrics.wal_water_level if worker is not None else "ok"
-                )
-                payload["obs"]["wal_usage_ratio"] = (
-                    round(wal_bytes / settings.obs_wal_max_bytes, 4)
-                    if settings.obs_wal_max_bytes > 0
-                    else 0.0
-                )
         else:
             payload["obs"] = {"enabled": False}
         return payload
@@ -124,6 +118,23 @@ def create_operations_router() -> APIRouter:
             session_id=session_id,
             tenant_id=tenant_id,
             user_id=user_id,
+        )
+
+    @router.get("/admin/operations/overview")
+    async def admin_operations_overview(
+        request: Request,
+        range: str = Query(default="week", pattern="^(week|month|quarter)$"),
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        require_platform_admin(request)
+        start, end, _, _ = operations_bounds(range)
+        feedbacks = await repository(request).list_feedbacks(from_at=start, to_at=end)
+        if tenant_id is not None:
+            feedbacks = [feedback for feedback in feedbacks if feedback.tenant_id == tenant_id]
+        return await _operations_analytics(request).overview(
+            tenant_id=tenant_id,
+            range_name=range,
+            feedbacks=feedbacks,
         )
 
     @router.post("/approvals/{approval_id}/confirm", response_model=ChatResponse)

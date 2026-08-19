@@ -33,15 +33,18 @@ from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
 from tianzhou_agent_platform.core.observation_interceptors import ObservedAgentRuntime
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
 from tianzhou_agent_platform.core.observability_query import ObsQueryService
+from tianzhou_agent_platform.core.observability_stream import RedisObsIngestWorker
 from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
+from tianzhou_agent_platform.core.operations_analytics import OperationsAnalyticsService
 from tianzhou_agent_platform.core.observation_logging import ObservationLogHandler
 from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
+from tianzhou_agent_platform.core.telemetry import DurableBufferSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
 from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
-from tianzhou_agent_platform.store.observability_wal import WalWriter, build_producer_instance_id
+from tianzhou_agent_platform.store.observability_buffer import build_producer_instance_id
+from tianzhou_agent_platform.store.observability_redis import RedisObsBuffer
 from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
 from tianzhou_agent_platform.store.runtime_check import (
     RUNTIME_CHECK_RESOURCE,
@@ -76,10 +79,11 @@ def create_app(
     storage_stores: StorageStores | None = None
     resolved_repository: InMemoryRepository
 
-    # OBS pipeline: dedicated MySQL pool, WAL and raw IO (design sections 10/11)
+    # OBS pipeline: Redis Streams durable buffer, dedicated MySQL pool and raw IO.
     obs_store: ObservabilityStore | None = None
-    obs_wal_writer: WalWriter | None = None
-    obs_ingest_worker: ObsIngestWorker | None = None
+    obs_buffer: RedisObsBuffer | None = None
+    obs_ingest_worker: RedisObsIngestWorker | None = None
+    legacy_wal_ingest_worker: ObsIngestWorker | None = None
     obs_query_service: ObsQueryService | None = None
     raw_io_writer: RawIoWriter | None = None
     if resolved_settings.obs_enabled and storage_settings is not None:
@@ -88,21 +92,42 @@ def create_app(
             resolved_settings.obs_raw_root,
             max_file_size_bytes=storage_settings.nas_max_file_size_bytes,
         )
-        obs_wal_writer = WalWriter(
-            resolved_settings.obs_wal_root,
-            build_producer_instance_id(resolved_settings.node_id),
-            max_segment_bytes=32 * 1024 * 1024,
-            rotation_interval_seconds=30.0,
+        producer_instance_id = build_producer_instance_id(resolved_settings.node_id)
+        obs_redis_secret = storage_settings.obs_redis_dsn or storage_settings.redis_dsn
+        obs_redis_url = obs_redis_secret.get_secret_value()
+        obs_buffer = RedisObsBuffer.from_url(
+            obs_redis_url,
+            producer_instance_id,
+            socket_timeout=storage_settings.redis_timeout_seconds,
+            stream_key=resolved_settings.obs_redis_stream_key,
+            producers_key=resolved_settings.obs_redis_producers_key,
+            durability_timeout_ms=resolved_settings.obs_redis_durability_timeout_ms,
+            wait_replicas=resolved_settings.obs_redis_wait_replicas,
         )
-        obs_ingest_worker = ObsIngestWorker(
-            resolved_settings.obs_wal_root,
+        obs_ingest_worker = RedisObsIngestWorker.from_url(
+            obs_redis_url,
             obs_store,
-            obs_wal_writer.producer_instance_id,
-            wal_max_bytes=resolved_settings.obs_wal_max_bytes,
+            producer_instance_id,
+            socket_timeout=storage_settings.redis_timeout_seconds,
+            stream_key=resolved_settings.obs_redis_stream_key,
+            group_name=resolved_settings.obs_redis_group_name,
+            dlq_key=resolved_settings.obs_redis_dlq_key,
+            producers_key=resolved_settings.obs_redis_producers_key,
+            claim_idle_ms=resolved_settings.obs_redis_claim_idle_ms,
+            producer_stale_seconds=resolved_settings.obs_redis_producer_stale_seconds,
+            durability_timeout_ms=resolved_settings.obs_redis_durability_timeout_ms,
+            wait_replicas=resolved_settings.obs_redis_wait_replicas,
             retention_days=resolved_settings.obs_retention_days,
             raw_root=resolved_settings.obs_raw_root,
         )
-        obs_wal_writer.on_records_flushed = obs_ingest_worker.on_records_flushed
+        # Transition-only reader: drain records created by versions that still
+        # used the file WAL. No new runtime records are written there.
+        legacy_wal_ingest_worker = ObsIngestWorker(
+            resolved_settings.obs_wal_root,
+            obs_store,
+            producer_instance_id,
+            wal_max_bytes=resolved_settings.obs_wal_max_bytes,
+        )
         obs_query_service = ObsQueryService(obs_store, resolved_settings.obs_raw_root)
 
     if repository is None and storage_settings is not None:
@@ -116,8 +141,8 @@ def create_app(
         )
         resolved_repository = PersistentRepository(
             storage_stores,
-            # Disabling the OBS pipeline is also the rollback path: keep the
-            # legacy Trace/LLMCall tables writable and restart-recoverable.
+            # Disabling the OBS pipeline keeps legacy Trace/LLMCall tables
+            # writable and restart-recoverable.
             persist_observability=not resolved_settings.obs_enabled,
             obs_trace_status_resolver=(
                 (lambda trace_id: _resolve_obs_trace_status(obs_store, trace_id))
@@ -142,23 +167,23 @@ def create_app(
     )
     tracer_provider = (
         setup_tracer_provider(
-            DurableWalSpanProcessor(obs_wal_writer),
-            service_instance_id=obs_wal_writer.producer_instance_id,
+            DurableBufferSpanProcessor(obs_buffer),
+            service_instance_id=obs_buffer.producer_instance_id,
         )
-        if obs_wal_writer is not None
+        if obs_buffer is not None
         else None
     )
     observability = ObservabilityAspect(
         resolved_repository,
-        wal_writer=obs_wal_writer,
+        buffer=obs_buffer,
         raw_io_writer=raw_io_writer,
-        # design 14 fallback: direct OBS MySQL write when the WAL is down
+        # Final fallback: direct OBS MySQL write when Redis is unavailable.
         obs_store=obs_store,
         # P0 fix: the aspect needs a Tracer (start_span), not a TracerProvider.
         tracer=(tracer_provider.get_tracer("unibot") if tracer_provider is not None else None),
     )
     obs_log_handler = (
-        ObservationLogHandler(obs_wal_writer) if obs_wal_writer is not None else None
+        ObservationLogHandler(obs_buffer) if obs_buffer is not None else None
     )
     managed_aina_runtime = ManagedAinaRuntime(
         resolved_settings,
@@ -219,16 +244,24 @@ def create_app(
                 await cast(MySqlCheckpointSaver, agent_checkpointer).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
             await task_service.initialize()
-            if obs_wal_writer is not None and obs_store is not None:
-                # startup order (design 16.1): NAS roots -> OBS tables -> WAL -> worker
-                resolved_settings.obs_wal_root.mkdir(parents=True, exist_ok=True)
+            if obs_buffer is not None and obs_store is not None:
+                # Startup order: OBS tables -> Redis durability check/group -> producer/consumer.
                 resolved_settings.obs_raw_root.mkdir(parents=True, exist_ok=True)
                 await obs_store.create_tables()
-                obs_wal_writer.start()
+                await obs_store.backfill_operations()
+                await obs_buffer.initialize()
+                if obs_ingest_worker is not None:
+                    await obs_ingest_worker.initialize()
+                obs_buffer.start()
                 if obs_log_handler is not None:
                     logging.getLogger().addHandler(obs_log_handler)
                 if obs_ingest_worker is not None:
                     obs_ingest_worker.start()
+                if (
+                    legacy_wal_ingest_worker is not None
+                    and resolved_settings.obs_wal_root.is_dir()
+                ):
+                    legacy_wal_ingest_worker.start()
             await ensure_builtin_ainas(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
@@ -246,16 +279,17 @@ def create_app(
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
-            # OBS shutdown order (design 16.2): stop records -> drain+seal WAL
-            # -> ingest remaining -> close the dedicated pool last.
+            # Stop new records, flush the Redis producer, then stop the consumer.
             if obs_log_handler is not None:
                 logging.getLogger().removeHandler(obs_log_handler)
-            if obs_wal_writer is not None:
-                obs_wal_writer.close()
-                await obs_wal_writer.wait_closed()
+            if obs_buffer is not None:
+                obs_buffer.close()
+                await obs_buffer.wait_closed()
             if obs_ingest_worker is not None:
                 await obs_ingest_worker.stop()
-            if obs_wal_writer is not None:
+            if legacy_wal_ingest_worker is not None:
+                await legacy_wal_ingest_worker.stop()
+            if obs_buffer is not None:
                 shutdown_tracer_provider()
             if obs_store is not None:
                 await obs_store.close()
@@ -291,10 +325,12 @@ def create_app(
     app.state.observability = observability
     app.state.obs_store = obs_store
     app.state.obs_ingest_worker = obs_ingest_worker
-    app.state.obs_wal_writer = obs_wal_writer
+    app.state.legacy_wal_ingest_worker = legacy_wal_ingest_worker
+    app.state.obs_buffer = obs_buffer
     app.state.obs_log_handler = obs_log_handler
     app.state.obs_query = obs_query_service or ObsQueryService(None, None)
     app.state.agent_checkpointer = agent_checkpointer
+    app.state.operations_analytics = OperationsAnalyticsService(obs_store)
     app.state.agent_runtime = ObservedAgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,

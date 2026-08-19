@@ -1,5 +1,8 @@
 # IR-01 OpenTelemetry SDK + WAL 可靠存储技术设计
 
+> 状态：历史设计。当前运行链路已将自研文件 WAL 替换为 Redis Streams；本文保留用于解释数据模型
+> 与旧 WAL 文件迁移。现行部署和故障恢复约束见 `docs/observability-wal-ops.md`。
+
 ## 1. 文档说明
 
 ### 1.1 文档目的
@@ -1034,4 +1037,3 @@ UNIBOT_OBS_RETENTION_DAYS=<数据治理确认>
 7. 前端不再加载用户全部 LLMCall 后自行聚合。
 8. WAL 积压、损坏、写入失败和数据缺口都有可发现的健康状态。
 9. 双写对账通过后，旧 Trace JSON 同步写入链路安全下线。
-

@@ -1265,6 +1265,8 @@ def test_span_to_record_mapping() -> None:
     span.set_attribute("session.id", "conv_1")
     span.set_attribute("user.id", "user_1")
     span.set_attribute("unibot.tenant.id", "tenant_1")
+    span.set_attribute("unibot.target_id", "assistant-a")
+    span.set_attribute("unibot.target_version", "1.2.0")
     span.set_attribute("gen_ai.usage.input_tokens", 42)
     span.end()
 
@@ -1277,6 +1279,8 @@ def test_span_to_record_mapping() -> None:
     assert record.payload["session_id"] == "conv_1"
     assert record.payload["user_id"] == "user_1"
     assert record.payload["tenant_id"] == "tenant_1"
+    assert record.payload["target_id"] == "assistant-a"
+    assert record.payload["target_version"] == "1.2.0"
     assert record.payload["input_tokens"] == 42
     assert record.payload["legacy_span_id"] == "span_bbbbbbbbbbbbbbbbbbbb"
 

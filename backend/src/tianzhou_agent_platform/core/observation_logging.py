@@ -1,4 +1,4 @@
-"""Standard-library logging interceptor backed by the durable observation WAL."""
+"""Standard-library logging interceptor backed by the durable OBS buffer."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from tianzhou_agent_platform.core.observation_context import (
     suppress_observation,
 )
 from tianzhou_agent_platform.core.trace_details import summarize_trace_data
-from tianzhou_agent_platform.store.observability_wal import ObsRecord, WalWriter
+from tianzhou_agent_platform.store.observability_buffer import DurableObsBuffer, ObsRecord
 
 
 class ObservationLogHandler(logging.Handler):
     """Capture contextual WARNING+ logs as replay-idempotent event records."""
 
-    def __init__(self, wal_writer: WalWriter, *, level: int = logging.WARNING) -> None:
+    def __init__(self, buffer: DurableObsBuffer, *, level: int = logging.WARNING) -> None:
         super().__init__(level=level)
-        self._wal = wal_writer
+        self._buffer = buffer
         self.dropped_count = 0
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -51,10 +51,10 @@ class ObservationLogHandler(logging.Handler):
                 else trace_id
             )
             with suppress_observation():
-                self._wal.submit(
+                self._buffer.submit(
                     ObsRecord(
                         record_type="event",
-                        producer_instance_id=self._wal.producer_instance_id,
+                        producer_instance_id=self._buffer.producer_instance_id,
                         sequence_no=0,
                         occurred_at=occurred_at,
                         trace_id=canonical_trace_id,

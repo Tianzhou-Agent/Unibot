@@ -91,7 +91,9 @@ uv run tianzhou-agent-platform
 ```
 
 后端启动时会自动创建 MySQL 业务表，并对 MySQL、Redis 和 NAS 执行读写探测。MySQL 是业务数据的
-权威存储，Redis 用于缓存和会话运行锁，NAS 默认位于仓库根目录的 `data/nas/`。
+权威存储，Redis 同时用于缓存、会话运行锁和可观测数据缓冲；OBS Streams 要求 Redis 7.2+ 且开启
+AOF，仓库自带的 compose 已包含该配置。NAS 默认位于仓库根目录的 `data/nas/`。可观测链路的部署、
+积压和恢复说明见 [`docs/observability-wal-ops.md`](docs/observability-wal-ops.md)。
 
 图片识别 AINA 还需要启动独立 YOLO26m 推理容器。在仓库根目录运行：
 
