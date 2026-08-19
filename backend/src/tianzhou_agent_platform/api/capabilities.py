@@ -10,11 +10,12 @@ from tianzhou_agent_platform.aina.protocol.models import (
     OpenAinaRequest,
     PermissionUpdate,
 )
+from tianzhou_agent_platform.aina.mcp.models import McpServerCreate, McpServerRecord
 from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
 from tianzhou_agent_platform.api.dependencies import (
-    actor_scope, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
+    actor_scope, bind_actor, gateway, mcp_client, repository, request_actor, require_platform_admin, settings,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.services.platform_tools import open_aina
@@ -51,6 +52,49 @@ def create_capability_router() -> APIRouter:
     async def delete_tool(tool_id: str, request: Request) -> Response:
         require_platform_admin(request)
         await repository(request).remove_tool(tool_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @router.post("/mcp-servers", response_model=McpServerRecord, status_code=status.HTTP_201_CREATED)
+    async def register_mcp_server(payload: McpServerCreate, request: Request) -> McpServerRecord:
+        require_platform_admin(request)
+        gateway(request).require_approved_destination(str(payload.endpoint))
+        discovered = await mcp_client(request).discover(payload)
+        _validate_mcp_tools(discovered)
+        actor = request_actor(request)
+        return await repository(request).register_mcp_server(
+            discovered.model_copy(update={"owner_user_id": actor.user_id, "tenant_id": actor.tenant_id})
+        )
+
+    @router.get("/mcp-servers", response_model=list[McpServerRecord])
+    async def list_mcp_servers(request: Request) -> list[McpServerRecord]:
+        return [record for record in await repository(request).list_mcp_servers() if _visible(request, record)]
+
+    @router.get("/mcp-servers/{server_id}", response_model=McpServerRecord)
+    async def get_mcp_server(server_id: str, request: Request) -> McpServerRecord:
+        record = await repository(request).get_mcp_server(server_id)
+        _require_visible(request, record)
+        return record
+
+    @router.post("/mcp-servers/{server_id}/refresh", response_model=McpServerRecord)
+    async def refresh_mcp_server(server_id: str, request: Request) -> McpServerRecord:
+        require_platform_admin(request)
+        current = await repository(request).get_mcp_server(server_id)
+        gateway(request).require_approved_destination(str(current.endpoint))
+        values = {name: getattr(current, name) for name in McpServerCreate.model_fields}
+        discovered = await mcp_client(request).discover(McpServerCreate(**values))
+        _validate_mcp_tools(discovered)
+        return await repository(request).replace_mcp_server(
+            discovered.model_copy(update={
+                "created_at": current.created_at,
+                "owner_user_id": current.owner_user_id,
+                "tenant_id": current.tenant_id,
+            })
+        )
+
+    @router.delete("/mcp-servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_mcp_server(server_id: str, request: Request) -> Response:
+        require_platform_admin(request)
+        await repository(request).remove_mcp_server(server_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/skills", response_model=SkillRecord, status_code=status.HTTP_201_CREATED)
@@ -218,7 +262,7 @@ def create_capability_router() -> APIRouter:
     return router
 
 
-def _visible(request: Request, record: ToolRecord | SkillRecord) -> bool:
+def _visible(request: Request, record: ToolRecord | SkillRecord | McpServerRecord) -> bool:
     actor = request_actor(request)
     return capability_visible(
         record,
@@ -229,7 +273,7 @@ def _visible(request: Request, record: ToolRecord | SkillRecord) -> bool:
     )
 
 
-def _require_visible(request: Request, record: ToolRecord | SkillRecord) -> None:
+def _require_visible(request: Request, record: ToolRecord | SkillRecord | McpServerRecord) -> None:
     if not _visible(request, record):
         raise PlatformError("RESOURCE_NOT_FOUND", "Capability was not found", status_code=404)
 
@@ -242,3 +286,10 @@ def _validate_permission_subset(record: AinaRecord, granted_permissions: list[st
             f"Cannot grant undeclared permissions: {', '.join(sorted(undeclared))}",
             status_code=422,
         )
+
+
+def _validate_mcp_tools(record: McpServerRecord) -> None:
+    for tool in record.tools:
+        validate_schema(tool.input_schema, label=f"MCP tool {tool.name} input_schema")
+        if tool.output_schema:
+            validate_schema(tool.output_schema, label=f"MCP tool {tool.name} output_schema")

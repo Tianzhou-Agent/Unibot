@@ -32,6 +32,7 @@ import type {
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames } from "@/lib/utils";
+import { McpServerSettings } from "@/features/mcp-settings/McpServerSettings";
 
 import i18n, { LANGUAGES, currentLocale } from "@/i18n";
 import { useAuth } from "@/lib/auth";
@@ -260,6 +261,7 @@ export default function SettingsPage() {
               <button type="button" onClick={() => setEditorProvider(null)} className="btn-primary mt-4 h-8 text-[11.5px]"><Plus className="h-3.5 w-3.5" />{t("addProvider")}</button>
             </div>
           )}
+          <McpServerSettings />
           </>
           ) : null}
           </div>

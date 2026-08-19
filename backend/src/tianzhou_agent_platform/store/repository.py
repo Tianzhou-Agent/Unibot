@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryUpdate
+from tianzhou_agent_platform.aina.mcp.models import McpServerRecord
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -431,6 +432,29 @@ class PersistentRepository(InMemoryRepository):
     async def remove_tool(self, tool_id: str) -> None:
         if not await self._registry_store.remove_tool(tool_id):
             raise not_found("Tool", tool_id)
+
+    async def register_mcp_server(self, server: McpServerRecord) -> McpServerRecord:
+        await self._registry_store.register_mcp_server(server)
+        return self._copy(server)
+
+    async def replace_mcp_server(self, server: McpServerRecord) -> McpServerRecord:
+        updated = await self._registry_store.replace_mcp_server(server)
+        if updated is None:
+            raise not_found("MCP server", server.server_id)
+        return updated
+
+    async def get_mcp_server(self, server_id: str) -> McpServerRecord:
+        server = await self._registry_store.get_mcp_server(server_id)
+        if server is None:
+            raise not_found("MCP server", server_id)
+        return server
+
+    async def list_mcp_servers(self) -> list[McpServerRecord]:
+        return await self._registry_store.list_mcp_servers()
+
+    async def remove_mcp_server(self, server_id: str) -> None:
+        if not await self._registry_store.remove_mcp_server(server_id):
+            raise not_found("MCP server", server_id)
 
     async def register_skill(self, skill: SkillRecord) -> SkillRecord:
         await self._registry_store.register_skill(skill)

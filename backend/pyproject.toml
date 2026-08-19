@@ -33,6 +33,7 @@ dependencies = [
     "opentelemetry-api>=1.43.0",
     "opentelemetry-sdk>=1.43.0",
     "alembic>=1.14",
+    "mcp>=2.0.0,<3.0.0",
 ]
 
 [project.scripts]

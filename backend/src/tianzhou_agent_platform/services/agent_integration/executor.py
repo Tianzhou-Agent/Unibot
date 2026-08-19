@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from tianzhou_agent_platform.aina.builtin import invoke_builtin
 from tianzhou_agent_platform.aina.document.builtin import CREATE_EDIT_TASK_TOOL_ID
+from tianzhou_agent_platform.aina.mcp.client import McpCapabilityClient
+from tianzhou_agent_platform.aina.mcp.models import McpServerRecord, McpToolDescriptor
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -48,6 +50,7 @@ class CapabilityExecutor:
         document_edit_task_service: Any | None = None,
         sandbox_service: Any | None = None,
         task_service: Any | None = None,
+        mcp_client: McpCapabilityClient | None = None,
     ) -> None:
         # The domain operations (platform tools, built-in AINAs) run against the repository they are written for.
         self.repository = repository
@@ -59,6 +62,7 @@ class CapabilityExecutor:
         self.document_edit_task_service = document_edit_task_service
         self.sandbox_service = sandbox_service
         self.task_service = task_service
+        self.mcp_client = mcp_client or McpCapabilityClient()
 
     def tools(self, run: AgentRun) -> list[StructuredTool]:
         """One native tool per registered capability; the run scope decides which are advertised."""
@@ -103,6 +107,11 @@ class CapabilityExecutor:
         if capability.capability_id == SUGGEST_AINAS_TOOL_ID:
             # The model's ranked suggestion replaces the one offered when the turn was routed into an AINA.
             run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "aina_chooser"]
+        if capability.kind == "mcp":
+            server, tool = cast(tuple[McpServerRecord, McpToolDescriptor], capability.value)
+            self.gateway.require_approved_destination(str(server.endpoint))
+            result, _duration_ms = await self.mcp_client.call_tool(server, tool, arguments)
+            return result
         if capability.kind == "tool":
             result, _duration_ms = await self.gateway.invoke_tool(
                 cast(ToolRecord, capability.value),
