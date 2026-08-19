@@ -23,6 +23,7 @@ class StorageSettings(BaseSettings):
     mysql_timeout_seconds: float = Field(default=5.0, gt=0)
 
     redis_dsn: SecretStr = SecretStr("redis://127.0.0.1:16379/0")
+    obs_redis_dsn: SecretStr | None = None
     redis_timeout_seconds: float = Field(default=2.0, gt=0)
     redis_default_ttl_seconds: int | None = Field(default=None, gt=0)
 
@@ -34,4 +35,11 @@ class StorageSettings(BaseSettings):
     def validate_nas_root_path(cls, value: Path) -> Path:
         if not str(value).strip():
             raise ValueError("NAS root path must not be empty")
+        return value
+
+    @field_validator("obs_redis_dsn", mode="before")
+    @classmethod
+    def empty_obs_redis_dsn_uses_default(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
         return value

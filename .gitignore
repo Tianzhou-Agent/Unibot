@@ -15,3 +15,4 @@ reasonix.toml
 backend/backend-live*.log
 frontend/debug.log
 backend/test-temp*/
+.playwright-mcp/

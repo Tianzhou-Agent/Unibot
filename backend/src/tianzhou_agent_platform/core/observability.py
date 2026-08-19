@@ -1,16 +1,15 @@
-"""Observability boundary: legacy repository persistence plus the OTel + WAL
-dual-write pipeline (design section 17.2, phase two of the migration).
+"""Observability boundary: legacy repository plus the OTel durable buffer.
 
 Every public method keeps its original signature and still writes the legacy
-repository path. When the OBS pipeline is enabled (a ``WalWriter``, tracer and
+repository path. When the OBS pipeline is enabled (a durable buffer, tracer and
 RawIoWriter are injected), the same business event also flows through OTel
-spans into the WAL:
+spans into Redis Streams:
 
 - ``create_agent_trace`` -> OTel root span + ``trace_started`` record
 - ``start_span`` -> child OTel span + ``span_started`` record
 - ``finish_span`` -> span attributes/preview/error/raw IO + ``span_finished``
 - ``finish_trace`` -> root span end + complete ``trace_finished`` record +
-  WAL fsync barrier (records durable before the business returns)
+  Redis durability barrier (records durable before the business returns)
 - ``record_event`` -> ``event`` record
 - ``record_llm_call`` -> staged as the raw-IO source of the matching Model
   Span (the LLM call itself keeps using the legacy repository this phase)
@@ -56,6 +55,7 @@ from tianzhou_agent_platform.core.telemetry import (
     ATTR_SPAN_KIND,
     ATTR_SPAN_ROLE,
     ATTR_TARGET_ID,
+    ATTR_TARGET_VERSION,
     ATTR_TENANT_ID,
     ATTR_TRACE_STATUS,
     ATTR_TTFT_MS,
@@ -66,7 +66,12 @@ from tianzhou_agent_platform.core.telemetry import (
 )
 from tianzhou_agent_platform.core.trace_details import summarize_trace_data
 from tianzhou_agent_platform.store.observability_raw import RawIoRef, RawIoWriter
-from tianzhou_agent_platform.store.observability_wal import ObsRecord, WalError, WalGapError, WalWriter
+from tianzhou_agent_platform.store.observability_buffer import (
+    DurableObsBuffer,
+    ObsBufferError,
+    ObsBufferGapError,
+    ObsRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +123,7 @@ def _derived_span_id(legacy_span_id: str) -> str:
 
 
 def _root_span_context(otel_trace_id: str):
-    """A non-recording parent context pinning the root span's trace_id so WAL
-    trace records and span records share the same trace identity."""
+    """Pin the root span ID so buffered trace/span records share an identity."""
     from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 
     if len(otel_trace_id) != 32:
@@ -148,25 +152,28 @@ def _preview_json(value: Any) -> str | None:
 
 
 class ObservabilityAspect:
-    """Non-blocking Trace/Span/Event persistence boundary (legacy + OTel/WAL)."""
+    """Non-blocking Trace/Span/Event persistence boundary."""
 
     def __init__(
         self,
         repository: InMemoryRepository,
         *,
-        wal_writer: WalWriter | None = None,
+        buffer: DurableObsBuffer | None = None,
+        wal_writer: DurableObsBuffer | None = None,
         tracer: Any | None = None,
         raw_io_writer: RawIoWriter | None = None,
         obs_store: Any | None = None,
     ) -> None:
+        if buffer is not None and wal_writer is not None:
+            raise ValueError("provide either buffer or legacy wal_writer, not both")
         self._repository = repository
-        self._wal_writer = wal_writer
+        self._buffer = buffer or wal_writer
         self._tracer = tracer
         self._raw_io_writer = raw_io_writer
-        # direct-write fallback when the WAL is unavailable but MySQL is
-        # healthy (design section 14)
+        # Direct-write fallback when the durable buffer is unavailable but
+        # MySQL is healthy.
         self._obs_store = obs_store
-        self._enabled = wal_writer is not None and tracer is not None
+        self._enabled = self._buffer is not None and tracer is not None
         self._spans: dict[str, Span] = {}  # legacy span_id -> OTel span
         self._otel_trace_ids: dict[str, str] = {}  # legacy trace_id -> OTel trace_id
         self._otel_root_span_ids: dict[str, str] = {}  # legacy trace_id -> OTel root span_id
@@ -381,6 +388,7 @@ class ObservabilityAspect:
         name: str,
         role: str,
         target_id: str | None = None,
+        target_version: str | None = None,
         input_preview: str | None = None,
     ) -> Span | None:
         otel_trace_id = self._otel_trace_ids.get(trace_id)
@@ -391,7 +399,7 @@ class ObservabilityAspect:
             context = otel_trace.set_span_in_context(self._spans[parent_span_id])
         elif role == "root":
             # The root span must carry the same trace_id as the trace_started /
-            # trace_finished WAL records; otherwise Span rows are orphaned
+            # trace_finished buffer records; otherwise Span rows are orphaned
             # from their Trace row (review P0-2).
             context = _root_span_context(otel_trace_id)
         span = self._tracer.start_span(name, context=context)  # type: ignore[union-attr]
@@ -405,6 +413,7 @@ class ObservabilityAspect:
         span.set_attribute(ATTR_SPAN_KIND, kind)
         span.set_attribute(ATTR_SEQUENCE_NO, self._next_sequence(otel_trace_id))
         span.set_attribute(ATTR_TARGET_ID, target_id or "")
+        span.set_attribute(ATTR_TARGET_VERSION, target_version or "")
         if trace_context is not None:
             span.set_attribute(ATTR_SESSION_ID, trace_context.conversation_id or "")
             span.set_attribute(ATTR_USER_ID, trace_context.user_id)
@@ -417,7 +426,7 @@ class ObservabilityAspect:
 
     def _deterministic_event_id(self, trace_id: str, name: str, occurred_at: datetime) -> str:
         """Stable event primary key derived from content, so the direct-write
-        fallback and WAL replay never produce duplicate event rows
+        fallback and durable-buffer replay never produce duplicate event rows
         (review round 2)."""
         import hashlib
 
@@ -433,12 +442,12 @@ class ObservabilityAspect:
         payload: dict[str, Any],
         record_id: str | None = None,
     ) -> None:
-        if self._wal_writer is None:
+        if self._buffer is None:
             return
         try:
             record_kwargs: dict[str, Any] = {
                 "record_type": record_type,
-                "producer_instance_id": self._wal_writer.producer_instance_id,
+                "producer_instance_id": self._buffer.producer_instance_id,
                 "sequence_no": 0,
                 "occurred_at": datetime.now(timezone.utc),
                 "trace_id": otel_trace_id,
@@ -447,9 +456,9 @@ class ObservabilityAspect:
             }
             if record_id is not None:
                 record_kwargs["record_id"] = record_id
-            self._wal_writer.submit(ObsRecord(**record_kwargs))
-        except WalError:
-            logger.exception("WAL submit failed for %s record", record_type)
+            self._buffer.submit(ObsRecord(**record_kwargs))
+        except ObsBufferError:
+            logger.exception("OBS buffer submit failed for %s record", record_type)
 
     async def _write_raw_io(
         self,
@@ -547,6 +556,7 @@ class ObservabilityAspect:
             name="agent.run",
             role="root",
             target_id="unibot",
+            target_version=None,
             input_preview=_preview_json(input_data),
         )
         otel_root_span_id = (
@@ -594,7 +604,7 @@ class ObservabilityAspect:
             restored = await self._ensure_trace_context(trace_id, conversation_id=conversation_id)
             if not restored:
                 return
-        # build the TraceEvent once so the repository row, the WAL record and
+        # Build the TraceEvent once so the repository row, buffer record and
         # the deterministic event id all share the same timestamp (review)
         event = TraceEvent(
             kind=kind,
@@ -710,6 +720,7 @@ class ObservabilityAspect:
             name=name,
             role="child",
             target_id=target_id,
+            target_version=target_version,
             input_preview=_preview_json(input_data),
         )
         if span is not None:
@@ -732,6 +743,7 @@ class ObservabilityAspect:
                     "kind": kind,
                     "name": name,
                     "target_id": target_id,
+                    "target_version": target_version,
                     "status": STATUS_RUNNING,
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "attributes": cast(dict[str, Any], summarize_trace_data(attributes or {})),
@@ -962,12 +974,12 @@ class ObservabilityAspect:
         )
         durable = True
         terminal_sequence: int | None = None
-        if self._wal_writer is not None:
+        if self._buffer is not None:
             try:
-                terminal_sequence = self._wal_writer.submit(
+                terminal_sequence = self._buffer.submit(
                     ObsRecord(
                         record_type="trace_finished",
-                        producer_instance_id=self._wal_writer.producer_instance_id,
+                        producer_instance_id=self._buffer.producer_instance_id,
                         sequence_no=0,
                         occurred_at=datetime.now(timezone.utc),
                         trace_id=otel_trace_id,
@@ -1005,8 +1017,8 @@ class ObservabilityAspect:
                         },
                     )
                 )
-            except WalError:
-                logger.exception("WAL submit failed for trace_finished %s", trace_id)
+            except ObsBufferError:
+                logger.exception("OBS buffer submit failed for trace_finished %s", trace_id)
                 durable = False
             # Trace barrier: the completed interaction must be durable before
             # the business returns its final answer (design 6.2). A barrier
@@ -1015,22 +1027,22 @@ class ObservabilityAspect:
             if terminal_sequence is not None:
                 try:
                     await self._flush_with_retry(terminal_sequence)
-                except WalGapError:
+                except ObsBufferGapError:
                     logger.error(
-                        "WAL barrier failed for finished trace %s: telemetry gap, data is not durable", trace_id
+                        "OBS buffer barrier failed for finished trace %s: telemetry gap, data is not durable", trace_id
                     )
                     durable = False
-                except WalError:
-                    logger.exception("WAL barrier failed for finished trace %s", trace_id)
+                except ObsBufferError:
+                    logger.exception("OBS buffer barrier failed for finished trace %s", trace_id)
                     durable = False
         if not durable and self._obs_store is not None:
-            # design 14 fallback: WAL/NAS unavailable but MySQL healthy ->
+            # Durable buffer unavailable but MySQL healthy ->
             # write the trace rows directly to OBS MySQL (review P1-4).
             try:
                 await self._obs_store.bulk_upsert(
                     self._build_fallback_records(trace_id, status, trace)
                 )
-                logger.warning("WAL barrier failed; OBS rows written directly to MySQL for trace %s", trace_id)
+                logger.warning("OBS buffer barrier failed; rows written directly to MySQL for trace %s", trace_id)
                 durable = True
             except Exception:
                 logger.exception("OBS direct-write fallback failed for trace %s", trace_id)
@@ -1053,7 +1065,7 @@ class ObservabilityAspect:
         trace_finished = ObsRecord(
             record_type="trace_finished",
             producer_instance_id=(
-                self._wal_writer.producer_instance_id if self._wal_writer is not None else "fallback"
+                self._buffer.producer_instance_id if self._buffer is not None else "fallback"
             ),
             sequence_no=0,
             occurred_at=datetime.now(timezone.utc),
@@ -1105,7 +1117,7 @@ class ObservabilityAspect:
                 ObsRecord(
                     record_type="span_finished",
                     producer_instance_id=(
-                        self._wal_writer.producer_instance_id if self._wal_writer is not None else "fallback"
+                        self._buffer.producer_instance_id if self._buffer is not None else "fallback"
                     ),
                     sequence_no=0,
                     # version = the span's own finish time, so a still-running
@@ -1126,6 +1138,7 @@ class ObservabilityAspect:
                         "kind": span.kind,
                         "name": span.name,
                         "target_id": span.target_id,
+                        "target_version": span.target_version,
                         "status": span.status,
                         "started_at": span.started_at.isoformat(),
                         "completed_at": span.completed_at.isoformat() if span.completed_at else None,
@@ -1153,7 +1166,7 @@ class ObservabilityAspect:
                     record_id=self._deterministic_event_id(otel_trace_id, event.kind, event.timestamp),
                     record_type="event",
                     producer_instance_id=(
-                        self._wal_writer.producer_instance_id if self._wal_writer is not None else "fallback"
+                        self._buffer.producer_instance_id if self._buffer is not None else "fallback"
                     ),
                     sequence_no=0,
                     occurred_at=event.timestamp,
@@ -1199,11 +1212,11 @@ class ObservabilityAspect:
         """flush_through with short retries; gaps are permanent and re-raised."""
         for attempt in range(attempts):
             try:
-                await self._wal_writer.flush_through(sequence_no)  # type: ignore[union-attr]
+                await self._buffer.flush_through(sequence_no)  # type: ignore[union-attr]
                 return
-            except WalGapError:
+            except ObsBufferGapError:
                 raise
-            except WalError:
+            except ObsBufferError:
                 if attempt == attempts - 1:
                     raise
                 await asyncio.sleep(0.05 * (attempt + 1))
@@ -1262,6 +1275,6 @@ class ObservabilityAspect:
             "obs_open_spans": len(self._spans),
             "obs_pending_llm_calls": len(self._pending_llm_calls),
         }
-        if self._wal_writer is not None:
-            snapshot.update(self._wal_writer.metrics.snapshot())
+        if self._buffer is not None:
+            snapshot.update(self._buffer.metrics.snapshot())
         return snapshot

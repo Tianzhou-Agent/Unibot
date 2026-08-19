@@ -1,9 +1,8 @@
-"""OpenTelemetry TracerProvider, span attribute/status mapping and the
-DurableWalSpanProcessor that converts ended spans into immutable ObsRecords.
+"""OpenTelemetry TracerProvider and durable OBS span processing.
 
 Design (ir-01 section 4.2, 5, 6): the OTel SDK is used as the in-process
-Trace/Span data model; ``DurableWalSpanProcessor.on_end`` converts each ended
-span into an immutable ``ObsRecord`` and submits it to the WAL synchronously
+Trace/Span data model; ``DurableBufferSpanProcessor.on_end`` converts each ended
+span into an immutable ``ObsRecord`` and submits it to the buffer synchronously
 (``SpanProcessor.on_end`` has no await). Trace start/terminal records remain
 owned by the agent-run observer because they carry business aggregates and
 approval checkpoint semantics that cannot be inferred from a generic span.
@@ -22,7 +21,11 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult  # noq
 from opentelemetry.trace import StatusCode, get_tracer_provider, set_tracer_provider
 
 from tianzhou_agent_platform.core.observation_context import is_observation_suppressed
-from tianzhou_agent_platform.store.observability_wal import ObsRecord, WalError, WalWriter
+from tianzhou_agent_platform.store.observability_buffer import (
+    DurableObsBuffer,
+    ObsBufferError,
+    ObsRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,7 @@ ATTR_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 ATTR_CACHE_READ_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 ATTR_TTFT_MS = "unibot.gen_ai.ttft_ms"
 ATTR_TARGET_ID = "unibot.target_id"
+ATTR_TARGET_VERSION = "unibot.target_version"
 ATTR_FIRST_OUTPUT_AT = "unibot.first_output_at"
 ATTR_INPUT_PREVIEW = "unibot.input_preview"
 ATTR_OUTPUT_PREVIEW = "unibot.output_preview"
@@ -89,6 +93,7 @@ _EXTRA_ATTRIBUTE_KEYS = {
     ATTR_CACHE_READ_TOKENS,
     ATTR_TTFT_MS,
     ATTR_TARGET_ID,
+    ATTR_TARGET_VERSION,
     ATTR_FIRST_OUTPUT_AT,
     ATTR_INPUT_PREVIEW,
     ATTR_OUTPUT_PREVIEW,
@@ -130,7 +135,7 @@ def otel_status_to_unibot(status: Any, business_status: str | None) -> str:
 
 
 def record_from_span(span: ReadableSpan, producer_instance_id: str, sequence_no: int) -> ObsRecord:
-    """Convert one ended OTel span into its finished WAL record."""
+    """Convert one ended OTel span into its finished durable record."""
     attributes = dict(span.attributes or {})
     raw_business_status = attributes.get(UNIBOT_STATUS_ATTR)
     business_status = raw_business_status if isinstance(raw_business_status, str) else None
@@ -161,6 +166,7 @@ def record_from_span(span: ReadableSpan, producer_instance_id: str, sequence_no:
         "kind": attributes.get(ATTR_SPAN_KIND) or "internal",
         "name": span.name,
         "target_id": attributes.get(ATTR_TARGET_ID),
+        "target_version": attributes.get(ATTR_TARGET_VERSION),
         "model": attributes.get(ATTR_RESPONSE_MODEL) or attributes.get(ATTR_REQUEST_MODEL),
         "status": unibot_status,
         "started_at": started.isoformat(),
@@ -197,11 +203,11 @@ def record_from_span(span: ReadableSpan, producer_instance_id: str, sequence_no:
     return record
 
 
-class DurableWalSpanProcessor(SpanProcessor):
-    """Converts ended OTel spans into immutable WAL records (design 4.1)."""
+class DurableBufferSpanProcessor(SpanProcessor):
+    """Convert ended OTel spans into immutable buffered records."""
 
-    def __init__(self, wal_writer: WalWriter) -> None:
-        self._wal = wal_writer
+    def __init__(self, buffer: DurableObsBuffer) -> None:
+        self._buffer = buffer
 
     def on_start(self, span: Any, parent_context: Any | None = None) -> None:  # noqa: ANN401
         if is_observation_suppressed():
@@ -211,12 +217,12 @@ class DurableWalSpanProcessor(SpanProcessor):
         if (span.attributes or {}).get(ATTR_OBSERVATION_SUPPRESSED):
             return
         try:
-            record = record_from_span(span, self._wal.producer_instance_id, 0)
-            self._wal.submit(record)
-        except WalError:
-            logger.exception("WAL submit failed for ended span %s", span.name)
+            record = record_from_span(span, self._buffer.producer_instance_id, 0)
+            self._buffer.submit(record)
+        except ObsBufferError:
+            logger.exception("OBS buffer submit failed for ended span %s", span.name)
         except Exception:  # noqa: BLE001 - observability must never break business
-            logger.exception("span -> WAL conversion failed for span %s", span.name)
+            logger.exception("span -> OBS record conversion failed for span %s", span.name)
 
     def shutdown(self) -> None:
         return None
@@ -225,8 +231,11 @@ class DurableWalSpanProcessor(SpanProcessor):
         return True
 
 
+DurableWalSpanProcessor = DurableBufferSpanProcessor
+
+
 def setup_tracer_provider(
-    processor: DurableWalSpanProcessor,
+    processor: DurableBufferSpanProcessor,
     *,
     service_name: str = SERVICE_NAME,
     service_instance_id: str | None = None,
@@ -254,7 +263,7 @@ def noop_exporter_factory() -> SpanExporter:  # pragma: no cover - interface mar
     """Placeholder explaining why no OTLP exporter is installed this phase.
 
     The design keeps the OTel SDK in-process and replaces the exporter with
-    the DurableWalSpanProcessor; no Collector/OTLP is deployed (section 1.2).
+    the DurableBufferSpanProcessor; no Collector/OTLP is deployed.
     """
 
     class _Noop(SpanExporter):

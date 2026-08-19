@@ -1,8 +1,8 @@
-"""End-to-end pipeline test (review recommendation): real create_app startup
--> chat request -> OTel/WAL -> ingest -> MySQL -> /obs queries.
+"""End-to-end pipeline test: real create_app startup
+-> chat request -> OTel/Redis Streams -> ingest -> MySQL -> /obs queries.
 
 This closes the loop the unit tests cannot: it proves the production wiring
-(main.py passing a Tracer, root span sharing the trace id with WAL trace
+(main.py passing a Tracer, root span sharing the trace id with buffered trace
 records, token aggregation, barrier) actually works. Requires MySQL/Redis on
 the default local ports; skipped otherwise.
 """
@@ -13,9 +13,11 @@ import os
 import socket
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from redis import Redis
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
@@ -52,8 +54,19 @@ def _wait_for(predicate, timeout: float = 10.0, interval: float = 0.3) -> bool:
     return predicate()
 
 
+def _delete_redis_keys(keys: list[str]) -> None:
+    client = Redis.from_url(REDIS_URL)
+    try:
+        client.delete(*keys)
+    finally:
+        client.close()
+
+
 @pytest.mark.asyncio
-async def test_chat_to_obs_query_end_to_end(tmp_path: Path) -> None:
+async def test_chat_to_obs_query_end_to_end(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
     from tianzhou_agent_platform.store.observability_store import OBS_METADATA, ObservabilityStore
 
     # clean OBS tables so the overview assertions are deterministic
@@ -63,6 +76,9 @@ async def test_chat_to_obs_query_end_to_end(tmp_path: Path) -> None:
         await connection.run_sync(OBS_METADATA.create_all)
     await cleanup.close()
 
+    redis_prefix = f"unibot:test:obs:{uuid4().hex}"
+    redis_keys = [redis_prefix, f"{redis_prefix}:dlq", f"{redis_prefix}:producers"]
+    request.addfinalizer(lambda: _delete_redis_keys(redis_keys))
     settings = AgentSettings(
         llm_base_url=None,
         llm_api_key=None,
@@ -71,6 +87,10 @@ async def test_chat_to_obs_query_end_to_end(tmp_path: Path) -> None:
         obs_wal_root=tmp_path / "wal",
         obs_raw_root=tmp_path / "raw",
         obs_enabled=True,
+        obs_redis_stream_key=redis_keys[0],
+        obs_redis_group_name=f"unibot-test-{uuid4().hex}",
+        obs_redis_dlq_key=redis_keys[1],
+        obs_redis_producers_key=redis_keys[2],
     )
     storage = StorageSettings(
         mysql_dsn=MYSQL_DSN,

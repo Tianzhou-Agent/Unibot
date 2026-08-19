@@ -30,7 +30,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, Field
+from tianzhou_agent_platform.store.observability_buffer import (
+    ObsRecord,
+    RecordType as RecordType,
+    WalError,
+    WalFlushTimeoutError,
+    WalGapError,
+    build_producer_instance_id as build_producer_instance_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,23 +62,6 @@ DEFAULT_FLUSH_TIMEOUT_SECONDS = 10.0
 DEFAULT_QUEUE_FULL_WAIT_SECONDS = 0.5
 # defensive upper bound for tracked gap sequences (extreme failure storms)
 MAX_GAP_SEQUENCES = 1000
-
-RecordType = Literal["trace_started", "trace_finished", "span_started", "span_finished", "event"]
-
-
-class ObsRecord(BaseModel):
-    """One immutable WAL payload; the unit of reliable persistence."""
-
-    schema_version: int = 1
-    record_id: str = Field(default_factory=lambda: f"obsrec_{os.urandom(16).hex()}")
-    record_type: RecordType
-    producer_instance_id: str
-    sequence_no: int
-    occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    trace_id: str
-    span_id: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -148,18 +138,6 @@ class WalMetrics:
             "obs_wal_sequence_no": self.sequence_no,
             "obs_wal_flushed_through": self.flushed_through,
         }
-
-
-class WalError(Exception):
-    """Base class for WAL failures."""
-
-
-class WalFlushTimeoutError(WalError):
-    """flush_through() did not complete within the configured timeout."""
-
-
-class WalGapError(WalError):
-    """A record could not be persisted; the WAL has a durability gap."""
 
 
 class CorruptSegmentError(WalError):
@@ -907,12 +885,3 @@ class WalWriter:
     def _set_exception_if_pending(future: asyncio.Future[None], exc: Exception) -> None:
         if not future.done():
             future.set_exception(exc)
-
-
-def build_producer_instance_id(node_id: str, process_id: int | None = None, startup_uuid: str | None = None) -> str:
-    """``<node_id>-<process_id>-<startup_uuid>`` (design section 7.1)."""
-    import uuid
-
-    process = process_id if process_id is not None else os.getpid()
-    startup = startup_uuid if startup_uuid is not None else uuid.uuid4().hex
-    return f"{node_id}-{process}-{startup}"

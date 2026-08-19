@@ -198,7 +198,7 @@ class AgentSettings(BaseSettings):
     obs_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("UNIBOT_OBS_ENABLED", "obs_enabled"),
-        description="Enable the OTel + WAL + OBS MySQL reliable observability pipeline.",
+        description="Enable the OTel + Redis Streams + OBS MySQL pipeline.",
     )
     obs_wal_root: Path = Field(
         default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "wal",
@@ -208,7 +208,52 @@ class AgentSettings(BaseSettings):
         default=4 * 1024 * 1024 * 1024,
         gt=0,
         validation_alias=AliasChoices("UNIBOT_OBS_WAL_MAX_BYTES", "obs_wal_max_bytes"),
-        description="Upper bound for total WAL bytes before operational attention is required.",
+        description="Legacy file-WAL limit retained for rollback compatibility.",
+    )
+    obs_redis_stream_key: str = Field(
+        default="unibot:obs:records:v1",
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_STREAM_KEY", "obs_redis_stream_key"),
+    )
+    obs_redis_group_name: str = Field(
+        default="unibot-obs-mysql-v1",
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_GROUP", "obs_redis_group_name"),
+    )
+    obs_redis_dlq_key: str = Field(
+        default="unibot:obs:records:dlq:v1",
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_DLQ_KEY", "obs_redis_dlq_key"),
+    )
+    obs_redis_producers_key: str = Field(
+        default="unibot:obs:producers:v1",
+        validation_alias=AliasChoices(
+            "UNIBOT_OBS_REDIS_PRODUCERS_KEY",
+            "obs_redis_producers_key",
+        ),
+    )
+    obs_redis_wait_replicas: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_WAIT_REPLICAS", "obs_redis_wait_replicas"),
+    )
+    obs_redis_durability_timeout_ms: int = Field(
+        default=10_000,
+        gt=0,
+        validation_alias=AliasChoices(
+            "UNIBOT_OBS_REDIS_DURABILITY_TIMEOUT_MS",
+            "obs_redis_durability_timeout_ms",
+        ),
+    )
+    obs_redis_claim_idle_ms: int = Field(
+        default=60_000,
+        gt=0,
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_CLAIM_IDLE_MS", "obs_redis_claim_idle_ms"),
+    )
+    obs_redis_producer_stale_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "UNIBOT_OBS_REDIS_PRODUCER_STALE_SECONDS",
+            "obs_redis_producer_stale_seconds",
+        ),
     )
     obs_raw_root: Path = Field(
         default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "raw",

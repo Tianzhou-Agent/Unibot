@@ -3,7 +3,7 @@
 Design (section 8 of ir-01): full model/tool IO is stored under
 ``<raw_root>/<tenant_id>/<user_id>/<trace_id>/<span_id>.json.gz`` after
 redaction. The file must be durably persisted *before* its reference is
-allowed into a WAL record or the database, so a crash never leaves a
+allowed into a durable-buffer record or the database, so a crash never leaves a
 database reference to a missing file. Orphaned ``.tmp`` files are possible
 after crashes and are cleaned by a periodic task.
 

@@ -464,7 +464,7 @@ class ObsQueryService:
             "name": span.get("name") or "",
             "status": status,
             "target_id": span.get("target_id"),
-            "target_version": None,
+            "target_version": span.get("target_version"),
             "logical_call_id": None,
             "attempt_no": 1,
             "started_at": _iso(span.get("started_at")) or datetime.now(timezone.utc).isoformat(),

@@ -15,6 +15,9 @@ from sqlalchemy import func, select, text
 from tianzhou_agent_platform.store.observability_store import (
     EVENTS_TABLE,
     OBS_METADATA,
+    OPS_FIRST_USE_TABLE,
+    OPS_REQUEST_AGENTS_TABLE,
+    OPS_USER_EVENTS_TABLE,
     SPANS_TABLE,
     TRACES_TABLE,
     ObservabilityStore,
@@ -67,7 +70,15 @@ def make_trace_finished(sequence_no: int, trace_id: str, *, user_id: str = "user
     )
 
 
-def make_span_finished(sequence_no: int, trace_id: str, span_id: str) -> ObsRecord:
+def make_span_finished(
+    sequence_no: int,
+    trace_id: str,
+    span_id: str,
+    *,
+    kind: str = "model",
+    target_id: str = "model-prod",
+    target_version: str | None = None,
+) -> ObsRecord:
     return ObsRecord(
         record_type="span_finished",
         producer_instance_id="node-1-abc",
@@ -81,9 +92,10 @@ def make_span_finished(sequence_no: int, trace_id: str, span_id: str) -> ObsReco
             "session_id": "conv_1",
             "user_id": "user_1",
             "tenant_id": "tenant_1",
-            "kind": "model",
+            "kind": kind,
             "name": "chat.completions",
-            "target_id": "model-prod",
+            "target_id": target_id,
+            "target_version": target_version,
             "model": "gpt-test",
             "status": "completed",
             "started_at": "2026-08-06T10:00:01Z",
@@ -161,6 +173,35 @@ async def test_upsert_idempotent_on_replay(store: ObservabilityStore) -> None:
     assert await _count(store, TRACES_TABLE) == 1
     assert await _count(store, SPANS_TABLE) == 1
     assert await _count(store, EVENTS_TABLE) == 1
+    assert await _count(store, OPS_USER_EVENTS_TABLE) == 1
+    assert await _count(store, OPS_FIRST_USE_TABLE) == 1
+
+
+async def test_operations_projection_is_idempotent_and_keeps_agent_version(store: ObservabilityStore) -> None:
+    batch = [
+        make_trace_finished(1, "trace_aaa"),
+        make_span_finished(
+            2,
+            "trace_aaa",
+            "span_aina",
+            kind="aina",
+            target_id="assistant-a",
+            target_version="1.2.0",
+        ),
+    ]
+    await store.bulk_upsert(batch)
+    await store.bulk_upsert(batch)
+
+    assert await _count(store, OPS_USER_EVENTS_TABLE) == 1
+    assert await _count(store, OPS_REQUEST_AGENTS_TABLE) == 1
+    assert await _count(store, OPS_FIRST_USE_TABLE) == 2
+    rows = await store.list_operation_agent_events(
+        tenant_id="tenant_1",
+        started_after=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        started_before=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert rows[0]["agent_id"] == "assistant-a"
+    assert rows[0]["agent_version"] == "1.2.0"
 
 
 async def test_events_keep_microsecond_order(store: ObservabilityStore) -> None:
