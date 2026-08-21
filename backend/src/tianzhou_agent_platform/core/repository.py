@@ -33,8 +33,10 @@ from tianzhou_agent_platform.core.model_settings import (
     ModelProviderUpdate,
     ModelRuntimeConfig,
 )
+from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceCreate, WorkspaceUpdate
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
+WORKSPACES_RESOURCE = "workspaces"
 CONVERSATIONS_RESOURCE = "conversations"
 MEMORIES_RESOURCE = "memories"
 TOOLS_RESOURCE = "tools"
@@ -67,6 +69,7 @@ class InMemoryRepository:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self._workspaces: dict[str, Workspace] = {}
         self._conversations: dict[str, Conversation] = {}
         self._tools: dict[str, ToolRecord] = {}
         self._skills: dict[str, SkillRecord] = {}
@@ -602,28 +605,38 @@ class InMemoryRepository:
                     for item in self._sandboxes.values()
                     if item.user_id == sandbox.user_id
                     and item.tenant_id == sandbox.tenant_id
+                    and item.workspace_id == sandbox.workspace_id
                     and item.id != sandbox.id
                 ),
                 None,
             )
             if existing is not None:
-                raise conflict("The user already owns a sandbox")
+                raise conflict("The sandbox scope already owns a sandbox")
             self._sandboxes[sandbox.id] = sandbox
             await self._save_record(SANDBOXES_RESOURCE, sandbox.id, sandbox)
             return self._copy(sandbox)
 
-    async def get_sandbox_for_actor(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
+    async def get_sandbox_for_actor(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+    ) -> SandboxRecord:
         async with self._lock:
             sandbox = next(
                 (
                     item
                     for item in self._sandboxes.values()
-                    if item.user_id == user_id and item.tenant_id == tenant_id
+                    if item.user_id == user_id
+                    and item.tenant_id == tenant_id
+                    and item.workspace_id == workspace_id
                 ),
                 None,
             )
             if sandbox is None:
-                raise not_found("Sandbox", f"{tenant_id}/{user_id}")
+                scope = workspace_id or "standalone"
+                raise not_found("Sandbox", f"{tenant_id}/{user_id}/{scope}")
             return self._copy(sandbox)
 
     async def put_sandbox_execution(self, execution: SandboxExecution) -> SandboxExecution:
@@ -637,13 +650,16 @@ class InMemoryRepository:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_id: str | None = None,
         limit: int = 50,
     ) -> list[SandboxExecution]:
         async with self._lock:
             values = [
                 self._copy(item)
                 for item in self._sandbox_executions.values()
-                if item.user_id == user_id and item.tenant_id == tenant_id
+                if item.user_id == user_id
+                and item.tenant_id == tenant_id
+                and item.workspace_id == workspace_id
             ]
         return sorted(values, key=lambda item: item.started_at, reverse=True)[:limit]
 
@@ -691,6 +707,7 @@ class InMemoryRepository:
         user_id: str | None = None,
         tenant_id: str | None = None,
         document_name: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[DocumentEditTask]:
         async with self._lock:
             values = [
@@ -699,6 +716,7 @@ class InMemoryRepository:
                 if (user_id is None or item.user_id == user_id)
                 and (tenant_id is None or item.tenant_id == tenant_id)
                 and (document_name is None or item.document_name == document_name)
+                and (workspace_id is None or item.workspace_id == workspace_id)
             ]
         return sorted(values, key=lambda item: item.created_at, reverse=True)
 
@@ -797,7 +815,78 @@ class InMemoryRepository:
                 del self._scheduled_aina_executions[execution_id]
                 await self._delete_record(SCHEDULED_AINA_EXECUTIONS_RESOURCE, execution_id)
 
+    async def create_workspace(self, data: WorkspaceCreate) -> Workspace:
+        workspace_suffix = uuid4().hex
+        workspace_id = f"workspace_{workspace_suffix}"
+        workspace = Workspace(
+            id=workspace_id,
+            storage_key=f"ws_{workspace_suffix}",
+            **data.model_dump(),
+        )
+        async with self._lock:
+            self._workspaces[workspace.id] = workspace
+            await self._save_record(WORKSPACES_RESOURCE, workspace.id, workspace)
+        return self._copy(workspace)
+
+    async def get_workspace(self, workspace_id: str) -> Workspace:
+        async with self._lock:
+            workspace = self._workspaces.get(workspace_id)
+            if workspace is None:
+                raise not_found("Workspace", workspace_id)
+            return self._copy(workspace)
+
+    async def require_workspace_actor(
+        self,
+        workspace_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> Workspace:
+        workspace = await self.get_workspace(workspace_id)
+        if workspace.user_id != user_id or workspace.tenant_id != tenant_id:
+            raise PlatformError(
+                code="PERMISSION_DENIED",
+                message="Workspace ownership does not match the caller",
+                status_code=403,
+            )
+        return workspace
+
+    async def list_workspaces(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[Workspace]:
+        async with self._lock:
+            values = [
+                self._copy(item)
+                for item in self._workspaces.values()
+                if (user_id is None or item.user_id == user_id)
+                and (tenant_id is None or item.tenant_id == tenant_id)
+            ]
+        return sorted(values, key=lambda item: item.updated_at, reverse=True)
+
+    async def update_workspace(self, workspace_id: str, data: WorkspaceUpdate) -> Workspace:
+        changes = data.model_dump(exclude_none=True)
+        async with self._lock:
+            workspace = self._workspaces.get(workspace_id)
+            if workspace is None:
+                raise not_found("Workspace", workspace_id)
+            updated = workspace.model_copy(
+                update={**changes, "updated_at": datetime.now(UTC)},
+                deep=True,
+            )
+            self._workspaces[workspace_id] = updated
+            await self._save_record(WORKSPACES_RESOURCE, workspace_id, updated)
+            return self._copy(updated)
+
     async def create_conversation(self, data: ConversationCreate) -> Conversation:
+        if data.workspace_id is not None:
+            await self.require_workspace_actor(
+                data.workspace_id,
+                user_id=data.user_id,
+                tenant_id=data.tenant_id,
+            )
         conversation = Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())
         async with self._lock:
             self._conversations[conversation.id] = conversation
@@ -834,6 +923,7 @@ class InMemoryRepository:
         user_id: str | None = None,
         tenant_id: str | None = None,
         category: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[Conversation]:
         async with self._lock:
             values = [
@@ -843,6 +933,7 @@ class InMemoryRepository:
                 and (user_id is None or item.user_id == user_id)
                 and (tenant_id is None or item.tenant_id == tenant_id)
                 and (category is None or item.category == category)
+                and (workspace_id is None or item.workspace_id == workspace_id)
             ]
         return sorted(values, key=lambda item: item.updated_at, reverse=True)
 

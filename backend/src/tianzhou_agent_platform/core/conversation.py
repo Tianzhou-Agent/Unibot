@@ -33,6 +33,7 @@ class Message(StrictModel):
 class ConversationCreate(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    workspace_id: str | None = None
     title: str = "新对话"
     category: str = Field(default="general", min_length=1, max_length=40)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -56,6 +57,7 @@ class Conversation(StrictModel):
     id: str
     user_id: str
     tenant_id: str
+    workspace_id: str | None = None
     title: str
     category: str = "general"
     status: Literal["active", "archived", "deleted"] = "active"

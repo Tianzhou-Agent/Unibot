@@ -92,8 +92,27 @@ def create_capability_router() -> APIRouter:
         request: Request,
     ) -> AinaCanvasResponse:
         scoped = bind_actor(request, payload)
+        data_repository = repository(request)
+        if scoped.conversation_id is not None:
+            conversation = await data_repository.require_conversation_actor(
+                scoped.conversation_id,
+                user_id=scoped.user_id,
+                tenant_id=scoped.tenant_id,
+            )
+            if scoped.workspace_id is not None and scoped.workspace_id != conversation.workspace_id:
+                raise PlatformError(
+                    "CONFLICT",
+                    "Requested workspace does not match the conversation",
+                    status_code=409,
+                )
+        elif scoped.workspace_id is not None:
+            await data_repository.require_workspace_actor(
+                scoped.workspace_id,
+                user_id=scoped.user_id,
+                tenant_id=scoped.tenant_id,
+            )
         return await open_aina(
-            repository(request),
+            data_repository,
             aina_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,

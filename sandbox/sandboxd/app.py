@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 WORKSPACE = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace")).resolve()
+RUNTIME = Path(os.getenv("SANDBOX_RUNTIME", str(WORKSPACE))).resolve()
 OUTPUT_LIMIT_BYTES = int(os.getenv("SANDBOX_OUTPUT_LIMIT_BYTES", "1000000"))
 FILE_LIMIT_BYTES = int(os.getenv("SANDBOX_FILE_LIMIT_BYTES", "25000000"))
 EXECUTION_LOCK = asyncio.Lock()
@@ -124,21 +125,24 @@ async def execute_serialized(payload: ExecutionRequest) -> ExecutionResult:
     if working_directory != WORKSPACE and WORKSPACE not in working_directory.parents:
         raise HTTPException(status_code=403, detail="Working directory escapes /workspace")
     working_directory.mkdir(parents=True, exist_ok=True)
+    RUNTIME.mkdir(parents=True, exist_ok=True)
+    python_packages = RUNTIME / ".python-packages"
+    npm_prefix = RUNTIME / ".npm-global"
     command = command_for(payload.language, payload.script)
     environment = {
-        "HOME": str(WORKSPACE),
+        "HOME": str(RUNTIME),
         "PYTHONUNBUFFERED": "1",
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
-        "PYTHONPATH": str(WORKSPACE / ".python-packages"),
-        "PIP_TARGET": str(WORKSPACE / ".python-packages"),
-        "npm_config_prefix": str(WORKSPACE / ".npm-global"),
+        "PYTHONPATH": str(python_packages),
+        "PIP_TARGET": str(python_packages),
+        "npm_config_prefix": str(npm_prefix),
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": os.pathsep.join(
             [
-                str(WORKSPACE / ".npm-global" / "bin"),
-                str(WORKSPACE / ".python-packages" / "bin"),
+                str(npm_prefix / "bin"),
+                str(python_packages / "bin"),
                 os.environ.get("PATH", ""),
             ]
         ),

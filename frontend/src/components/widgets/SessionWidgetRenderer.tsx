@@ -8,6 +8,7 @@ import { WidgetFormFields } from "./WidgetFormFields";
 
 interface SessionWidgetRendererProps {
   widget: WidgetDefinition;
+  workspaceId?: string | null;
   disabled?: boolean;
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
@@ -15,7 +16,7 @@ interface SessionWidgetRendererProps {
 
 export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
   if (props.widget.kind === "document_outline") {
-    return <DocumentOutlineWidget widget={props.widget} />;
+    return <DocumentOutlineWidget widget={props.widget} workspaceId={props.workspaceId} />;
   }
   return <DeclarativeSessionWidgetRenderer {...props} />;
 }

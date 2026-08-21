@@ -8,6 +8,7 @@ from tianzhou_agent_platform.core.base import StrictModel
 class DocumentActor(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    workspace_id: str | None = None
 
 
 class DocumentCreate(DocumentActor):

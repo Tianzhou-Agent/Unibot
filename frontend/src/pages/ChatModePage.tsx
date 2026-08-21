@@ -25,6 +25,7 @@ import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
+import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
 import type {
   AinaCanvasResponse,
   ApprovalRecord,
@@ -44,7 +45,8 @@ interface MessageFailure {
 }
 
 export default function ChatModePage() {
-  const { conversationId } = useParams<{ conversationId: string }>();
+  const { workspaceId, conversationId } = useParams<{ workspaceId?: string; conversationId?: string }>();
+  const routeWorkspaceId = workspaceId ?? null;
   const navigate = useNavigate();
   const { debugMode } = useDebugMode();
   const { profile } = useMockSession();
@@ -68,9 +70,26 @@ export default function ChatModePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const endRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
+  const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const localRunConversationIdRef = useRef<string | null>(null);
+  const localRunWorkspaceIdRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
+  const runGenerationRef = useRef(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   activeConversationIdRef.current = conversationId ?? null;
+  activeWorkspaceIdRef.current = routeWorkspaceId;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     if (!conversationId) return;
     let active = true;
@@ -136,6 +155,9 @@ export default function ChatModePage() {
         api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
       ]);
       if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
+      if ((record.workspace_id ?? null) !== activeWorkspaceIdRef.current) {
+        throw new Error("该对话不属于当前工作区，请从左侧选择正确的工作区。");
+      }
       setConversation(record);
       setApproval(pendingApprovals[0] ?? null);
       setTitleDraft(record.title);
@@ -155,10 +177,19 @@ export default function ChatModePage() {
 
   useEffect(() => {
     const continuingLocalRun = Boolean(
-      conversationId && localRunConversationIdRef.current === conversationId,
+      conversationId
+      && localRunWorkspaceIdRef.current === routeWorkspaceId
+      && localRunConversationIdRef.current === conversationId,
     );
-    setConversation((current) => (current?.id === conversationId ? current : null));
+    setConversation((current) => (
+      current && current.id === conversationId && (current.workspace_id ?? null) === routeWorkspaceId ? current : null
+    ));
     if (!continuingLocalRun) {
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      localRunConversationIdRef.current = null;
+      localRunWorkspaceIdRef.current = null;
       setOptimisticUser(null);
       setStreamText("");
       setActivity(null);
@@ -175,7 +206,7 @@ export default function ChatModePage() {
       setConversation(null);
       setLoading(false);
     }
-  }, [conversationId, loadConversation]);
+  }, [conversationId, loadConversation, routeWorkspaceId]);
 
   useEffect(() => {
     if (!conversationId || conversation?.run_status !== "running") return;
@@ -187,6 +218,11 @@ export default function ChatModePage() {
 
   useEffect(() => {
     const reset = () => {
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      localRunConversationIdRef.current = null;
+      localRunWorkspaceIdRef.current = null;
       setConversation(null);
       setApproval(null);
       setLastRun(null);
@@ -223,6 +259,15 @@ export default function ChatModePage() {
     setSending(true);
     let runConversationId = conversation?.id ?? null;
     localRunConversationIdRef.current = runConversationId;
+    localRunWorkspaceIdRef.current = routeWorkspaceId;
+    const runGeneration = ++runGenerationRef.current;
+    streamAbortRef.current?.abort();
+    const streamController = new AbortController();
+    streamAbortRef.current = streamController;
+    const isActiveRun = () => mountedRef.current
+      && runGenerationRef.current === runGeneration
+      && activeConversationIdRef.current === runConversationId
+      && activeWorkspaceIdRef.current === routeWorkspaceId;
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
     try {
@@ -230,16 +275,19 @@ export default function ChatModePage() {
       if (!targetConversation) {
         targetConversation = await api.post<ConversationRecord>("/conversations", {
           ...actor,
+          workspace_id: routeWorkspaceId,
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
           category: "general",
         });
+        if (!isActiveRun()) return;
         setConversation(targetConversation);
         setTitleDraft(targetConversation.title);
         runConversationId = targetConversation.id;
         localRunConversationIdRef.current = targetConversation.id;
+        localRunWorkspaceIdRef.current = routeWorkspaceId;
         activeConversationIdRef.current = targetConversation.id;
         notifyConversationsChanged();
-        navigate(`/chat/${targetConversation.id}`, { replace: true });
+        navigate(workspaceChatPath(routeWorkspaceId, targetConversation.id), { replace: true });
       }
       runConversationId = targetConversation.id;
       localRunConversationIdRef.current = targetConversation.id;
@@ -247,6 +295,7 @@ export default function ChatModePage() {
         {
           message: text,
           conversation_id: targetConversation.id,
+          workspace_id: routeWorkspaceId,
           ...actor,
         },
         (event: StreamEvent) => {
@@ -254,7 +303,7 @@ export default function ChatModePage() {
           if (event.type === "error") {
             streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
           }
-          if (activeConversationIdRef.current !== targetConversation.id) return;
+          if (!isActiveRun()) return;
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
           if (event.type === "tool.requested") {
             if (debugMode) {
@@ -272,16 +321,18 @@ export default function ChatModePage() {
             setError(streamFailure);
           }
         },
+        streamController.signal,
       );
       if (!completion) throw new Error(streamFailure ?? "智能体流程结束前没有返回完成事件。");
+      if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       if (["New conversation", "新对话"].includes(targetConversation.title)) {
         await api.patch(`/conversations/${completed.conversation_id}`, {
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
         });
       }
+      if (!isActiveRun()) return;
       notifyConversationsChanged();
-      if (activeConversationIdRef.current !== completed.conversation_id) return;
       setLastRun(completed);
       setApproval(completed.approval ?? null);
       const openAction = completed.widgets
@@ -292,19 +343,22 @@ export default function ChatModePage() {
         return;
       }
       if (conversationId !== completed.conversation_id) {
-        navigate(`/chat/${completed.conversation_id}`, { replace: true });
+        navigate(workspaceChatPath(routeWorkspaceId, completed.conversation_id), { replace: true });
       }
       await loadConversation(completed.conversation_id);
     } catch (sendError) {
-      if (runConversationId && activeConversationIdRef.current === runConversationId) {
+      if (isActiveRun()) {
         setError(apiErrorMessage(sendError));
-        await loadConversation(runConversationId, true);
+        if (runConversationId) await loadConversation(runConversationId, true);
       }
     } finally {
-      if (localRunConversationIdRef.current === runConversationId) {
+      const activeRun = isActiveRun();
+      if (runGenerationRef.current === runGeneration) {
         localRunConversationIdRef.current = null;
+        localRunWorkspaceIdRef.current = null;
+        if (streamAbortRef.current === streamController) streamAbortRef.current = null;
       }
-      if (runConversationId && activeConversationIdRef.current === runConversationId) {
+      if (activeRun) {
         setOptimisticUser(null);
         setStreamText("");
         setActivity(null);
@@ -375,15 +429,22 @@ export default function ChatModePage() {
   }
 
   async function openAina(ainaId: string, targetConversationId = conversation?.id) {
+    const expectedWorkspaceId = routeWorkspaceId;
+    const expectedConversationId = targetConversationId ?? null;
+    const isCurrentRoute = () => mountedRef.current
+      && activeWorkspaceIdRef.current === expectedWorkspaceId
+      && activeConversationIdRef.current === expectedConversationId;
     setError(null);
     try {
       const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...actor,
+        workspace_id: routeWorkspaceId,
         conversation_id: targetConversationId,
       });
-      navigate(canvas.route, { state: { canvas } });
+      if (!isCurrentRoute()) return;
+      navigate(workspaceCanvasPath(routeWorkspaceId, ainaId, targetConversationId), { state: { canvas } });
     } catch (openError) {
-      setError(apiErrorMessage(openError));
+      if (isCurrentRoute()) setError(apiErrorMessage(openError));
     }
   }
 
@@ -473,6 +534,7 @@ export default function ChatModePage() {
                       onPrompt={sendMessage}
                       debugMode={debugMode}
                       conversationId={conversation?.id ?? ""}
+                      workspaceId={routeWorkspaceId}
                       failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
                     />
                   ))
@@ -528,6 +590,7 @@ function ConversationMessage({
   onPrompt,
   debugMode,
   conversationId,
+  workspaceId,
   failures,
 }: {
   message: BackendMessage;
@@ -535,6 +598,7 @@ function ConversationMessage({
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
   conversationId: string;
+  workspaceId: string | null;
   failures: MessageFailure[];
 }) {
   const failure = failures[0] ?? null;
@@ -570,6 +634,7 @@ function ConversationMessage({
         <SessionWidgetRenderer
           key={widget.id}
           widget={widget}
+          workspaceId={workspaceId}
           onOpenAina={onOpenAina}
           onPrompt={onPrompt}
         />

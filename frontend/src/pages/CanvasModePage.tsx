@@ -12,10 +12,12 @@ import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
+import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
 import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext } from "@/types";
 
 export default function CanvasModePage() {
-  const { ainaId = "" } = useParams<{ ainaId: string }>();
+  const { workspaceId, ainaId = "" } = useParams<{ workspaceId?: string; ainaId: string }>();
+  const routeWorkspaceId = workspaceId ?? null;
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -42,11 +44,31 @@ export default function CanvasModePage() {
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const activeAinaIdRef = useRef(ainaId);
+  const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const activeConversationIdRef = useRef<string | null>(conversationId);
-  const localRunRef = useRef<{ ainaId: string; conversationId: string | null } | null>(null);
+  const localRunRef = useRef<{ workspaceId: string | null; ainaId: string; conversationId: string | null } | null>(null);
   const loadRequestRef = useRef(0);
+  const runGenerationRef = useRef(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
-  const loadConversation = useCallback(async (id: string, expectedAinaId = activeAinaIdRef.current, force = false) => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+    };
+  }, []);
+
+  const loadConversation = useCallback(async (
+    id: string,
+    expectedAinaId = activeAinaIdRef.current,
+    force = false,
+    expectedWorkspaceId = activeWorkspaceIdRef.current,
+  ) => {
     const requestId = ++loadRequestRef.current;
     const [record, pendingApprovals] = await Promise.all([
       api.get<ConversationRecord>(`/conversations/${id}`),
@@ -54,11 +76,15 @@ export default function CanvasModePage() {
     ]);
     if (
       requestId !== loadRequestRef.current
+      || activeWorkspaceIdRef.current !== expectedWorkspaceId
       || activeAinaIdRef.current !== expectedAinaId
       || activeConversationIdRef.current !== id
     ) return null;
+    if ((record.workspace_id ?? null) !== expectedWorkspaceId) {
+      throw new Error("该对话不属于当前工作区，请从左侧选择正确的工作区。");
+    }
     const localRun = localRunRef.current;
-    const isCurrentLocalRun = localRun?.ainaId === expectedAinaId && localRun.conversationId === id;
+    const isCurrentLocalRun = localRun?.workspaceId === activeWorkspaceIdRef.current && localRun?.ainaId === expectedAinaId && localRun.conversationId === id;
     if (!isCurrentLocalRun || force) setMessages(record.messages);
     setApproval(pendingApprovals[0] ?? null);
     if (!isCurrentLocalRun || force) {
@@ -74,12 +100,18 @@ export default function CanvasModePage() {
   useEffect(() => {
     let cancelled = false;
     const routeConversationId = searchParams.get("conversation") ?? stateCanvas?.conversation_id ?? null;
+    activeWorkspaceIdRef.current = routeWorkspaceId;
     activeAinaIdRef.current = ainaId;
     activeConversationIdRef.current = routeConversationId;
     loadRequestRef.current += 1;
-    const continuingLocalRun = localRunRef.current?.ainaId === ainaId
+    const continuingLocalRun = localRunRef.current?.workspaceId === routeWorkspaceId
+      && localRunRef.current?.ainaId === ainaId
       && localRunRef.current.conversationId === routeConversationId;
     if (!continuingLocalRun) {
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      localRunRef.current = null;
       setMessages([]);
       setSending(false);
       setRecoveringRun(false);
@@ -101,6 +133,7 @@ export default function CanvasModePage() {
     api
       .post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...actor,
+        workspace_id: routeWorkspaceId,
         conversation_id: routeConversationId,
       })
       .then((opened) => {
@@ -117,14 +150,20 @@ export default function CanvasModePage() {
     return () => {
       cancelled = true;
     };
-  }, [ainaId, searchParams, stateCanvas]);
+  }, [ainaId, routeWorkspaceId, searchParams, stateCanvas]);
 
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
       return;
     }
-    void loadConversation(conversationId, ainaId).catch((loadError) => setError(apiErrorMessage(loadError)));
+    let active = true;
+    void loadConversation(conversationId, ainaId).catch((loadError) => {
+      if (active) setError(apiErrorMessage(loadError));
+    });
+    return () => {
+      active = false;
+    };
   }, [ainaId, conversationId, loadConversation]);
 
   useEffect(() => {
@@ -144,8 +183,15 @@ export default function CanvasModePage() {
     if (!prompt || sending) return;
     const runAinaId = ainaId;
     let runConversationId = conversationId;
-    localRunRef.current = { ainaId: runAinaId, conversationId: runConversationId };
-    const isActiveRun = () => activeAinaIdRef.current === runAinaId
+    localRunRef.current = { workspaceId: routeWorkspaceId, ainaId: runAinaId, conversationId: runConversationId };
+    const runGeneration = ++runGenerationRef.current;
+    streamAbortRef.current?.abort();
+    const streamController = new AbortController();
+    streamAbortRef.current = streamController;
+    const isActiveRun = () => mountedRef.current
+      && runGenerationRef.current === runGeneration
+      && activeWorkspaceIdRef.current === routeWorkspaceId
+      && activeAinaIdRef.current === runAinaId
       && activeConversationIdRef.current === runConversationId;
     const optimistic: BackendMessage = {
       id: uid("canvas-user"),
@@ -168,17 +214,19 @@ export default function CanvasModePage() {
       if (!targetConversationId) {
         const created = await api.post<ConversationRecord>("/conversations", {
           ...actor,
+          workspace_id: routeWorkspaceId,
           title: `${canvas?.name ?? runAinaId} 对话`,
           category: "general",
           active_aina_ids: [runAinaId],
           primary_aina_id: runAinaId,
         });
+        if (!isActiveRun()) return;
         targetConversationId = created.id;
         runConversationId = created.id;
-        localRunRef.current = { ainaId: runAinaId, conversationId: created.id };
+        localRunRef.current = { workspaceId: routeWorkspaceId, ainaId: runAinaId, conversationId: created.id };
         activeConversationIdRef.current = created.id;
         setConversationId(created.id);
-        navigate(`/canvas/${runAinaId}?conversation=${created.id}`, {
+        navigate(workspaceCanvasPath(routeWorkspaceId, runAinaId, created.id), {
           replace: true,
           state: canvas ? { canvas: { ...canvas, conversation_id: created.id } } : undefined,
         });
@@ -187,6 +235,7 @@ export default function CanvasModePage() {
         {
           message: prompt,
           conversation_id: targetConversationId,
+          workspace_id: routeWorkspaceId,
           preferred_aina_id: runAinaId,
           ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
           ...actor,
@@ -206,6 +255,7 @@ export default function CanvasModePage() {
             setError(streamFailure);
           }
         },
+        streamController.signal,
       );
       if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
       if (!isActiveRun()) return;
@@ -215,6 +265,7 @@ export default function CanvasModePage() {
       activeConversationIdRef.current = completed.conversation_id;
       setConversationId(completed.conversation_id);
       await loadConversation(completed.conversation_id, runAinaId, true);
+      if (!isActiveRun()) return;
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
@@ -228,10 +279,12 @@ export default function CanvasModePage() {
         setError(apiErrorMessage(sendError));
       }
     } finally {
-      const isCurrentRun = localRunRef.current?.ainaId === runAinaId
-        && localRunRef.current.conversationId === runConversationId;
-      if (isCurrentRun) localRunRef.current = null;
-      if (isActiveRun()) {
+      const activeRun = isActiveRun();
+      if (runGenerationRef.current === runGeneration) {
+        localRunRef.current = null;
+        if (streamAbortRef.current === streamController) streamAbortRef.current = null;
+      }
+      if (activeRun) {
         setSending(false);
         setStreamText("");
         setActivity(null);
@@ -262,14 +315,23 @@ export default function CanvasModePage() {
   }
 
   async function openAina(targetAinaId: string, targetConversationId = conversationId) {
+    const expectedWorkspaceId = routeWorkspaceId;
+    const expectedAinaId = ainaId;
+    const expectedConversationId = targetConversationId ?? null;
+    const isCurrentRoute = () => mountedRef.current
+      && activeWorkspaceIdRef.current === expectedWorkspaceId
+      && activeAinaIdRef.current === expectedAinaId
+      && activeConversationIdRef.current === expectedConversationId;
     try {
       const opened = await api.post<AinaCanvasResponse>(`/ainas/${targetAinaId}/open`, {
         ...actor,
+        workspace_id: routeWorkspaceId,
         conversation_id: targetConversationId,
       });
-      navigate(opened.route, { state: { canvas: opened } });
+      if (!isCurrentRoute()) return;
+      navigate(workspaceCanvasPath(routeWorkspaceId, targetAinaId, targetConversationId), { state: { canvas: opened } });
     } catch (openError) {
-      setError(apiErrorMessage(openError));
+      if (isCurrentRoute()) setError(apiErrorMessage(openError));
     }
   }
 
@@ -311,7 +373,7 @@ export default function CanvasModePage() {
             </div>
             <button
               type="button"
-              onClick={() => navigate(conversationId ? `/chat/${conversationId}` : "/chat")}
+              onClick={() => navigate(workspaceChatPath(routeWorkspaceId, conversationId))}
               className="btn-outline h-8"
             >
               <ArrowLeft className="h-3.5 w-3.5" />退出画布
@@ -360,6 +422,7 @@ export default function CanvasModePage() {
                     onPrompt={(prompt) => void sendMessage(prompt)}
                     debugMode={debugMode}
                     conversationId={conversationId ?? ""}
+                    workspaceId={routeWorkspaceId}
                   />
                 ))}
                 {streamText ? (
@@ -404,9 +467,10 @@ export default function CanvasModePage() {
             )}>
               <div className="min-h-0 flex-1 overflow-hidden">
                 <MainWidgetRenderer
-                  key={canvas.main_widget.id}
+                  key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${canvas.main_widget.id}`}
                   ainaId={canvas.aina_id}
                   widget={canvas.main_widget}
+                  workspaceId={routeWorkspaceId}
                   disabled={false}
                   refreshToken={lastRun?.trace_id}
                   onOpenAina={(id) => void openAina(id)}
@@ -433,12 +497,14 @@ function CanvasMessage({
   onPrompt,
   debugMode,
   conversationId,
+  workspaceId,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
   conversationId: string;
+  workspaceId: string | null;
 }) {
   if (message.role === "user") return <UserMessage content={message.content} />;
   if (message.role === "tool") {
@@ -468,7 +534,7 @@ function CanvasMessage({
         />
       ) : null}
       {message.widgets?.map((widget) => (
-        <SessionWidgetRenderer key={widget.id} widget={widget} onOpenAina={onOpenAina} onPrompt={onPrompt} />
+        <SessionWidgetRenderer key={widget.id} widget={widget} workspaceId={workspaceId} onOpenAina={onOpenAina} onPrompt={onPrompt} />
       ))}
     </div>
   );

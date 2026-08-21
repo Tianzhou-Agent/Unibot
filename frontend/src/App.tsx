@@ -11,6 +11,7 @@ import OperationsAnalyticsPage from "@/pages/OperationsAnalyticsPage";
 import { AdminRoute } from "@/components/auth/AdminRoute";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import LoginPage from "@/pages/LoginPage";
+import WorkspacePage from "@/pages/WorkspacePage";
 import { RequireAuth } from "@/lib/auth";
 
 export default function App() {
@@ -22,6 +23,10 @@ export default function App() {
         <Route path="/chat" element={<ChatModePage />} />
         <Route path="/chat/:conversationId" element={<ChatModePage />} />
         <Route path="/canvas/:ainaId" element={<CanvasModePage />} />
+        <Route path="/workspaces/:workspaceId" element={<WorkspacePage />} />
+        <Route path="/workspaces/:workspaceId/chat" element={<ChatModePage />} />
+        <Route path="/workspaces/:workspaceId/chat/:conversationId" element={<ChatModePage />} />
+        <Route path="/workspaces/:workspaceId/canvas/:ainaId" element={<CanvasModePage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/apps" element={<AllAppsPage />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />

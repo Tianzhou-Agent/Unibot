@@ -71,16 +71,26 @@ class LocalProcessSandboxDriver(SandboxDriver):
 
     name = "local"
 
-    def __init__(self, workspace_root: Path, *, output_limit_bytes: int = 1_000_000) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        *,
+        persistent_workspace_root: Path | None = None,
+        output_limit_bytes: int = 1_000_000,
+    ) -> None:
         self.workspace_root = workspace_root.resolve()
+        self.persistent_workspace_root = (
+            persistent_workspace_root.resolve() if persistent_workspace_root is not None else None
+        )
         self.output_limit_bytes = output_limit_bytes
 
     async def ensure(self, sandbox: SandboxRecord) -> DriverSandboxState:
         workspace = self._workspace(sandbox)
         workspace.mkdir(parents=True, exist_ok=True)
+        self._runtime_workspace(sandbox).mkdir(parents=True, exist_ok=True)
         return DriverSandboxState(
             status="ready",
-            runtime_name="local-process-development",
+            runtime_name=sandbox.runtime_name,
             workspace=str(workspace),
         )
 
@@ -91,14 +101,16 @@ class LocalProcessSandboxDriver(SandboxDriver):
     ) -> DriverExecutionResult:
         workspace = self._workspace(sandbox)
         workspace.mkdir(parents=True, exist_ok=True)
+        runtime_workspace = self._runtime_workspace(sandbox)
+        runtime_workspace.mkdir(parents=True, exist_ok=True)
         working_directory = (workspace / request.working_directory).resolve()
         if working_directory != workspace and workspace not in working_directory.parents:
             raise PlatformError("PERMISSION_DENIED", "Working directory escapes the sandbox", status_code=403)
         working_directory.mkdir(parents=True, exist_ok=True)
         command = self._command(request.language, request.script)
-        python_packages = workspace / ".python-packages"
-        npm_prefix = workspace / ".npm-global"
-        temp_directory = workspace / ".tmp"
+        python_packages = runtime_workspace / ".python-packages"
+        npm_prefix = runtime_workspace / ".npm-global"
+        temp_directory = runtime_workspace / ".tmp"
         temp_directory.mkdir(exist_ok=True)
         system_environment = {
             name: value
@@ -114,8 +126,8 @@ class LocalProcessSandboxDriver(SandboxDriver):
                     os.environ.get("PATH", ""),
                 ]
             ),
-            "HOME": str(workspace),
-            "USERPROFILE": str(workspace),
+            "HOME": str(runtime_workspace),
+            "USERPROFILE": str(runtime_workspace),
             "TEMP": str(temp_directory),
             "TMP": str(temp_directory),
             "PYTHONUNBUFFERED": "1",
@@ -177,7 +189,7 @@ class LocalProcessSandboxDriver(SandboxDriver):
     async def stop(self, sandbox: SandboxRecord) -> DriverSandboxState:
         return DriverSandboxState(
             status="stopped",
-            runtime_name="local-process-development",
+            runtime_name=sandbox.runtime_name,
             workspace=str(self._workspace(sandbox)),
         )
 
@@ -215,12 +227,31 @@ class LocalProcessSandboxDriver(SandboxDriver):
             return
 
     async def reset(self, sandbox: SandboxRecord) -> None:
-        workspace = self._workspace(sandbox)
-        if workspace.exists():
-            shutil.rmtree(workspace)
+        runtime_workspace = self._runtime_workspace(sandbox)
+        if runtime_workspace.exists():
+            shutil.rmtree(runtime_workspace)
 
     def _workspace(self, sandbox: SandboxRecord) -> Path:
-        digest = hashlib.sha256(f"{sandbox.tenant_id}:{sandbox.user_id}".encode()).hexdigest()[:24]
+        if sandbox.workspace_id is None or self.persistent_workspace_root is None:
+            return self._runtime_workspace(sandbox)
+        storage_key = sandbox.workspace_storage_key
+        if storage_key is None:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "Workspace sandbox storage key is unavailable",
+                status_code=500,
+                source="sandbox",
+            )
+        workspace_root = (self.persistent_workspace_root / storage_key).resolve()
+        if workspace_root.parent != self.persistent_workspace_root:
+            raise PlatformError("PERMISSION_DENIED", "Invalid workspace storage key", status_code=403)
+        return workspace_root / "files"
+
+    def _runtime_workspace(self, sandbox: SandboxRecord) -> Path:
+        identity = f"{sandbox.tenant_id}:{sandbox.user_id}"
+        if sandbox.workspace_id is not None:
+            identity = f"{identity}:workspace:{sandbox.workspace_id}"
+        digest = hashlib.sha256(identity.encode()).hexdigest()[:24]
         workspace = (self.workspace_root / digest).resolve()
         if workspace.parent != self.workspace_root:
             raise PlatformError("PERMISSION_DENIED", "Invalid sandbox workspace", status_code=403)
@@ -280,6 +311,7 @@ class KubernetesSandboxDriver(SandboxDriver):
         token: str,
         ca_file: str | None,
         runtime_class: str,
+        workspace_pvc: str | None = None,
         ready_timeout_seconds: int = 60,
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -288,11 +320,13 @@ class KubernetesSandboxDriver(SandboxDriver):
         self.token = token
         self.ca_file = ca_file
         self.runtime_class = runtime_class
+        self.workspace_pvc = workspace_pvc
         self.ready_timeout_seconds = ready_timeout_seconds
         self._client = client or httpx.AsyncClient(verify=ca_file or True)
         self._owns_client = client is None
 
     async def ensure(self, sandbox: SandboxRecord) -> DriverSandboxState:
+        workspace_spec = self._workspace_spec(sandbox)
         url = self._resource_url(sandbox.runtime_name)
         response = await self._request("GET", url)
         if response.status_code == 404:
@@ -314,6 +348,7 @@ class KubernetesSandboxDriver(SandboxDriver):
                     "image": sandbox.image,
                     "runtimeClassName": self.runtime_class,
                     "desiredState": "Running",
+                    **workspace_spec,
                 },
             }
             response = await self._request("POST", self._collection_url(), json=payload)
@@ -324,6 +359,7 @@ class KubernetesSandboxDriver(SandboxDriver):
                 "desiredState": "Running",
                 "image": sandbox.image,
                 "runtimeClassName": self.runtime_class,
+                **workspace_spec,
             }
             if any(current_spec.get(key) != value for key, value in desired_spec.items()):
                 response = await self._request(
@@ -336,13 +372,46 @@ class KubernetesSandboxDriver(SandboxDriver):
         current = response.json()
         status = current.get("status", {})
         phase = str(status.get("phase") or "Provisioning")
+        endpoint = status.get("endpoint")
+        if workspace_spec and not (
+            status.get("workspaceMountReady") is True
+            and status.get("workspaceStorageKey") == workspace_spec["workspaceStorageKey"]
+            and status.get("workspacePersistentVolumeClaim")
+            == workspace_spec["workspacePersistentVolumeClaim"]
+        ):
+            phase = "Provisioning"
+            endpoint = None
         return DriverSandboxState(
             status=self._phase(phase),
             runtime_name=sandbox.runtime_name,
             workspace="/workspace",
-            endpoint=status.get("endpoint"),
+            endpoint=endpoint,
             error=status.get("message"),
         )
+
+    def _workspace_spec(self, sandbox: SandboxRecord) -> dict[str, str]:
+        if sandbox.workspace_id is None:
+            return {}
+        if self.workspace_pvc is None:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "Kubernetes workspace sandboxes require "
+                "UNIBOT_SANDBOX_KUBERNETES_WORKSPACE_PVC",
+                status_code=503,
+                source="sandbox",
+            )
+        if sandbox.workspace_storage_key is None:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "Workspace sandbox storage key is unavailable",
+                status_code=500,
+                source="sandbox",
+            )
+        return {
+            "workspaceId": sandbox.workspace_id,
+            "workspaceStorageKey": sandbox.workspace_storage_key,
+            "workspacePersistentVolumeClaim": self.workspace_pvc,
+        }
 
     async def execute(
         self,

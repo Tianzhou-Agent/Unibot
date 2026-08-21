@@ -164,6 +164,11 @@ def create_app(
     resolved_sandbox_service = sandbox_service or create_sandbox_service(
         resolved_settings,
         resolved_repository,
+        persistent_workspace_root=(
+            storage_settings.nas_root_path / "workspaces"
+            if storage_settings is not None
+            else None
+        ),
     )
     tracer_provider = (
         setup_tracer_provider(

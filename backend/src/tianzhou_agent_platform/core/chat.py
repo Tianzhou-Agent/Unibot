@@ -15,6 +15,7 @@ class ChatRequest(StrictModel):
         description="Transient UI context for the current request; it is not persisted as conversation content.",
     )
     conversation_id: str | None = None
+    workspace_id: str | None = None
     user_id: str = "anonymous"
     tenant_id: str = "default"
     capability: str | None = Field(

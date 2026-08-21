@@ -66,7 +66,7 @@ from tianzhou_agent_platform.core.context_compression import (
     summary_request,
 )
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient
 from tianzhou_agent_platform.core.model_settings import use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
@@ -131,6 +131,7 @@ class AgentState(TypedDict, total=False):
     conversation_id: str
     user_id: str
     tenant_id: str
+    workspace_id: str | None
     iterations: int
     max_iterations: int
     forced_function: str | None
@@ -572,6 +573,7 @@ class AgentRuntime:
                 user_id=state["user_id"],
                 tenant_id=state["tenant_id"],
                 conversation_id=state["conversation_id"],
+                workspace_id=state.get("workspace_id"),
                 trace_id=state["trace_id"],
             )
         elif capability.kind == "aina":
@@ -582,6 +584,7 @@ class AgentRuntime:
                 arguments=arguments,
                 call_id=call_id,
                 conversation_id=state["conversation_id"],
+                workspace_id=state.get("workspace_id"),
                 trace_id=state["trace_id"],
                 available_tools=available_tool_ids,
             )
@@ -789,7 +792,11 @@ class AgentRuntime:
     ) -> ChatResponse:
         if request.conversation_id is None:
             conversation = await self.repository.create_conversation(
-                ConversationCreate(user_id=request.user_id, tenant_id=request.tenant_id)
+                ConversationCreate(
+                    user_id=request.user_id,
+                    tenant_id=request.tenant_id,
+                    workspace_id=request.workspace_id,
+                )
             )
         else:
             conversation = await self.repository.require_conversation_actor(
@@ -797,6 +804,8 @@ class AgentRuntime:
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
             )
+            if request.workspace_id is not None and request.workspace_id != conversation.workspace_id:
+                raise conflict("Requested workspace does not match the conversation")
         trace_id = trace_id or f"trace_{uuid4().hex}"
         try:
             await self.repository.start_conversation_run(conversation.id, trace_id)
@@ -1148,6 +1157,7 @@ class AgentRuntime:
             "conversation_id": conversation.id,
             "user_id": conversation.user_id,
             "tenant_id": conversation.tenant_id,
+            "workspace_id": conversation.workspace_id,
             "iterations": 0,
             "max_iterations": self.settings.max_agent_iterations,
             "forced_function": forced_function,
@@ -1173,6 +1183,7 @@ class AgentRuntime:
                 "trace_id": trace_id,
                 "user_id": conversation.user_id,
                 "tenant_id": conversation.tenant_id,
+                "workspace_id": conversation.workspace_id,
             },
         }
         context: AgentContext = {

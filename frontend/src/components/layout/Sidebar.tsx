@@ -1,13 +1,13 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Check, LayoutGrid, LogOut, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Check, ChevronDown, ChevronRight, Folder, FolderOpen, LayoutGrid, LogOut, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames, timeAgo } from "@/lib/utils";
-import { CONVERSATION_CATEGORIES, conversationCategoryLabel } from "@/lib/conversationCategories";
 import type { ConversationRecord } from "@/types";
 import { useMockSession } from "@/lib/mockSession";
 import { useAuth } from "@/lib/auth";
+import { useWorkspace, workspaceChatPath, workspaceHomePath } from "@/lib/workspace";
 
 export const CONVERSATIONS_CHANGED_EVENT = "unibot:conversations-changed";
 
@@ -17,12 +17,15 @@ export function notifyConversationsChanged() {
 
 export function Sidebar() {
   const { profile } = useMockSession();
+  const { workspaces, activeWorkspaceId, loading: workspacesLoading, error: workspacesError, createWorkspace } = useWorkspace();
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set());
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -56,33 +59,49 @@ export function Sidebar() {
     });
   }, [conversations, query]);
 
-  const grouped = useMemo(() => {
-    const groups = new Map<string, ConversationRecord[]>();
+  const conversationsByWorkspace = useMemo(() => {
+    const grouped = new Map<string, ConversationRecord[]>();
+    for (const workspace of workspaces) grouped.set(workspace.id, []);
     for (const conversation of filtered) {
-      const values = groups.get(conversation.category) ?? [];
-      values.push(conversation);
-      groups.set(conversation.category, values);
+      if (!conversation.workspace_id || !grouped.has(conversation.workspace_id)) continue;
+      grouped.get(conversation.workspace_id)?.push(conversation);
     }
-    const order = new Map<string, number>(CONVERSATION_CATEGORIES.map((item, index) => [item.value, index]));
-    return [...groups.entries()].sort(([left], [right]) => (
-      (order.get(left) ?? 99) - (order.get(right) ?? 99) || left.localeCompare(right)
-    ));
-  }, [filtered]);
+    return grouped;
+  }, [filtered, workspaces]);
 
-  function startConversation() {
-    if (location.pathname === "/chat") {
+  const independentConversations = useMemo(
+    () => filtered.filter((conversation) => !conversation.workspace_id),
+    [filtered],
+  );
+
+  useEffect(() => {
+    const preferred = activeWorkspaceId ?? workspaces[0]?.id;
+    if (!preferred) return;
+    setExpandedWorkspaceIds((current) => {
+      if (current.has(preferred)) return current;
+      const next = new Set(current);
+      next.add(preferred);
+      return next;
+    });
+  }, [activeWorkspaceId, workspaces]);
+
+  function startConversation(workspaceId: string | null = null) {
+    const target = workspaceChatPath(workspaceId);
+    if (location.pathname === target) {
       window.dispatchEvent(new Event("unibot:new-conversation"));
     } else {
-      navigate("/chat");
+      navigate(target);
     }
   }
 
-  async function deleteConversation(conversationId: string) {
+  async function deleteConversation(conversation: ConversationRecord) {
     setDeleting(true);
     try {
-      await api.delete(`/conversations/${conversationId}`);
+      await api.delete(`/conversations/${conversation.id}`);
       setPendingDelete(null);
-      if (location.pathname === `/chat/${conversationId}`) navigate("/chat");
+      if (location.pathname === workspaceChatPath(conversation.workspace_id, conversation.id)) {
+        navigate(workspaceChatPath(conversation.workspace_id));
+      }
       await load();
     } catch (deleteError) {
       setError(apiErrorMessage(deleteError));
@@ -95,7 +114,10 @@ export function Sidebar() {
     <aside className="relative z-20 w-16 md:w-[220px] shrink-0 h-full bg-sidebar-bg text-ink-onDark flex flex-col dark-scroll">
       <div className="flex flex-col items-center gap-2 px-3 pt-4 pb-3 md:flex-row md:justify-between md:px-4">
         <Brand />
-        <NewConversationMenu onSelect={startConversation} />
+        <NewConversationMenu
+          onNewConversation={() => startConversation(null)}
+          onNewWorkspace={() => setWorkspaceDialogOpen(true)}
+        />
       </div>
 
       <div className="hidden px-4 pb-2 md:block">
@@ -112,15 +134,6 @@ export function Sidebar() {
         </label>
       </div>
 
-      <div className="hidden px-4 pb-2 md:flex items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
-          对话
-        </span>
-        <span className="ml-auto rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-ink-onDarkMuted">
-          {conversations.length}
-        </span>
-      </div>
-
       <nav className="hidden md:flex flex-col flex-1 min-h-0 px-3 pb-4" aria-label="对话列表">
         <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
           {loading ? <SkeletonList /> : null}
@@ -132,37 +145,96 @@ export function Sidebar() {
               </button>
             </div>
           ) : null}
-          {!loading && !error && filtered.length === 0 ? (
+          {!loading && !error && filtered.length === 0 && workspaces.length === 0 ? (
             <div className="px-2 py-8 text-center text-[11.5px] text-ink-onDarkMuted">
               {query ? "没有匹配的对话" : "还没有对话"}
             </div>
           ) : null}
-          {grouped.map(([category, records]) => (
-            <section key={category} aria-label={`${conversationCategoryLabel(category)}会话`}>
-              <div className="mb-1.5 flex items-center gap-2 px-1.5 text-[10px] font-bold text-ink-onDarkMuted">
-                <span>{conversationCategoryLabel(category)}</span>
-                <span className="ml-auto rounded-full bg-white/5 px-1.5 py-0.5">{records.length}</span>
-              </div>
-              <div className="space-y-1.5">
-                {records.map((conversation) => (
-                  <ConversationLink
-                    key={conversation.id}
-                    conversation={conversation}
-                    confirmingDelete={pendingDelete === conversation.id}
-                    deleting={deleting}
-                    onRequestDelete={() => setPendingDelete(conversation.id)}
-                    onCancelDelete={() => setPendingDelete(null)}
-                    onConfirmDelete={() => void deleteConversation(conversation.id)}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+          <section aria-label="工作区列表">
+            <div className="mb-1.5 flex items-center gap-2 px-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
+              <span>工作区</span>
+              <span className="rounded-full bg-white/5 px-1.5 py-0.5">{workspaces.length}</span>
+              <button
+                type="button"
+                onClick={() => setWorkspaceDialogOpen(true)}
+                className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-ink-onDarkMuted transition hover:bg-white/10 hover:text-white"
+                aria-label="创建工作区"
+                title="创建工作区"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {workspacesLoading ? <div className="mx-1 h-9 animate-pulse rounded-lg bg-white/5" /> : null}
+            {!workspacesLoading && workspacesError ? <p className="px-1.5 py-2 text-[10px] text-red-200">{workspacesError}</p> : null}
+            <div className="space-y-1.5">
+              {workspaces.map((workspace) => (
+                <WorkspaceConversationGroup
+                  key={workspace.id}
+                  workspaceId={workspace.id}
+                  name={workspace.name}
+                  conversations={conversationsByWorkspace.get(workspace.id) ?? []}
+                  expanded={query ? true : expandedWorkspaceIds.has(workspace.id)}
+                  onToggle={() => setExpandedWorkspaceIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(workspace.id)) next.delete(workspace.id);
+                    else next.add(workspace.id);
+                    return next;
+                  })}
+                  onNewConversation={() => startConversation(workspace.id)}
+                  pendingDelete={pendingDelete}
+                  deleting={deleting}
+                  onRequestDelete={setPendingDelete}
+                  onCancelDelete={() => setPendingDelete(null)}
+                  onConfirmDelete={(conversation) => void deleteConversation(conversation)}
+                />
+              ))}
+              {!workspacesLoading && !workspacesError && !workspaces.length ? (
+                <button type="button" onClick={() => setWorkspaceDialogOpen(true)} className="w-full rounded-lg border border-dashed border-sidebar-border px-3 py-3 text-left text-[10.5px] text-ink-onDarkMuted hover:bg-sidebar-hover">
+                  创建第一个工作区
+                </button>
+              ) : null}
+            </div>
+          </section>
+
+          <section aria-label="独立对话">
+            <div className="mb-1.5 flex items-center gap-2 px-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-ink-onDarkMuted">
+              <span>独立对话</span>
+              <span className="rounded-full bg-white/5 px-1.5 py-0.5">{independentConversations.length}</span>
+              <button type="button" onClick={() => startConversation(null)} className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-ink-onDarkMuted transition hover:bg-white/10 hover:text-white" aria-label="新建独立对话" title="新建独立对话">
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {independentConversations.map((conversation) => (
+                <ConversationLink
+                  key={conversation.id}
+                  conversation={conversation}
+                  confirmingDelete={pendingDelete === conversation.id}
+                  deleting={deleting}
+                  onRequestDelete={() => setPendingDelete(conversation.id)}
+                  onCancelDelete={() => setPendingDelete(null)}
+                  onConfirmDelete={() => void deleteConversation(conversation)}
+                />
+              ))}
+              {!loading && !independentConversations.length ? <p className="px-2 py-2 text-[10px] text-ink-onDarkMuted/70">暂无独立对话</p> : null}
+            </div>
+          </section>
         </div>
       </nav>
 
       <UserAccount />
       <FooterUtility />
+      {workspaceDialogOpen ? (
+        <WorkspaceCreateDialog
+          onClose={() => setWorkspaceDialogOpen(false)}
+          onCreate={async (input) => {
+            const workspace = await createWorkspace(input);
+            setExpandedWorkspaceIds((current) => new Set(current).add(workspace.id));
+            setWorkspaceDialogOpen(false);
+            navigate(workspaceHomePath(workspace.id));
+          }}
+        />
+      ) : null}
     </aside>
   );
 }
@@ -179,7 +251,13 @@ function Brand() {
   );
 }
 
-function NewConversationMenu({ onSelect }: { onSelect: () => void }) {
+function NewConversationMenu({
+  onNewConversation,
+  onNewWorkspace,
+}: {
+  onNewConversation: () => void;
+  onNewWorkspace: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
@@ -230,12 +308,24 @@ function NewConversationMenu({ onSelect }: { onSelect: () => void }) {
                   role="menuitem"
                   onClick={() => {
                     setOpen(false);
-                    onSelect();
+                    onNewConversation();
                   }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-ink transition-colors hover:bg-app-soft"
                 >
                   <MessageSquarePlus className="h-3.5 w-3.5 text-ink-muted" />
-                  新建对话
+                  新建独立对话
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onNewWorkspace();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-ink transition-colors hover:bg-app-soft"
+                >
+                  <Folder className="h-3.5 w-3.5 text-ink-muted" />
+                  新建工作区
                 </button>
               </div>
             </>,
@@ -246,6 +336,134 @@ function NewConversationMenu({ onSelect }: { onSelect: () => void }) {
   );
 }
 
+function WorkspaceConversationGroup({
+  workspaceId,
+  name,
+  conversations,
+  expanded,
+  onToggle,
+  onNewConversation,
+  pendingDelete,
+  deleting,
+  onRequestDelete,
+  onCancelDelete,
+  onConfirmDelete,
+}: {
+  workspaceId: string;
+  name: string;
+  conversations: ConversationRecord[];
+  expanded: boolean;
+  onToggle: () => void;
+  onNewConversation: () => void;
+  pendingDelete: string | null;
+  deleting: boolean;
+  onRequestDelete: (conversationId: string) => void;
+  onCancelDelete: () => void;
+  onConfirmDelete: (conversation: ConversationRecord) => void;
+}) {
+  const location = useLocation();
+  const active = location.pathname.startsWith(`${workspaceHomePath(workspaceId)}/`) || location.pathname === workspaceHomePath(workspaceId);
+  return (
+    <div className="rounded-lg border border-sidebar-border/80 bg-sidebar-bg">
+      <div className={classNames("group flex h-9 items-center gap-1 rounded-lg px-1.5", active && "bg-sidebar-hover")}>
+        <button type="button" onClick={onToggle} className="flex h-7 w-6 shrink-0 items-center justify-center rounded text-ink-onDarkMuted hover:bg-white/10 hover:text-white" aria-label={`${expanded ? "收起" : "展开"}${name}`}>
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+        <NavLink to={workspaceHomePath(workspaceId)} className="flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] font-bold text-ink-onDark" title={name}>
+          {active ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-blue-300" /> : <Folder className="h-3.5 w-3.5 shrink-0 text-ink-onDarkMuted" />}
+          <span className="truncate">{name}</span>
+          <span className="ml-auto shrink-0 rounded-full bg-white/5 px-1.5 py-0.5 text-[9px] font-normal text-ink-onDarkMuted">{conversations.length}</span>
+        </NavLink>
+        <button type="button" onClick={onNewConversation} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-onDarkMuted opacity-0 transition hover:bg-white/10 hover:text-white group-hover:opacity-100 focus-visible:opacity-100" aria-label={`在 ${name} 新建对话`} title="新建对话">
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {expanded ? (
+        <div className="space-y-1 border-t border-sidebar-border/70 px-1.5 py-1.5">
+          {conversations.map((conversation) => (
+            <ConversationLink
+              key={conversation.id}
+              conversation={conversation}
+              confirmingDelete={pendingDelete === conversation.id}
+              deleting={deleting}
+              compact
+              onRequestDelete={() => onRequestDelete(conversation.id)}
+              onCancelDelete={onCancelDelete}
+              onConfirmDelete={() => onConfirmDelete(conversation)}
+            />
+          ))}
+          {!conversations.length ? <p className="px-2 py-1.5 text-[9.5px] text-ink-onDarkMuted/70">暂无对话</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkspaceCreateDialog({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (input: { name: string; description?: string }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) onClose();
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [onClose, saving]);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onCreate({ name: name.trim(), description: description.trim() || undefined });
+    } catch (createError) {
+      setError(apiErrorMessage(createError));
+      setSaving(false);
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <form onSubmit={(event) => void submit(event)} role="dialog" aria-modal="true" aria-label="创建工作区" className="w-full max-w-md rounded-xl border border-line bg-white p-5 text-ink shadow-xl">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent"><FolderPlusIcon /></span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[15px] font-extrabold">创建工作区</h2>
+            <p className="mt-1 text-[11.5px] text-ink-muted">工作区内的对话和产物会共享同一份 NAS 存储空间。</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-muted hover:bg-app-soft hover:text-ink" aria-label="关闭创建工作区"><X className="h-4 w-4" /></button>
+        </div>
+        <label className="mt-4 block text-[11.5px] font-bold text-ink">名称
+          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus required maxLength={160} placeholder="例如：产品发布计划" className="input-soft mt-1.5" />
+        </label>
+        <label className="mt-3 block text-[11.5px] font-bold text-ink">描述
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} maxLength={2000} placeholder="说明这个工作区要完成的目标（可选）" className="input-soft mt-1.5 resize-none" />
+        </label>
+        {error ? <p className="mt-3 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2 text-[11.5px] text-danger-deep">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={saving} className="btn-outline">取消</button>
+          <button type="submit" disabled={saving || !name.trim()} className="btn-primary disabled:opacity-50">{saving ? "创建中…" : "创建"}</button>
+        </div>
+      </form>
+    </div>,
+    document.body,
+  );
+}
+
+function FolderPlusIcon() {
+  return <Plus className="h-5 w-5" />;
+}
+
 function ConversationLink({
   conversation,
   confirmingDelete,
@@ -253,6 +471,7 @@ function ConversationLink({
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete,
+  compact = false,
 }: {
   conversation: ConversationRecord;
   confirmingDelete: boolean;
@@ -260,6 +479,7 @@ function ConversationLink({
   onRequestDelete: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
+  compact?: boolean;
 }) {
   const preview = conversation.messages.at(-1)?.content || "等待第一条消息";
   const title = conversation.title === "New conversation" ? "新对话" : conversation.title;
@@ -293,9 +513,9 @@ function ConversationLink({
       data-testid={`conversation-row-${conversation.id}`}
     >
       <NavLink
-        to={`/chat/${conversation.id}`}
+        to={workspaceChatPath(conversation.workspace_id, conversation.id)}
         className={({ isActive }) => classNames(
-          "block rounded-lg border px-3 py-2.5 pr-10 transition-colors",
+          classNames("block rounded-lg border pr-10 transition-colors", compact ? "px-2 py-2" : "px-3 py-2.5"),
           isActive ? "bg-sidebar-active border-transparent" : "bg-sidebar-bg border-sidebar-border hover:bg-sidebar-hover",
         )}
       >

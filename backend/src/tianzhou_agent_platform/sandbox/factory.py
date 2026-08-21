@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.repository import InMemoryRepository
@@ -13,10 +15,13 @@ from tianzhou_agent_platform.sandbox.service import SandboxService
 def create_sandbox_service(
     settings: AgentSettings,
     repository: InMemoryRepository,
+    *,
+    persistent_workspace_root: Path | None = None,
 ) -> SandboxService:
     if settings.sandbox_driver == "local":
         driver = LocalProcessSandboxDriver(
             settings.sandbox_workspace_root,
+            persistent_workspace_root=persistent_workspace_root,
             output_limit_bytes=settings.sandbox_output_limit_bytes,
         )
     else:
@@ -38,5 +43,6 @@ def create_sandbox_service(
                 else None
             ),
             runtime_class=settings.sandbox_runtime_class,
+            workspace_pvc=settings.sandbox_kubernetes_workspace_pvc,
         )
     return SandboxService(repository, driver, default_image=settings.sandbox_default_image)

@@ -79,6 +79,7 @@ export async function streamChat(
   payload: {
     message: string;
     conversation_id?: string;
+    workspace_id?: string | null;
     user_id?: string;
     tenant_id?: string;
     capability?: string;

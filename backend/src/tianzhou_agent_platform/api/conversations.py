@@ -17,12 +17,21 @@ def create_conversation_router() -> APIRouter:
         user_id: str | None = None,
         tenant_id: str | None = None,
         category: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[Conversation]:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        return await repository(request).list_conversations(
+        data_repository = repository(request)
+        if workspace_id is not None:
+            await data_repository.require_workspace_actor(
+                workspace_id,
+                user_id=actor.user_id,
+                tenant_id=actor.tenant_id,
+            )
+        return await data_repository.list_conversations(
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
             category=category,
+            workspace_id=workspace_id,
         )
 
     @router.get("/conversations/{conversation_id}", response_model=Conversation)

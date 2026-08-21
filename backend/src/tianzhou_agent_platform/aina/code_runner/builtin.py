@@ -120,6 +120,7 @@ async def invoke_code_runner_tool(
     *,
     user_id: str,
     tenant_id: str,
+    workspace_id: str | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
     language = {
         RUN_PYTHON_TOOL_ID: "python",
@@ -132,6 +133,7 @@ async def invoke_code_runner_tool(
         SandboxExecutionRequest(
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_id=workspace_id,
             language=language,
             script=str(arguments.get("script") or ""),
             timeout_seconds=int(arguments.get("timeout_seconds") or 60),

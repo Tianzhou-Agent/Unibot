@@ -446,16 +446,26 @@ async def invoke_document_tool(
     *,
     user_id: str,
     tenant_id: str,
+    workspace_storage_key: str | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
     name = str(arguments.get("name") or "").strip()
     if tool_id == LIST_DOCUMENTS_TOOL_ID:
-        items = await service.list_documents(user_id=user_id, tenant_id=tenant_id)
+        items = await service.list_documents(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         return {"count": len(items), "documents": [item.model_dump(mode="json") for item in items]}, []
     if tool_id == SEARCH_DOCUMENTS_TOOL_ID:
         query = str(arguments.get("query") or "").strip()
         if not query:
             raise PlatformError("INVALID_REQUEST", "document.search requires query")
-        matches = await service.search_documents(query, user_id=user_id, tenant_id=tenant_id)
+        matches = await service.search_documents(
+            query,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         return {
             "query": query,
             "count": len(matches),
@@ -467,10 +477,20 @@ async def invoke_document_tool(
     if not isinstance(occurrence, int) or isinstance(occurrence, bool) or occurrence < 1:
         raise PlatformError("INVALID_REQUEST", f"{tool_id} occurrence must be a positive integer")
     if tool_id == OUTLINE_DOCUMENT_TOOL_ID:
-        outline = await service.get_outline(name, user_id=user_id, tenant_id=tenant_id)
+        outline = await service.get_outline(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         return {"outline": outline.model_dump(mode="json")}, []
     if tool_id == BROWSE_DOCUMENT_TOOL_ID:
-        outline = await service.get_outline(name, user_id=user_id, tenant_id=tenant_id)
+        outline = await service.get_outline(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         levels = [heading.level for heading in outline.headings]
         root_level = min(levels, default=1)
         chapter_level = root_level + 1 if root_level + 1 in levels else root_level
@@ -513,6 +533,7 @@ async def invoke_document_tool(
             occurrence,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
         return {"section": section.model_dump(mode="json")}, []
     if tool_id == UPDATE_DOCUMENT_SECTION_TOOL_ID:
@@ -530,16 +551,23 @@ async def invoke_document_tool(
             str(arguments["expected_revision"]),
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
         return {"updated_section": updated_section.model_dump(mode="json")}, []
     if tool_id == READ_DOCUMENT_TOOL_ID:
-        document = await service.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        document = await service.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
     elif tool_id == CREATE_DOCUMENT_TOOL_ID:
         document = await service.create_document(
             name,
             str(arguments.get("content") or ""),
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
     elif tool_id == APPEND_DOCUMENT_TOOL_ID:
         if "content" not in arguments:
@@ -549,6 +577,7 @@ async def invoke_document_tool(
             str(arguments["content"]),
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
     elif tool_id == RENAME_DOCUMENT_TOOL_ID:
         new_name = str(arguments.get("new_name") or "").strip()
@@ -559,9 +588,15 @@ async def invoke_document_tool(
             new_name,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
     elif tool_id == DELETE_DOCUMENT_TOOL_ID:
-        deleted = await service.delete_document(name, user_id=user_id, tenant_id=tenant_id)
+        deleted = await service.delete_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         return {"deleted": deleted, "name": name}, []
     else:
         raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown document tool {tool_id!r}", status_code=404)
@@ -575,6 +610,7 @@ async def invoke_document_edit_task_tool(
     *,
     user_id: str,
     tenant_id: str,
+    workspace_id: str | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
     if tool_id == CREATE_EDIT_TASK_TOOL_ID:
         name = _required_string(arguments, "name", tool_id)
@@ -588,6 +624,7 @@ async def invoke_document_edit_task_tool(
             DocumentEditTaskCreate(
                 user_id=user_id,
                 tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 description=description,
                 sections=sections,
             ),
@@ -596,13 +633,34 @@ async def invoke_document_edit_task_tool(
 
     if tool_id == LIST_EDIT_TASKS_TOOL_ID:
         name = _required_string(arguments, "name", tool_id)
-        tasks = await service.list_tasks(name, user_id=user_id, tenant_id=tenant_id)
+        tasks = await service.list_tasks(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
         return {"count": len(tasks), "tasks": [task.model_dump(mode="json") for task in tasks]}, []
 
     task_id = _required_string(arguments, "task_id", tool_id)
+    if tool_id not in {
+        READ_EDIT_TASK_TOOL_ID,
+        UPDATE_DRAFT_TOOL_ID,
+        AI_REVISE_DRAFT_TOOL_ID,
+        RETRY_EDIT_TASK_TOOL_ID,
+        MERGE_EDIT_SECTION_TOOL_ID,
+        ABANDON_EDIT_SECTION_TOOL_ID,
+    }:
+        raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown document edit task tool {tool_id!r}", status_code=404)
+    task = await service.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+    if task.workspace_id != workspace_id:
+        raise PlatformError(
+            "CONFLICT",
+            "Document edit task does not belong to the current workspace",
+            status_code=409,
+        )
     if tool_id == READ_EDIT_TASK_TOOL_ID:
-        task = await service.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
-    elif tool_id == UPDATE_DRAFT_TOOL_ID:
+        return {"task": task.model_dump(mode="json")}, []
+    if tool_id == UPDATE_DRAFT_TOOL_ID:
         section_id = _required_string(arguments, "section_id", tool_id)
         if "content" not in arguments:
             raise PlatformError("INVALID_REQUEST", f"{tool_id} requires content")
@@ -639,8 +697,6 @@ async def invoke_document_edit_task_tool(
             user_id=user_id,
             tenant_id=tenant_id,
         )
-    else:
-        raise PlatformError("RESOURCE_NOT_FOUND", f"Unknown document edit task tool {tool_id!r}", status_code=404)
     return {"task": task.model_dump(mode="json")}, []
 
 

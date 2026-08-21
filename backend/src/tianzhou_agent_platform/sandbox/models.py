@@ -15,6 +15,7 @@ ExecutionLanguage = Literal["python", "bash", "shell", "node"]
 class SandboxEnsureRequest(StrictModel):
     user_id: str = Field(default="anonymous", min_length=1, max_length=160)
     tenant_id: str = Field(default="default", min_length=1, max_length=160)
+    workspace_id: str | None = Field(default=None, min_length=1, max_length=160)
 
 
 class SandboxExecutionRequest(SandboxEnsureRequest):
@@ -49,6 +50,13 @@ class SandboxRecord(StrictModel):
     id: str
     user_id: str
     tenant_id: str
+    workspace_id: str | None = None
+    workspace_storage_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
     image: str
     driver: Literal["local", "kubernetes"]
     status: SandboxStatus = "provisioning"
@@ -66,6 +74,7 @@ class SandboxExecution(StrictModel):
     sandbox_id: str
     user_id: str
     tenant_id: str
+    workspace_id: str | None = None
     language: ExecutionLanguage
     script: str
     working_directory: str = "."

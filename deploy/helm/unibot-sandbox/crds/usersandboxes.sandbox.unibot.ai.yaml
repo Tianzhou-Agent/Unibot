@@ -48,6 +48,20 @@ spec:
                 userId:
                   type: string
                   minLength: 1
+                workspaceId:
+                  type: string
+                  minLength: 1
+                  maxLength: 160
+                workspaceStorageKey:
+                  type: string
+                  minLength: 1
+                  maxLength: 160
+                  pattern: ^[A-Za-z0-9_-]+$
+                workspacePersistentVolumeClaim:
+                  type: string
+                  minLength: 1
+                  maxLength: 253
+                  pattern: ^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$
                 image:
                   type: string
                   minLength: 1
@@ -92,6 +106,12 @@ spec:
                 endpoint:
                   type: string
                 message:
+                  type: string
+                workspaceMountReady:
+                  type: boolean
+                workspaceStorageKey:
+                  type: string
+                workspacePersistentVolumeClaim:
                   type: string
                 observedGeneration:
                   type: integer

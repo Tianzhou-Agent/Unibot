@@ -131,6 +131,7 @@ class RemoteCapabilityGateway:
         user_id: str,
         tenant_id: str,
         conversation_id: str,
+        workspace_id: str | None = None,
         trace_id: str,
     ) -> tuple[Any, float]:
         validate_value(arguments, tool.input_schema, label=f"Tool {tool.tool_id} arguments")
@@ -143,6 +144,8 @@ class RemoteCapabilityGateway:
             "conversation_id": conversation_id,
             "trace_id": trace_id,
         }
+        if workspace_id is not None:
+            payload["workspace_id"] = workspace_id
         started = perf_counter()
         result = await self._request_json(
             "POST",
@@ -166,6 +169,7 @@ class RemoteCapabilityGateway:
         arguments: dict[str, Any],
         call_id: str,
         conversation_id: str,
+        workspace_id: str | None = None,
         trace_id: str,
         available_tools: list[str],
     ) -> tuple[AinaInvokeResponse, float]:
@@ -183,6 +187,7 @@ class RemoteCapabilityGateway:
                 arguments=arguments,
                 call_id=call_id,
                 conversation_id=conversation_id,
+                workspace_id=workspace_id,
                 trace_id=trace_id,
                 available_tools=available_tools,
             )
@@ -217,7 +222,10 @@ class RemoteCapabilityGateway:
             session_id=conversation_id,
             conversation_id=conversation_id,
             input=arguments,
-            context={"source": "agent"},
+            context={
+                "source": "agent",
+                **({"workspace_id": workspace_id} if workspace_id is not None else {}),
+            },
             authorization={"permissions": installation.granted_permissions},
             trace={"trace_id": trace_id},
             available_tools=available_tools,

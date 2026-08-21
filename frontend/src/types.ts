@@ -136,6 +136,17 @@ export interface SettingsResponse {
 
 export type ConversationStatus = "active" | "archived" | "deleted";
 
+export interface WorkspaceRecord {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  storage_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface BackendMessage {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
@@ -157,6 +168,7 @@ export interface ConversationRecord {
   id: string;
   user_id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   title: string;
   category: string;
   status: ConversationStatus;
@@ -484,6 +496,7 @@ export interface SandboxRecord {
   id: string;
   user_id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   image: string;
   driver: "local" | "kubernetes";
   status: SandboxStatus;
@@ -501,6 +514,7 @@ export interface SandboxExecution {
   sandbox_id: string;
   user_id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   language: SandboxExecutionLanguage;
   script: string;
   working_directory: string;

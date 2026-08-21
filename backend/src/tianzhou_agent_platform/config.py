@@ -4,7 +4,7 @@ import socket
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -128,6 +128,24 @@ class AgentSettings(BaseSettings):
         default=Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"),
         validation_alias=AliasChoices("UNIBOT_SANDBOX_KUBERNETES_CA_FILE", "sandbox_kubernetes_ca_file"),
     )
+    sandbox_kubernetes_workspace_pvc: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=253,
+        pattern=r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
+        validation_alias=AliasChoices(
+            "UNIBOT_SANDBOX_KUBERNETES_WORKSPACE_PVC",
+            "sandbox_kubernetes_workspace_pvc",
+        ),
+    )
+
+    @field_validator("sandbox_kubernetes_workspace_pvc", mode="before")
+    @classmethod
+    def empty_workspace_pvc_disables_kubernetes_workspace_mount(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     sandbox_runtime_class: str = Field(
         default="gvisor",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_RUNTIME_CLASS", "sandbox_runtime_class"),
