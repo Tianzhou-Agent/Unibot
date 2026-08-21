@@ -7,13 +7,13 @@ import {
   Check,
   RotateCcw,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
+import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -48,6 +48,7 @@ export default function ChatModePage() {
   const { workspaceId, conversationId } = useParams<{ workspaceId?: string; conversationId?: string }>();
   const routeWorkspaceId = workspaceId ?? null;
   const navigate = useNavigate();
+  const location = useLocation();
   const { debugMode } = useDebugMode();
   const { profile } = useMockSession();
   const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
@@ -448,10 +449,22 @@ export default function ChatModePage() {
     }
   }
 
+  const initialPrompt = (location.state as { initialPrompt?: string } | null)?.initialPrompt?.trim()
+    || searchParams.get("prompt")?.trim()
+    || "";
+
   const messages = useMemo(
     () => [...(conversation?.messages ?? []), ...(optimisticUser ? [optimisticUser] : [])],
     [conversation?.messages, optimisticUser],
   );
+  const toolResultsByCallId = useMemo(() => new Map(
+    messages
+      .filter((message) => message.role === "tool" && message.tool_call_id)
+      .map((message) => [message.tool_call_id as string, message]),
+  ), [messages]);
+  const requestedToolCallIds = useMemo(() => new Set(
+    messages.flatMap((message) => message.tool_calls?.map((call) => call.id) ?? []),
+  ), [messages]);
 
   const title = conversation?.title === "New conversation" ? "新对话" : conversation?.title ?? "新对话";
   const badge = deleted
@@ -462,7 +475,7 @@ export default function ChatModePage() {
 
   return (
     <>
-    <div className="h-full flex flex-col bg-app-bg">
+    <div className="flex h-full flex-col bg-app-bg">
       <Topbar
         title={title}
         badge={badge}
@@ -518,26 +531,35 @@ export default function ChatModePage() {
       ) : null}
 
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5" aria-live="polite">
-          <div className="max-w-4xl mx-auto space-y-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
+          <div className="mx-auto max-w-[760px] space-y-7">
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
               ) : null}
               {!loading && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
               {!deleted
-                ? messages.map((message) => (
-                    <ConversationMessage
-                      key={message.id}
-                      message={message}
-                      onOpenAina={(ainaId) => void openAina(ainaId)}
-                      onPrompt={sendMessage}
-                      debugMode={debugMode}
-                      conversationId={conversation?.id ?? ""}
-                      workspaceId={routeWorkspaceId}
-                      failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
-                    />
-                  ))
+                ? messages.map((message, index) => {
+                    if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+                    const continuesToolSequence = isToolSequenceContinuation(messages, index);
+                    return (
+                      <div key={message.id} className={continuesToolSequence ? "!mt-2" : undefined}>
+                        <ConversationMessage
+                          message={message}
+                          onOpenAina={(ainaId) => void openAina(ainaId)}
+                          onPrompt={sendMessage}
+                          debugMode={debugMode}
+                          conversationId={conversation?.id ?? ""}
+                          workspaceId={routeWorkspaceId}
+                          failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
+                          toolResultsByCallId={toolResultsByCallId}
+                          requestedToolCallIds={requestedToolCallIds}
+                          showToolHeader={!continuesToolSequence}
+                          toolHeaderCount={toolSequenceCallCount(messages, index)}
+                        />
+                      </div>
+                    );
+                  })
                 : null}
               {streamText ? (
                 <AssistantMessage
@@ -568,6 +590,7 @@ export default function ChatModePage() {
           {!deleted ? (
             <ChatComposer
               disabled={sending || loading}
+              initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
               onSend={sendMessage}
             />
@@ -592,6 +615,10 @@ function ConversationMessage({
   conversationId,
   workspaceId,
   failures,
+  toolResultsByCallId,
+  requestedToolCallIds,
+  showToolHeader,
+  toolHeaderCount,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
@@ -600,6 +627,10 @@ function ConversationMessage({
   conversationId: string;
   workspaceId: string | null;
   failures: MessageFailure[];
+  toolResultsByCallId: ReadonlyMap<string, BackendMessage>;
+  requestedToolCallIds: ReadonlySet<string>;
+  showToolHeader: boolean;
+  toolHeaderCount: number;
 }) {
   const failure = failures[0] ?? null;
   if (message.role === "system") return null;
@@ -613,12 +644,14 @@ function ConversationMessage({
       </div>
     );
   }
-  if (message.role === "tool") return debugMode ? <ToolResultMessage message={message} /> : null;
+  if (message.role === "tool") {
+    if (message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+    return <ToolResultCard message={message} debugMode={debugMode} />;
+  }
   const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
     <div className="space-y-2">
-      {debugMode && hasToolCalls ? <ToolCallMessage message={message} /> : null}
-      {message.content && (!hasToolCalls || debugMode) ? (
+      {message.content ? (
         <AssistantMessage
           conversationId={conversationId}
           message={{
@@ -628,6 +661,15 @@ function ConversationMessage({
             createdAt: message.created_at,
             runState: "done",
           }}
+        />
+      ) : null}
+      {hasToolCalls ? (
+        <ToolCallList
+          calls={message.tool_calls ?? []}
+          resultsByCallId={toolResultsByCallId}
+          debugMode={debugMode}
+          showHeader={showToolHeader}
+          headerCount={toolHeaderCount}
         />
       ) : null}
       {message.widgets?.map((widget) => (
@@ -663,57 +705,8 @@ function FailedCallNotice({ conversationId, traceId, failure }: { conversationId
   );
 }
 
-function ToolCallMessage({ message }: { message: BackendMessage }) {
-  return (
-    <div className="rounded-lg border border-accent-ring bg-accent-soft px-3.5 py-3">
-      <div className="flex items-center gap-2 text-[12.5px] font-bold text-accent-hover">
-        <Wrench className="w-4 h-4" />
-        智能体请求调用能力
-      </div>
-      <div className="mt-2 space-y-1.5">
-        {message.tool_calls?.map((call) => (
-          <div key={call.id} className="rounded-md border border-accent-ring/70 bg-white px-2.5 py-2">
-            <div className="font-mono text-[11.5px] text-ink">{call.function.name}</div>
-            <div className="mt-1 font-mono text-[10.5px] text-ink-muted break-all">
-              {call.function.arguments}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ToolResultMessage({ message }: { message: BackendMessage }) {
-  const isError = toolResultIsError(message.content);
-  return (
-    <details className="rounded-lg border border-line bg-white px-3.5 py-2.5">
-      <summary className="cursor-pointer text-[12px] font-bold text-ink-muted">
-        {isError ? "能力调用失败" : "能力调用结果"} · {message.name}
-      </summary>
-      <pre className="mt-2 whitespace-pre-wrap break-all text-[10.5px] leading-relaxed text-ink-muted">
-        {formatJson(message.content)}
-      </pre>
-    </details>
-  );
-}
-
-function toolResultIsError(content: string): boolean {
-  try {
-    const payload: unknown = JSON.parse(content);
-    return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "error");
-  } catch {
-    return false;
-  }
-}
-
 function ActivityBubble({ text }: { text: string }) {
-  return (
-    <div className="rounded-lg border border-accent-ring bg-accent-soft h-11 px-3.5 flex items-center gap-2.5">
-      <span className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
-      <span className="text-accent-hover text-[12.5px] font-semibold">{text}</span>
-    </div>
-  );
+  return <ToolActivityCard text={text} />;
 }
 
 function RunSummary({ response }: { response: ChatResponse }) {
@@ -745,14 +738,16 @@ function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; det
 
 function ChatComposer({
   disabled,
+  initialText,
   sessionId,
   onSend,
 }: {
   disabled: boolean;
+  initialText: string;
   sessionId: string | null;
   onSend: (text: string) => void;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -763,12 +758,12 @@ function ChatComposer({
   }
 
   return (
-    <div className="border-t border-line bg-white px-5 py-3">
-      <div className="mx-auto max-w-4xl space-y-2">
+    <div className="bg-white px-4 pb-5 pt-3 md:px-6">
+      <div className="mx-auto max-w-[760px] space-y-2">
         <TaskTreeWidget sessionId={sessionId} />
         <form
           onSubmit={submit}
-          className="rounded-xl border border-line-strong bg-white p-2.5 shadow-soft focus-within:border-accent"
+          className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
         >
           <textarea
             value={text}
@@ -780,10 +775,10 @@ function ChatComposer({
               }
             }}
             disabled={disabled}
-            rows={2}
-            placeholder="给 Unibot 发消息；Enter 发送，Shift+Enter 换行"
+            rows={1}
+            placeholder="补充约束，或继续安排下一步…"
             aria-label="消息"
-            className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
+            className="w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
           />
           <div className="mt-2 flex items-center justify-between gap-2">
             <ModelSelector disabled={disabled} />
@@ -791,10 +786,10 @@ function ChatComposer({
               type="submit"
               disabled={disabled || !text.trim()}
               className={classNames(
-                "w-9 h-9 rounded-lg flex items-center justify-center text-white transition-colors",
+                "flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors",
                 !disabled && text.trim()
                   ? "bg-accent hover:bg-accent-hover"
-                  : "bg-ink-subtle cursor-not-allowed",
+                  : "bg-ink cursor-not-allowed opacity-80",
               )}
               aria-label="发送消息"
             >
@@ -858,12 +853,4 @@ function ChatSkeleton() {
       ))}
     </div>
   );
-}
-
-function formatJson(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
 }

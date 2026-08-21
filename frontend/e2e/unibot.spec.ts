@@ -1095,7 +1095,7 @@ test("FE-E2E-001 新建会话并展示流式回复", async ({ page }) => {
   await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 });
 
-test("FE-E2E-001W 创建工作区并在其中发起会话", async ({ page }) => {
+test("FE-E2E-001W Demo · 场景说明：进入工作区并直接发起任务", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/chat");
 
@@ -1106,13 +1106,27 @@ test("FE-E2E-001W 创建工作区并在其中发起会话", async ({ page }) => 
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
 
   await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
-  await expect(page.locator("main").getByRole("heading", { name: "产品发布计划", exact: true }).first()).toBeVisible();
-  await page.locator("main").getByRole("link", { name: "新建会话", exact: true }).click();
-  await page.getByRole("textbox", { name: "消息", exact: true }).fill("生成发布检查清单");
-  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(page.locator("main").getByText("产品发布计划", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "搜索或创建任务", exact: true }).fill("生成发布检查清单");
+  await page.getByRole("button", { name: "开始任务", exact: true }).click();
 
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\?prompt=/);
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("生成发布检查清单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
+  await expect(page.locator("main p").filter({ hasText: "生成发布检查清单" })).toBeVisible();
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
   expect(state.lastStreamPayload?.workspace_id).toBe("workspace-e2e-1");
+
+  await page.getByRole("link", { name: "文件", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
+  await page.locator("main").getByRole("link", { name: /guide\.md/ }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/canvas\/unibot-documents$/);
+  const editor = page.getByRole("textbox", { name: "全文 Markdown 编辑器" });
+  await editor.fill("# 发布检查清单\n\n- [x] Demo 场景已跑通\n");
+  await page.getByRole("button", { name: "保存文档" }).click();
+  await expect(editor).toHaveValue(/Demo 场景已跑通/);
+  expect(state.documentContent).toContain("Demo 场景已跑通");
 });
 
 test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ page }) => {
@@ -1236,6 +1250,7 @@ test("FE-E2E-001WC 离开运行中的工作区聊天后不会跳回旧路由", a
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("开始一个慢任务");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.locator('aside a[href="/workspaces/workspace-b"]').click();
 
   await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
@@ -1270,6 +1285,7 @@ test("FE-E2E-001WD 离开运行中的 Workspace Canvas 后不会执行旧打开�
   await page.getByRole("textbox", { name: "画布消息" }).fill("运行一个慢 Canvas 任务");
   await page.getByRole("button", { name: "发送画布消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.locator('aside a[href="/workspaces/workspace-b"]').click();
 
   await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
@@ -1518,6 +1534,7 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
 test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "已有会话" })).toBeVisible();
   const conversationList = page.getByRole("navigation", { name: "对话列表" });
@@ -1532,7 +1549,10 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await conversationRow.hover();
   await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await conversationList.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
+  const deleteDialog = page.getByRole("alertdialog", { name: "删除会话", exact: true });
+  await expect(deleteDialog.getByText("重命名后的会话", { exact: true })).toBeVisible();
+  await expect(deleteDialog.getByText("工作区中已经生成的文件和其他产物不会受到影响。", { exact: true })).toBeVisible();
+  await deleteDialog.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
   await expect(page).toHaveURL(/\/chat$/);
   await expect(conversationList.getByText("重命名后的会话", { exact: true })).toHaveCount(0);
 });
@@ -1540,6 +1560,7 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
 test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
 
   const row = page.getByTestId("conversation-row-conv-e2e-1");
   const moreButton = row.getByRole("button", { name: "更多操作", exact: true });
@@ -1556,6 +1577,33 @@ test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ pa
 
   await moreButton.click();
   await expect(page.getByRole("menu", { name: "已有会话 对话操作", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-002C 对话与文件导航状态保持互斥", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [workspace()],
+    conversations: [conversation({ workspace_id: "workspace-e2e-1" })],
+  });
+
+  await page.goto("/chat");
+  const rail = page.getByRole("complementary", { name: "快捷导航" });
+  await expect(rail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(rail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await rail.getByRole("button", { name: "展开导航", exact: true }).click();
+  const mainNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(mainNavigation.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(mainNavigation.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await page.goto("/workspaces/workspace-e2e-1/chat/conv-e2e-1");
+  const workspaceRail = page.getByRole("complementary", { name: "快捷导航" });
+  await expect(workspaceRail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(workspaceRail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await page.goto("/workspaces/workspace-e2e-1");
+  const workspaceNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(workspaceNavigation.getByRole("link", { name: "对话", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+  await expect(workspaceNavigation.getByRole("link", { name: "文件", exact: true })).toHaveClass(/bg-sidebar-active/);
 });
 
 test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
@@ -1800,8 +1848,64 @@ test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ p
 
   await page.goto("/chat/conv-e2e-1");
 
-  await expect(page.getByText("能力调用结果 · builtin_document_edit_task_create_success", { exact: true })).toBeVisible();
-  await expect(page.getByText("能力调用失败 · builtin_document_edit_task_create_error", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 builtin_document_edit_task_create_success 完成", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 builtin_document_edit_task_create_error 失败", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004E 普通模式按设计稿展示并合并工具调用结果", async ({ page }) => {
+  await installMockApi(page, {
+    conversations: [
+      conversation({
+        messages: [
+          {
+            id: "msg-tool-request",
+            role: "assistant",
+            content: "我先检索公开资料并提取证据。",
+            content_type: "text",
+            tool_calls: [{
+              id: "call-search",
+              type: "function",
+              function: { name: "browser.search", arguments: JSON.stringify({ query: "CNCF survey 2025" }) },
+            }],
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-result",
+            role: "tool",
+            name: "browser.search",
+            tool_call_id: "call-search",
+            content: JSON.stringify({ status: "ok", results: [{ title: "CNCF Annual Survey" }] }),
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-summary",
+            role: "assistant",
+            content: "检索完成，已整理关键来源。",
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText("我先检索公开资料并提取证据。", { exact: true })).toBeVisible();
+  await expect(page.getByText("检索完成，已整理关键来源。", { exact: true })).toBeVisible();
+  const card = page.getByLabel("工具调用 browser.search 完成", { exact: true });
+  await expect(card).toHaveCount(1);
+  await expect(card.getByText("联网搜索", { exact: true })).toBeVisible();
+  await expect(card.getByText("CNCF survey 2025", { exact: true })).toBeVisible();
+  await card.locator("summary").click();
+  await expect(card.getByText("调用参数", { exact: true })).toBeVisible();
+  await expect(card.getByText("返回结果", { exact: true })).toBeVisible();
+
+  await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
+  await expect(page.getByLabel("工具调用 browser.search 完成", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
@@ -2500,6 +2604,7 @@ test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page 
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
 
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.getByTestId("conversation-row-conv-other").click();
   await expect(page).toHaveURL(/\/chat\/conv-other$/);
   await expect(main.getByText("这是另一个会话的独立消息。", { exact: true })).toBeVisible();
