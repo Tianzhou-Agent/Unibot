@@ -80,6 +80,24 @@ def test_model_settings_support_multiple_models_and_mask_secrets() -> None:
     assert updated.json()["has_api_key"] is True
 
 
+def test_model_provider_can_be_deleted() -> None:
+    with TestClient(create_app(settings=_settings())) as client:
+        created = client.post("/model-settings/providers", json=_provider_payload()).json()
+        selected_model = created["models"][0]
+        client.post(
+            f"/model-settings/providers/{created['id']}/models/{selected_model['id']}/default",
+            json={},
+        )
+
+        deleted = client.delete(f"/model-settings/providers/{created['id']}")
+        loaded = client.get("/model-settings")
+
+    assert deleted.status_code == 204
+    assert loaded.status_code == 200
+    assert loaded.json()["providers"] == []
+    assert loaded.json()["active_model"]["source"] == "environment"
+
+
 def test_model_discovery_reads_openai_compatible_models_and_reuses_saved_key() -> None:
     requests: list[httpx.Request] = []
 

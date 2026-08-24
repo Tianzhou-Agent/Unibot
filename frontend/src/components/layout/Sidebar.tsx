@@ -270,8 +270,7 @@ export function Sidebar() {
         </div>
       </nav>
 
-      <UserAccount />
-      <FooterUtility />
+      <AccountFooter />
       {workspaceDialogOpen ? (
         <WorkspaceCreateDialog
           onClose={() => setWorkspaceDialogOpen(false)}
@@ -747,82 +746,132 @@ function SkeletonList() {
   );
 }
 
-function FooterUtility() {
+function AccountFooter() {
   const { profile, isAdmin, toggleRole } = useMockSession();
-  const { user, config } = useAuth();
-  const canAccessAdmin = config.auth_required ? Boolean(user?.is_admin) : true;
-  return (
-    <div className="border-t border-sidebar-border p-3">
-      {!config.auth_required ? (
-        <button
-          type="button"
-          onClick={toggleRole}
-          aria-label={`切换身份，当前${profile.roleLabel}`}
-          className="mb-2 flex h-10 w-full items-center gap-2 rounded-lg px-2 text-ink transition-colors hover:bg-sidebar-hover"
-        >
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#D9DEE7] text-[10px] font-bold">{profile.initials}</span>
-          <span className="min-w-0 flex-1 text-left"><span className="block truncate text-[10.5px] font-semibold">{profile.name}</span><span className="block truncate text-[9px] text-ink-subtle">Mock · {profile.roleLabel}</span></span>
-          {isAdmin ? <ShieldCheck className="h-3.5 w-3.5 text-accent" /> : <UserRound className="h-3.5 w-3.5 text-ink-subtle" />}
-        </button>
-      ) : null}
-      <div className="grid grid-cols-4 gap-2">
-        <FooterButton to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} />
-        <FooterButton to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} />
-        <FooterButton to="/obs" label="OBS" icon={<Activity className="h-4 w-4" />} />
-        {canAccessAdmin ? <FooterButton to="/admin/observability" label="管理" icon={<ShieldCheck className="h-4 w-4" />} /> : null}
-      </div>
-    </div>
-  );
-}
-
-function UserAccount() {
   const { user, config, logout } = useAuth();
   const navigate = useNavigate();
-  if (!user) return null;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const canAccessAdmin = config.auth_required ? Boolean(user?.is_admin) : true;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!footerRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+
+  const displayName = config.auth_required ? user?.name : profile.name;
+  const detail = config.auth_required ? user?.email : `Mock · ${profile.roleLabel}`;
+
   return (
-    <div className="border-t border-sidebar-border px-3 py-2">
-      <div className="flex items-center gap-2 rounded-lg px-1.5 py-1.5">
-        {user.avatar_url ? (
+    <div ref={footerRef} className="relative border-t border-sidebar-border p-3">
+      <div className="flex h-11 items-center gap-2 rounded-xl px-2 transition-colors hover:bg-sidebar-hover">
+        {user?.avatar_url ? (
           <img src={user.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
-        ) : (
+        ) : config.auth_required ? (
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D9DEE7] text-ink-muted">
             <UserRound className="h-4 w-4" />
           </span>
+        ) : (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D9DEE7] text-[10px] font-bold text-ink-muted">
+            {profile.initials}
+          </span>
         )}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[11.5px] font-bold text-ink">{user.name}</div>
-          <div className="truncate text-[9.5px] text-ink-subtle">{config.auth_required ? user.email : "本地模式"}</div>
+          <div className="truncate text-[11.5px] font-bold text-ink">{displayName}</div>
+          <div className="truncate text-[9.5px] text-ink-subtle">{detail}</div>
         </div>
-        {config.auth_required ? (
-          <button
-            type="button"
-            aria-label="退出登录"
-            title="退出登录"
-            onClick={() => void logout().then(() => navigate("/login", { replace: true }))}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-subtle transition hover:bg-sidebar-hover hover:text-ink"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={() => setMenuOpen((current) => !current)}
+          aria-label="打开用户菜单"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          className={classNames(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-subtle transition-colors hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring",
+            menuOpen && "bg-white text-ink shadow-sm",
+          )}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
       </div>
+
+      {menuOpen ? (
+        <div
+          role="menu"
+          aria-label="用户菜单"
+          className="absolute bottom-[calc(100%+8px)] left-3 right-3 z-50 overflow-hidden rounded-xl border border-line bg-white p-1.5 shadow-[0_12px_32px_rgba(15,17,21,0.14)]"
+        >
+          <FooterMenuLink to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
+          <FooterMenuLink to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
+          <FooterMenuLink to="/obs" label="OBS" icon={<Activity className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
+          {canAccessAdmin ? (
+            <FooterMenuLink to="/admin/observability" label="管理" icon={<ShieldCheck className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
+          ) : null}
+          <div className="my-1 border-t border-line" />
+          {!config.auth_required ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                toggleRole();
+              }}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[11.5px] text-ink transition-colors hover:bg-app-soft"
+            >
+              {isAdmin ? <UserRound className="h-4 w-4 text-ink-subtle" /> : <ShieldCheck className="h-4 w-4 text-accent" />}
+              切换为{isAdmin ? "普通用户" : "管理员"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void logout().then(() => navigate("/login", { replace: true }))}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[11.5px] text-ink transition-colors hover:bg-app-soft"
+            >
+              <LogOut className="h-4 w-4 text-ink-subtle" />
+              退出登录
+            </button>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function FooterButton({ to, label, icon }: { to: string; label: string; icon: React.ReactNode }) {
+function FooterMenuLink({
+  to,
+  label,
+  icon,
+  onSelect,
+}: {
+  to: string;
+  label: string;
+  icon: React.ReactNode;
+  onSelect: () => void;
+}) {
   return (
     <NavLink
       to={to}
-      aria-label={label}
-      title={label}
-      className={({ isActive }) =>
-        classNames(
-          "h-10 rounded-lg flex items-center justify-center transition-colors",
-          isActive ? "bg-sidebar-active text-ink" : "text-ink-subtle hover:bg-sidebar-hover hover:text-ink",
-        )
-      }
+      role="menuitem"
+      onClick={onSelect}
+      className={({ isActive }) => classNames(
+        "flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[11.5px] transition-colors",
+        isActive ? "bg-sidebar-active font-semibold text-ink" : "text-ink hover:bg-app-soft",
+      )}
     >
-      {icon}
+      <span className="text-ink-subtle">{icon}</span>
+      {label}
     </NavLink>
   );
 }

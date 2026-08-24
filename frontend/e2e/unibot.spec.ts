@@ -860,6 +860,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           : { source: "environment", provider_name: "环境变量", model_name: "env-model", model: "env-model" },
       });
     }
+    if (method === "DELETE" && /^\/model-settings\/providers\/[^/]+$/.test(path)) {
+      const providerId = path.split("/")[3];
+      state.modelProviders = state.modelProviders.filter((provider) => provider.id !== providerId);
+      return route.fulfill({ status: 204 });
+    }
     if (method === "POST" && path === "/model-settings/providers/discover-models") {
       return json(route, {
         models: [
@@ -1961,9 +1966,11 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   });
   await page.goto("/settings");
 
-  await expect(page.getByRole("link", { name: "应用", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "设置", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "OBS", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
+  const userMenu = page.getByRole("menu", { name: "用户菜单", exact: true });
+  await expect(userMenu.getByRole("menuitem", { name: "应用", exact: true })).toBeVisible();
+  await expect(userMenu.getByRole("menuitem", { name: "设置", exact: true })).toBeVisible();
+  await expect(userMenu.getByRole("menuitem", { name: "OBS", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   const providerSection = page.getByLabel("Provider 团队模型服务");
   await providerSection.getByRole("heading", { name: "团队模型服务", exact: true }).click();
@@ -1980,9 +1987,39 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("当前模型").getByText("快速模型", { exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "OBS", exact: true }).click();
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
+  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "OBS", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004F 可从折叠状态删除 Provider", async ({ page }) => {
+  await installMockApi(page, {
+    modelProviders: [
+      {
+        id: "provider-delete-e2e",
+        provider_type: "openai",
+        name: "待删除模型服务",
+        base_url: "https://delete.example.com/v1",
+        api_key_masked: "del******-key",
+        has_api_key: true,
+        timeout_seconds: 60,
+        models: [
+          { id: "model-delete", name: "待删除模型", model: "delete-model", enabled: true, is_default: true },
+        ],
+      },
+    ],
+  });
+  await page.goto("/settings");
+
+  const providerSection = page.getByLabel("Provider 待删除模型服务");
+  await page.getByRole("button", { name: "删除 待删除模型服务", exact: true }).click();
+  await expect(providerSection.getByText("删除后该 Provider 的全部模型配置将不可恢复。", { exact: true })).toBeVisible();
+  await providerSection.getByRole("button", { name: "确认删除", exact: true }).click();
+
+  await expect(page.getByText("Provider 已删除。", { exact: true })).toBeVisible();
+  await expect(providerSection).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "尚未添加 Provider", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
@@ -2000,9 +2037,10 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "需要管理员权限", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "可观测", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "OBS", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
+  await expect(page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "OBS", exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "OBS", exact: true }).click();
+  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "OBS", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toHaveCount(0);
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
