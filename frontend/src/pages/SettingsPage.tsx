@@ -252,40 +252,44 @@ function ProviderSection({
   const [collapsed, setCollapsed] = useState(true);
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white shadow-card" aria-label={`Provider ${provider.name}`}>
-      <button
-        type="button"
-        onClick={() => setCollapsed((c) => !c)}
-        className="flex w-full flex-wrap items-center gap-3 border-b border-line px-4 py-3 text-left"
-      >
-        {collapsed ? <ChevronRight className="h-4 w-4 shrink-0 text-ink-subtle" /> : <ChevronDown className="h-4 w-4 shrink-0 text-accent" />}
-        <div className="flex h-8 w-8 items-center justify-center rounded bg-app-soft text-ink-muted"><Server className="h-4 w-4" /></div>
-        <div className="min-w-40">
-          <div className="flex items-center gap-2">
-            <h3 className="text-[13px] font-extrabold text-ink">{provider.name}</h3>
-            <span className="rounded bg-app-soft px-1.5 py-0.5 text-[9.5px] font-bold uppercase text-ink-muted">{providerTypeLabel(provider.provider_type)}</span>
+      <div className="flex w-full items-stretch border-b border-line">
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={!collapsed}
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-3 px-4 py-3 text-left"
+        >
+          {collapsed ? <ChevronRight className="h-4 w-4 shrink-0 text-ink-subtle" /> : <ChevronDown className="h-4 w-4 shrink-0 text-accent" />}
+          <div className="flex h-8 w-8 items-center justify-center rounded bg-app-soft text-ink-muted"><Server className="h-4 w-4" /></div>
+          <div className="min-w-40">
+            <div className="flex items-center gap-2">
+              <h3 className="text-[13px] font-extrabold text-ink">{provider.name}</h3>
+              <span className="rounded bg-app-soft px-1.5 py-0.5 text-[9.5px] font-bold uppercase text-ink-muted">{providerTypeLabel(provider.provider_type)}</span>
+            </div>
+            <p className="mt-0.5 max-w-xl truncate font-mono text-[10.5px] text-ink-subtle">{provider.base_url}</p>
           </div>
-          <p className="mt-0.5 max-w-xl truncate font-mono text-[10.5px] text-ink-subtle">{provider.base_url}</p>
+          <div className="flex-1" />
+          <div className="hidden items-center gap-4 text-[10.5px] text-ink-muted sm:flex">
+            <span className="flex items-center gap-1"><KeyRound className="h-3 w-3" />{provider.api_key_masked}</span>
+            <span className="flex items-center gap-1"><Clock3 className="h-3 w-3" />{provider.timeout_seconds}s</span>
+          </div>
+        </button>
+        <div className="flex shrink-0 items-center gap-1 pr-4">
+          <button type="button" onClick={onEdit} className="btn-ghost h-8 w-8 p-0" aria-label={`编辑 ${provider.name}`} title="编辑 Provider"><Pencil className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={onRequestDelete} aria-expanded={confirmingDelete} className="btn-ghost h-8 w-8 p-0 text-danger" aria-label={`删除 ${provider.name}`} title="删除 Provider"><Trash2 className="h-3.5 w-3.5" /></button>
         </div>
-        <div className="flex-1" />
-        <div className="hidden items-center gap-4 text-[10.5px] text-ink-muted sm:flex">
-          <span className="flex items-center gap-1"><KeyRound className="h-3 w-3" />{provider.api_key_masked}</span>
-          <span className="flex items-center gap-1"><Clock3 className="h-3 w-3" />{provider.timeout_seconds}s</span>
+      </div>
+
+      {confirmingDelete ? (
+        <div className="flex items-center gap-2 border-b border-danger-ring bg-danger-soft px-4 py-2 text-[11.5px] text-danger-deep">
+          <span>删除后该 Provider 的全部模型配置将不可恢复。</span><span className="flex-1" />
+          <button type="button" onClick={onCancelDelete} disabled={busyModel === provider.id} className="btn-ghost h-7 px-2"><X className="h-3.5 w-3.5" />取消</button>
+          <button type="button" onClick={onDelete} disabled={busyModel === provider.id} className="btn-danger-outline h-7 px-2"><Trash2 className="h-3.5 w-3.5" />确认删除</button>
         </div>
-        <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} className="btn-ghost h-8 w-8 p-0" aria-label={`编辑 ${provider.name}`} title="编辑 Provider"><Pencil className="h-3.5 w-3.5" /></button>
-        <button type="button" onClick={(e) => { e.stopPropagation(); onRequestDelete(); }} className="btn-ghost h-8 w-8 p-0 text-danger" aria-label={`删除 ${provider.name}`} title="删除 Provider"><Trash2 className="h-3.5 w-3.5" /></button>
-      </button>
+      ) : null}
 
       {!collapsed ? (
-        <>
-          {confirmingDelete ? (
-            <div className="flex items-center gap-2 border-b border-danger-ring bg-danger-soft px-4 py-2 text-[11.5px] text-danger-deep">
-              <span>删除后该 Provider 的全部模型配置将不可恢复。</span><span className="flex-1" />
-              <button type="button" onClick={onCancelDelete} disabled={busyModel === provider.id} className="btn-ghost h-7 px-2"><X className="h-3.5 w-3.5" />取消</button>
-              <button type="button" onClick={onDelete} disabled={busyModel === provider.id} className="btn-danger-outline h-7 px-2"><Trash2 className="h-3.5 w-3.5" />确认删除</button>
-            </div>
-          ) : null}
-
-          <div className="divide-y divide-line">
+        <div className="divide-y divide-line">
             {provider.models.map((model) => {
               const isActive = model.id === activeModelId;
               const modelStatus = health[model.id];
@@ -317,8 +321,7 @@ function ProviderSection({
                 </div>
               );
             })}
-          </div>
-        </>
+        </div>
       ) : null}
     </section>
   );

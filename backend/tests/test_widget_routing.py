@@ -260,7 +260,7 @@ def test_clarification_builtin_returns_a_host_rendered_prefilled_form() -> None:
     assert widget["kind"] == "form"
     assert widget["fields"][0]["value"] == "Leadership"
     assert widget["actions"][0]["prompt"].startswith("以下是我的补充信息")
-    assert conversation.json()["messages"][-1]["widgets"] == [widget]
+    assert all(not message["widgets"] for message in conversation.json()["messages"])
 
 
 def test_aina_ui_declaration_loads_the_matching_host_widget_capability() -> None:

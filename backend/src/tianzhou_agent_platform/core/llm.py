@@ -20,7 +20,7 @@ from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.model_settings import current_model_runtime
+from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, current_model_runtime
 from tianzhou_agent_platform.core.trace_details import redact_trace_data
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
@@ -296,7 +296,7 @@ class OpenAICompatibleClient:
             "model": model,
             "messages": deepcopy(messages),
             "stream": stream,
-            "context_window": self.settings.context_window_tokens,
+            "context_window": current_context_window_tokens(self.settings.context_window_tokens),
             "estimated_prompt_tokens": estimate_request_tokens(messages, tools),
         }
         if tools:

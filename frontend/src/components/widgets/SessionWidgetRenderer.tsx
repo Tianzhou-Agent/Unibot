@@ -14,6 +14,10 @@ interface SessionWidgetRendererProps {
   onPrompt?: (prompt: string) => void;
 }
 
+export function isClarificationWidget(widget: WidgetDefinition): boolean {
+  return widget.id.startsWith("clarification-");
+}
+
 export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
   if (props.widget.kind === "document_outline") {
     return <DocumentOutlineWidget widget={props.widget} workspaceId={props.workspaceId} />;

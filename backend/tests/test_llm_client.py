@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.llm import OpenAICompatibleClient, _response_from_result, _result_from_message
+from tianzhou_agent_platform.core.model_settings import ModelRuntimeConfig, use_model_runtime
 
 
 @pytest.mark.asyncio
@@ -58,23 +59,35 @@ async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
     )
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
     client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
-    result = await client.complete(
-        messages=[
-            {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Add 17 and 25."},
-        ],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "demo_add",
-                    "description": "Add numbers.",
-                    "parameters": {"type": "object"},
-                },
-            }
-        ],
-        tool_choice={"type": "function", "function": {"name": "demo_add"}},
+    runtime = ModelRuntimeConfig(
+        provider_id="provider-test",
+        provider_name="Test Provider",
+        base_url="https://provider.invalid/v1",
+        api_key="test-key",
+        model_id="model-test",
+        model_name="Thinking model",
+        model="thinking-model",
+        context_window_tokens=64_000,
+        timeout_seconds=60,
     )
+    with use_model_runtime(runtime):
+        result = await client.complete(
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Add 17 and 25."},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "demo_add",
+                        "description": "Add numbers.",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": "demo_add"}},
+        )
     await http_client.aclose()
 
     assert len(requests) == 2
@@ -92,7 +105,7 @@ async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
     assert completed.request["messages"][0]["content"].endswith(
         "Call that function before answering the user."
     )
-    assert completed.request["context_window"] == settings.context_window_tokens
+    assert completed.request["context_window"] == 64_000
     assert completed.request["estimated_prompt_tokens"] > 0
     assert completed.response is not None
     assert completed.response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "demo_add"

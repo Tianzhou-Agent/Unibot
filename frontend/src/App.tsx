@@ -12,6 +12,7 @@ import { AdminRoute } from "@/components/auth/AdminRoute";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import LoginPage from "@/pages/LoginPage";
 import WorkspacePage from "@/pages/WorkspacePage";
+import FilesPage from "@/pages/FilesPage";
 import { RequireAuth } from "@/lib/auth";
 
 export default function App() {
@@ -23,12 +24,14 @@ export default function App() {
         <Route path="/chat" element={<ChatModePage />} />
         <Route path="/chat/:conversationId" element={<ChatModePage />} />
         <Route path="/canvas/:ainaId" element={<CanvasModePage />} />
+        <Route path="/files" element={<FilesPage />} />
         <Route path="/workspaces/:workspaceId" element={<WorkspacePage />} />
         <Route path="/workspaces/:workspaceId/chat" element={<ChatModePage />} />
         <Route path="/workspaces/:workspaceId/chat/:conversationId" element={<ChatModePage />} />
         <Route path="/workspaces/:workspaceId/canvas/:ainaId" element={<CanvasModePage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/apps" element={<AllAppsPage />} />
+        <Route path="/plugin" element={<AllAppsPage />} />
+        <Route path="/apps" element={<Navigate to="/plugin" replace />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />
         <Route path="/obs" element={<DebugPage />} />
         <Route path="/debug" element={<LegacyDebugRedirect />} />

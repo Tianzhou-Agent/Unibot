@@ -101,6 +101,50 @@ def test_long_context_is_summarized_without_deleting_conversation_messages() -> 
     assert compression_span["status"] == "completed"
 
 
+def test_selected_model_context_window_controls_compression_threshold() -> None:
+    repository = InMemoryRepository()
+    conversation_id = _seed_long_conversation(repository)
+    llm = ScriptedLLM(
+        [
+            assistant("## Goal\nPreserve the old requirements.", input_tokens=120, output_tokens=20),
+            assistant("final answer", input_tokens=40, output_tokens=5),
+        ]
+    )
+    settings = _settings().model_copy(update={"context_window_tokens": 128_000})
+
+    with TestClient(create_app(settings=settings, repository=repository, llm=llm)) as client:
+        provider = client.post(
+            "/model-settings/providers",
+            json={
+                "provider_type": "openai",
+                "name": "Small context provider",
+                "base_url": "https://model.invalid/v1",
+                "api_key": "test-key",
+                "models": [
+                    {
+                        "name": "Small context model",
+                        "model": "small-context",
+                        "context_window_tokens": 4_096,
+                    }
+                ],
+            },
+        ).json()
+        client.post(
+            f"/model-settings/providers/{provider['id']}/models/{provider['models'][0]['id']}/default",
+            json={},
+        )
+        response = client.post(
+            "/chat",
+            json={"message": "latest question", "conversation_id": conversation_id},
+        )
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert len(llm.calls) == 2
+    compression_span = next(span for span in trace["spans"] if span["name"] == "context.compress")
+    assert compression_span["attributes"]["context_window_tokens"] == 4_096
+
+
 def test_compression_failure_preserves_full_context_and_continues() -> None:
     repository = InMemoryRepository()
     conversation_id = _seed_long_conversation(repository)

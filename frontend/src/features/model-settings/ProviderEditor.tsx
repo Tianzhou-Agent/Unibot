@@ -9,6 +9,7 @@ import type {
 import { api, apiErrorMessage } from "@/lib/api";
 
 const MAX_MODELS = 50;
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 
 const PROVIDERS: Array<{
   type: ProviderType;
@@ -29,6 +30,7 @@ interface ModelDraft {
   name: string;
   model: string;
   enabled: boolean;
+  contextWindowTokens: number;
 }
 
 export function ProviderEditor({
@@ -50,7 +52,11 @@ export function ProviderEditor({
   const [apiKey, setApiKey] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState(provider?.timeout_seconds ?? 60);
   const [models, setModels] = useState<ModelDraft[]>(
-    provider?.models.map((model) => ({ ...model, key: model.id })) ?? [emptyModel()],
+    provider?.models.map((model) => ({
+      ...model,
+      key: model.id,
+      contextWindowTokens: model.context_window_tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+    })) ?? [emptyModel()],
   );
   const [discovering, setDiscovering] = useState(false);
   const [discoveryFeedback, setDiscoveryFeedback] = useState<{ error: boolean; message: string } | null>(null);
@@ -92,7 +98,17 @@ export function ProviderEditor({
         api_key: apiKey,
         timeout_seconds: timeoutSeconds,
       });
-      const retained = models.filter((model) => model.id || model.name.trim() || model.model.trim());
+      const discoveredById = new Map(
+        response.models.map((model) => [model.id.trim().toLowerCase(), model]),
+      );
+      const retained = models
+        .filter((model) => model.id || model.name.trim() || model.model.trim())
+        .map((model) => {
+          const discovered = discoveredById.get(model.model.trim().toLowerCase());
+          return discovered?.context_window_tokens
+            ? { ...model, contextWindowTokens: discovered.context_window_tokens }
+            : model;
+        });
       const existing = new Set(retained.map((model) => model.model.trim().toLowerCase()).filter(Boolean));
       const additions = response.models.filter((model) => {
         const normalized = model.id.trim().toLowerCase();
@@ -104,7 +120,12 @@ export function ProviderEditor({
       if (imported.length > 0) {
         setModels([
           ...retained,
-          ...imported.map((model) => ({ ...emptyModel(), name: model.name, model: model.id })),
+          ...imported.map((model) => ({
+            ...emptyModel(),
+            name: model.name,
+            model: model.id,
+            contextWindowTokens: model.context_window_tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+          })),
         ]);
       }
       if (response.models.length === 0) {
@@ -136,11 +157,12 @@ export function ProviderEditor({
       base_url: baseUrl.trim(),
       api_key: apiKey,
       timeout_seconds: timeoutSeconds,
-      models: models.map(({ id, name: modelName, model, enabled }) => ({
+      models: models.map(({ id, name: modelName, model, enabled, contextWindowTokens }) => ({
         ...(id ? { id } : {}),
         name: modelName.trim(),
         model: model.trim(),
         enabled,
+        context_window_tokens: contextWindowTokens,
       })),
     });
   }
@@ -194,7 +216,7 @@ export function ProviderEditor({
           <div className="mt-6 flex items-center border-b border-line pb-2">
             <div>
               <h3 className="text-[13px] font-extrabold text-ink">模型</h3>
-              <p className="text-[11px] text-ink-muted">可从 Provider 的 /models 自动获取，也可手动填写模型 ID。</p>
+              <p className="text-[11px] text-ink-muted">自动获取模型及上下文窗口；Provider 未返回上下文时默认 128000，可手动修改。</p>
             </div>
             <div className="flex-1" />
             <button type="button" onClick={() => void discoverModels()} disabled={discovering || saving} className="btn-outline mr-2 h-8 text-[11.5px] disabled:opacity-50">
@@ -211,7 +233,7 @@ export function ProviderEditor({
           ) : null}
           <div className="divide-y divide-line">
             {models.map((model, index) => (
-              <div key={model.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] items-end gap-3 py-3">
+              <div key={model.key} className="grid grid-cols-1 items-end gap-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(140px,0.7fr)_auto]">
                 <label className="text-[11px] font-bold text-ink-muted">
                   显示名称
                   <input value={model.name} onChange={(event) => updateModel(model.key, { name: event.target.value })} className="input-soft mt-1" required placeholder="例如：GPT-4.1" aria-label={`模型 ${index + 1} 显示名称`} />
@@ -219,6 +241,19 @@ export function ProviderEditor({
                 <label className="text-[11px] font-bold text-ink-muted">
                   模型 ID
                   <input value={model.model} onChange={(event) => updateModel(model.key, { model: event.target.value })} className="input-soft mt-1 font-mono text-[12px]" required placeholder="例如：gpt-4.1" aria-label={`模型 ${index + 1} ID`} />
+                </label>
+                <label className="text-[11px] font-bold text-ink-muted">
+                  上下文（Tokens）
+                  <input
+                    value={model.contextWindowTokens}
+                    onChange={(event) => updateModel(model.key, { contextWindowTokens: Number(event.target.value) })}
+                    className="input-soft mt-1 font-mono text-[12px]"
+                    required
+                    type="number"
+                    min={4096}
+                    max={10_000_000}
+                    aria-label={`模型 ${index + 1} 上下文`}
+                  />
                 </label>
                 <div className="flex h-10 items-center gap-1">
                   <label className="flex items-center gap-1.5 whitespace-nowrap text-[11.5px] font-semibold text-ink-muted">
@@ -248,5 +283,6 @@ function emptyModel(): ModelDraft {
     name: "",
     model: "",
     enabled: true,
+    contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
   };
 }

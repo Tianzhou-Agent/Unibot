@@ -108,3 +108,8 @@ export function workspaceCanvasPath(
     : `/canvas/${encodeURIComponent(ainaId)}`;
   return conversationId ? `${root}?conversation=${encodeURIComponent(conversationId)}` : root;
 }
+
+export function documentCanvasPath(workspaceId: string | null | undefined, documentName?: string | null): string {
+  const root = workspaceCanvasPath(workspaceId, "unibot-documents");
+  return documentName ? `${root}?document=${encodeURIComponent(documentName)}` : root;
+}
