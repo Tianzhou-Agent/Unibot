@@ -5,12 +5,13 @@ import type { ChatMessage, FileChip, MessageBlock } from "@/types";
 import { MessageFeedback } from "@/components/feedback/MessageFeedback";
 import { MarkdownContent } from "./MarkdownContent";
 import { SurfaceRenderer } from "./SurfaceRenderer";
+import { ToolCallCard } from "./ToolCallCard";
 
 export function UserMessage({ content, files }: { content: string; files?: FileChip[] }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[430px] rounded-lg bg-accent p-3.5 space-y-1.5">
-        <p className="text-white text-[13px] leading-[1.42]">{content}</p>
+      <div className="max-w-[520px] space-y-1.5 rounded-xl bg-accent-softer px-3.5 py-3">
+        <p className="text-[14px] leading-[1.7] text-ink">{content}</p>
         {files && files.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
             {files.map((f) => (
@@ -35,7 +36,7 @@ export function AssistantMessage({
   onConfirm?: (action: "confirm" | "cancel") => void;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-app-soft p-3 space-y-2">
+    <div className="space-y-3 py-0.5">
       {message.content ? (
         <MarkdownContent content={message.content} />
       ) : null}
@@ -81,12 +82,11 @@ function BlockRenderer({ block }: { block: MessageBlock }) {
   }
   if (block.kind === "tool_call") {
     return (
-      <div className="rounded-md border border-line bg-white p-2.5 text-[12px]">
-        <div className="text-ink-muted">工具调用：{block.name}</div>
-        {block.result ? (
-          <div className="mt-1 text-ink">{block.result}</div>
-        ) : null}
-      </div>
+      <ToolCallCard
+        name={block.name}
+        resultText={block.result}
+        state={block.result ? "success" : "running"}
+      />
     );
   }
   return null;
@@ -104,7 +104,7 @@ function FileChipPill({ file }: { file: FileChip }) {
 function AgentActions({ message, conversationId }: { message: ChatMessage; conversationId?: string }) {
   const feedbackEnabled = message.id !== "streaming" && message.runState !== "running" && message.runState !== "thinking";
   return (
-    <div className="flex items-center justify-end gap-1.5">
+    <div className="flex items-center justify-end gap-1 text-ink-subtle">
       {feedbackEnabled && conversationId ? <MessageFeedback messageId={message.id} conversationId={conversationId} /> : null}
       <span className="h-4 w-px bg-line" />
       <ActionIcon icon={<Copy className="w-3.5 h-3.5" />} label="复制" />

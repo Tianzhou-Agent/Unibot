@@ -20,6 +20,7 @@ from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.conversation import Conversation
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
+from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceUpdate
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
 from tianzhou_agent_platform.core.repository import (
     AINA_PROJECTS_RESOURCE,
@@ -39,6 +40,7 @@ from tianzhou_agent_platform.core.repository import (
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
     USERS_RESOURCE,
+    WORKSPACES_RESOURCE,
     FEEDBACKS_RESOURCE,
     InMemoryRepository,
 )
@@ -63,6 +65,7 @@ def _record_table(name: str) -> Table:
 repository_tables = {
     resource: _record_table(resource)
     for resource in (
+        WORKSPACES_RESOURCE,
         CONVERSATIONS_RESOURCE,
         MEMORIES_RESOURCE,
         TOOLS_RESOURCE,
@@ -115,6 +118,7 @@ class PersistentRepository(InMemoryRepository):
 
     async def initialize(self) -> None:
         await self.stores.mysql.create_tables(repository_metadata)
+        workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
         conversations = await self._load_models(CONVERSATIONS_RESOURCE, Conversation)
         memories = await self._load_models(MEMORIES_RESOURCE, MemoryRecord)
         tools = await self._load_models(TOOLS_RESOURCE, ToolRecord)
@@ -146,6 +150,7 @@ class PersistentRepository(InMemoryRepository):
         )
 
         async with self._lock:
+            self._workspaces = {item.id: item for item in workspaces}
             self._conversations = {item.id: item for item in conversations}
             self._memories = {item.id: item for item in memories}
             self._tools = {item.tool_id: item for item in tools}
@@ -232,6 +237,43 @@ class PersistentRepository(InMemoryRepository):
         async with self._lock:
             self._users = {item.id: item for item in users}
         return users
+
+    async def get_workspace(self, workspace_id: str) -> Workspace:
+        record = await self.stores.mysql.read(WORKSPACES_RESOURCE, workspace_id)
+        if record is None:
+            async with self._lock:
+                self._workspaces.pop(workspace_id, None)
+            raise not_found("Workspace", workspace_id)
+        workspace = Workspace.model_validate(record.values["payload"])
+        async with self._lock:
+            self._workspaces[workspace.id] = workspace
+        return self._copy(workspace)
+
+    async def list_workspaces(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[Workspace]:
+        await self._refresh_workspaces()
+        return await super().list_workspaces(user_id=user_id, tenant_id=tenant_id)
+
+    async def update_workspace(self, workspace_id: str, data: WorkspaceUpdate) -> Workspace:
+        async with self.stores.redis.lease(
+            "workspace-write",
+            workspace_id,
+            ttl_seconds=30,
+        ) as acquired:
+            if not acquired:
+                raise conflict("Workspace is being updated. Retry the request.")
+            await self.get_workspace(workspace_id)
+            return await super().update_workspace(workspace_id, data)
+
+    async def _refresh_workspaces(self) -> list[Workspace]:
+        workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
+        async with self._lock:
+            self._workspaces = {item.id: item for item in workspaces}
+        return workspaces
 
     async def create_aina_project(self, project: AinaProjectRecord) -> AinaProjectRecord:
         async with self.stores.redis.lease(
@@ -390,17 +432,28 @@ class PersistentRepository(InMemoryRepository):
             return None
         return AinaProjectRecord.model_validate(record.values["payload"])
 
-    async def get_sandbox_for_actor(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
+    async def get_sandbox_for_actor(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+    ) -> SandboxRecord:
         sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
         async with self._lock:
             self._sandboxes = {item.id: item for item in sandboxes}
-        return await super().get_sandbox_for_actor(user_id=user_id, tenant_id=tenant_id)
+        return await super().get_sandbox_for_actor(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
 
     async def list_sandbox_executions(
         self,
         *,
         user_id: str,
         tenant_id: str,
+        workspace_id: str | None = None,
         limit: int = 50,
     ) -> list[SandboxExecution]:
         executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
@@ -409,6 +462,7 @@ class PersistentRepository(InMemoryRepository):
         return await super().list_sandbox_executions(
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_id=workspace_id,
             limit=limit,
         )
 
@@ -440,6 +494,7 @@ class PersistentRepository(InMemoryRepository):
         user_id: str | None = None,
         tenant_id: str | None = None,
         document_name: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[DocumentEditTask]:
         tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
         async with self._lock:
@@ -448,6 +503,7 @@ class PersistentRepository(InMemoryRepository):
             user_id=user_id,
             tenant_id=tenant_id,
             document_name=document_name,
+            workspace_id=workspace_id,
         )
 
     async def put_document_edit_task(

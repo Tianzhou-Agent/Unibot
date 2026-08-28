@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +14,7 @@ from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.drivers import LocalProcessSandboxDriver
 from tianzhou_agent_platform.sandbox.models import SandboxEnsureRequest
 from tianzhou_agent_platform.sandbox.service import SandboxService
-from tests.support.fake_llm import ScriptedLLM
+from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
 def test_sandbox_executes_python_and_preserves_workspace(tmp_path) -> None:
@@ -169,6 +170,186 @@ async def test_sandbox_service_reuses_driver_file_contract(tmp_path) -> None:
             path="../outside",
             content=b"unsafe",
         )
+
+
+def test_workspace_sandboxes_isolate_files_executions_and_reset(tmp_path: Path) -> None:
+    repository = InMemoryRepository()
+    driver = LocalProcessSandboxDriver(
+        tmp_path / "runtime",
+        persistent_workspace_root=tmp_path / "nas" / "workspaces",
+    )
+    service = SandboxService(repository, driver, default_image="unibot/sandboxd:test")
+    app = create_app(
+        settings=AgentSettings(sandbox_driver="local", sandbox_workspace_root=tmp_path / "runtime"),
+        repository=repository,
+        sandbox_service=service,
+        llm=ScriptedLLM([]),
+    )
+
+    with TestClient(app) as client:
+        workspace_a = client.post("/workspaces", json={"name": "Workspace A"}).json()
+        workspace_b = client.post("/workspaces", json={"name": "Workspace B"}).json()
+        denied = client.post(
+            "/sandboxes/ensure",
+            json={"workspace_id": workspace_a["id"], "user_id": "other-user"},
+        )
+
+        execution_a = client.post(
+            "/sandboxes/execute",
+            json={
+                "workspace_id": workspace_a["id"],
+                "language": "python",
+                "script": "from pathlib import Path; Path('scope.txt').write_text('A')",
+            },
+        ).json()
+        execution_b = client.post(
+            "/sandboxes/execute",
+            json={
+                "workspace_id": workspace_b["id"],
+                "language": "python",
+                "script": "from pathlib import Path; Path('scope.txt').write_text('B')",
+            },
+        ).json()
+        standalone_execution = client.post(
+            "/sandboxes/execute",
+            json={
+                "language": "python",
+                "script": "from pathlib import Path; Path('scope.txt').write_text('standalone')",
+            },
+        ).json()
+
+        current_a = client.get(
+            "/sandboxes/current",
+            params={"workspace_id": workspace_a["id"]},
+        ).json()
+        current_b = client.get(
+            "/sandboxes/current",
+            params={"workspace_id": workspace_b["id"]},
+        ).json()
+        current_standalone = client.get("/sandboxes/current").json()
+        history_a = client.get(
+            "/sandboxes/executions",
+            params={"workspace_id": workspace_a["id"]},
+        ).json()
+        history_b = client.get(
+            "/sandboxes/executions",
+            params={"workspace_id": workspace_b["id"]},
+        ).json()
+        standalone_history = client.get("/sandboxes/executions").json()
+
+        reset_a = client.delete(
+            "/sandboxes/current",
+            params={"workspace_id": workspace_a["id"]},
+        )
+        missing_a = client.get(
+            "/sandboxes/current",
+            params={"workspace_id": workspace_a["id"]},
+        )
+        remaining_b = client.get(
+            "/sandboxes/current",
+            params={"workspace_id": workspace_b["id"]},
+        )
+        remaining_standalone = client.get("/sandboxes/current")
+        history_a_after_reset = client.get(
+            "/sandboxes/executions",
+            params={"workspace_id": workspace_a["id"]},
+        ).json()
+        history_b_after_reset = client.get(
+            "/sandboxes/executions",
+            params={"workspace_id": workspace_b["id"]},
+        ).json()
+        standalone_history_after_reset = client.get("/sandboxes/executions").json()
+
+    files_a = tmp_path / "nas" / "workspaces" / workspace_a["storage_key"] / "files"
+    files_b = tmp_path / "nas" / "workspaces" / workspace_b["storage_key"] / "files"
+    assert (files_a / "scope.txt").read_text() == "A"
+    assert (files_b / "scope.txt").read_text() == "B"
+    assert denied.status_code == 403
+    assert current_a["workspace"] == str(files_a.resolve())
+    assert current_b["workspace"] == str(files_b.resolve())
+    assert current_a["workspace_storage_key"] == workspace_a["storage_key"]
+    assert current_b["workspace_storage_key"] == workspace_b["storage_key"]
+    assert len({current_a["runtime_name"], current_b["runtime_name"], current_standalone["runtime_name"]}) == 3
+    assert [item["id"] for item in history_a] == [execution_a["id"]]
+    assert [item["id"] for item in history_b] == [execution_b["id"]]
+    assert [item["id"] for item in standalone_history] == [standalone_execution["id"]]
+    assert all(item["workspace_id"] == workspace_a["id"] for item in history_a)
+    assert reset_a.status_code == 204
+    assert missing_a.status_code == 404
+    assert remaining_b.status_code == 200
+    assert remaining_standalone.status_code == 200
+    assert history_a_after_reset == []
+    assert [item["id"] for item in history_b_after_reset] == [execution_b["id"]]
+    assert [item["id"] for item in standalone_history_after_reset] == [standalone_execution["id"]]
+    assert (files_a / "scope.txt").read_text() == "A"
+    assert (Path(current_standalone["workspace"]) / "scope.txt").read_text() == "standalone"
+
+
+def test_chat_code_runner_uses_conversation_workspace(tmp_path: Path) -> None:
+    repository = InMemoryRepository()
+    service = SandboxService(
+        repository,
+        LocalProcessSandboxDriver(
+            tmp_path / "runtime",
+            persistent_workspace_root=tmp_path / "nas" / "workspaces",
+        ),
+        default_image="unibot/sandboxd:test",
+    )
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_sandbox_run_python_",
+                arguments=(
+                    '{"script":"from pathlib import Path; '
+                    "Path('chat.txt').write_text('workspace-chat'); print('done')\"}"
+                ),
+                call_id="call_run_python",
+            ),
+            assistant("The workspace code completed."),
+        ]
+    )
+    app = create_app(
+        settings=AgentSettings(sandbox_driver="local", sandbox_workspace_root=tmp_path / "runtime"),
+        repository=repository,
+        sandbox_service=service,
+        llm=llm,
+    )
+
+    with TestClient(app) as client:
+        workspace = client.post("/workspaces", json={"name": "Chat workspace"}).json()
+        pending = client.post(
+            "/chat",
+            json={
+                "message": "Run Python and save chat.txt",
+                "workspace_id": workspace["id"],
+                "capability": "aina:unibot-code-runner",
+            },
+        )
+        confirmed = client.post(
+            f"/approvals/{pending.json()['approval']['id']}/confirm",
+            json={},
+        )
+        workspace_history = client.get(
+            "/sandboxes/executions",
+            params={"workspace_id": workspace["id"]},
+        ).json()
+        standalone_history = client.get("/sandboxes/executions").json()
+
+    workspace_file = (
+        tmp_path
+        / "nas"
+        / "workspaces"
+        / workspace["storage_key"]
+        / "files"
+        / "chat.txt"
+    )
+    assert pending.json()["status"] == "approval_required"
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "completed"
+    assert len(workspace_history) == 1
+    assert workspace_history[0]["workspace_id"] == workspace["id"]
+    assert standalone_history == []
+    assert workspace_file.read_text() == "workspace-chat"
 
 
 def test_sandbox_executes_bash_when_available(tmp_path) -> None:

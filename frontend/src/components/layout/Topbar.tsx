@@ -1,5 +1,6 @@
-import { Activity, Bell, CheckCircle2, CircleDashed } from "lucide-react";
+import { Activity, Bell, CheckCircle2, ChevronRight, CircleDashed } from "lucide-react";
 import { classNames } from "@/lib/utils";
+import { useWorkspace } from "@/lib/workspace";
 
 export type RunBadgeTone = "info" | "success" | "warning" | "neutral" | "thinking";
 
@@ -12,9 +13,18 @@ export function Topbar({
   badge?: { label: string; tone: RunBadgeTone };
   actions?: React.ReactNode;
 }) {
+  const { activeWorkspace } = useWorkspace();
   return (
-    <div className="min-h-16 px-3 py-2 md:px-5 flex flex-wrap items-center gap-2 md:gap-3 border-b border-line bg-white">
-      <h1 className="text-[16px] md:text-[18px] font-bold text-ink font-display">{title}</h1>
+    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-white px-4 md:px-6">
+      <span className="hidden text-[13px] font-normal text-ink-subtle sm:inline">Unibot</span>
+      {activeWorkspace ? (
+        <>
+          <ChevronRight className="hidden h-3.5 w-3.5 text-ink-subtle sm:block" />
+          <span className="hidden max-w-48 truncate text-[13px] font-medium text-ink-muted sm:inline">{activeWorkspace.name}</span>
+        </>
+      ) : null}
+      <ChevronRight className="hidden h-3.5 w-3.5 text-ink-subtle sm:block" />
+      <h1 className="truncate text-[13px] font-semibold text-ink">{title}</h1>
       <div className="flex-1" />
       {badge ? <RunBadge {...badge} /> : null}
       {actions}
@@ -28,7 +38,7 @@ export function RunBadge({ label, tone }: { label: string; tone: RunBadgeTone })
   return (
     <div
       className={classNames(
-        "h-8 px-2.5 rounded-lg inline-flex items-center gap-1.5 text-[12.5px] font-bold",
+        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium",
         styles.bg,
         styles.fg,
       )}

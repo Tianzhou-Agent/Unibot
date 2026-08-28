@@ -31,6 +31,7 @@ import {
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { api, ApiError, apiErrorMessage } from "@/lib/api";
 import { documentApiPath } from "@/lib/documentPaths";
+import { useMockSession } from "@/lib/mockSession";
 import { classNames } from "@/lib/utils";
 import type {
   DocumentDraftSection,
@@ -46,7 +47,6 @@ import type {
   DocumentTreeResponse,
 } from "@/types";
 
-const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 type DocumentMode = "edit" | "tasks";
 type EditorMode = "edit" | "split" | "preview";
 
@@ -58,11 +58,22 @@ interface ConfirmRequest {
   resolve: (confirmed: boolean) => void;
 }
 
-export function DocumentWidget({ disabled = false, refreshToken, onTaskContextChange }: {
+export function DocumentWidget({ workspaceId, disabled = false, refreshToken, onTaskContextChange }: {
+  workspaceId?: string | null;
   disabled?: boolean;
   refreshToken?: string | null;
   onTaskContextChange?: (context: DocumentTaskContext | null) => void;
 }) {
+  const { profile } = useMockSession();
+  const scope = useMemo<Record<string, string>>(
+    () => ({
+      user_id: profile.actorUserId,
+      tenant_id: profile.tenantId,
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+    }),
+    [profile.actorUserId, profile.tenantId, workspaceId],
+  );
+  const scopeQuery = useMemo(() => new URLSearchParams(scope).toString(), [scope]);
   const [items, setItems] = useState<DocumentSummary[]>([]);
   const [folders, setFolders] = useState<DocumentFolder[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -126,19 +137,19 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
 
   useEffect(() => {
     void refreshDocuments();
-  }, []);
+  }, [scopeQuery]);
 
   useEffect(() => {
     if (!selectedName || !hasPendingWork) return;
     const timer = window.setInterval(() => void refreshTasks(selectedName, activeTask?.id), 800);
     return () => window.clearInterval(timer);
-  }, [activeSectionId, activeTask?.id, draftContent, hasPendingWork, selectedName]);
+  }, [activeSectionId, activeTask?.id, draftContent, hasPendingWork, scopeQuery, selectedName]);
 
   useEffect(() => {
     if (!refreshToken || !selectedName || appliedRefreshToken.current === refreshToken) return;
     appliedRefreshToken.current = refreshToken;
     void syncFromConversation(selectedName);
-  }, [refreshToken, selectedName]);
+  }, [refreshToken, scopeQuery, selectedName]);
 
   useEffect(() => {
     if (!activeSection) {
@@ -181,7 +192,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
   async function refreshDocuments(preferredName?: string | null) {
     setLoading(true);
     try {
-      const response = await api.get<DocumentTreeResponse>(`/documents/tree?${new URLSearchParams(ACTOR)}`);
+      const response = await api.get<DocumentTreeResponse>(`/documents/tree?${scopeQuery}`);
       setItems(response.documents);
       setFolders(response.folders);
       const target = preferredName && response.documents.some((item) => item.name === preferredName)
@@ -206,7 +217,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     }))) return;
     setLoading(true);
     try {
-      const actorQuery = new URLSearchParams(ACTOR);
+      const actorQuery = scopeQuery;
       const path = documentApiPath(name);
       const [document, nextOutline, taskList] = await Promise.all([
         api.get<DocumentRecord>(`/documents/${path}?${actorQuery}`),
@@ -242,7 +253,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
   async function refreshTasks(name: string, activeTaskId?: string | null) {
     try {
       const response = await api.get<DocumentEditTaskListResponse>(
-        `/documents/${documentApiPath(name)}/edit-tasks?${new URLSearchParams(ACTOR)}`,
+        `/documents/${documentApiPath(name)}/edit-tasks?${scopeQuery}`,
       );
       setTasks(response.items);
       const taskId = activeTaskId ?? activeTask?.id;
@@ -259,7 +270,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
 
   async function syncFromConversation(name: string) {
     try {
-      const actorQuery = new URLSearchParams(ACTOR);
+      const actorQuery = scopeQuery;
       const path = documentApiPath(name);
       const [tree, taskList, document, nextOutline] = await Promise.all([
         api.get<DocumentTreeResponse>(`/documents/tree?${actorQuery}`),
@@ -313,7 +324,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
         const name = selectedFolder ? `${selectedFolder}/${value}` : value;
         const title = value.replace(/\.md$/i, "");
         const record = await api.post<DocumentRecord>("/documents", {
-          ...ACTOR,
+          ...scope,
           name,
           content: `# ${title}\n\n`,
         });
@@ -322,7 +333,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
         await refreshDocuments(record.name);
       } else {
         const path = selectedFolder ? `${selectedFolder}/${value}` : value;
-        await api.post("/documents/folders", { ...ACTOR, path });
+        await api.post("/documents/folders", { ...scope, path });
         setCreateValue("");
         setCreatingEntry(null);
         setSelectedFolder(path);
@@ -366,7 +377,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     try {
       const record = await api.post<DocumentRecord>(
         `/documents/${documentApiPath(name)}/rename`,
-        { ...ACTOR, new_name: nextName },
+        { ...scope, new_name: nextName },
       );
       setRenamingItem(null);
       if (name === selectedName) await refreshDocuments(record.name);
@@ -383,7 +394,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     setSaving(true);
     try {
       await api.post(`/documents/folders/${documentApiPath(path)}/rename`, {
-        ...ACTOR,
+        ...scope,
         new_path: nextPath,
       });
       const preferredDocument = selectedName?.startsWith(`${path}/`)
@@ -410,7 +421,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     }))) return;
     setSaving(true);
     try {
-      await api.delete(`/documents/folders/${documentApiPath(path)}?${new URLSearchParams(ACTOR)}`);
+      await api.delete(`/documents/folders/${documentApiPath(path)}?${scopeQuery}`);
       setSelectedFolder(parentFolder(path));
       await refreshTreeOnly();
       setError(null);
@@ -438,15 +449,15 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
       await api.put<DocumentSectionsUpdateResult>(
         `/documents/${documentApiPath(selectedName)}/section-changes`,
         {
-          ...ACTOR,
+          ...scope,
           content,
           expected_revision: outline.revision,
         },
       );
       const path = documentApiPath(selectedName);
       const [document, nextOutline] = await Promise.all([
-        api.get<DocumentRecord>(`/documents/${path}?${new URLSearchParams(ACTOR)}`),
-        api.get<DocumentOutline>(`/documents/${path}/outline?${new URLSearchParams(ACTOR)}`),
+        api.get<DocumentRecord>(`/documents/${path}?${scopeQuery}`),
+        api.get<DocumentOutline>(`/documents/${path}/outline?${scopeQuery}`),
       ]);
       setContent(document.content);
       setSavedContent(document.content);
@@ -482,7 +493,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
       const task = await api.post<DocumentEditTask>(
         `/documents/${documentApiPath(selectedName)}/edit-tasks`,
         {
-          ...ACTOR,
+          ...scope,
           description: taskDescription.trim(),
           sections: selectedHeadings.map((heading) => ({
             heading: heading.heading,
@@ -534,7 +545,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
       const task = await api.patch<DocumentEditTask>(
         `/document-edit-tasks/${activeTask.id}/sections/${activeSection.id}`,
         {
-          ...ACTOR,
+          ...scope,
           content: draftContent,
           expected_draft_revision: activeSection.draft_revision,
         },
@@ -552,7 +563,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     if (!activeTask) return;
     setSaving(true);
     try {
-      replaceTask(await api.post<DocumentEditTask>(`/document-edit-tasks/${activeTask.id}/retry`, ACTOR));
+      replaceTask(await api.post<DocumentEditTask>(`/document-edit-tasks/${activeTask.id}/retry`, scope));
       setError(null);
     } catch (retryError) {
       setError(apiErrorMessage(retryError));
@@ -576,7 +587,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     try {
       replaceTask(await api.post<DocumentEditTask>(
         `/document-edit-tasks/${activeTask.id}/abandon`,
-        ACTOR,
+        scope,
       ));
       setError(null);
     } catch (abandonError) {
@@ -596,7 +607,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     }))) return;
     setSaving(true);
     try {
-      await api.delete(`/document-edit-tasks/${activeTask.id}?${new URLSearchParams(ACTOR)}`);
+      await api.delete(`/document-edit-tasks/${activeTask.id}?${scopeQuery}`);
       setTasks((current) => current.filter((task) => task.id !== activeTask.id));
       setActiveTask(null);
       setActiveSectionId(null);
@@ -619,13 +630,13 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     try {
       const task = await api.post<DocumentEditTask>(
         `/document-edit-tasks/${activeTask.id}/sections/${activeSection.id}/merge`,
-        ACTOR,
+        scope,
       );
       replaceTask(task);
       const path = documentApiPath(selectedName);
       const [document, nextOutline] = await Promise.all([
-        api.get<DocumentRecord>(`/documents/${path}?${new URLSearchParams(ACTOR)}`),
-        api.get<DocumentOutline>(`/documents/${path}/outline?${new URLSearchParams(ACTOR)}`),
+        api.get<DocumentRecord>(`/documents/${path}?${scopeQuery}`),
+        api.get<DocumentOutline>(`/documents/${path}/outline?${scopeQuery}`),
       ]);
       setContent(document.content);
       setSavedContent(document.content);
@@ -658,7 +669,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     try {
       replaceTask(await api.post<DocumentEditTask>(
         `/document-edit-tasks/${activeTask.id}/sections/${activeSection.id}/abandon`,
-        ACTOR,
+        scope,
       ));
       setError(null);
     } catch (abandonError) {
@@ -683,7 +694,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
     }))) return;
     setSaving(true);
     try {
-      await api.delete(`/documents/${documentApiPath(name)}?${new URLSearchParams(ACTOR)}`);
+      await api.delete(`/documents/${documentApiPath(name)}?${scopeQuery}`);
       if (name === selectedName) await refreshDocuments(null);
       else await refreshTreeOnly();
       setError(null);
@@ -699,7 +710,7 @@ export function DocumentWidget({ disabled = false, refreshToken, onTaskContextCh
   }
 
   async function refreshTreeOnly() {
-    const response = await api.get<DocumentTreeResponse>(`/documents/tree?${new URLSearchParams(ACTOR)}`);
+    const response = await api.get<DocumentTreeResponse>(`/documents/tree?${scopeQuery}`);
     setItems(response.documents);
     setFolders(response.folders);
   }

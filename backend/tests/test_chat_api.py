@@ -340,11 +340,13 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
                 "endpoint": "https://tool.invalid/add",
             },
         )
+        workspace = client.post("/workspaces", json={"name": "Tool workspace"}).json()
         response = client.post(
             "/chat",
             json={
                 "message": "What is 17 + 25? password=customer-secret-value",
                 "capability": "tool:demo.add",
+                "workspace_id": workspace["id"],
             },
         )
         trace = client.get(f"/traces/{response.json()['trace_id']}")
@@ -354,6 +356,7 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
     assert response.json()["content"] == "The result is 42."
     assert response.json()["iterations"] == 2
     assert captured[0]["arguments"] == {"a": 17, "b": 25, "api_key": "tool-secret-value"}
+    assert captured[0]["workspace_id"] == workspace["id"]
     assert captured[0]["trace_id"] == response.json()["trace_id"]
     events = trace.json()["events"]
     request_event = next(event for event in events if event["kind"] == "user.request")

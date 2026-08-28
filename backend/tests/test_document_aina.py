@@ -7,9 +7,22 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tianzhou_agent_platform.aina.document.builtin import (
+    ABANDON_EDIT_SECTION_TOOL_ID,
+    AI_REVISE_DRAFT_TOOL_ID,
+    MERGE_EDIT_SECTION_TOOL_ID,
+    READ_EDIT_TASK_TOOL_ID,
+    RETRY_EDIT_TASK_TOOL_ID,
+    UPDATE_DRAFT_TOOL_ID,
+    invoke_document_edit_task_tool,
+)
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_models import DocumentDraftSection, DocumentEditTask
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import LLMResult
+from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
@@ -185,6 +198,85 @@ def test_document_aina_chat_creates_markdown_file(tmp_path: Path) -> None:
         event["kind"] == "builtin.completed" and event["target_id"] == "document.create"
         for event in trace.json()["events"]
     )
+
+
+def test_workspace_documents_are_isolated_in_nas(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        first_workspace = client.post("/workspaces", json={"name": "First"}).json()
+        second_workspace = client.post("/workspaces", json={"name": "Second"}).json()
+
+        first_created = client.post(
+            "/documents",
+            json={
+                "name": "shared",
+                "content": "# First workspace",
+                "workspace_id": first_workspace["id"],
+            },
+        )
+        second_created = client.post(
+            "/documents",
+            json={
+                "name": "shared",
+                "content": "# Second workspace",
+                "workspace_id": second_workspace["id"],
+            },
+        )
+        first_loaded = client.get(
+            "/documents/shared.md",
+            params={"workspace_id": first_workspace["id"]},
+        )
+        second_loaded = client.get(
+            "/documents/shared.md",
+            params={"workspace_id": second_workspace["id"]},
+        )
+        standalone_loaded = client.get("/documents/shared.md")
+
+    assert first_created.status_code == 201
+    assert second_created.status_code == 201
+    assert first_loaded.json()["content"] == "# First workspace"
+    assert second_loaded.json()["content"] == "# Second workspace"
+    assert standalone_loaded.status_code == 404
+    assert (
+        tmp_path / "workspaces" / first_workspace["storage_key"] / "files" / "shared.md"
+    ).read_text(encoding="utf-8") == "# First workspace"
+    assert (
+        tmp_path / "workspaces" / second_workspace["storage_key"] / "files" / "shared.md"
+    ).read_text(encoding="utf-8") == "# Second workspace"
+
+
+def test_workspace_chat_document_tool_writes_to_conversation_workspace(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_document_create_",
+                arguments='{"name":"workspace-plan","content":"# Workspace plan"}',
+            ),
+            assistant("Created workspace-plan.md."),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        workspace = client.post("/workspaces", json={"name": "Planning"}).json()
+        response = client.post(
+            "/chat",
+            json={
+                "message": "Create workspace-plan.md",
+                "capability": "aina:unibot-documents",
+                "workspace_id": workspace["id"],
+            },
+        )
+        workspace_document = client.get(
+            "/documents/workspace-plan.md",
+            params={"workspace_id": workspace["id"]},
+        )
+        standalone_document = client.get("/documents/workspace-plan.md")
+
+    assert response.status_code == 200
+    assert workspace_document.status_code == 200
+    assert workspace_document.json()["content"] == "# Workspace plan"
+    assert standalone_document.status_code == 404
+    assert (
+        tmp_path / "workspaces" / workspace["storage_key"] / "files" / "workspace-plan.md"
+    ).is_file()
 
 
 def test_document_lookup_activates_scope_then_searches_without_opening_canvas(tmp_path: Path) -> None:
@@ -436,6 +528,133 @@ def test_document_aina_chat_creates_reviewed_edit_task_without_changing_source(t
         for event in trace["events"]
     )
     assert sum(event["kind"] == "model.completed" for event in trace["events"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_id",
+    [
+        READ_EDIT_TASK_TOOL_ID,
+        UPDATE_DRAFT_TOOL_ID,
+        AI_REVISE_DRAFT_TOOL_ID,
+        RETRY_EDIT_TASK_TOOL_ID,
+        MERGE_EDIT_SECTION_TOOL_ID,
+        ABANDON_EDIT_SECTION_TOOL_ID,
+    ],
+)
+@pytest.mark.parametrize(
+    ("task_workspace_id", "conversation_workspace_id"),
+    [
+        ("workspace-b", "workspace-a"),
+        ("workspace-b", None),
+        (None, "workspace-a"),
+    ],
+)
+async def test_document_edit_task_builtin_rejects_cross_workspace_task_ids(
+    tmp_path: Path,
+    tool_id: str,
+    task_workspace_id: str | None,
+    conversation_workspace_id: str | None,
+) -> None:
+    repository = InMemoryRepository()
+    service = DocumentEditTaskService(
+        DocumentService(NasStore(tmp_path)),
+        repository,
+        ScriptedLLM([]),
+    )
+    section = DocumentDraftSection(
+        heading="Background",
+        occurrence=1,
+        level=2,
+        base_content="## Background\n\nOriginal.",
+        draft_content="## Background\n\nDraft.",
+    )
+    task = await repository.create_document_edit_task(
+        DocumentEditTask(
+            document_name="guide.md",
+            title="Rewrite background",
+            description="Rewrite background",
+            base_revision="revision",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            workspace_id=task_workspace_id,
+            sections=[section],
+        )
+    )
+
+    with pytest.raises(PlatformError) as caught:
+        await invoke_document_edit_task_tool(
+            service,
+            tool_id,
+            {
+                "task_id": task.id,
+                "section_id": section.id,
+                "content": "## Background\n\nChanged.",
+                "instruction": "Improve this section",
+                "expected_draft_revision": 0,
+            },
+            user_id="user-1",
+            tenant_id="tenant-1",
+            workspace_id=conversation_workspace_id,
+        )
+
+    assert caught.value.code == "CONFLICT"
+    assert caught.value.status_code == 409
+    assert (await repository.get_document_edit_task(
+        task.id,
+        user_id="user-1",
+        tenant_id="tenant-1",
+    )).model_dump() == task.model_dump()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_workspace_id", "conversation_workspace_id"),
+    [("workspace-a", "workspace-a"), (None, None)],
+)
+async def test_document_edit_task_builtin_reads_exact_workspace_scope(
+    tmp_path: Path,
+    task_workspace_id: str | None,
+    conversation_workspace_id: str | None,
+) -> None:
+    repository = InMemoryRepository()
+    service = DocumentEditTaskService(
+        DocumentService(NasStore(tmp_path)),
+        repository,
+        ScriptedLLM([]),
+    )
+    task = await repository.create_document_edit_task(
+        DocumentEditTask(
+            document_name="guide.md",
+            title="Rewrite background",
+            description="Rewrite background",
+            base_revision="revision",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            workspace_id=task_workspace_id,
+            sections=[
+                DocumentDraftSection(
+                    heading="Background",
+                    occurrence=1,
+                    level=2,
+                    base_content="## Background\n\nOriginal.",
+                    draft_content="## Background\n\nDraft.",
+                )
+            ],
+        )
+    )
+
+    payload, _ = await invoke_document_edit_task_tool(
+        service,
+        READ_EDIT_TASK_TOOL_ID,
+        {"task_id": task.id},
+        user_id="user-1",
+        tenant_id="tenant-1",
+        workspace_id=conversation_workspace_id,
+    )
+
+    assert payload["task"]["id"] == task.id
+    assert payload["task"]["workspace_id"] == task_workspace_id
 
 
 def test_document_aina_merge_section_requires_confirmation(tmp_path: Path) -> None:

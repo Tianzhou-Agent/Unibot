@@ -39,7 +39,7 @@ from tianzhou_agent_platform.core.context_compression import (
     plan_compression,
 )
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, Message
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
 from tianzhou_agent_platform.core.model_settings import current_model_runtime
 from tianzhou_agent_platform.core.observation_context import (
@@ -375,7 +375,11 @@ class ObservedAgentRuntime(AgentRuntime):
     ) -> ChatResponse:
         if request.conversation_id is None:
             conversation = await self.repository.create_conversation(
-                ConversationCreate(user_id=request.user_id, tenant_id=request.tenant_id)
+                ConversationCreate(
+                    user_id=request.user_id,
+                    tenant_id=request.tenant_id,
+                    workspace_id=request.workspace_id,
+                )
             )
             request = request.model_copy(update={"conversation_id": conversation.id})
         else:
@@ -384,6 +388,8 @@ class ObservedAgentRuntime(AgentRuntime):
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
             )
+            if request.workspace_id is not None and request.workspace_id != conversation.workspace_id:
+                raise conflict("Requested workspace does not match the conversation")
 
         run_trace_id = trace_id or f"trace_{uuid4().hex}"
         root_span_id = f"span_{uuid4().hex}"
@@ -397,11 +403,21 @@ class ObservedAgentRuntime(AgentRuntime):
                 "message": request.message,
                 "requested_capability": request.capability,
                 "preferred_aina_id": request.preferred_aina_id,
+                **(
+                    {"workspace_id": conversation.workspace_id}
+                    if conversation.workspace_id is not None
+                    else {}
+                ),
             },
             attributes={
                 "conversation_id": conversation.id,
                 "requested_capability": request.capability,
                 "preferred_aina_id": request.preferred_aina_id,
+                **(
+                    {"workspace_id": conversation.workspace_id}
+                    if conversation.workspace_id is not None
+                    else {}
+                ),
             },
         )
         context = ObservationContext(

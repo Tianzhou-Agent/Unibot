@@ -56,10 +56,16 @@ class DocumentEditTaskService:
 
     async def create_task(self, name: str, data: DocumentEditTaskCreate) -> DocumentEditTask:
         description = data.description.strip()
+        workspace_storage_key = await self._workspace_storage_key(
+            data.workspace_id,
+            user_id=data.user_id,
+            tenant_id=data.tenant_id,
+        )
         outline = await self.documents.get_outline(
             name,
             user_id=data.user_id,
             tenant_id=data.tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
         available = {(item.heading, item.occurrence): item for item in outline.headings}
         selected = []
@@ -99,6 +105,7 @@ class DocumentEditTaskService:
                 heading.occurrence,
                 user_id=data.user_id,
                 tenant_id=data.tenant_id,
+                workspace_storage_key=workspace_storage_key,
             )
             if section.revision != outline.revision:
                 raise conflict("The document changed while the task was being created. Please try again.")
@@ -118,6 +125,7 @@ class DocumentEditTaskService:
             base_revision=outline.revision,
             user_id=data.user_id,
             tenant_id=data.tenant_id,
+            workspace_id=data.workspace_id,
             sections=draft_sections,
         )
         return await self.repository.create_document_edit_task(task)
@@ -135,14 +143,29 @@ class DocumentEditTaskService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_id: str | None = None,
     ) -> list[DocumentEditTask]:
-        document = await self.documents.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        workspace_storage_key = await self._workspace_storage_key(
+            workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        document = await self.documents.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         tasks = await self.repository.list_document_edit_tasks(
             user_id=user_id,
             tenant_id=tenant_id,
             document_name=document.name,
         )
-        return [task for task in tasks if task.status != "deleted"]
+        return [
+            task
+            for task in tasks
+            if task.status != "deleted" and task.workspace_id == workspace_id
+        ]
 
     async def update_draft(
         self,
@@ -249,6 +272,11 @@ class DocumentEditTaskService:
 
     async def merge_task(self, task_id: str, *, user_id: str, tenant_id: str) -> DocumentEditTask:
         task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        workspace_storage_key = await self._workspace_storage_key(
+            task.workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         self._require_reviewing(task)
         pending_sections = [item for item in task.sections if item.review_status == "pending"]
         if not pending_sections:
@@ -259,7 +287,7 @@ class DocumentEditTaskService:
             task.model_copy(update={"status": "merging", "error": None}),
             expected_version=task.version,
         )
-        lock_key = f"{tenant_id}:{user_id}:{merging.document_name}"
+        lock_key = f"{tenant_id}:{user_id}:{task.workspace_id or 'standalone'}:{merging.document_name}"
         acquired = await self._acquire_merge_lock(lock_key)
         if not acquired:
             latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
@@ -275,6 +303,7 @@ class DocumentEditTaskService:
                 merging.base_revision,
                 user_id=user_id,
                 tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
             )
         except StorageValidationError as exc:
             latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
@@ -330,6 +359,11 @@ class DocumentEditTaskService:
         tenant_id: str,
     ) -> DocumentEditTask:
         task = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+        workspace_storage_key = await self._workspace_storage_key(
+            task.workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         self._require_reviewing(task)
         section = _find_draft_section(task, section_id)
         _require_pending_section(section)
@@ -339,7 +373,7 @@ class DocumentEditTaskService:
             task.model_copy(update={"status": "merging", "error": None}),
             expected_version=task.version,
         )
-        lock_key = f"{tenant_id}:{user_id}:{merging.document_name}"
+        lock_key = f"{tenant_id}:{user_id}:{task.workspace_id or 'standalone'}:{merging.document_name}"
         acquired = await self._acquire_merge_lock(lock_key)
         if not acquired:
             latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
@@ -355,6 +389,7 @@ class DocumentEditTaskService:
                 merging.base_revision,
                 user_id=user_id,
                 tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
             )
         except StorageValidationError as exc:
             latest = await self.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
@@ -536,6 +571,22 @@ class DocumentEditTaskService:
         lock = self._merge_locks.get(key)
         if lock is not None and lock.locked():
             lock.release()
+
+    async def _workspace_storage_key(
+        self,
+        workspace_id: str | None,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> str | None:
+        if workspace_id is None:
+            return None
+        workspace = await self.repository.require_workspace_actor(
+            workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        return workspace.storage_key
 
     @staticmethod
     def _require_reviewing(task: DocumentEditTask) -> None:

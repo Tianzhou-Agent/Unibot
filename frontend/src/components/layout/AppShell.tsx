@@ -2,18 +2,21 @@ import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { DebugModeProvider } from "@/lib/debugMode";
 import { MockSessionProvider } from "@/lib/mockSession";
+import { WorkspaceProvider } from "@/lib/workspace";
 
 export function AppShell() {
   return (
     <MockSessionProvider>
-      <DebugModeProvider>
-        <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-ink">
-          <Sidebar />
-          <main className="flex-1 min-w-0 overflow-hidden">
-            <Outlet />
-          </main>
-        </div>
-      </DebugModeProvider>
+      <WorkspaceProvider>
+        <DebugModeProvider>
+          <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-ink">
+            <Sidebar />
+            <main className="flex-1 min-w-0 overflow-hidden">
+              <Outlet />
+            </main>
+          </div>
+        </DebugModeProvider>
+      </WorkspaceProvider>
     </MockSessionProvider>
   );
 }

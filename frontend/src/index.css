@@ -16,7 +16,7 @@
   }
   body {
     @apply bg-app-bg text-ink antialiased;
-    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: "Noto Sans SC", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
     font-feature-settings: "cv11", "ss01";
   }
   *::-webkit-scrollbar {

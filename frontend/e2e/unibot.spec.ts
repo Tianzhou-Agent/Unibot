@@ -9,6 +9,7 @@ const OBS_TOOL_SPAN_ID = "cccccccccccccccc";
 type JsonObject = Record<string, unknown>;
 
 interface MockState {
+  workspaces: JsonObject[];
   ainas: JsonObject[];
   ainaProjects: JsonObject[];
   conversations: JsonObject[];
@@ -19,6 +20,8 @@ interface MockState {
   legacySpanIo: boolean;
   obsSessions: Record<string, JsonObject>;
   streamDelayMs: number;
+  workspaceCreateDelayMs: number;
+  workspaceConversationDelayMs: Record<string, number>;
   staleFirstConversationLoadMs: number;
   conversationLoadCount: number;
   documentTasks: JsonObject[];
@@ -27,6 +30,11 @@ interface MockState {
   documentContent: string;
   documentMergeConflict: boolean;
   lastStreamPayload: JsonObject | null;
+  lastWorkspaceListScope: JsonObject | null;
+  lastWorkspaceCreatePayload: JsonObject | null;
+  lastDocumentTreeScope: JsonObject | null;
+  lastDocumentSectionScope: JsonObject | null;
+  lastSandboxEnsurePayload: JsonObject | null;
   streamWidgets: JsonObject[];
   sandbox: JsonObject | null;
   sandboxExecutions: JsonObject[];
@@ -39,6 +47,7 @@ function conversation(overrides: JsonObject = {}): JsonObject {
     id: "conv-e2e-1",
     user_id: "anonymous",
     tenant_id: "default",
+    workspace_id: null,
     title: "已有会话",
     category: "general",
     status: "active",
@@ -49,6 +58,20 @@ function conversation(overrides: JsonObject = {}): JsonObject {
     config: {},
     enabled_ainas: [],
     messages: [],
+    created_at: NOW,
+    updated_at: NOW,
+    ...overrides,
+  };
+}
+
+function workspace(overrides: JsonObject = {}): JsonObject {
+  return {
+    id: "workspace-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    name: "E2E 工作区",
+    description: "用于验证工作区隔离。",
+    storage_key: "workspace-e2e-1",
     created_at: NOW,
     updated_at: NOW,
     ...overrides,
@@ -266,6 +289,7 @@ function successfulObsSession(sessionId: string): JsonObject {
 
 async function installMockApi(page: Page, initial: Partial<MockState> = {}): Promise<MockState> {
   const state: MockState = {
+    workspaces: initial.workspaces ?? [],
     ainas: initial.ainas ?? [],
     ainaProjects: initial.ainaProjects ?? [],
     conversations: initial.conversations ?? [],
@@ -276,6 +300,8 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     legacySpanIo: initial.legacySpanIo ?? false,
     obsSessions: initial.obsSessions ?? {},
     streamDelayMs: initial.streamDelayMs ?? 0,
+    workspaceCreateDelayMs: initial.workspaceCreateDelayMs ?? 0,
+    workspaceConversationDelayMs: initial.workspaceConversationDelayMs ?? {},
     staleFirstConversationLoadMs: initial.staleFirstConversationLoadMs ?? 0,
     conversationLoadCount: 0,
     documentTasks: initial.documentTasks ?? [],
@@ -284,6 +310,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     documentContent: initial.documentContent ?? "# 使用指南\n\n## 简介\n\n旧内容。\n",
     documentMergeConflict: initial.documentMergeConflict ?? false,
     lastStreamPayload: null,
+    lastWorkspaceListScope: null,
+    lastWorkspaceCreatePayload: null,
+    lastDocumentTreeScope: null,
+    lastDocumentSectionScope: null,
+    lastSandboxEnsurePayload: null,
     streamWidgets: initial.streamWidgets ?? [],
     sandbox: initial.sandbox ?? null,
     sandboxExecutions: initial.sandboxExecutions ?? [],
@@ -337,6 +368,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     }
 
     if (method === "POST" && path === "/sandboxes/ensure") {
+      state.lastSandboxEnsurePayload = request.postDataJSON() as JsonObject;
       state.sandbox ??= {
         id: "sandbox-e2e",
         user_id: "anonymous",
@@ -391,12 +423,55 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return route.fulfill({ status: 204, body: "" });
     }
 
+    if (method === "GET" && path === "/workspaces") {
+      const userId = url.searchParams.get("user_id");
+      const tenantId = url.searchParams.get("tenant_id");
+      state.lastWorkspaceListScope = { user_id: userId, tenant_id: tenantId };
+      return json(route, state.workspaces.filter((workspace) => (
+        (!userId || workspace.user_id === userId) && (!tenantId || workspace.tenant_id === tenantId)
+      )));
+    }
+    if (method === "POST" && path === "/workspaces") {
+      const payload = request.postDataJSON() as JsonObject;
+      state.lastWorkspaceCreatePayload = payload;
+      if (state.workspaceCreateDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, state.workspaceCreateDelayMs));
+      }
+      const workspace = {
+        id: `workspace-e2e-${state.workspaces.length + 1}`,
+        user_id: payload.user_id ?? "anonymous",
+        tenant_id: payload.tenant_id ?? "default",
+        name: payload.name,
+        description: payload.description ?? "",
+        storage_key: `workspace-e2e-${state.workspaces.length + 1}`,
+        created_at: NOW,
+        updated_at: NOW,
+      };
+      state.workspaces.push(workspace);
+      return json(route, workspace, 201);
+    }
     if (method === "GET" && path === "/conversations") {
-      return json(route, state.conversations.filter((item) => item.status !== "deleted"));
+      const workspaceId = url.searchParams.get("workspace_id");
+      const userId = url.searchParams.get("user_id");
+      const tenantId = url.searchParams.get("tenant_id");
+      const delay = workspaceId ? state.workspaceConversationDelayMs[workspaceId] ?? 0 : 0;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      return json(route, state.conversations.filter((item) => (
+        item.status !== "deleted"
+        && (!workspaceId || item.workspace_id === workspaceId)
+        && (!userId || item.user_id === userId)
+        && (!tenantId || item.tenant_id === tenantId)
+      )));
     }
     if (method === "POST" && path === "/conversations") {
       const payload = request.postDataJSON() as JsonObject;
-      const created = conversation({ title: payload.title, category: payload.category });
+      const created = conversation({
+        title: payload.title,
+        category: payload.category,
+        user_id: payload.user_id ?? "anonymous",
+        tenant_id: payload.tenant_id ?? "default",
+        workspace_id: payload.workspace_id ?? null,
+      });
       state.conversations.push(created);
       return json(route, created, 201);
     }
@@ -573,6 +648,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return json(route, { items: [{ name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW }], total: 1 });
     }
     if (method === "GET" && path === "/documents/tree") {
+      state.lastDocumentTreeScope = {
+        user_id: url.searchParams.get("user_id"),
+        tenant_id: url.searchParams.get("tenant_id"),
+        workspace_id: url.searchParams.get("workspace_id"),
+      };
       return json(route, {
         folders: state.documentFolders.map((folderPath) => ({ path: folderPath, name: folderPath.split("/").at(-1) })),
         documents: [{ name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW }],
@@ -739,6 +819,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return route.fulfill({ status: 204 });
     }
     if (method === "GET" && /^\/documents\/[^/]+\/sections$/.test(path)) {
+      state.lastDocumentSectionScope = {
+        user_id: url.searchParams.get("user_id"),
+        tenant_id: url.searchParams.get("tenant_id"),
+        workspace_id: url.searchParams.get("workspace_id"),
+      };
       const heading = url.searchParams.get("heading") ?? "未命名章节";
       const content = heading === "使用指南"
         ? state.documentContent
@@ -1010,6 +1095,204 @@ test("FE-E2E-001 新建会话并展示流式回复", async ({ page }) => {
   await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 });
 
+test("FE-E2E-001W Demo · 场景说明：进入工作区并直接发起任务", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/chat");
+
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
+  await dialog.getByLabel("名称").fill("产品发布计划");
+  await dialog.getByLabel("描述").fill("集中保存发布相关对话与产物");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
+  await expect(page.locator("main").getByText("产品发布计划", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "搜索或创建任务", exact: true }).fill("生成发布检查清单");
+  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\?prompt=/);
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("生成发布检查清单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
+  await expect(page.locator("main p").filter({ hasText: "生成发布检查清单" })).toBeVisible();
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  expect(state.lastStreamPayload?.workspace_id).toBe("workspace-e2e-1");
+
+  await page.getByRole("link", { name: "文件", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
+  await page.locator("main").getByRole("link", { name: /guide\.md/ }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/canvas\/unibot-documents$/);
+  const editor = page.getByRole("textbox", { name: "全文 Markdown 编辑器" });
+  await editor.fill("# 发布检查清单\n\n- [x] Demo 场景已跑通\n");
+  await page.getByRole("button", { name: "保存文档" }).click();
+  await expect(editor).toHaveValue(/Demo 场景已跑通/);
+  expect(state.documentContent).toContain("Demo 场景已跑通");
+});
+
+test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
+  const state = await installMockApi(page);
+  await page.goto("/chat");
+
+  await expect.poll(() => state.lastWorkspaceListScope?.user_id).toBe("admin-zhou-ran");
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
+  await dialog.getByLabel("名称").fill("管理员工作区");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
+  expect(state.lastWorkspaceCreatePayload).toMatchObject({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+  });
+  await expect.poll(() => state.lastDocumentTreeScope).toEqual({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+    workspace_id: "workspace-e2e-1",
+  });
+
+  await page.goto("/workspaces/workspace-e2e-1/canvas/unibot-documents");
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
+  await expect.poll(() => state.lastDocumentTreeScope?.user_id).toBe("admin-zhou-ran");
+
+  state.conversations.push(conversation({
+    id: "conv-admin-outline",
+    user_id: "admin-zhou-ran",
+    workspace_id: "workspace-e2e-1",
+    messages: [{
+      id: "msg-admin-outline",
+      role: "assistant",
+      content: "请选择章节。",
+      content_type: "text",
+      widgets: [{
+        id: "outline-admin",
+        kind: "document_outline",
+        title: "guide.md",
+        description: "管理员章节读取",
+        markdown: null,
+        fields: [],
+        actions: [],
+        apps: [],
+        document_name: "guide.md",
+        sections: [{ index: 1, heading: "使用指南", level: 1, occurrence: 1, line_start: 1, line_end: 6 }],
+      }],
+      created_at: NOW,
+    }],
+  }));
+  await page.goto("/workspaces/workspace-e2e-1/chat/conv-admin-outline");
+  await expect(page.getByRole("region", { name: "文档章节 guide.md" })).toBeVisible();
+  await expect.poll(() => state.lastDocumentSectionScope).toEqual({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+    workspace_id: "workspace-e2e-1",
+  });
+
+  await page.goto("/workspaces/workspace-e2e-1/canvas/unibot-code-runner");
+  await expect.poll(() => state.lastSandboxEnsurePayload).toEqual({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+    workspace_id: "workspace-e2e-1",
+  });
+});
+
+test("FE-E2E-001WAA 创建工作区期间切换用户不会写入旧 actor 响应", async ({ page }) => {
+  const state = await installMockApi(page, { workspaceCreateDelayMs: 300 });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
+  await dialog.getByLabel("名称").fill("不应写入当前列表");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect.poll(() => state.lastWorkspaceCreatePayload?.user_id).toBe("anonymous");
+
+  await page.getByRole("button", { name: "切换身份，当前普通用户" }).evaluate((button: HTMLButtonElement) => button.click());
+  await expect.poll(() => state.lastWorkspaceListScope?.user_id).toBe("admin-zhou-ran");
+  await expect(dialog.getByText("当前用户已切换，请重新创建工作区。", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.locator('aside a[href="/workspaces/workspace-e2e-1"]')).toHaveCount(0);
+});
+
+test("FE-E2E-001WB 快速切换工作区不会被慢响应覆盖", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+    conversations: [
+      conversation({ id: "conv-a", workspace_id: "workspace-a", title: "A 的会话" }),
+      conversation({ id: "conv-b", workspace_id: "workspace-b", title: "B 的会话" }),
+    ],
+    workspaceConversationDelayMs: { "workspace-a": 350 },
+  });
+  const slowRequest = page.waitForRequest((request) => (
+    request.url().includes("/api/conversations?") && request.url().includes("workspace_id=workspace-a")
+  ));
+  await page.goto("/workspaces/workspace-a");
+  await slowRequest;
+  await page.locator('aside a[href="/workspaces/workspace-b"]').click();
+
+  const main = page.locator("main");
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+  await expect(main.getByText("B 的会话", { exact: true })).toBeVisible();
+  await page.waitForTimeout(450);
+  await expect(main.getByText("B 的会话", { exact: true })).toBeVisible();
+  await expect(main.getByText("A 的会话", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("conversation-row-conv-b")).toBeVisible();
+});
+
+test("FE-E2E-001WC 离开运行中的工作区聊天后不会跳回旧路由", async ({ page }) => {
+  const state = await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+    streamDelayMs: 300,
+  });
+  await page.goto("/workspaces/workspace-a/chat");
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("开始一个慢任务");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
+  await page.locator('aside a[href="/workspaces/workspace-b"]').click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+  await page.waitForTimeout(450);
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+});
+
+test("FE-E2E-001WD 离开运行中的 Workspace Canvas 后不会执行旧打开动作", async ({ page }) => {
+  const state = await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+    conversations: [conversation({
+      id: "conv-canvas-workspace",
+      workspace_id: "workspace-a",
+      title: "Workspace Canvas 会话",
+    })],
+    streamDelayMs: 300,
+    streamWidgets: [{
+      id: "open-memory-after-run",
+      kind: "navigation",
+      title: "打开记忆",
+      description: "完成后打开另一个 AINA",
+      markdown: null,
+      fields: [],
+      apps: [],
+      actions: [{ id: "open-memory", label: "打开记忆", kind: "open_aina", aina_id: "unibot-memory", style: "primary" }],
+    }],
+  });
+  await page.goto("/workspaces/workspace-a/canvas/unibot-documents?conversation=conv-canvas-workspace");
+  await page.getByRole("textbox", { name: "画布消息" }).fill("运行一个慢 Canvas 任务");
+  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
+  await page.locator('aside a[href="/workspaces/workspace-b"]').click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+  await page.waitForTimeout(450);
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+});
+
 test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/canvas/unibot-documents");
@@ -1251,6 +1534,7 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
 test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "已有会话" })).toBeVisible();
   const conversationList = page.getByRole("navigation", { name: "对话列表" });
@@ -1265,7 +1549,10 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await conversationRow.hover();
   await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await conversationList.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
+  const deleteDialog = page.getByRole("alertdialog", { name: "删除会话", exact: true });
+  await expect(deleteDialog.getByText("重命名后的会话", { exact: true })).toBeVisible();
+  await expect(deleteDialog.getByText("工作区中已经生成的文件和其他产物不会受到影响。", { exact: true })).toBeVisible();
+  await deleteDialog.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
   await expect(page).toHaveURL(/\/chat$/);
   await expect(conversationList.getByText("重命名后的会话", { exact: true })).toHaveCount(0);
 });
@@ -1273,6 +1560,7 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
 test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
 
   const row = page.getByTestId("conversation-row-conv-e2e-1");
   const moreButton = row.getByRole("button", { name: "更多操作", exact: true });
@@ -1289,6 +1577,33 @@ test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ pa
 
   await moreButton.click();
   await expect(page.getByRole("menu", { name: "已有会话 对话操作", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-002C 对话与文件导航状态保持互斥", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [workspace()],
+    conversations: [conversation({ workspace_id: "workspace-e2e-1" })],
+  });
+
+  await page.goto("/chat");
+  const rail = page.getByRole("complementary", { name: "快捷导航" });
+  await expect(rail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(rail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await rail.getByRole("button", { name: "展开导航", exact: true }).click();
+  const mainNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(mainNavigation.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(mainNavigation.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await page.goto("/workspaces/workspace-e2e-1/chat/conv-e2e-1");
+  const workspaceRail = page.getByRole("complementary", { name: "快捷导航" });
+  await expect(workspaceRail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(workspaceRail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await page.goto("/workspaces/workspace-e2e-1");
+  const workspaceNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(workspaceNavigation.getByRole("link", { name: "对话", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+  await expect(workspaceNavigation.getByRole("link", { name: "文件", exact: true })).toHaveClass(/bg-sidebar-active/);
 });
 
 test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
@@ -1533,8 +1848,64 @@ test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ p
 
   await page.goto("/chat/conv-e2e-1");
 
-  await expect(page.getByText("能力调用结果 · builtin_document_edit_task_create_success", { exact: true })).toBeVisible();
-  await expect(page.getByText("能力调用失败 · builtin_document_edit_task_create_error", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 builtin_document_edit_task_create_success 完成", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 builtin_document_edit_task_create_error 失败", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004E 普通模式按设计稿展示并合并工具调用结果", async ({ page }) => {
+  await installMockApi(page, {
+    conversations: [
+      conversation({
+        messages: [
+          {
+            id: "msg-tool-request",
+            role: "assistant",
+            content: "我先检索公开资料并提取证据。",
+            content_type: "text",
+            tool_calls: [{
+              id: "call-search",
+              type: "function",
+              function: { name: "browser.search", arguments: JSON.stringify({ query: "CNCF survey 2025" }) },
+            }],
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-result",
+            role: "tool",
+            name: "browser.search",
+            tool_call_id: "call-search",
+            content: JSON.stringify({ status: "ok", results: [{ title: "CNCF Annual Survey" }] }),
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-summary",
+            role: "assistant",
+            content: "检索完成，已整理关键来源。",
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText("我先检索公开资料并提取证据。", { exact: true })).toBeVisible();
+  await expect(page.getByText("检索完成，已整理关键来源。", { exact: true })).toBeVisible();
+  const card = page.getByLabel("工具调用 browser.search 完成", { exact: true });
+  await expect(card).toHaveCount(1);
+  await expect(card.getByText("联网搜索", { exact: true })).toBeVisible();
+  await expect(card.getByText("CNCF survey 2025", { exact: true })).toBeVisible();
+  await card.locator("summary").click();
+  await expect(card.getByText("调用参数", { exact: true })).toBeVisible();
+  await expect(card.getByText("返回结果", { exact: true })).toBeVisible();
+
+  await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
+  await expect(page.getByLabel("工具调用 browser.search 完成", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
@@ -2233,6 +2604,7 @@ test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page 
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
 
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.getByTestId("conversation-row-conv-other").click();
   await expect(page).toHaveURL(/\/chat\/conv-other$/);
   await expect(main.getByText("这是另一个会话的独立消息。", { exact: true })).toBeVisible();

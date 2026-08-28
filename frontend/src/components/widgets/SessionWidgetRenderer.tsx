@@ -8,6 +8,7 @@ import { WidgetFormFields } from "./WidgetFormFields";
 
 interface SessionWidgetRendererProps {
   widget: WidgetDefinition;
+  workspaceId?: string | null;
   disabled?: boolean;
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
@@ -15,7 +16,7 @@ interface SessionWidgetRendererProps {
 
 export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
   if (props.widget.kind === "document_outline") {
-    return <DocumentOutlineWidget widget={props.widget} />;
+    return <DocumentOutlineWidget widget={props.widget} workspaceId={props.workspaceId} />;
   }
   return <DeclarativeSessionWidgetRenderer {...props} />;
 }
@@ -48,22 +49,19 @@ function DeclarativeSessionWidgetRenderer({
   }
 
   return (
-    <section className="overflow-hidden rounded-lg border border-accent-ring bg-white shadow-soft" aria-label={widget.title}>
-      <header className="flex items-start gap-3 border-b border-line bg-accent-soft px-4 py-3.5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-white">
-          {widget.kind === "app_list" ? <Boxes className="h-4.5 w-4.5" /> : <AppWindow className="h-4.5 w-4.5" />}
+    <section className="overflow-hidden rounded-xl border border-line bg-white p-3" aria-label={widget.title}>
+      <header className="flex items-center gap-2">
+        <span className="text-ink-muted">
+          {widget.kind === "app_list" ? <Boxes className="h-4 w-4" /> : <AppWindow className="h-4 w-4" />}
         </span>
         <div className="min-w-0 flex-1">
-          <h3 className="text-[14px] font-extrabold text-ink">{widget.title}</h3>
-          {widget.description ? <p className="mt-0.5 text-[11.5px] leading-relaxed text-ink-muted">{widget.description}</p> : null}
+          <h3 className="truncate text-[12px] font-semibold text-ink">{widget.title}</h3>
         </div>
-        <span className="rounded-md bg-white px-2 py-1 font-mono text-[9.5px] font-bold uppercase text-accent shadow-sm">
-          Widget
-        </span>
       </header>
+      {widget.description ? <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-subtle">{widget.description}</p> : null}
 
-      <div className="p-4">
-        {widget.markdown ? <MarkdownContent content={widget.markdown} className="mb-4" /> : null}
+      <div className="mt-3">
+        {widget.markdown ? <MarkdownContent content={widget.markdown} className="mb-3" /> : null}
         {widget.kind === "app_list" ? (
           <SessionAppList widget={widget} disabled={disabled} onOpenAina={onOpenAina} />
         ) : (
@@ -71,7 +69,7 @@ function DeclarativeSessionWidgetRenderer({
         )}
 
         {widget.actions.length ? (
-          <div className={classNames("flex flex-wrap items-center gap-2", widget.fields.length || widget.markdown ? "mt-4" : "")}>
+          <div className={classNames("flex flex-wrap items-center gap-2", widget.fields.length || widget.markdown ? "mt-3" : "")}>
             {widget.actions.map((action) => (
               <button
                 key={action.id}

@@ -33,30 +33,51 @@ class SandboxService:
         self._actor_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     async def ensure(self, request: SandboxEnsureRequest) -> SandboxRecord:
-        async with self._actor_lease(request.user_id, request.tenant_id):
-            return await self._ensure_unlocked(request)
+        workspace_storage_key = await self._authorize_workspace(
+            request.workspace_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+        )
+        async with self._actor_lease(request.user_id, request.tenant_id, request.workspace_id):
+            return await self._ensure_unlocked(
+                request,
+                workspace_storage_key=workspace_storage_key,
+            )
 
-    async def _ensure_unlocked(self, request: SandboxEnsureRequest) -> SandboxRecord:
+    async def _ensure_unlocked(
+        self,
+        request: SandboxEnsureRequest,
+        *,
+        workspace_storage_key: str | None,
+    ) -> SandboxRecord:
         try:
             sandbox = await self.repository.get_sandbox_for_actor(
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
+                workspace_id=request.workspace_id,
             )
         except PlatformError as exc:
             if exc.code != "RESOURCE_NOT_FOUND":
                 raise
-            actor_digest = _actor_digest(request.tenant_id, request.user_id)
+            actor_digest = _actor_digest(request.tenant_id, request.user_id, request.workspace_id)
             sandbox = SandboxRecord(
                 id=f"sandbox_{actor_digest}",
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
+                workspace_id=request.workspace_id,
+                workspace_storage_key=workspace_storage_key,
                 image=self.default_image,
                 driver=self.driver.name,  # type: ignore[arg-type]
                 runtime_name=f"unibot-{actor_digest}",
                 workspace="/workspace",
             )
         else:
-            sandbox = sandbox.model_copy(update={"image": self.default_image})
+            sandbox = sandbox.model_copy(
+                update={
+                    "image": self.default_image,
+                    "workspace_storage_key": workspace_storage_key,
+                }
+            )
         state = await self.driver.ensure(sandbox)
         now = datetime.now(UTC)
         updated = sandbox.model_copy(
@@ -74,22 +95,41 @@ class SandboxService:
         )
         return await self.repository.put_sandbox(updated)
 
-    async def get(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
-        return await self.repository.get_sandbox_for_actor(user_id=user_id, tenant_id=tenant_id)
+    async def get(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+    ) -> SandboxRecord:
+        await self._authorize_workspace(workspace_id, user_id=user_id, tenant_id=tenant_id)
+        return await self.repository.get_sandbox_for_actor(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
 
     async def execute(self, request: SandboxExecutionRequest) -> SandboxExecution:
-        async with self._actor_lease(request.user_id, request.tenant_id):
+        workspace_storage_key = await self._authorize_workspace(
+            request.workspace_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+        )
+        async with self._actor_lease(request.user_id, request.tenant_id, request.workspace_id):
             sandbox = await self._ensure_unlocked(
                 SandboxEnsureRequest(
                     user_id=request.user_id,
                     tenant_id=request.tenant_id,
-                )
+                    workspace_id=request.workspace_id,
+                ),
+                workspace_storage_key=workspace_storage_key,
             )
             execution = SandboxExecution(
                 id=f"execution_{uuid4().hex}",
                 sandbox_id=sandbox.id,
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
+                workspace_id=request.workspace_id,
                 language=request.language,
                 script=request.script,
                 working_directory=request.working_directory,
@@ -144,25 +184,64 @@ class SandboxService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_id: str | None = None,
         path: str,
         content: bytes,
         overwrite: bool = True,
     ) -> None:
         normalized = _workspace_file_path(path)
-        async with self._actor_lease(user_id, tenant_id):
-            sandbox = await self._ensure_unlocked(SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id))
+        workspace_storage_key = await self._authorize_workspace(
+            workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        async with self._actor_lease(user_id, tenant_id, workspace_id):
+            sandbox = await self._ensure_unlocked(
+                SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id),
+                workspace_storage_key=workspace_storage_key,
+            )
             await self.driver.write_file(sandbox, normalized, content, overwrite=overwrite)
 
-    async def read_file(self, *, user_id: str, tenant_id: str, path: str) -> bytes:
+    async def read_file(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+        path: str,
+    ) -> bytes:
         normalized = _workspace_file_path(path)
-        async with self._actor_lease(user_id, tenant_id):
-            sandbox = await self._ensure_unlocked(SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id))
+        workspace_storage_key = await self._authorize_workspace(
+            workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        async with self._actor_lease(user_id, tenant_id, workspace_id):
+            sandbox = await self._ensure_unlocked(
+                SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id),
+                workspace_storage_key=workspace_storage_key,
+            )
             return await self.driver.read_file(sandbox, normalized)
 
-    async def delete_file(self, *, user_id: str, tenant_id: str, path: str) -> None:
+    async def delete_file(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+        path: str,
+    ) -> None:
         normalized = _workspace_file_path(path)
-        async with self._actor_lease(user_id, tenant_id):
-            sandbox = await self._ensure_unlocked(SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id))
+        workspace_storage_key = await self._authorize_workspace(
+            workspace_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        async with self._actor_lease(user_id, tenant_id, workspace_id):
+            sandbox = await self._ensure_unlocked(
+                SandboxEnsureRequest(user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id),
+                workspace_storage_key=workspace_storage_key,
+            )
             await self.driver.delete_file(sandbox, normalized)
 
     async def list_executions(
@@ -170,17 +249,31 @@ class SandboxService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_id: str | None = None,
         limit: int = 50,
     ) -> list[SandboxExecution]:
+        await self._authorize_workspace(workspace_id, user_id=user_id, tenant_id=tenant_id)
         return await self.repository.list_sandbox_executions(
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_id=workspace_id,
             limit=limit,
         )
 
-    async def stop(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
-        async with self._actor_lease(user_id, tenant_id):
-            sandbox = await self.get(user_id=user_id, tenant_id=tenant_id)
+    async def stop(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+    ) -> SandboxRecord:
+        await self._authorize_workspace(workspace_id, user_id=user_id, tenant_id=tenant_id)
+        async with self._actor_lease(user_id, tenant_id, workspace_id):
+            sandbox = await self.repository.get_sandbox_for_actor(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+            )
             state = await self.driver.stop(sandbox)
             return await self.repository.put_sandbox(
                 sandbox.model_copy(
@@ -193,18 +286,50 @@ class SandboxService:
                 )
             )
 
-    async def reset(self, *, user_id: str, tenant_id: str) -> None:
-        async with self._actor_lease(user_id, tenant_id):
-            sandbox = await self.get(user_id=user_id, tenant_id=tenant_id)
+    async def reset(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+    ) -> None:
+        await self._authorize_workspace(workspace_id, user_id=user_id, tenant_id=tenant_id)
+        async with self._actor_lease(user_id, tenant_id, workspace_id):
+            sandbox = await self.repository.get_sandbox_for_actor(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+            )
             await self.driver.reset(sandbox)
             await self.repository.remove_sandbox(sandbox.id)
 
     async def aclose(self) -> None:
         await self.driver.aclose()
 
+    async def _authorize_workspace(
+        self,
+        workspace_id: str | None,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> str | None:
+        if workspace_id is not None:
+            workspace = await self.repository.require_workspace_actor(
+                workspace_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            return workspace.storage_key
+        return None
+
     @asynccontextmanager
-    async def _actor_lease(self, user_id: str, tenant_id: str) -> AsyncIterator[None]:
-        key = hashlib.sha256(f"{tenant_id}:{user_id}".encode()).hexdigest()
+    async def _actor_lease(
+        self,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None,
+    ) -> AsyncIterator[None]:
+        key = _actor_digest(tenant_id, user_id, workspace_id, length=None)
         local_lock = self._actor_locks.setdefault(key, asyncio.Lock())
         async with local_lock:
             stores = getattr(self.repository, "stores", None)
@@ -224,15 +349,25 @@ class SandboxService:
                 await asyncio.sleep(0.1)
             raise PlatformError(
                 "CONFLICT",
-                "Another sandbox operation is already running for this user",
+                "Another sandbox operation is already running for this sandbox",
                 status_code=409,
                 retryable=True,
                 source="sandbox",
             )
 
 
-def _actor_digest(tenant_id: str, user_id: str) -> str:
-    return hashlib.sha256(f"{tenant_id}:{user_id}".encode()).hexdigest()[:20]
+def _actor_digest(
+    tenant_id: str,
+    user_id: str,
+    workspace_id: str | None,
+    *,
+    length: int | None = 20,
+) -> str:
+    identity = f"{tenant_id}:{user_id}"
+    if workspace_id is not None:
+        identity = f"{identity}:workspace:{workspace_id}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    return digest if length is None else digest[:length]
 
 
 def _workspace_file_path(value: str) -> str:
