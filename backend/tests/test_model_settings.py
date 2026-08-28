@@ -30,7 +30,12 @@ def _provider_payload() -> dict[str, Any]:
         "api_key": "user-secret-key-value",
         "timeout_seconds": 45,
         "models": [
-            {"name": "快速模型", "model": "team-fast", "enabled": True},
+            {
+                "name": "快速模型",
+                "model": "team-fast",
+                "enabled": True,
+                "context_window_tokens": 64_000,
+            },
             {"name": "推理模型", "model": "team-reasoning", "enabled": True},
         ],
     }
@@ -56,6 +61,7 @@ def test_model_settings_support_multiple_models_and_mask_secrets() -> None:
                 "name": model["name"],
                 "model": model["model"],
                 "enabled": model["enabled"],
+                "context_window_tokens": model["context_window_tokens"],
             }
             for model in selected.json()["models"]
         ]
@@ -67,6 +73,8 @@ def test_model_settings_support_multiple_models_and_mask_secrets() -> None:
     assert created.json()["api_key_masked"] == "use******alue"
     assert "user-secret-key-value" not in created.text
     assert len(created.json()["models"]) == 2
+    assert created.json()["models"][0]["context_window_tokens"] == 64_000
+    assert created.json()["models"][1]["context_window_tokens"] == 128_000
     assert selected.status_code == 200
     assert loaded.json()["active_model"] == {
         "source": "user",
@@ -108,8 +116,12 @@ def test_model_discovery_reads_openai_compatible_models_and_reuses_saved_key() -
             json={
                 "object": "list",
                 "data": [
-                    {"id": "team-fast", "object": "model"},
-                    {"id": "team-reasoning", "display_name": "Team Reasoning"},
+                    {"id": "team-fast", "object": "model", "context_length": 131_072},
+                    {
+                        "id": "team-reasoning",
+                        "display_name": "Team Reasoning",
+                        "top_provider": {"context_length": "200000"},
+                    },
                     {"id": "team-fast"},
                 ],
             },
@@ -132,8 +144,8 @@ def test_model_discovery_reads_openai_compatible_models_and_reuses_saved_key() -
     assert response.status_code == 200
     assert response.json() == {
         "models": [
-            {"id": "team-fast", "name": "team-fast"},
-            {"id": "team-reasoning", "name": "Team Reasoning"},
+            {"id": "team-fast", "name": "team-fast", "context_window_tokens": 131_072},
+            {"id": "team-reasoning", "name": "Team Reasoning", "context_window_tokens": 200_000},
         ]
     }
     assert len(requests) == 1

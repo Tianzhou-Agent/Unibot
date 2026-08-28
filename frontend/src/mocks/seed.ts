@@ -249,7 +249,7 @@ export const APPS: AppDescriptor[] = [
     category: "extension",
     enabled: true,
     highlight: true,
-    routesTo: "/apps/memory",
+    routesTo: "/plugin/memory",
   },
   {
     id: "app_files",

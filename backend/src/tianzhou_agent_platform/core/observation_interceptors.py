@@ -41,7 +41,7 @@ from tianzhou_agent_platform.core.context_compression import (
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, Message
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient, LLMResult
-from tianzhou_agent_platform.core.model_settings import current_model_runtime
+from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, current_model_runtime
 from tianzhou_agent_platform.core.observation_context import (
     ObservationContext,
     bind_observation_context,
@@ -969,9 +969,9 @@ class ObservedAgentRuntime(AgentRuntime):
             *history.provider_messages(),
         ]
         before_tokens = estimate_request_tokens(active_messages, tool_definitions)
+        context_window_tokens = current_context_window_tokens(self.settings.context_window_tokens)
         threshold_tokens = int(
-            self.settings.context_window_tokens
-            * self.settings.context_compression_threshold_ratio
+            context_window_tokens * self.settings.context_compression_threshold_ratio
         )
         plan = (
             plan_compression(
@@ -1016,7 +1016,7 @@ class ObservedAgentRuntime(AgentRuntime):
             attributes={
                 "before_tokens": before_tokens,
                 "threshold_tokens": threshold_tokens,
-                "context_window_tokens": self.settings.context_window_tokens,
+                "context_window_tokens": context_window_tokens,
                 "compression_count": next_count,
             },
         )
@@ -1077,7 +1077,7 @@ class ObservedAgentRuntime(AgentRuntime):
             "before_tokens": before_tokens,
             "after_tokens": after_tokens,
             "threshold_tokens": threshold_tokens,
-            "context_window_tokens": self.settings.context_window_tokens,
+            "context_window_tokens": context_window_tokens,
             "summarized_message_count": len(plan.messages_to_summarize),
             "retained_message_count": len(plan.retained_messages),
             "compression_count": next_count,

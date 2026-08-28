@@ -6,6 +6,7 @@ export interface ModelDefinition {
   model: string;
   enabled: boolean;
   is_default: boolean;
+  context_window_tokens: number;
 }
 
 export interface ModelProvider {
@@ -44,6 +45,7 @@ export interface ModelDiscoveryResponse {
   models: Array<{
     id: string;
     name: string;
+    context_window_tokens?: number | null;
   }>;
 }
 
@@ -60,5 +62,6 @@ export interface ModelProviderPayload {
     name: string;
     model: string;
     enabled: boolean;
+    context_window_tokens: number;
   }>;
 }

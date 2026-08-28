@@ -315,7 +315,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
 
           {!loading && runnableAinas.length === 0 ? (
             <div className="rounded-lg border border-warning/30 bg-warning-soft p-3 text-[11.5px] text-warning-deep">
-              还没有可定时运行的 AINA。请先到 <Link to="/apps" className="font-bold underline">能力中心</Link> 安装一个支持独立运行的 AINA。
+              还没有可定时运行的 AINA。请先到 <Link to="/plugin" className="font-bold underline">插件</Link> 安装一个支持独立运行的 AINA。
             </div>
           ) : null}
 

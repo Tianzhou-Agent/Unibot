@@ -58,8 +58,9 @@ interface ConfirmRequest {
   resolve: (confirmed: boolean) => void;
 }
 
-export function DocumentWidget({ workspaceId, disabled = false, refreshToken, onTaskContextChange }: {
+export function DocumentWidget({ workspaceId, initialDocumentName, disabled = false, refreshToken, onTaskContextChange }: {
   workspaceId?: string | null;
+  initialDocumentName?: string | null;
   disabled?: boolean;
   refreshToken?: string | null;
   onTaskContextChange?: (context: DocumentTaskContext | null) => void;
@@ -136,8 +137,8 @@ export function DocumentWidget({ workspaceId, disabled = false, refreshToken, on
   const documentTree = useMemo(() => buildDocumentTree(folders, items), [folders, items]);
 
   useEffect(() => {
-    void refreshDocuments();
-  }, [scopeQuery]);
+    void refreshDocuments(initialDocumentName);
+  }, [initialDocumentName, scopeQuery]);
 
   useEffect(() => {
     if (!selectedName || !hasPendingWork) return;

@@ -17,7 +17,7 @@ import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, To
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
-import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
@@ -35,6 +35,7 @@ import type {
   LLMCallRecord,
   TraceRecord,
   TraceSpan,
+  WidgetDefinition,
 } from "@/types";
 
 interface MessageFailure {
@@ -63,6 +64,7 @@ export default function ChatModePage() {
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
+  const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -195,6 +197,7 @@ export default function ChatModePage() {
       setStreamText("");
       setActivity(null);
       setSending(false);
+      setClarificationWidgets([]);
     }
     setApproval(null);
     setLastRun(null);
@@ -233,6 +236,7 @@ export default function ChatModePage() {
       setStreamText("");
       setActivity(null);
       setSending(false);
+      setClarificationWidgets([]);
     };
     window.addEventListener("unibot:new-conversation", reset);
     return () => window.removeEventListener("unibot:new-conversation", reset);
@@ -240,10 +244,11 @@ export default function ChatModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending]);
+  }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending, clarificationWidgets]);
 
   async function sendMessage(text: string) {
     if (sending || deleted) return;
+    setClarificationWidgets([]);
     const localMessage: BackendMessage = {
       id: uid("local"),
       role: "user",
@@ -335,6 +340,7 @@ export default function ChatModePage() {
       if (!isActiveRun()) return;
       notifyConversationsChanged();
       setLastRun(completed);
+      setClarificationWidgets(completed.widgets.filter(isClarificationWidget));
       setApproval(completed.approval ?? null);
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
@@ -561,6 +567,15 @@ export default function ChatModePage() {
                     );
                   })
                 : null}
+              {clarificationWidgets.map((widget) => (
+                <SessionWidgetRenderer
+                  key={widget.id}
+                  widget={widget}
+                  workspaceId={routeWorkspaceId}
+                  onOpenAina={(ainaId) => void openAina(ainaId)}
+                  onPrompt={sendMessage}
+                />
+              ))}
               {streamText ? (
                 <AssistantMessage
                   message={{
@@ -672,7 +687,7 @@ function ConversationMessage({
           headerCount={toolHeaderCount}
         />
       ) : null}
-      {message.widgets?.map((widget) => (
+      {message.widgets?.filter((widget) => !isClarificationWidget(widget)).map((widget) => (
         <SessionWidgetRenderer
           key={widget.id}
           widget={widget}

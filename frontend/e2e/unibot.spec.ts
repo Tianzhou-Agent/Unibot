@@ -869,7 +869,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return json(route, {
         models: [
           { id: "team-fast", name: "快速模型" },
-          { id: "team-coder", name: "代码模型" },
+          { id: "team-coder", name: "代码模型", context_window_tokens: 262144 },
         ],
       });
     }
@@ -1124,9 +1124,9 @@ test("FE-E2E-001W Demo · 场景说明：进入工作区并直接发起任务", 
   expect(state.lastStreamPayload?.workspace_id).toBe("workspace-e2e-1");
 
   await page.getByRole("link", { name: "文件", exact: true }).click();
-  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
-  await page.locator("main").getByRole("link", { name: /guide\.md/ }).click();
-  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/canvas\/unibot-documents$/);
+  await expect(page).toHaveURL(/\/files$/);
+  await page.getByRole("region", { name: "产品发布计划文件层级", exact: true }).getByRole("link", { name: /guide\.md/ }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/canvas\/unibot-documents\?document=guide\.md$/);
   const editor = page.getByRole("textbox", { name: "全文 Markdown 编辑器" });
   await editor.fill("# 发布检查清单\n\n- [x] Demo 场景已跑通\n");
   await page.getByRole("button", { name: "保存文档" }).click();
@@ -1255,7 +1255,6 @@ test("FE-E2E-001WC 离开运行中的工作区聊天后不会跳回旧路由", a
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("开始一个慢任务");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.locator('aside a[href="/workspaces/workspace-b"]').click();
 
   await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
@@ -1290,7 +1289,6 @@ test("FE-E2E-001WD 离开运行中的 Workspace Canvas 后不会执行旧打开�
   await page.getByRole("textbox", { name: "画布消息" }).fill("运行一个慢 Canvas 任务");
   await page.getByRole("button", { name: "发送画布消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.locator('aside a[href="/workspaces/workspace-b"]').click();
 
   await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
@@ -1539,8 +1537,6 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
 test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
-
   await expect(page.getByRole("heading", { name: "已有会话" })).toBeVisible();
   const conversationList = page.getByRole("navigation", { name: "对话列表" });
   const conversationRow = page.getByTestId("conversation-row-conv-e2e-1");
@@ -1565,10 +1561,9 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
 test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
-
   const row = page.getByTestId("conversation-row-conv-e2e-1");
   const moreButton = row.getByRole("button", { name: "更多操作", exact: true });
+  await expect(row.getByText("等待第一条消息", { exact: true })).toHaveCount(0);
   await expect(moreButton).toHaveCSS("opacity", "0");
 
   await row.hover();
@@ -1578,32 +1573,45 @@ test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ pa
   const buttonBox = await moreButton.boundingBox();
   expect(rowBox).not.toBeNull();
   expect(buttonBox).not.toBeNull();
+  expect(rowBox!.height).toBeLessThan(40);
   expect(Math.abs((buttonBox!.y + buttonBox!.height / 2) - (rowBox!.y + rowBox!.height / 2))).toBeLessThan(2);
 
   await moreButton.click();
   await expect(page.getByRole("menu", { name: "已有会话 对话操作", exact: true })).toBeVisible();
 });
 
-test("FE-E2E-002C 对话与文件导航状态保持互斥", async ({ page }) => {
+test("FE-E2E-002C 切换对话不会自动收起导航且图标可展开侧栏", async ({ page }) => {
   await installMockApi(page, {
     workspaces: [workspace()],
     conversations: [conversation({ workspace_id: "workspace-e2e-1" })],
   });
 
   await page.goto("/chat");
+  const mainNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(page.getByRole("button", { name: /新任务/ })).toHaveCount(0);
+  await expect(mainNavigation.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(mainNavigation.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await page.getByTestId("conversation-row-conv-e2e-1").click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
+  await expect(mainNavigation).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "快捷导航" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "收起导航", exact: true }).click();
   const rail = page.getByRole("complementary", { name: "快捷导航" });
   await expect(rail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
   await expect(rail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
 
-  await rail.getByRole("button", { name: "展开导航", exact: true }).click();
-  const mainNavigation = page.getByRole("navigation", { name: "主导航" });
-  await expect(mainNavigation.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
-  await expect(mainNavigation.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
-
-  await page.goto("/workspaces/workspace-e2e-1/chat/conv-e2e-1");
-  const workspaceRail = page.getByRole("complementary", { name: "快捷导航" });
-  await expect(workspaceRail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
-  await expect(workspaceRail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+  const expandButton = rail.getByRole("button", { name: "展开导航", exact: true });
+  const botIcon = expandButton.locator("svg.lucide-bot");
+  const expandIcon = expandButton.locator("svg.lucide-panel-left-open");
+  await expect(botIcon).toBeVisible();
+  await expect(expandIcon).toBeHidden();
+  await expandButton.hover();
+  await expect(botIcon).toBeHidden();
+  await expect(expandIcon).toBeVisible();
+  await expandButton.click();
+  await expect(mainNavigation).toBeVisible();
 
   await page.goto("/workspaces/workspace-e2e-1");
   const workspaceNavigation = page.getByRole("navigation", { name: "主导航" });
@@ -1611,11 +1619,36 @@ test("FE-E2E-002C 对话与文件导航状态保持互斥", async ({ page }) => 
   await expect(workspaceNavigation.getByRole("link", { name: "文件", exact: true })).toHaveClass(/bg-sidebar-active/);
 });
 
-test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
+test("FE-E2E-002D 文件入口按用户和 Workspace 层级展示文件", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+  });
+
+  await page.goto("/files");
+  const userFiles = page.getByRole("region", { name: "用户文件文件层级", exact: true });
+  const workspaceAFiles = page.getByRole("region", { name: "工作区 A文件层级", exact: true });
+  const workspaceBFiles = page.getByRole("region", { name: "工作区 B文件层级", exact: true });
+  await expect(userFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
+  await expect(workspaceAFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
+  await expect(workspaceBFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
+
+  await workspaceBFiles.getByRole("link", { name: /guide\.md/ }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b\/canvas\/unibot-documents\?document=guide\.md$/);
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
+});
+
+test("FE-E2E-003 在插件页面注册 Tool", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/apps");
+  await expect(page).toHaveURL(/\/plugin$/);
+  await page.goto("/chat");
+  await page.getByRole("link", { name: "插件", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "能力中心" })).toBeVisible();
+  await expect(page).toHaveURL(/\/plugin$/);
+  await expect(page.getByRole("heading", { name: "插件", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /工具/ }).click();
   await page.getByRole("button", { name: "注册工具" }).click();
   await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.add/);
@@ -1687,8 +1720,13 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
       },
     ],
   });
-  await page.goto("/apps");
+  await page.goto("/plugin");
 
+  const openAppButton = page.getByRole("button", { name: "打开应用", exact: true });
+  await expect(openAppButton).toBeVisible();
+  await expect(openAppButton.locator("svg")).toHaveClass(/lucide-app-window/);
+  await expect(openAppButton).toHaveCSS("background-color", "rgb(15, 17, 21)");
+  await expect(page.getByRole("button", { name: "打开画布", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "查看能力", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "文档编辑器 能力详情" });
   await expect(dialog).toBeVisible();
@@ -1703,7 +1741,7 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
 
 test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭环", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/apps");
+  await page.goto("/plugin");
 
   await page.getByRole("button", { name: "项目模板", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生成 AINA Project 模板", exact: true })).toBeVisible();
@@ -1945,7 +1983,7 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
   await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-e2e-1$/);
 });
 
-test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async ({ page }) => {
+test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
   await installMockApi(page, {
     modelProviders: [
@@ -1968,9 +2006,12 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
 
   await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
   const userMenu = page.getByRole("menu", { name: "用户菜单", exact: true });
-  await expect(userMenu.getByRole("menuitem", { name: "应用", exact: true })).toBeVisible();
+  await expect(userMenu.getByRole("menuitem", { name: "应用", exact: true })).toHaveCount(0);
+  const homeMenuItem = userMenu.getByRole("menuitem", { name: "主页", exact: true });
+  await expect(homeMenuItem).toBeVisible();
+  await expect(homeMenuItem.locator("svg")).toHaveClass(/lucide-house/);
   await expect(userMenu.getByRole("menuitem", { name: "设置", exact: true })).toBeVisible();
-  await expect(userMenu.getByRole("menuitem", { name: "OBS", exact: true })).toBeVisible();
+  await expect(userMenu.getByRole("menuitem", { name: "管理", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   const providerSection = page.getByLabel("Provider 团队模型服务");
   await providerSection.getByRole("heading", { name: "团队模型服务", exact: true }).click();
@@ -1981,6 +2022,9 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   await page.getByRole("button", { name: "自动获取", exact: true }).click();
   await expect(page.getByText("已从 Provider 自动添加 1 个模型。", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "模型 3 ID", exact: true })).toHaveValue("team-coder");
+  await expect(page.getByRole("spinbutton", { name: "模型 3 上下文", exact: true })).toHaveValue("262144");
+  await page.getByRole("button", { name: "添加模型", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "模型 4 上下文", exact: true })).toHaveValue("128000");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.getByRole("button", { name: "设为默认" }).click();
@@ -1988,7 +2032,7 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   await expect(page.getByLabel("当前模型").getByText("快速模型", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
-  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "OBS", exact: true }).click();
+  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
 });
@@ -2038,9 +2082,9 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "需要管理员权限", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "可观测", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
-  await expect(page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "OBS", exact: true })).toBeVisible();
+  await expect(page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true })).toBeVisible();
 
-  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "OBS", exact: true }).click();
+  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toHaveCount(0);
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
@@ -2642,7 +2686,6 @@ test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page 
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.getByTestId("conversation-row-conv-other").click();
   await expect(page).toHaveURL(/\/chat\/conv-other$/);
   await expect(main.getByText("这是另一个会话的独立消息。", { exact: true })).toBeVisible();
@@ -2715,6 +2758,53 @@ test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async (
   await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-canvas-streaming$/);
   await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
   await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-006A Clarification Widget 提交后消失且不进入消息历史", async ({ page }) => {
+  const state = await installMockApi(page, {
+    conversations: [conversation()],
+    streamWidgets: [
+      {
+        id: "clarification-conv-e2e-1",
+        kind: "form",
+        title: "补充报告信息",
+        description: "整理缺失信息后继续。",
+        markdown: null,
+        fields: [
+          { id: "audience", label: "受众", input_type: "text", placeholder: "", required: true, value: "" },
+          { id: "period", label: "周期", input_type: "text", placeholder: "", required: true, value: "" },
+        ],
+        actions: [
+          {
+            id: "submit-clarification",
+            label: "提交并继续",
+            kind: "prompt",
+            prompt: "以下是我的补充信息：\n受众: {audience}\n周期: {period}",
+            style: "primary",
+          },
+        ],
+        apps: [],
+      },
+    ],
+  });
+  await page.goto("/chat/conv-e2e-1");
+
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("帮我生成报告");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  const widget = page.getByRole("region", { name: "补充报告信息" });
+  await expect(widget).toBeVisible();
+
+  await widget.getByRole("textbox", { name: "受众", exact: true }).fill("管理层");
+  await widget.getByRole("textbox", { name: "周期", exact: true }).fill("本季度");
+  state.streamWidgets = [];
+  await widget.getByRole("button", { name: "提交并继续", exact: true }).click();
+
+  await expect(widget).toHaveCount(0);
+  await expect.poll(() => state.lastStreamPayload?.message).toBe("以下是我的补充信息：\n受众: 管理层\n周期: 本季度");
+  expect((state.conversations[0].messages as JsonObject[]).every((message) => !(message.widgets as JsonObject[]).length)).toBe(true);
+
+  await page.reload();
+  await expect(page.getByRole("region", { name: "补充报告信息" })).toHaveCount(0);
 });
 
 test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {

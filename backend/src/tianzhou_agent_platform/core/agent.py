@@ -68,7 +68,7 @@ from tianzhou_agent_platform.core.context_compression import (
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.core.llm import EventSink, LLMClient
-from tianzhou_agent_platform.core.model_settings import use_model_runtime
+from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.schema import validate_value
 from tianzhou_agent_platform.sandbox.service import SandboxService
@@ -1064,7 +1064,8 @@ class AgentRuntime:
 
         before_tokens = estimate_request_tokens(active_messages, tool_definitions)
         threshold_tokens = int(
-            self.settings.context_window_tokens * self.settings.context_compression_threshold_ratio
+            current_context_window_tokens(self.settings.context_window_tokens)
+            * self.settings.context_compression_threshold_ratio
         )
         if before_tokens < threshold_tokens:
             return active_messages, 0, 0
@@ -1199,10 +1200,13 @@ class AgentRuntime:
         )
         new_messages = result["messages"][persist_from:]
         widgets = result.get("widgets", [])
-        if widgets:
+        persistent_widgets = [
+            widget for widget in widgets if widget.id != f"clarification-{conversation.id}"
+        ]
+        if persistent_widgets:
             for message in reversed(new_messages):
                 if message.get("role") == "assistant" and not message.get("tool_calls"):
-                    message["widgets"] = [widget.model_dump(mode="json") for widget in widgets]
+                    message["widgets"] = [widget.model_dump(mode="json") for widget in persistent_widgets]
                     break
         appended = await self.repository.append_provider_messages(
             conversation.id,

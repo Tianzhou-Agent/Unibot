@@ -17,6 +17,8 @@ from tianzhou_agent_platform.core.model_settings import (
     ModelProviderUpdate,
     ModelProviderView,
     ModelSettingsResponse,
+    MAX_CONTEXT_WINDOW_TOKENS,
+    MIN_CONTEXT_WINDOW_TOKENS,
     models_url,
     provider_view,
 )
@@ -144,18 +146,26 @@ def create_model_settings_router() -> APIRouter:
             if isinstance(item, str):
                 model_id = item.strip()
                 model_name = model_id
+                context_window_tokens = None
             elif isinstance(item, dict):
                 identifier = item.get("id") or item.get("model") or item.get("name")
                 model_id = identifier.strip() if isinstance(identifier, str) else ""
                 display_name = item.get("display_name") or item.get("name")
                 model_name = display_name.strip() if isinstance(display_name, str) else model_id
+                context_window_tokens = _context_window_tokens(item)
             else:
                 continue
             normalized = model_id.casefold()
             if not model_id or normalized in seen:
                 continue
             seen.add(normalized)
-            discovered.append(DiscoveredModel(id=model_id, name=model_name or model_id))
+            discovered.append(
+                DiscoveredModel(
+                    id=model_id,
+                    name=model_name or model_id,
+                    context_window_tokens=context_window_tokens,
+                )
+            )
         return ModelDiscoveryResponse(models=discovered)
 
     @router.put("/providers/{provider_id}", response_model=ModelProviderView)
@@ -243,3 +253,36 @@ def create_model_settings_router() -> APIRouter:
         )
 
     return router
+
+
+_CONTEXT_WINDOW_FIELDS = (
+    "context_window_tokens",
+    "context_length",
+    "context_window",
+    "max_context_tokens",
+    "max_context_length",
+    "max_model_len",
+    "max_input_tokens",
+)
+_CONTEXT_WINDOW_CONTAINERS = ("architecture", "top_provider", "limits", "capabilities")
+
+
+def _context_window_tokens(model: dict[str, object]) -> int | None:
+    containers = [model]
+    containers.extend(
+        nested
+        for key in _CONTEXT_WINDOW_CONTAINERS
+        if isinstance((nested := model.get(key)), dict)
+    )
+    for container in containers:
+        for field in _CONTEXT_WINDOW_FIELDS:
+            value = container.get(field)
+            if isinstance(value, bool):
+                continue
+            try:
+                tokens = int(value) if isinstance(value, (int, float, str)) else 0
+            except ValueError:
+                continue
+            if MIN_CONTEXT_WINDOW_TOKENS <= tokens <= MAX_CONTEXT_WINDOW_TOKENS:
+                return tokens
+    return None

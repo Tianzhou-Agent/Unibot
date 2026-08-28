@@ -4,7 +4,7 @@ const USER = {
   id: "user-e2e",
   email: "owner@example.com",
   name: "端到端用户",
-  avatar_url: null,
+  avatar_url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
   tenant_id: "default",
   providers: ["password"],
 };
@@ -74,8 +74,15 @@ test("用户可注册、退出并重新登录", async ({ page }) => {
   await page.getByRole("button", { name: "注册并进入", exact: true }).click();
 
   await expect(page).toHaveURL(/\/chat$/);
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await expect(page.getByText(USER.name, { exact: true })).toBeVisible();
+  await expect(page.locator("aside").getByText(USER.name, { exact: true }).locator("..").locator("..").locator("img")).toHaveAttribute("src", USER.avatar_url);
+  await page.getByRole("button", { name: "收起导航", exact: true }).click();
+  const compactNavigation = page.getByRole("complementary", { name: "快捷导航" });
+  const compactAccount = compactNavigation.getByRole("button", { name: `当前用户 ${USER.name}`, exact: true });
+  await expect(compactAccount.locator("img")).toHaveAttribute("src", USER.avatar_url);
+  await expect(compactNavigation.getByText("林", { exact: true })).toHaveCount(0);
+  await expect(compactNavigation.getByText("周", { exact: true })).toHaveCount(0);
+  await compactNavigation.getByRole("button", { name: "展开导航", exact: true }).click();
   await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
   await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "退出登录", exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
@@ -84,6 +91,5 @@ test("用户可注册、退出并重新登录", async ({ page }) => {
   await page.getByLabel("密码", { exact: true }).fill("password-123");
   await page.locator("form").getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/chat$/);
-  await page.getByRole("button", { name: "展开导航", exact: true }).click();
   await expect(page.getByText(USER.email, { exact: true })).toBeVisible();
 });

@@ -1,9 +1,9 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bot, Check, ChevronDown, ChevronRight, Folder, FolderOpen, LayoutGrid, ListChecks, LogOut, MessageSquare, MoreHorizontal, PanelLeftOpen, Pencil, Plus, Puzzle, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Folder, FolderOpen, House, ListChecks, LogOut, MessageSquare, MoreHorizontal, PanelLeftOpen, Pencil, Plus, Puzzle, Search, Settings as SettingsIcon, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
-import { classNames, timeAgo } from "@/lib/utils";
+import { classNames } from "@/lib/utils";
 import type { ConversationRecord } from "@/types";
 import { useMockSession } from "@/lib/mockSession";
 import { useAuth } from "@/lib/auth";
@@ -27,14 +27,11 @@ export function Sidebar() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set());
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
-  const [navigationOpen, setNavigationOpen] = useState(false);
+  const [navigationOpen, setNavigationOpen] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
   const chatTabActive = isChatNavigationPath(location.pathname);
   const fileTabActive = isFileNavigationPath(location.pathname);
-  const compactRoute = /^\/chat(?:\/|$)/.test(location.pathname)
-    || /^\/canvas\//.test(location.pathname)
-    || /^\/workspaces\/[^/]+\/(?:chat|canvas)(?:\/|$)/.test(location.pathname);
 
   const load = useCallback(async () => {
     try {
@@ -119,15 +116,12 @@ export function Sidebar() {
     }
   }
 
-  if (compactRoute && !navigationOpen) {
+  if (!navigationOpen) {
     return (
       <>
       <IconRail
-        activeWorkspaceId={activeWorkspaceId}
-        initials={profile.initials}
         roleLabel={profile.roleLabel}
         onExpand={() => setNavigationOpen(true)}
-        onNewTask={() => startConversation(activeWorkspaceId)}
         onNewWorkspace={() => setWorkspaceDialogOpen(true)}
         onToggleRole={toggleRole}
       />
@@ -150,24 +144,16 @@ export function Sidebar() {
     <aside className="relative z-20 flex h-full w-[264px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg text-ink">
       <div className="flex items-center justify-between gap-2 px-[18px] pb-2 pt-[18px]">
         <Brand />
-        {navigationOpen ? (
-          <button type="button" onClick={() => setNavigationOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label="收起导航">
-            <PanelLeftOpen className="h-4 w-4 rotate-180" />
-          </button>
-        ) : null}
-      </div>
-
-      <div className="px-3 pb-2">
-        <button type="button" onClick={() => startConversation(activeWorkspaceId)} className="flex h-9 w-full items-center gap-2 rounded-lg bg-ink px-2.5 text-[13px] font-medium text-white hover:bg-black">
-          <Plus className="h-3.5 w-3.5" />新任务<span className="ml-auto rounded-[5px] bg-white/15 px-1.5 py-0.5 font-mono text-[10px] text-white/70">⌘K</span>
+        <button type="button" onClick={() => setNavigationOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label="收起导航">
+          <PanelLeftOpen className="h-4 w-4 rotate-180" />
         </button>
       </div>
 
       <nav className="space-y-0.5 px-3 pb-2" aria-label="主导航">
         <SidebarNavLink to="/chat" label="对话" active={chatTabActive} icon={<MessageSquare className="h-4 w-4" />} />
         <SidebarNavLink to="/schedules" label="任务" icon={<ListChecks className="h-4 w-4" />} />
-        <SidebarNavLink to={activeWorkspaceId ? workspaceHomePath(activeWorkspaceId) : "/chat"} label="文件" active={fileTabActive} icon={<Folder className="h-4 w-4" />} />
-        <SidebarNavLink to="/apps" label="插件" icon={<Puzzle className="h-4 w-4" />} />
+        <SidebarNavLink to="/files" label="文件" active={fileTabActive} icon={<Folder className="h-4 w-4" />} />
+        <SidebarNavLink to="/plugin" label="插件" icon={<Puzzle className="h-4 w-4" />} />
       </nav>
 
       <div className="px-3 pb-2">
@@ -185,7 +171,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex min-h-0 flex-1 flex-col px-3 pb-3" aria-label="对话列表">
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+        <div className="-mr-2 min-h-0 flex-1 space-y-4 overflow-y-auto pr-2">
           {loading ? <SkeletonList /> : null}
           {!loading && error ? (
             <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">
@@ -322,45 +308,46 @@ function SidebarNavLink({ to, label, icon, active }: { to: string; label: string
 }
 
 function IconRail({
-  activeWorkspaceId,
-  initials,
   roleLabel,
   onExpand,
-  onNewTask,
   onNewWorkspace,
   onToggleRole,
 }: {
-  activeWorkspaceId: string | null;
-  initials: string;
   roleLabel: string;
   onExpand: () => void;
-  onNewTask: () => void;
   onNewWorkspace: () => void;
   onToggleRole: () => void;
 }) {
-  const filePath = activeWorkspaceId ? workspaceHomePath(activeWorkspaceId) : "/chat";
+  const { user, config } = useAuth();
   const location = useLocation();
   const chatActive = isChatNavigationPath(location.pathname);
   const fileActive = isFileNavigationPath(location.pathname);
   return (
     <aside className="relative z-20 flex h-full w-16 shrink-0 flex-col items-center gap-2 border-r border-sidebar-border bg-sidebar-bg py-4" aria-label="快捷导航">
-      <button type="button" onClick={onNewTask} className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-accent text-white" aria-label="新任务" title="新任务">
-        <Bot className="h-5 w-5" />
+      <button type="button" onClick={onExpand} className="group flex h-9 w-9 items-center justify-center rounded-[10px] bg-accent text-white" aria-label="展开导航" title="展开导航">
+        <Bot className="h-5 w-5 group-hover:hidden" />
+        <PanelLeftOpen className="hidden h-5 w-5 group-hover:block" />
       </button>
       <span className="h-3" />
       <RailLink to="/chat" label="对话" active={chatActive} icon={<MessageSquare className="h-[19px] w-[19px]" />} />
       <RailLink to="/schedules" label="任务" icon={<ListChecks className="h-[19px] w-[19px]" />} />
-      <RailLink to={filePath} label="文件" active={fileActive} icon={<Folder className="h-[19px] w-[19px]" />} />
-      <RailLink to="/apps" label="插件" icon={<Puzzle className="h-[19px] w-[19px]" />} />
+      <RailLink to="/files" label="文件" active={fileActive} icon={<Folder className="h-[19px] w-[19px]" />} />
+      <RailLink to="/plugin" label="插件" icon={<Puzzle className="h-[19px] w-[19px]" />} />
       <button type="button" onClick={onNewWorkspace} className="flex h-10 w-10 items-center justify-center rounded-[10px] text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label="创建工作区" title="创建工作区">
         <Plus className="h-[19px] w-[19px]" />
       </button>
-      <button type="button" onClick={onExpand} className="flex h-10 w-10 items-center justify-center rounded-[10px] text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label="展开导航" title="展开导航">
-        <PanelLeftOpen className="h-[19px] w-[19px]" />
-      </button>
       <span className="flex-1" />
       <RailLink to="/settings" label="设置" icon={<SettingsIcon className="h-[19px] w-[19px]" />} />
-      <button type="button" onClick={onToggleRole} className="flex h-[30px] w-[30px] items-center justify-center rounded-full border border-line-strong bg-[#D9DEE7] text-[10px] font-semibold text-ink-muted" aria-label={`切换身份，当前${roleLabel}`} title={roleLabel}>{initials}</button>
+      <button
+        type="button"
+        onClick={config.auth_required ? undefined : onToggleRole}
+        disabled={config.auth_required}
+        className="flex h-[30px] w-[30px] items-center justify-center rounded-full disabled:cursor-default"
+        aria-label={config.auth_required ? `当前用户 ${user?.name || user?.email || "用户"}` : `切换身份，当前${roleLabel}`}
+        title={config.auth_required ? user?.name || user?.email || "当前用户" : roleLabel}
+      >
+        <AccountAvatar compact />
+      </button>
     </aside>
   );
 }
@@ -371,7 +358,8 @@ function isChatNavigationPath(pathname: string) {
 }
 
 function isFileNavigationPath(pathname: string) {
-  return /^\/canvas(?:\/|$)/.test(pathname)
+  return /^\/files(?:\/|$)/.test(pathname)
+    || /^\/canvas(?:\/|$)/.test(pathname)
     || /^\/workspaces\/[^/]+\/?$/.test(pathname)
     || /^\/workspaces\/[^/]+\/canvas(?:\/|$)/.test(pathname);
 }
@@ -613,7 +601,6 @@ function ConversationLink({
   onRequestDelete: () => void;
   compact?: boolean;
 }) {
-  const preview = conversation.messages.at(-1)?.content || "等待第一条消息";
   const title = conversation.title === "New conversation" ? "新对话" : conversation.title;
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -644,46 +631,38 @@ function ConversationLink({
       className="relative group"
       data-testid={`conversation-row-${conversation.id}`}
     >
-      <NavLink
-        to={workspaceChatPath(conversation.workspace_id, conversation.id)}
-        className={({ isActive }) => classNames(
-          classNames("block rounded-lg border border-transparent pr-10 transition-colors", compact ? "py-2 pl-8" : "px-2.5 py-2"),
-          isActive ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
-        )}
-      >
-        {({ isActive }) => (
-          <>
-            <div className="flex items-center gap-1.5">
-              {!compact ? <span className={classNames("h-1.5 w-1.5 shrink-0 rounded-full", conversation.run_status === "running" ? "animate-pulse bg-warning" : "bg-success")} /> : null}
-              <div className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{renaming ? "" : title}</div>
-              <span className="shrink-0 text-[10px] text-ink-subtle transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
-                {timeAgo(conversation.updated_at)}
-              </span>
-            </div>
-            {renaming ? (
-              <div className="mt-1 flex items-center gap-1" onClick={(e) => e.preventDefault()}>
-                <input
-                  value={titleDraft}
-                  aria-label="对话标题"
-                  onChange={(e) => setTitleDraft(e.target.value)}
-                  className="flex-1 min-w-0 rounded border border-line-strong bg-white px-2 py-0.5 text-[12px] text-ink outline-none focus:border-accent"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") { e.preventDefault(); void saveTitle(); }
-                    if (e.key === "Escape") { e.preventDefault(); setRenaming(false); }
-                  }}
-                />
-                <button type="button" onClick={() => void saveTitle()} className="rounded p-0.5 text-success hover:bg-white"><Check className="h-3.5 w-3.5" /></button>
-                <button type="button" onClick={() => setRenaming(false)} className="rounded p-0.5 text-ink-subtle hover:bg-white"><X className="h-3.5 w-3.5" /></button>
-              </div>
-            ) : (
-              !compact ? <div className="mt-1 truncate text-[10.5px] text-ink-subtle">{preview}</div> : null
-            )}
-          </>
-        )}
-      </NavLink>
+      {renaming ? (
+        <div className={classNames("flex h-[34px] items-center gap-1 rounded-lg", compact ? "pl-[34px] pr-2" : "px-2.5")}>
+          <input
+            value={titleDraft}
+            aria-label="对话标题"
+            onChange={(e) => setTitleDraft(e.target.value)}
+            className="h-6 min-w-0 flex-1 rounded border border-line-strong bg-white px-2 text-[12px] text-ink outline-none focus:border-accent"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); void saveTitle(); }
+              if (e.key === "Escape") { e.preventDefault(); setRenaming(false); }
+            }}
+          />
+          <button type="button" onClick={() => void saveTitle()} className="rounded p-0.5 text-success hover:bg-white" aria-label="保存标题"><Check className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => setRenaming(false)} className="rounded p-0.5 text-ink-subtle hover:bg-white" aria-label="取消重命名"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      ) : (
+        <NavLink
+          to={workspaceChatPath(conversation.workspace_id, conversation.id)}
+          className={({ isActive }) => classNames(
+            "flex items-center rounded-lg border border-transparent py-[7px] pr-10 transition-colors",
+            compact ? "pl-[34px]" : "pl-2.5",
+            isActive ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
+          )}
+        >
+          {({ isActive }) => (
+            <span className={classNames("min-w-0 flex-1 truncate text-[13px]", isActive ? "font-medium text-ink" : "font-normal text-ink-muted")}>{title}</span>
+          )}
+        </NavLink>
+      )}
 
-      <button
+      {!renaming ? <button
         ref={menuBtnRef}
         type="button"
         onClick={openMenu}
@@ -696,7 +675,7 @@ function ConversationLink({
         aria-expanded={menuOpen}
       >
         <MoreHorizontal className="h-4 w-4" />
-      </button>
+      </button> : null}
 
       {menuOpen && menuPos
         ? createPortal(
@@ -735,11 +714,10 @@ function ConversationLink({
 
 function SkeletonList() {
   return (
-    <div className="space-y-2">
+    <div className="space-y-0.5">
       {[0, 1, 2].map((item) => (
-        <div key={item} className="rounded-lg p-3">
+        <div key={item} className="flex h-[34px] items-center rounded-lg px-2.5">
           <div className="h-3 w-28 rounded bg-sidebar-hover" />
-          <div className="mt-2 h-2.5 w-36 rounded bg-sidebar-hover" />
         </div>
       ))}
     </div>
@@ -776,17 +754,7 @@ function AccountFooter() {
   return (
     <div ref={footerRef} className="relative border-t border-sidebar-border p-3">
       <div className="flex h-11 items-center gap-2 rounded-xl px-2 transition-colors hover:bg-sidebar-hover">
-        {user?.avatar_url ? (
-          <img src={user.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
-        ) : config.auth_required ? (
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D9DEE7] text-ink-muted">
-            <UserRound className="h-4 w-4" />
-          </span>
-        ) : (
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D9DEE7] text-[10px] font-bold text-ink-muted">
-            {profile.initials}
-          </span>
-        )}
+        <AccountAvatar />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[11.5px] font-bold text-ink">{displayName}</div>
           <div className="truncate text-[9.5px] text-ink-subtle">{detail}</div>
@@ -812,9 +780,8 @@ function AccountFooter() {
           aria-label="用户菜单"
           className="absolute bottom-[calc(100%+8px)] left-3 right-3 z-50 overflow-hidden rounded-xl border border-line bg-white p-1.5 shadow-[0_12px_32px_rgba(15,17,21,0.14)]"
         >
-          <FooterMenuLink to="/apps" label="应用" icon={<LayoutGrid className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
+          <FooterMenuLink to="/obs" label="主页" icon={<House className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
           <FooterMenuLink to="/settings" label="设置" icon={<SettingsIcon className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
-          <FooterMenuLink to="/obs" label="OBS" icon={<Activity className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
           {canAccessAdmin ? (
             <FooterMenuLink to="/admin/observability" label="管理" icon={<ShieldCheck className="h-4 w-4" />} onSelect={() => setMenuOpen(false)} />
           ) : null}
@@ -846,6 +813,28 @@ function AccountFooter() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AccountAvatar({ compact = false }: { compact?: boolean }) {
+  const { profile } = useMockSession();
+  const { user, config } = useAuth();
+  const size = compact ? "h-[30px] w-[30px]" : "h-8 w-8";
+
+  if (user?.avatar_url) {
+    return <img src={user.avatar_url} alt="" className={classNames(size, "shrink-0 rounded-full border border-line-strong object-cover")} referrerPolicy="no-referrer" />;
+  }
+  if (config.auth_required) {
+    return (
+      <span className={classNames(size, "flex shrink-0 items-center justify-center rounded-full border border-line-strong bg-[#D9DEE7] text-ink-muted")}>
+        <UserRound className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
+      </span>
+    );
+  }
+  return (
+    <span className={classNames(size, "flex shrink-0 items-center justify-center rounded-full border border-line-strong bg-[#D9DEE7] text-[10px] font-bold text-ink-muted")}>
+      {profile.initials}
+    </span>
   );
 }
 

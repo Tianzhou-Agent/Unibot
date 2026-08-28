@@ -420,6 +420,7 @@ class InMemoryRepository:
                         name=model.name,
                         model=model.model,
                         enabled=model.enabled,
+                        context_window_tokens=model.context_window_tokens,
                     )
                     for model in data.models
                 ],
@@ -485,6 +486,7 @@ class InMemoryRepository:
                     model=model.model,
                     enabled=model.enabled,
                     is_default=(current_models[model.id].is_default and model.enabled if model.id else False),
+                    context_window_tokens=model.context_window_tokens,
                 )
                 for model in data.models
             ]
@@ -581,6 +583,7 @@ class InMemoryRepository:
                         model_id=model.id,
                         model_name=model.name,
                         model=model.model,
+                        context_window_tokens=model.context_window_tokens,
                         timeout_seconds=provider.timeout_seconds,
                     )
         return None

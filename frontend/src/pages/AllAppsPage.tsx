@@ -385,9 +385,9 @@ export default function AllAppsPage() {
 
   const total = ainas.length + tools.length + skills.length;
   return (
-    <div className="h-full flex flex-col bg-app-bg">
+    <div className="flex h-full flex-col bg-app-bg">
       <Topbar
-        title="能力中心"
+        title="插件"
         badge={{ label: `${total} 项能力`, tone: "neutral" }}
         actions={
           <button type="button" onClick={() => void load()} className="btn-outline h-8" aria-label="刷新能力">
@@ -395,9 +395,9 @@ export default function AllAppsPage() {
           </button>
         }
       />
-      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mx-auto max-w-6xl space-y-4">
-          <section className="rounded-xl border border-line bg-white p-4 shadow-card">
+          <section className="rounded-xl border border-line bg-white p-4 shadow-soft">
             <div className="flex flex-wrap items-center gap-2">
               <TabButton active={tab === "aina"} onClick={() => setTab("aina")} icon={<AppWindow className="w-4 h-4" />}>
                 AINA 应用 <Count value={ainas.length} />
@@ -447,7 +447,7 @@ export default function AllAppsPage() {
                   </button>
                 </>
               ) : null}
-              <button type="button" onClick={() => openEditor()} className="btn-primary">
+              <button type="button" onClick={() => openEditor()} className="btn bg-ink text-white hover:bg-black">
                 <Plus className="w-4 h-4" />注册{tabLabel(tab)}
               </button>
             </div>
@@ -523,9 +523,9 @@ function ProjectScaffoldForm({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-accent-ring bg-white p-4 shadow-soft">
+    <form onSubmit={onSubmit} className="rounded-xl border border-line bg-white p-4 shadow-soft">
       <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-app-soft text-ink-muted">
           <FileArchive className="h-5 w-5" />
         </div>
         <div>
@@ -586,7 +586,7 @@ function ProjectScaffoldForm({
       </div>
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" onClick={onCancel} className="btn-outline">取消</button>
-        <button type="submit" disabled={downloading} className="btn-primary">
+        <button type="submit" disabled={downloading} className="btn bg-ink text-white hover:bg-black">
           {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           {downloading ? "正在生成…" : "下载 ZIP 模板"}
         </button>
@@ -620,7 +620,7 @@ function ProjectSection({
   onUndeploy: (project: AinaProjectRecord) => void;
 }) {
   return (
-    <section aria-label="AINA Projects" className="mb-4 rounded-xl border border-line bg-white p-4 shadow-card">
+    <section aria-label="AINA Projects" className="mb-4 rounded-xl border border-line bg-white p-4 shadow-soft">
       <div className="flex items-start gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-success-soft text-success-deep">
           <PackageCheck className="h-4 w-4" />
@@ -677,7 +677,7 @@ function ProjectSection({
                       type="button"
                       disabled={busyProjectId !== null}
                       onClick={() => onDeploy(project)}
-                      className="btn-primary h-8"
+                      className="btn h-8 bg-ink text-white hover:bg-black"
                       aria-label={`部署项目 ${project.manifest.aina.name}`}
                     >
                       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
@@ -755,9 +755,9 @@ function AinaGrid({
           const managed = manifest.runtime.type === "managed";
           const installed = builtin || installedIds.has(manifest.aina.id);
           return (
-            <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-card">
+            <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-soft">
             <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-accent-soft text-accent flex items-center justify-center">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-app-soft text-ink-muted">
                 <Box className="w-5 h-5" />
               </div>
               <div className="min-w-0 flex-1">
@@ -794,15 +794,15 @@ function AinaGrid({
                 <ListTree className="h-4 w-4" />查看能力
               </button>
               {builtin ? (
-                <button type="button" onClick={() => onOpen(record)} className="btn-primary">
-                  <ExternalLink className="w-4 h-4" />
-                  {manifest.aina.id === "unibot-scheduler" ? "管理任务" : "打开画布"}
+                <button type="button" onClick={() => onOpen(record)} className="btn bg-ink text-white hover:bg-black">
+                  <AppWindow className="h-4 w-4" />
+                  {manifest.aina.id === "unibot-scheduler" ? "管理任务" : "打开应用"}
                 </button>
               ) : installed ? (
                 <>
                   {manifest.main_widget ? (
-                    <button type="button" onClick={() => onOpen(record)} className="btn-primary">
-                      <ExternalLink className="w-4 h-4" />打开画布
+                    <button type="button" onClick={() => onOpen(record)} className="btn bg-ink text-white hover:bg-black">
+                      <AppWindow className="h-4 w-4" />打开应用
                     </button>
                   ) : null}
                   <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
@@ -810,7 +810,7 @@ function AinaGrid({
                   </button>
                 </>
               ) : (
-                <button type="button" onClick={() => onInstall(record)} className="btn-primary">
+                <button type="button" onClick={() => onInstall(record)} className="btn bg-ink text-white hover:bg-black">
                   <Download className="w-4 h-4" />安装并授权
                 </button>
               )}
@@ -835,8 +835,8 @@ function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete: (id: str
   return (
     <div className="space-y-2.5">
       {tools.map((tool) => (
-        <article key={tool.tool_id} className="rounded-xl border border-line bg-white p-4 flex items-center gap-4 shadow-card">
-          <div className={classNames("w-10 h-10 rounded-xl flex items-center justify-center", tool.side_effect_level === "high" ? "bg-warning-soft text-warning" : "bg-accent-soft text-accent")}>
+        <article key={tool.tool_id} className="flex items-center gap-4 rounded-xl border border-line bg-white p-4 shadow-soft">
+          <div className={classNames("flex h-10 w-10 items-center justify-center rounded-xl", tool.side_effect_level === "high" ? "bg-warning-soft text-warning" : "bg-app-soft text-ink-muted")}>
             {tool.side_effect_level === "high" ? <ShieldAlert className="w-5 h-5" /> : <Wrench className="w-5 h-5" />}
           </div>
           <div className="min-w-0 flex-1">
@@ -863,9 +863,9 @@ function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete: (id:
   return (
     <div className="grid grid-cols-2 gap-3">
       {skills.map((skill) => (
-        <article key={skill.skill_id} className="rounded-xl border border-line bg-white p-4 shadow-card">
+        <article key={skill.skill_id} className="rounded-xl border border-line bg-white p-4 shadow-soft">
           <div className="flex items-center gap-2">
-            <Code2 className="w-5 h-5 text-accent" />
+            <Code2 className="h-5 w-5 text-ink-muted" />
             <h2 className="text-[14px] font-extrabold text-ink">{skill.name}</h2>
             <StatusChip tone={skill.status === "published" ? "success" : "neutral"}>{skill.status}</StatusChip>
           </div>
@@ -884,9 +884,9 @@ function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete: (id:
 
 function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { tab: Tab; text: string; saving: boolean; onChange: (text: string) => void; onClose: () => void; onSave: () => void }) {
   return (
-    <section className="rounded-xl border border-accent-ring bg-white shadow-soft overflow-hidden">
-      <div className="h-12 border-b border-line bg-accent-soft px-4 flex items-center gap-2">
-        <Code2 className="w-4 h-4 text-accent" />
+    <section className="overflow-hidden rounded-xl border border-line bg-white shadow-soft">
+      <div className="flex h-12 items-center gap-2 border-b border-line bg-app-soft px-4">
+        <Code2 className="h-4 w-4 text-ink-muted" />
         <h2 className="text-[13px] font-extrabold text-ink">注册{tabLabel(tab)} JSON</h2>
         <span className="flex-1" />
         <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label="关闭注册编辑器"><X className="w-4 h-4" /></button>
@@ -904,7 +904,7 @@ function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { ta
           <p className="text-[11px] text-ink-muted">提交前由后端执行数据结构、协议和远程健康检查。</p>
           <span className="flex-1" />
           <button type="button" onClick={onClose} className="btn-outline">取消</button>
-          <button type="button" disabled={saving} onClick={onSave} className="btn-primary">{saving ? "正在注册…" : "提交注册"}</button>
+          <button type="button" disabled={saving} onClick={onSave} className="btn bg-ink text-white hover:bg-black">{saving ? "正在注册…" : "提交注册"}</button>
         </div>
       </div>
     </section>
@@ -913,7 +913,7 @@ function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { ta
 
 function TabButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className={classNames("h-9 px-3 rounded-lg inline-flex items-center gap-2 text-[12.5px] font-bold border", active ? "bg-accent text-white border-accent" : "bg-app-soft text-ink border-line hover:bg-line/50")}>{icon}{children}</button>
+    <button type="button" onClick={onClick} className={classNames("inline-flex h-8 items-center gap-2 rounded-lg px-2.5 text-[12.5px] transition-colors", active ? "bg-sidebar-active font-medium text-ink" : "font-normal text-ink-muted hover:bg-sidebar-hover hover:text-ink")}>{icon}{children}</button>
   );
 }
 

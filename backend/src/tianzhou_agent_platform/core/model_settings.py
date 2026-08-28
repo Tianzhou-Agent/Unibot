@@ -12,6 +12,9 @@ from pydantic import Field, field_validator, model_validator
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 
 ProviderType = Literal["openai", "deepseek", "openrouter", "ollama", "custom"]
+DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
+MIN_CONTEXT_WINDOW_TOKENS = 4_096
+MAX_CONTEXT_WINDOW_TOKENS = 10_000_000
 
 
 class ModelDefinitionInput(StrictModel):
@@ -19,6 +22,11 @@ class ModelDefinitionInput(StrictModel):
     name: str = Field(min_length=1, max_length=100)
     model: str = Field(min_length=1, max_length=200)
     enabled: bool = True
+    context_window_tokens: int = Field(
+        default=DEFAULT_CONTEXT_WINDOW_TOKENS,
+        ge=MIN_CONTEXT_WINDOW_TOKENS,
+        le=MAX_CONTEXT_WINDOW_TOKENS,
+    )
 
     @field_validator("name", "model")
     @classmethod
@@ -83,6 +91,11 @@ class ModelDiscoveryRequest(StrictModel):
 class DiscoveredModel(StrictModel):
     id: str
     name: str
+    context_window_tokens: int | None = Field(
+        default=None,
+        ge=MIN_CONTEXT_WINDOW_TOKENS,
+        le=MAX_CONTEXT_WINDOW_TOKENS,
+    )
 
 
 class ModelDiscoveryResponse(StrictModel):
@@ -95,6 +108,11 @@ class ModelDefinition(StrictModel):
     model: str
     enabled: bool = True
     is_default: bool = False
+    context_window_tokens: int = Field(
+        default=DEFAULT_CONTEXT_WINDOW_TOKENS,
+        ge=MIN_CONTEXT_WINDOW_TOKENS,
+        le=MAX_CONTEXT_WINDOW_TOKENS,
+    )
 
 
 class ModelProviderRecord(StrictModel):
@@ -157,6 +175,7 @@ class ModelRuntimeConfig:
     model_id: str
     model_name: str
     model: str
+    context_window_tokens: int
     timeout_seconds: float
 
     @property
@@ -172,6 +191,11 @@ _current_model_runtime: ContextVar[ModelRuntimeConfig | None] = ContextVar(
 
 def current_model_runtime() -> ModelRuntimeConfig | None:
     return _current_model_runtime.get()
+
+
+def current_context_window_tokens(default: int) -> int:
+    runtime = current_model_runtime()
+    return runtime.context_window_tokens if runtime is not None else default
 
 
 @contextmanager

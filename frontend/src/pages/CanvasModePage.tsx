@@ -8,13 +8,13 @@ import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, To
 import { Topbar } from "@/components/layout/Topbar";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
-import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
 import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
-import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext } from "@/types";
+import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext, WidgetDefinition } from "@/types";
 
 export default function CanvasModePage() {
   const { workspaceId, ainaId = "" } = useParams<{ workspaceId?: string; ainaId: string }>();
@@ -40,6 +40,7 @@ export default function CanvasModePage() {
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
+  const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
   const [recoveringRun, setRecoveringRun] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
@@ -122,6 +123,7 @@ export default function CanvasModePage() {
       setLastRun(null);
       setError(null);
       setDocumentTaskContext(null);
+      setClarificationWidgets([]);
     }
     const supplied = stateCanvas?.aina_id === ainaId ? stateCanvas : null;
     if (supplied) {
@@ -177,11 +179,12 @@ export default function CanvasModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [messages, streamText, activity, approval, sending]);
+  }, [messages, streamText, activity, approval, sending, clarificationWidgets]);
 
   async function sendMessage(text: string) {
     const prompt = text.trim();
     if (!prompt || sending) return;
+    setClarificationWidgets([]);
     const runAinaId = ainaId;
     let runConversationId = conversationId;
     localRunRef.current = { workspaceId: routeWorkspaceId, ainaId: runAinaId, conversationId: runConversationId };
@@ -262,6 +265,7 @@ export default function CanvasModePage() {
       if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       setLastRun(completed);
+      setClarificationWidgets(completed.widgets.filter(isClarificationWidget));
       setApproval(completed.approval ?? null);
       activeConversationIdRef.current = completed.conversation_id;
       setConversationId(completed.conversation_id);
@@ -440,6 +444,15 @@ export default function CanvasModePage() {
                     />
                   );
                 })}
+                {clarificationWidgets.map((widget) => (
+                  <SessionWidgetRenderer
+                    key={widget.id}
+                    widget={widget}
+                    workspaceId={routeWorkspaceId}
+                    onOpenAina={(id) => void openAina(id)}
+                    onPrompt={(prompt) => void sendMessage(prompt)}
+                  />
+                ))}
                 {streamText ? (
                   <AssistantMessage
                     message={{
@@ -484,6 +497,7 @@ export default function CanvasModePage() {
                   ainaId={canvas.aina_id}
                   widget={canvas.main_widget}
                   workspaceId={routeWorkspaceId}
+                  documentName={searchParams.get("document")}
                   disabled={false}
                   refreshToken={lastRun?.trace_id}
                   onOpenAina={(id) => void openAina(id)}
@@ -557,7 +571,7 @@ function CanvasMessage({
           headerCount={toolHeaderCount}
         />
       ) : null}
-      {message.widgets?.map((widget) => (
+      {message.widgets?.filter((widget) => !isClarificationWidget(widget)).map((widget) => (
         <SessionWidgetRenderer key={widget.id} widget={widget} workspaceId={workspaceId} onOpenAina={onOpenAina} onPrompt={onPrompt} />
       ))}
     </div>
