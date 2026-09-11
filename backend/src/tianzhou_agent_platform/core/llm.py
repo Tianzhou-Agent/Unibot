@@ -18,7 +18,11 @@ from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
-from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
+from tianzhou_agent_platform.core.context_compression import (
+    estimate_request_tokens,
+    output_token_reserve,
+    request_input_budget,
+)
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, current_model_runtime
 from tianzhou_agent_platform.core.trace_details import redact_trace_data
@@ -99,6 +103,9 @@ class OpenAICompatibleClient:
             base_url=base_url,
             timeout_seconds=timeout_seconds,
             client=self._client,
+            max_completion_tokens=output_token_reserve(
+                current_context_window_tokens(self.settings.context_window_tokens)
+            ),
         )
 
     async def complete(
@@ -291,13 +298,23 @@ class OpenAICompatibleClient:
         context_type: str | None,
         context_id: str | None,
     ) -> tuple[LLMCallRecord, float]:
+        context_window = current_context_window_tokens(self.settings.context_window_tokens)
+        input_tokens = estimate_request_tokens(messages, tools)
+        if input_tokens > request_input_budget(context_window):
+            raise PlatformError(
+                "CONTEXT_BUDGET_EXCEEDED",
+                "The model request exceeds the context budget after reserving space for the answer.",
+                status_code=400,
+                source="model",
+            )
         endpoint, model = self._request_target()
         request: dict[str, Any] = {
             "model": model,
             "messages": deepcopy(messages),
             "stream": stream,
-            "context_window": current_context_window_tokens(self.settings.context_window_tokens),
-            "estimated_prompt_tokens": estimate_request_tokens(messages, tools),
+            "context_window": context_window,
+            "estimated_prompt_tokens": input_tokens,
+            "max_completion_tokens": output_token_reserve(context_window),
         }
         if tools:
             request["tools"] = deepcopy(tools)

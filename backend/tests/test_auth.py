@@ -197,7 +197,10 @@ def test_platform_admin_allowlist_protects_admin_data() -> None:
 
         assert client.post("/auth/logout").status_code == 204
         admin = _register(client, email="ADMIN@example.com")
-        assert admin["is_admin"] is True
+        assert admin["is_admin"] is False
+        assert client.get("/admin/summary").status_code == 403
+        app.state.settings.admin_identities = str(admin["id"])
+        assert client.get("/auth/me").json()["user"]["is_admin"] is True
         admin_conversation = client.post("/conversations", json={"title": "Admin conversation"})
         assert admin_conversation.status_code == 201
         assert len(client.get("/conversations").json()) == 1

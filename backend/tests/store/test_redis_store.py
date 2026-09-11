@@ -24,9 +24,15 @@ class FakeRedisClient:
             self.expirations[key] = ex
         return True
 
-    async def eval(self, script: str, key_count: int, key: str, value: str, ttl: str) -> int:
+    async def eval(self, script: str, key_count: int, key: str, value: str, ttl: str = "") -> int:
         assert key_count == 1
         current = self.values.get(key)
+        if "== ARGV[1]" in script:
+            if current != value:
+                return 0
+            if "'EXPIRE'" in script:
+                return int(await self.expire(key, int(ttl)))
+            return await self.delete(key)
         if current is not None and int(current) >= int(value):
             return 0
         self.values[key] = value
@@ -71,7 +77,14 @@ class FakeRedisLock:
         self.timeout = timeout
         self.blocking = blocking
 
-    async def acquire(self, *, blocking: bool) -> bool:
+    async def acquire(self, *, blocking: bool, blocking_timeout: float | None = None) -> bool:
+        if blocking and blocking_timeout is not None:
+            try:
+                async with asyncio.timeout(blocking_timeout):
+                    while self.key in self.client.locked:
+                        await asyncio.sleep(0.01)
+            except TimeoutError:
+                return False
         if self.key in self.client.locked:
             return False
         self.client.locked.add(self.key)
@@ -161,6 +174,21 @@ async def test_redis_store_set_max_int_never_regresses() -> None:
 
 
 @pytest.mark.asyncio
+async def test_redis_run_lease_refresh_and_release_require_current_owner() -> None:
+    client = FakeRedisClient()
+    store = RedisStore(client)
+    old, new = {"trace_id": "old"}, {"trace_id": "new"}
+    await store.set("run", "conversation", new, ttl_seconds=30)
+    assert not (await store.refresh_if_value("run", "conversation", old, ttl_seconds=90)).written
+    assert client.expirations["run:conversation"] == 30
+    assert not (await store.delete_if_value("run", "conversation", old)).deleted
+    assert (await store.refresh_if_value("run", "conversation", new, ttl_seconds=90)).written
+    assert client.expirations["run:conversation"] == 90
+    assert (await store.delete_if_value("run", "conversation", new)).deleted
+    assert not (await store.refresh_if_value("run", "conversation", new, ttl_seconds=90)).written
+
+
+@pytest.mark.asyncio
 async def test_redis_store_publish_subscribe_round_trip() -> None:
     store = RedisStore(FakeRedisClient())
 
@@ -181,6 +209,21 @@ async def test_redis_store_lease_has_one_owner_and_releases_safely() -> None:
         assert "schedule:task-1" in client.locked
 
     assert "schedule:task-1" not in client.locked
+
+
+@pytest.mark.asyncio
+async def test_redis_store_state_lock_can_wait_for_a_short_read_to_finish():
+    store = RedisStore(FakeRedisClient())
+
+    async def wait_for_lock():
+        async with store.lease("state", "conversation", ttl_seconds=30, blocking_timeout_seconds=1) as locked:
+            assert locked
+
+    async with store.lease("state", "conversation", ttl_seconds=30):
+        waiter = asyncio.create_task(wait_for_lock())
+        await asyncio.sleep(0.02)
+        assert not waiter.done()
+    await waiter
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
-import { Copy, Share2, Trash2, Paperclip, ArrowUp, X } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { Check, Copy, Share2, Trash2, Paperclip, ArrowUp, X } from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
 import { classNames } from "@/lib/utils";
 import type { ChatMessage, FileChip, MessageBlock } from "@/types";
 import { MessageFeedback } from "@/components/feedback/MessageFeedback";
@@ -102,12 +102,42 @@ function FileChipPill({ file }: { file: FileChip }) {
 }
 
 function AgentActions({ message, conversationId }: { message: ChatMessage; conversationId?: string }) {
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const copyText = [
+    message.content,
+    ...(message.blocks ?? []).flatMap((block) => block.kind === "text" || block.kind === "result" ? [block.text] : []),
+  ].filter((text) => text.trim()).join("\n\n");
   const feedbackEnabled = message.id !== "streaming" && message.runState !== "running" && message.runState !== "thinking";
+
+  useEffect(() => {
+    if (copyState !== "copied") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  async function copyMessage() {
+    setCopyState("copying");
+    try {
+      await navigator.clipboard.writeText(copyText);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+  }
+
   return (
     <div className="flex items-center justify-end gap-1 text-ink-subtle">
+      <span role="status" className={classNames("text-[11px]", copyState === "error" ? "text-danger" : "text-success")}>
+        {copyState === "copied" ? "已复制" : copyState === "error" ? "复制失败，请重试或手动选择文字" : ""}
+      </span>
       {feedbackEnabled && conversationId ? <MessageFeedback messageId={message.id} conversationId={conversationId} /> : null}
       <span className="h-4 w-px bg-line" />
-      <ActionIcon icon={<Copy className="w-3.5 h-3.5" />} label="复制" />
+      <ActionIcon
+        icon={copyState === "copied" ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+        label="复制"
+        onClick={() => void copyMessage()}
+        disabled={!copyText || copyState === "copying"}
+      />
       <ActionIcon icon={<Share2 className="w-3.5 h-3.5" />} label="分享" />
       <ActionIcon
         icon={<Trash2 className="w-3.5 h-3.5" />}
@@ -122,17 +152,23 @@ function ActionIcon({
   icon,
   label,
   tone = "default",
+  onClick,
+  disabled,
 }: {
   icon: React.ReactNode;
   label: string;
   tone?: "default" | "danger";
+  onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
       className={classNames(
-        "w-6 h-6 rounded-md hover:bg-line/50 flex items-center justify-center",
+        "w-6 h-6 rounded-md hover:bg-line/50 flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-40",
         tone === "danger" ? "text-danger" : "text-ink-muted",
       )}
     >

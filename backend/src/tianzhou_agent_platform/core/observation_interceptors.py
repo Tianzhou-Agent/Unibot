@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Iterable
@@ -64,10 +65,6 @@ _model_iteration: ContextVar[int] = ContextVar("agent_model_iteration", default=
 _model_capabilities: ContextVar[dict[str, Capability]] = ContextVar(
     "agent_model_capabilities",
     default={},
-)
-_recorded_capability_failures: ContextVar[frozenset[str]] = ContextVar(
-    "agent_recorded_capability_failures",
-    default=frozenset(),
 )
 
 
@@ -348,6 +345,7 @@ class ObservedAgentRuntime(AgentRuntime):
         sandbox_service: SandboxService | None = None,
         task_service: TaskService | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
+        auth_enforced: bool = False,
     ) -> None:
         self._observability = observability
         observed_repository = cast(
@@ -364,6 +362,7 @@ class ObservedAgentRuntime(AgentRuntime):
             sandbox_service=sandbox_service,
             task_service=task_service,
             checkpointer=checkpointer,
+            auth_enforced=auth_enforced,
         )
 
     async def chat(
@@ -429,7 +428,6 @@ class ObservedAgentRuntime(AgentRuntime):
         )
         capture_token = _run_capture.set(_RunCapture(request.capability))
         iteration_token = _model_iteration.set(0)
-        failure_token = _recorded_capability_failures.set(frozenset())
         try:
             with bind_observation_context(context):
                 response = await super().chat(
@@ -439,11 +437,10 @@ class ObservedAgentRuntime(AgentRuntime):
                 )
                 await self._finish_response(response, root_span_id)
                 return response
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await self._observability.finish_trace(run_trace_id, "failed")
             raise
         finally:
-            _recorded_capability_failures.reset(failure_token)
             _model_iteration.reset(iteration_token)
             _run_capture.reset(capture_token)
 
@@ -466,7 +463,6 @@ class ObservedAgentRuntime(AgentRuntime):
             root_span_id=root_span_id,
         )
         iteration_token = _model_iteration.set(0)
-        failure_token = _recorded_capability_failures.set(frozenset())
         try:
             with bind_observation_context(context):
                 response = await super().confirm(
@@ -476,11 +472,10 @@ class ObservedAgentRuntime(AgentRuntime):
                 )
                 await self._finish_response(response, root_span_id)
                 return response
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await self._observability.finish_trace(approval.trace_id, "failed")
             raise
         finally:
-            _recorded_capability_failures.reset(failure_token)
             _model_iteration.reset(iteration_token)
 
     async def deny(self, approval_id: str, *, user_id: str, tenant_id: str) -> ApprovalRecord:
@@ -761,18 +756,18 @@ class ObservedAgentRuntime(AgentRuntime):
                 "failed",
                 error=error,
             )
-            await self._record_capability_failure(
-                trace_id,
-                capability=capability,
-                call_id=call_id,
-                function_name=function_name,
-                code=str(error.get("code") or "DEPENDENCY_FAILED"),
-                message=str(error.get("message") or str(exc)),
-                retryable=bool(error.get("retryable", False)),
-            )
-            _recorded_capability_failures.set(
-                _recorded_capability_failures.get() | {call_id}
-            )
+            # Handled errors are recorded by _append_tool_error after the runtime
+            # decides whether another attempt is safe and within the retry limit.
+            if not isinstance(exc, (PlatformError, TypeError, ValueError)):
+                await self._record_capability_failure(
+                    trace_id,
+                    capability=capability,
+                    call_id=call_id,
+                    function_name=function_name,
+                    code=str(error.get("code") or "DEPENDENCY_FAILED"),
+                    message=str(error.get("message") or str(exc)),
+                    retryable=False,
+                )
             raise
         await self._observability.finish_span(
             trace_id,
@@ -817,21 +812,18 @@ class ObservedAgentRuntime(AgentRuntime):
         message: str,
         capability: Capability | None = None,
         recovery: dict[str, Any] | None = None,
+        retryable: bool = False,
     ) -> None:
-        recorded = _recorded_capability_failures.get()
-        if call_id in recorded:
-            _recorded_capability_failures.set(recorded - {call_id})
-        else:
-            await self._record_capability_failure(
-                state["trace_id"],
-                capability=capability,
-                call_id=call_id,
-                function_name=name,
-                code=code,
-                message=message,
-                retryable=code in {"TIMEOUT", "RATE_LIMITED"},
-                recovery=recovery,
-            )
+        await self._record_capability_failure(
+            state["trace_id"],
+            capability=capability,
+            call_id=call_id,
+            function_name=name,
+            code=code,
+            message=message,
+            retryable=retryable,
+            recovery=recovery,
+        )
         await super()._append_tool_error(
             state,
             event_sink,
@@ -842,6 +834,7 @@ class ObservedAgentRuntime(AgentRuntime):
             message=message,
             capability=capability,
             recovery=recovery,
+            retryable=retryable,
         )
 
     async def _record_capability_failure(

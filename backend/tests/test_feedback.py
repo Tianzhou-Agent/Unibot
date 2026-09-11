@@ -60,6 +60,7 @@ def test_feedback_uses_real_messages_and_admin_context_stops_at_feedback_time() 
 
         assert client.post("/auth/logout").status_code == 204
         _register(client, "admin@example.com", "反馈管理员")
+        app.state.settings.admin_identities = client.get("/auth/me").json()["user"]["id"]
 
         filtered = client.get(
             "/admin/feedback",

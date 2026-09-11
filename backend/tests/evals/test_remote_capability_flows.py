@@ -4,6 +4,8 @@ import asyncio
 from typing import Any
 from uuid import uuid4
 
+from deepeval.test_case import ToolCall
+
 from scripts.real_api_test import demo_server
 from tests.evals.support import (
     REAL_EVAL_MARK,
@@ -71,7 +73,7 @@ def test_remote_tool_agent_flow() -> None:
         run,
         task="Use the selected remote tool and compose a sentence explaining that 17 plus 25 equals 42",
         expected_output="A concise sentence explaining that adding 17 and 25 produces 42.",
-        expected_tools=[tool_id],
+        expected_tools=[ToolCall(name=tool_id, input_parameters={"a": 17, "b": 25}, output={"result": 42})],
         criteria="The answer must report 42 as the result and must not report a different sum.",
     )
 

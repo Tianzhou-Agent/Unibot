@@ -45,6 +45,8 @@ export default function CanvasModePage() {
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const [composerVersion, setComposerVersion] = useState(0);
+  const composerConversationIdRef = useRef<string | null>(conversationId);
   const activeAinaIdRef = useRef(ainaId);
   const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const activeConversationIdRef = useRef<string | null>(conversationId);
@@ -102,6 +104,10 @@ export default function CanvasModePage() {
   useEffect(() => {
     let cancelled = false;
     const routeConversationId = searchParams.get("conversation") ?? stateCanvas?.conversation_id ?? null;
+    if (composerConversationIdRef.current !== routeConversationId) {
+      composerConversationIdRef.current = routeConversationId;
+      setComposerVersion((current) => current + 1);
+    }
     activeWorkspaceIdRef.current = routeWorkspaceId;
     activeAinaIdRef.current = ainaId;
     activeConversationIdRef.current = routeConversationId;
@@ -230,6 +236,7 @@ export default function CanvasModePage() {
         localRunRef.current = { workspaceId: routeWorkspaceId, ainaId: runAinaId, conversationId: created.id };
         activeConversationIdRef.current = created.id;
         setConversationId(created.id);
+        composerConversationIdRef.current = created.id;
         navigate(workspaceCanvasPath(routeWorkspaceId, runAinaId, created.id), {
           replace: true,
           state: canvas ? { canvas: { ...canvas, conversation_id: created.id } } : undefined,
@@ -276,12 +283,14 @@ export default function CanvasModePage() {
         .find((action) => action.kind === "open_aina" && action.aina_id);
       if (openAction?.aina_id) {
         await openAina(openAction.aina_id, completed.conversation_id);
-        return;
+        return true;
       }
+      return true;
     } catch (sendError) {
       if (isActiveRun()) {
         setMessages((current) => current.filter((message) => message.id !== optimistic.id));
         setError(apiErrorMessage(sendError));
+        return Boolean(completion);
       }
     } finally {
       const activeRun = isActiveRun();
@@ -480,10 +489,11 @@ export default function CanvasModePage() {
                 <div ref={endRef} />
               </div>
               <CanvasComposer
+                key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${ainaId}:${composerVersion}`}
                 disabled={sending}
                 context={documentTaskContext}
                 sessionId={conversationId}
-                onSend={(text) => void sendMessage(text)}
+                onSend={sendMessage}
               />
             </section>
 
@@ -582,21 +592,26 @@ function CanvasComposer({ disabled, context, sessionId, onSend }: {
   disabled: boolean;
   context: DocumentTaskContext | null;
   sessionId: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean | undefined>;
 }) {
   const [text, setText] = useState("");
+  const [sendFailed, setSendFailed] = useState(false);
+  const composingRef = useRef(false);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
-    onSend(value);
-    setText("");
+    setSendFailed(false);
+    const sent = await onSend(value);
+    if (sent) setText((current) => current === text ? "" : current);
+    else if (sent === false) setSendFailed(true);
   }
 
   return (
     <div className="space-y-2 border-t border-line bg-white p-3">
       <TaskTreeWidget sessionId={sessionId} />
+      {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">发送未完成，草稿已保留，可重试。</p> : null}
       <form onSubmit={submit} className="rounded-xl border border-line-strong p-2 shadow-soft focus-within:border-accent">
         {context ? <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[9.5px] text-accent">
           <Sparkles className="h-3 w-3 shrink-0" />
@@ -604,8 +619,11 @@ function CanvasComposer({ disabled, context, sessionId, onSend }: {
         </div> : null}
         <textarea
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => { setText(event.target.value); setSendFailed(false); }}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
           onKeyDown={(event) => {
+            if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               submit(event);

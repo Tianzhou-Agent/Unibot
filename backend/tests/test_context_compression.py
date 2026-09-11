@@ -4,10 +4,11 @@ import asyncio
 import json
 from typing import Any
 
+import httpx
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from tests.support.fake_llm import ScriptedLLM, assistant
+from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.context_compression import (
     COMPRESSION_CONFIG_KEY,
@@ -35,10 +36,10 @@ def _settings() -> AgentSettings:
     )
 
 
-def _seed_long_conversation(repository: InMemoryRepository) -> str:
+def _seed_long_conversation(repository: InMemoryRepository, *, content_size: int = 400) -> str:
     async def seed() -> str:
         conversation = await repository.create_conversation(ConversationCreate())
-        old_context = "old-context-" + ("x" * 4_000)
+        old_context = "old-context-" + ("x" * content_size)
         messages: list[dict[str, Any]] = []
         for turn in range(3):
             messages.extend(
@@ -220,3 +221,34 @@ def test_recompression_updates_previous_summary_without_splitting_tool_groups() 
         "through_message_id": "msg_tool_result",
         "count": 2,
     }
+
+
+def test_large_tool_result_stops_before_next_model_call_and_preserves_full_result() -> None:
+    result = "result-marker:" + "x" * 60_000 + ":end-marker"
+    llm = ScriptedLLM([call_first_tool()])
+    remote = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"result": result})))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=remote)) as client:
+        assert client.post("/tools", json={
+            "tool_id": "large-result", "name": "Large result", "description": "Return a large result",
+            "input_schema": {"type": "object"}, "endpoint": "https://tool.invalid/invoke",
+        }).status_code == 201
+        response = client.post("/chat", json={"message": "Read it", "capability": "tool:large-result"}).json()
+        conversation = client.get(f"/conversations/{response['conversation_id']}").json()
+    assert response["status"] == "failed"
+    assert "context budget" in response["content"]
+    assert len(llm.calls) == 1
+    saved_result = next(message for message in conversation["messages"] if message["role"] == "tool")
+    assert json.loads(saved_result["content"])["result"] == result
+
+
+def test_oversized_transcript_never_reaches_summary_or_answer_model():
+    repository = InMemoryRepository()
+    conversation_id = _seed_long_conversation(repository, content_size=20_000)
+    llm = ScriptedLLM([])
+    with TestClient(create_app(settings=_settings(), repository=repository, llm=llm)) as client:
+        response = client.post("/chat", json={"message": "Continue", "conversation_id": conversation_id}).json()
+        conversation = client.get(f"/conversations/{conversation_id}").json()
+    assert response["status"] == "failed"
+    assert not llm.calls
+    assert "x" * 20_000 in conversation["messages"][0]["content"]
+    assert COMPRESSION_CONFIG_KEY not in conversation["config"]

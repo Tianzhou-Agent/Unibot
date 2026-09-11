@@ -14,7 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality-checks.yml
+    permissions:
+      contents: read
+
   publish:
+    needs: quality
     name: Publish ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 60

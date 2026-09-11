@@ -164,6 +164,7 @@ def create_app(
     resolved_sandbox_service = sandbox_service or create_sandbox_service(
         resolved_settings,
         resolved_repository,
+        enforce_isolation=enforce_auth,
         persistent_workspace_root=(
             storage_settings.nas_root_path / "workspaces"
             if storage_settings is not None
@@ -210,6 +211,7 @@ def create_app(
         resolved_settings,
         capability_http_client,
         managed_runtime=managed_aina_runtime,
+        enforce_destination_policy=enforce_auth,
     )
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
@@ -347,6 +349,7 @@ def create_app(
         sandbox_service=resolved_sandbox_service,
         task_service=task_service,
         checkpointer=agent_checkpointer,
+        auth_enforced=enforce_auth,
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler

@@ -1,3 +1,6 @@
+import os
+from pathlib import Path, PureWindowsPath
+
 import pytest
 
 from tianzhou_agent_platform.store import (
@@ -8,6 +11,45 @@ from tianzhou_agent_platform.store import (
     StoragePolicyViolationError,
     StorageValidationError,
 )
+from tianzhou_agent_platform.store.nas.filesystem import _relative_to_root
+
+
+@pytest.mark.parametrize("target,root,expected", [
+    (r"\\?\C:\workspace\docs\file.txt", r"C:\workspace", "docs/file.txt"),
+    (r"C:\workspace\docs\file.txt", r"\\?\C:\workspace", "docs/file.txt"),
+    (r"\\?\UNC\server\share\docs\file.txt", r"\\server\share", "docs/file.txt"),
+    (r"\\server\share\docs\file.txt", r"\\?\UNC\server\share", "docs/file.txt"),
+    (r"\\?\C:\outside\file.txt", r"C:\workspace", None),
+    (r"\\?\C:\workspace-other\file.txt", r"C:\workspace", None),
+    (r"\\?\D:\workspace\file.txt", r"C:\workspace", None),
+    (r"\\?\UNC\other\share\file.txt", r"\\server\share", None),
+])
+def test_windows_path_aliases_preserve_the_containment_boundary(target, root, expected):
+    relative = _relative_to_root(PureWindowsPath(target), PureWindowsPath(root))
+    assert (relative.as_posix() if relative is not None else None) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended-path filesystem behavior")
+async def test_nas_handles_extended_resolved_paths_without_allowing_escape(tmp_path, monkeypatch):
+    store = NasStore(tmp_path)
+    path = StoragePath(relative_path="docs/file.txt")
+    await store.write(path, b"preserved")
+    original_resolve = type(tmp_path).resolve
+
+    def extended_resolve(self, *args, **kwargs):
+        resolved = original_resolve(self, *args, **kwargs)
+        if resolved == tmp_path / "escape":
+            resolved = tmp_path.parent / "outside"
+        value = str(resolved)
+        return Path(value if value.startswith("\\\\?\\") else "\\\\?\\" + value)
+
+    monkeypatch.setattr(type(tmp_path), "resolve", extended_resolve)
+    assert str(store._resolve(path)).startswith("\\\\?\\")
+    assert await store.read(path) == b"preserved"
+    assert [item.path.relative_path for item in await store.list_files(StoragePath(relative_path="docs"))] == ["docs/file.txt"]
+    with pytest.raises(StoragePolicyViolationError):
+        store._resolve(StoragePath(relative_path="escape"))
 
 
 @pytest.mark.asyncio

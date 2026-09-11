@@ -27,11 +27,29 @@ export function Sidebar() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set());
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
-  const [navigationOpen, setNavigationOpen] = useState(true);
+  const [navigationOpen, setNavigationOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
   const navigate = useNavigate();
   const location = useLocation();
   const chatTabActive = isChatNavigationPath(location.pathname);
   const fileTabActive = isFileNavigationPath(location.pathname);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const resize = () => setNavigationOpen(desktop.matches);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !desktop.matches) setNavigationOpen(false);
+    };
+    desktop.addEventListener("change", resize);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      desktop.removeEventListener("change", resize);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.matchMedia("(min-width: 768px)").matches) setNavigationOpen(false);
+  }, [location.pathname, location.search]);
 
   const load = useCallback(async () => {
     try {
@@ -141,7 +159,10 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="relative z-20 flex h-full w-[264px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg text-ink">
+    <>
+    <div className="w-16 shrink-0 md:hidden" />
+    <button type="button" onClick={() => setNavigationOpen(false)} className="fixed inset-0 z-20 bg-black/30 md:hidden" aria-label="关闭导航" />
+    <aside className="fixed inset-y-0 left-0 z-30 flex h-full w-[264px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg text-ink md:relative md:z-20">
       <div className="flex items-center justify-between gap-2 px-[18px] pb-2 pt-[18px]">
         <Brand />
         <button type="button" onClick={() => setNavigationOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label="收起导航">
@@ -281,6 +302,7 @@ export function Sidebar() {
         />
       ) : null}
     </aside>
+    </>
   );
 }
 

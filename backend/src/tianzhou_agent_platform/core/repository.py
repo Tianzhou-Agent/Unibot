@@ -988,11 +988,14 @@ class InMemoryRepository:
         *,
         status: str = "idle",
         error: str | None = None,
+        expected_trace_id: str | None = None,
     ) -> Conversation:
         async with self._lock:
             conversation = self._conversations.get(conversation_id)
             if conversation is None:
                 raise not_found("Conversation", conversation_id)
+            if expected_trace_id is not None and conversation.active_trace_id != expected_trace_id:
+                return self._copy(conversation)
             updated = conversation.model_copy(
                 update={
                     "run_status": status,
@@ -1035,6 +1038,9 @@ class InMemoryRepository:
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
 
+    async def _has_live_conversation_run(self, conversation: Conversation) -> bool:
+        return False
+
     async def reconcile_conversation_run(self, conversation_id: str) -> Conversation:
         conversation = await self.get_conversation(conversation_id)
         if conversation.run_status != "running":
@@ -1066,6 +1072,7 @@ class InMemoryRepository:
                         conversation_id,
                         status=resolved,
                         error=INTERRUPTED_RUN_ERROR if resolved == "failed" else None,
+                        expected_trace_id=conversation.active_trace_id,
                     )
                 # A WAL-fsynced trace may not be queryable from OBS MySQL yet,
                 # especially from another node. Keep the business run and its
@@ -1077,10 +1084,13 @@ class InMemoryRepository:
                     < OBS_TRACE_VISIBILITY_GRACE
                 ):
                     return conversation
+            if await self._has_live_conversation_run(conversation):
+                return conversation
             return await self.finish_conversation_run(
                 conversation_id,
                 status="failed",
                 error=INTERRUPTED_RUN_ERROR,
+                expected_trace_id=conversation.active_trace_id,
             )
         if trace.status == "running":
             return conversation
@@ -1089,6 +1099,7 @@ class InMemoryRepository:
             conversation_id,
             status=status,
             error=INTERRUPTED_RUN_ERROR if status == "failed" else None,
+            expected_trace_id=conversation.active_trace_id,
         )
 
     async def create_memory(self, data: MemoryCreate) -> MemoryRecord:
