@@ -77,12 +77,14 @@ class LocalProcessSandboxDriver(SandboxDriver):
         *,
         persistent_workspace_root: Path | None = None,
         output_limit_bytes: int = 1_000_000,
+        allow_execution: bool = True,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.persistent_workspace_root = (
             persistent_workspace_root.resolve() if persistent_workspace_root is not None else None
         )
         self.output_limit_bytes = output_limit_bytes
+        self.allow_execution = allow_execution
 
     async def ensure(self, sandbox: SandboxRecord) -> DriverSandboxState:
         workspace = self._workspace(sandbox)
@@ -99,6 +101,15 @@ class LocalProcessSandboxDriver(SandboxDriver):
         sandbox: SandboxRecord,
         request: SandboxExecutionRequest,
     ) -> DriverExecutionResult:
+        if not self.allow_execution:
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                "Local code execution requires UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL=true for trusted development; "
+                "configure the Kubernetes sandbox for untrusted users",
+                status_code=403,
+                source="sandbox",
+                user_message="本地代码执行未启用，请配置隔离沙箱。",
+            )
         workspace = self._workspace(sandbox)
         workspace.mkdir(parents=True, exist_ok=True)
         runtime_workspace = self._runtime_workspace(sandbox)

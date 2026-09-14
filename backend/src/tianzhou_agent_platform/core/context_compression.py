@@ -96,9 +96,17 @@ def estimate_request_tokens(
     return total
 
 
+def output_token_reserve(context_window_tokens: int) -> int:
+    return min(4_096, context_window_tokens // 4)
+
+
+def request_input_budget(context_window_tokens: int) -> int:
+    return context_window_tokens - output_token_reserve(context_window_tokens)
+
+
 def summary_request(plan: CompressionPlan) -> list[dict[str, Any]]:
     transcript = [
-        _summary_source_message(message.provider_message())
+        message.provider_message()
         for message in plan.messages_to_summarize
     ]
     previous = plan.previous_state.summary if plan.previous_state is not None else "(none)"
@@ -140,14 +148,6 @@ def _load_state(value: Any) -> CompressionState | None:
     if not isinstance(count, int) or count < 1:
         return None
     return CompressionState(summary=summary, through_message_id=through_message_id, count=count)
-
-
-def _summary_source_message(message: dict[str, Any]) -> dict[str, Any]:
-    copied = dict(message)
-    content = copied.get("content")
-    if copied.get("role") == "tool" and isinstance(content, str) and len(content) > 2_000:
-        copied["content"] = f"{content[:2_000]}\n[Older tool output truncated for context compression]"
-    return copied
 
 
 def _estimate_value_tokens(value: Any) -> int:

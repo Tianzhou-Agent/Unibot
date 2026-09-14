@@ -24,6 +24,7 @@ import { useNavigate } from "react-router-dom";
 import { AinaCapabilityDialog } from "@/components/apps/AinaCapabilityDialog";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { classNames } from "@/lib/utils";
 import type {
   AinaCanvasResponse,
@@ -143,6 +144,8 @@ const SAMPLE_SKILL = {
 
 export default function AllAppsPage() {
   const navigate = useNavigate();
+  const { user, config } = useAuth();
+  const canManageRegistry = !config.auth_required || Boolean(user?.is_admin);
   const [tab, setTab] = useState<Tab>("aina");
   const [ainas, setAinas] = useState<AinaRecord[]>([]);
   const [projects, setProjects] = useState<AinaProjectRecord[]>([]);
@@ -447,9 +450,9 @@ export default function AllAppsPage() {
                   </button>
                 </>
               ) : null}
-              <button type="button" onClick={() => openEditor()} className="btn bg-ink text-white hover:bg-black">
+              {canManageRegistry ? <button type="button" onClick={() => openEditor()} className="btn bg-ink text-white hover:bg-black">
                 <Plus className="w-4 h-4" />注册{tabLabel(tab)}
-              </button>
+              </button> : <p className="text-xs text-ink-muted">注册和删除能力定义需要管理员权限。</p>}
             </div>
           </section>
 
@@ -493,15 +496,15 @@ export default function AllAppsPage() {
                 onInstall={(aina) => void install(aina)}
                 onUninstall={(aina) => void uninstall(aina)}
                 onOpen={(aina) => void open(aina)}
-                onDelete={(id) => void remove("aina", id)}
+                onDelete={canManageRegistry ? (id) => void remove("aina", id) : undefined}
               />
             </>
           ) : null}
           {!loading && tab === "tools" ? (
-            <ToolGrid tools={tools} onDelete={(id) => void remove("tools", id)} />
+            <ToolGrid tools={tools} onDelete={canManageRegistry ? (id) => void remove("tools", id) : undefined} />
           ) : null}
           {!loading && tab === "skills" ? (
-            <SkillGrid skills={skills} onDelete={(id) => void remove("skills", id)} />
+            <SkillGrid skills={skills} onDelete={canManageRegistry ? (id) => void remove("skills", id) : undefined} />
           ) : null}
         </div>
       </div>
@@ -742,7 +745,7 @@ function AinaGrid({
   onInstall: (aina: AinaRecord) => void;
   onUninstall: (aina: AinaRecord) => void;
   onOpen: (aina: AinaRecord) => void;
-  onDelete: (id: string) => void;
+  onDelete?: (id: string) => void;
 }) {
   const [selectedAina, setSelectedAina] = useState<AinaRecord | null>(null);
   if (!ainas.length) return <EmptyState icon={<AppWindow />} title="尚未注册 AINA" detail="请先注册远程运行服务清单。" />;
@@ -815,7 +818,7 @@ function AinaGrid({
                 </button>
               )}
               <span className="flex-1" />
-              {!builtin && !managed ? (
+              {!builtin && !managed && onDelete ? (
                 <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={`删除 ${manifest.aina.name}`}>
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -830,7 +833,7 @@ function AinaGrid({
   );
 }
 
-function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete: (id: string) => void }) {
+function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete?: (id: string) => void }) {
   if (!tools.length) return <EmptyState icon={<Wrench />} title="尚未注册工具" detail="请注册 OpenAI 函数结构和远程执行地址。" />;
   return (
     <div className="space-y-2.5">
@@ -849,16 +852,16 @@ function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete: (id: str
             <p className="mt-1 text-[12px] text-ink-muted">{tool.description}</p>
             <p className="mt-1 truncate font-mono text-[10.5px] text-ink-subtle">{tool.tool_id} · {tool.endpoint}</p>
           </div>
-          <button type="button" onClick={() => onDelete(tool.tool_id)} className="btn-danger-outline" aria-label={`删除 ${tool.name}`}>
+          {onDelete ? <button type="button" onClick={() => onDelete(tool.tool_id)} className="btn-danger-outline" aria-label={`删除 ${tool.name}`}>
             <Trash2 className="w-4 h-4" />删除
-          </button>
+          </button> : null}
         </article>
       ))}
     </div>
   );
 }
 
-function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete: (id: string) => void }) {
+function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete?: (id: string) => void }) {
   if (!skills.length) return <EmptyState icon={<Code2 />} title="尚未定义技能" detail="技能为智能体提供可复用的行为指令。" />;
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -874,7 +877,7 @@ function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete: (id:
           <div className="mt-3 flex items-center gap-2">
             <span className="font-mono text-[10.5px] text-ink-subtle">{skill.skill_id}</span>
             <span className="flex-1" />
-            <button type="button" onClick={() => onDelete(skill.skill_id)} className="btn-ghost text-danger" aria-label={`删除 ${skill.name}`}><Trash2 className="w-4 h-4" /></button>
+            {onDelete ? <button type="button" onClick={() => onDelete(skill.skill_id)} className="btn-ghost text-danger" aria-label={`删除 ${skill.name}`}><Trash2 className="w-4 h-4" /></button> : null}
           </div>
         </article>
       ))}

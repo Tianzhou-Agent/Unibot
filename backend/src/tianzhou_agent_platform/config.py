@@ -48,6 +48,11 @@ class AgentSettings(BaseSettings):
         gt=0,
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_TIMEOUT_SECONDS", "capability_timeout_seconds"),
     )
+    capability_allowed_origins: str = Field(
+        default="",
+        validation_alias=AliasChoices("UNIBOT_CAPABILITY_ALLOWED_ORIGINS", "capability_allowed_origins"),
+        description="Comma-separated approved HTTP(S) origins for remote Tools and AINA; empty denies all.",
+    )
     max_agent_iterations: int = Field(
         default=8,
         ge=1,
@@ -94,6 +99,10 @@ class AgentSettings(BaseSettings):
     sandbox_driver: Literal["local", "kubernetes"] = Field(
         default="local",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_DRIVER", "sandbox_driver"),
+    )
+    sandbox_allow_unsafe_local: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL", "sandbox_allow_unsafe_local"),
     )
     sandbox_workspace_root: Path = Field(
         default=_BACKEND_ROOT.parent / "data" / "sandboxes",
@@ -212,6 +221,7 @@ class AgentSettings(BaseSettings):
     admin_identities: str = Field(
         default="",
         validation_alias=AliasChoices("UNIBOT_ADMIN_IDENTITIES", "admin_identities"),
+        description="Comma-separated provisioned immutable user IDs; email addresses and logins never grant admin.",
     )
     obs_enabled: bool = Field(
         default=True,
@@ -309,15 +319,14 @@ class AgentSettings(BaseSettings):
         self,
         *,
         user_id: str,
-        email: str,
+        email: str = "",
         github_login: str | None = None,
     ) -> bool:
         allowed = {
-            identity.strip().casefold()
+            identity.strip()
             for identity in self.admin_identities.split(",")
             if identity.strip()
         }
-        identities = {user_id.casefold(), email.casefold()}
-        if github_login:
-            identities.add(github_login.casefold())
-        return bool(allowed & identities)
+        # Registration does not verify claimed email ownership, and external
+        # login names may change. Only the platform's immutable user ID is trusted.
+        return user_id in allowed

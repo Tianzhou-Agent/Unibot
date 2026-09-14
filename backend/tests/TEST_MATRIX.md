@@ -1,12 +1,17 @@
 # Agent Test Matrix
 
-This matrix covers every Agent behavior currently exposed by the product. Deterministic tests own protocol and
+This matrix tracks implemented coverage and remaining evaluation gaps. Deterministic tests own protocol and
 failure invariants; DeepEval owns real-model decisions and answer quality; Playwright owns browser rendering and
 navigation. A row is complete only when every applicable layer is automated.
 
 | Area | Deterministic contract coverage | Real-model DeepEval | Browser E2E | Required invariant |
 | --- | --- | --- | --- | --- |
 | User authentication and isolation | `test_auth.py` covers password sessions, logout, impersonation rejection, OAuth state and PKCE | Not applicable: identity flows are deterministic | `auth.spec.ts` | Password hashes never leave storage, session cookies are HttpOnly, GitHub tokens are not persisted, and authenticated callers cannot select another actor. |
+| Registry and execution boundaries | `test_capability_security.py` | Not applicable: authorization is deterministic | FE-E2E-REGISTRY-001 | Admin IDs are provisioned; ownership is server-bound; private capabilities are excluded from other actors' model context; destinations and local execution require operator configuration. |
+| Interrupted run recovery | `store/test_persistent_repository_observability_unit.py`, `store/test_redis_store.py` | Live worker/Redis failure injection remains outstanding | Existing running-state polling cases | Leases renew, dead owners become interrupted, and old workers cannot release a replacement run. |
+| Context and output limits | `test_context_compression.py`, `test_llm_client.py`, `test_agent_resilience.py` | Long-task capability comparisons remain outstanding | Chat displays failed/incomplete runs | Every model request reserves output budget; originals remain durable; partial tool calls never execute. |
+| Evaluation validity | `test_eval_adapter.py` rejects incorrect arguments/results, missing/duplicate calls and failed execution | Repeated trials and independent judge calibration remain outstanding | Not applicable | Graders receive actual evidence and no blanket claim that each step was required. |
+| Composer reliability | Backend conversation contracts | Not applicable | FE-E2E-DRAFT, FE-E2E-IME, FE-E2E-MOBILE, FE-E2E-005B/C | Failed text can be retried; drafts do not cross conversations; composition confirmation does not submit; phone send controls fit. |
 | Ordinary chat / no false tool call | `test_chat_preserves_multi_turn_context` | `test_ordinary_chat_does_not_call_capabilities` | FE-E2E-001 | Direct questions complete without Tool or AINA calls. |
 | Application discovery | `test_list_app_builtin_persists_an_interactive_widget` | `test_list_apps_agent_flow` | FE-E2E-005, FE-E2E-006 | `list_app` is selected once and returns the installed AINA widget. |
 | Open AINA | `test_open_aina_builtin_returns_navigation_widget_through_agent` | `test_open_aina_agent_flow` | FE-E2E-006 | `open_aina` targets the requested ID and returns a Canvas navigation action. |
@@ -22,6 +27,7 @@ navigation. A row is complete only when every applicable layer is automated.
 | Retry and loop bounds | `test_timeout_retries_then_returns_retryable_error_to_model`, repeated-call and iteration-limit tests | `StepEfficiencyMetric` runs where the Judge can distinguish optional steps from mandatory runtime protocol | Run summary covered by FE-E2E-004 | Transport retries are bounded, an identical successful call executes once per run, and model iterations never exceed configuration. |
 | Streaming, recovery, and trace | streaming/running-state tests in `test_chat_api.py`; detailed event, AINA ownership graph, exclusion reason, and redaction tests in `test_trace_details.py` and `test_widget_routing.py` | Every DeepEval case loads and evaluates the real trace | FE-E2E-001, FE-E2E-004, FE-E2E-005 | SSE completes, refresh recovers state, and trace records sanitized input, AINA-to-capability relationships, model scope, calls, results, usage, and final status. |
 | Persistent MySQL/Redis/NAS | `tests/store`, including opt-in `test_storage_e2e.py` | Real evaluations use the running persistent backend | Browser reload paths above | Repository recreation restores records; Redis and NAS enforce storage contracts. |
+| Windows NAS path aliases | `test_nas_store.py` checks disk/UNC aliases and Windows filesystem reads/listing | Not applicable | Not applicable | Equivalent extended paths remain usable; outside roots, sibling prefixes, and different drives/servers remain excluded. |
 | Per-user script sandbox | `test_sandbox_api.py`, `test_sandboxd.py`, `test_kubernetes_sandbox_driver.py` | Not applicable: execution is deterministic | FE-E2E-009 | Workspace persists across runs, actor history is isolated, timeout/output contracts hold, and stop/reset have distinct lifecycle semantics. |
 | Image object detection | `test_vision_api.py` and `vision-service/tests/test_app.py` cover proxy, validation, GPU priority and CPU fallback | Not applicable: inference output is model-dependent | FE-E2E-010 | JPEG/PNG/WebP bytes cross the multipart boundary without persistence; the UI supports file selection and paste, renders boxes, and reports the actual device. |
 

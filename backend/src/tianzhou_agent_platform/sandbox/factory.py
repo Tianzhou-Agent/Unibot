@@ -17,12 +17,14 @@ def create_sandbox_service(
     repository: InMemoryRepository,
     *,
     persistent_workspace_root: Path | None = None,
+    enforce_isolation: bool = True,
 ) -> SandboxService:
     if settings.sandbox_driver == "local":
         driver = LocalProcessSandboxDriver(
             settings.sandbox_workspace_root,
             persistent_workspace_root=persistent_workspace_root,
             output_limit_bytes=settings.sandbox_output_limit_bytes,
+            allow_execution=not enforce_isolation or settings.sandbox_allow_unsafe_local,
         )
     else:
         token_file = settings.sandbox_kubernetes_token_file

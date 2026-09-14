@@ -111,6 +111,36 @@ return 1
             raise self._map_redis_error(exc) from exc
         return WriteResult(written=bool(written))
 
+    async def refresh_if_value(
+        self, namespace: str, key: str, value: Any, *, ttl_seconds: int,
+    ) -> WriteResult:
+        script = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+"""
+        try:
+            written = await self._client.eval(
+                script, 1, self._redis_key(namespace, key), self._encode(value), self._ttl(ttl_seconds),
+            )
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        return WriteResult(written=bool(written))
+
+    async def delete_if_value(self, namespace: str, key: str, value: Any) -> DeleteResult:
+        script = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+        try:
+            deleted = await self._client.eval(script, 1, self._redis_key(namespace, key), self._encode(value))
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        return DeleteResult(deleted=bool(deleted))
+
     async def publish(self, namespace: str, key: str, value: Any) -> int:
         channel = self._redis_key(namespace, key)
         try:
@@ -179,6 +209,7 @@ return 1
         key: str,
         *,
         ttl_seconds: int,
+        blocking_timeout_seconds: float | None = None,
     ) -> AsyncIterator[bool]:
         """Acquire an ownership-safe redis-py lock and renew it while in use."""
 
@@ -191,7 +222,11 @@ return 1
             blocking=False,
         )
         try:
-            acquired = bool(await lock.acquire(blocking=False))
+            acquired = bool(
+                await lock.acquire(blocking=True, blocking_timeout=blocking_timeout_seconds)
+                if blocking_timeout_seconds is not None
+                else await lock.acquire(blocking=False)
+            )
         except RedisError as exc:
             raise self._map_redis_error(exc) from exc
         if not acquired:

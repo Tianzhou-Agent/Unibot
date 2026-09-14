@@ -43,6 +43,7 @@ from tianzhou_agent_platform.core.repository import (
     WORKSPACES_RESOURCE,
     FEEDBACKS_RESOURCE,
     InMemoryRepository,
+    INTERRUPTED_RUN_ERROR,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.errors import StorageValidationError
@@ -50,6 +51,8 @@ from tianzhou_agent_platform.store.models import StoreQuery
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
 repository_metadata = MetaData()
+CONVERSATION_RUN_TTL_SECONDS = 15 * 60
+CONVERSATION_RUN_HEARTBEAT_SECONDS = 30
 
 
 def _record_table(name: str) -> Table:
@@ -115,6 +118,7 @@ class PersistentRepository(InMemoryRepository):
         # Phase four: conversation run reconciliation falls back to the OBS
         # pipeline when a trace is no longer in the in-memory repository.
         self.obs_trace_status_resolver = obs_trace_status_resolver
+        self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
 
     async def initialize(self) -> None:
         await self.stores.mysql.create_tables(repository_metadata)
@@ -551,19 +555,70 @@ class PersistentRepository(InMemoryRepository):
         return sorted(matching, key=lambda item: item.started_at, reverse=True)[:limit]
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
-        acquired = await self.stores.redis.set_if_absent(
-            "conversation-run",
-            conversation_id,
-            {"trace_id": trace_id},
-            ttl_seconds=15 * 60,
-        )
-        if not acquired.written:
-            raise conflict("This conversation already has a running request")
+        async with self.stores.redis.lease("conversation-run-state", conversation_id, ttl_seconds=30) as locked:
+            if not locked:
+                raise conflict("Conversation run state is being updated. Retry the request.")
+            conversation = await self.get_conversation(conversation_id)
+            acquired = await self.stores.redis.set_if_absent(
+                "conversation-run", conversation_id, {"trace_id": trace_id},
+                ttl_seconds=CONVERSATION_RUN_TTL_SECONDS,
+            )
+            if not acquired.written:
+                raise conflict("This conversation already has a running request")
+            try:
+                # Owning the lease proves the previous worker no longer owns this run.
+                if conversation.run_status == "running":
+                    await super().finish_conversation_run(
+                        conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR,
+                    )
+                conversation = await super().start_conversation_run(conversation_id, trace_id)
+            except BaseException:
+                await self.stores.redis.delete_if_value("conversation-run", conversation_id, {"trace_id": trace_id})
+                raise
+            heartbeat = asyncio.create_task(
+                self._renew_conversation_run(conversation_id, trace_id, asyncio.current_task())
+            )
+            self._conversation_run_tasks[(conversation_id, trace_id)] = heartbeat
+            return conversation
+
+    async def _renew_conversation_run(
+        self, conversation_id: str, trace_id: str, owner: asyncio.Task[Any] | None,
+    ) -> None:
         try:
-            return await super().start_conversation_run(conversation_id, trace_id)
-        except Exception:
-            await self.stores.redis.delete("conversation-run", conversation_id)
-            raise
+            while owner is not None and not owner.done():
+                await asyncio.sleep(CONVERSATION_RUN_HEARTBEAT_SECONDS)
+                try:
+                    renewed = await self.stores.redis.refresh_if_value(
+                        "conversation-run", conversation_id, {"trace_id": trace_id},
+                        ttl_seconds=CONVERSATION_RUN_TTL_SECONDS,
+                    )
+                    if renewed.written:
+                        continue
+                except Exception:
+                    pass
+                # Stop execution when ownership cannot be established; do not replay effects.
+                owner.cancel()
+                return
+        finally:
+            if self._conversation_run_tasks.get((conversation_id, trace_id)) is asyncio.current_task():
+                self._conversation_run_tasks.pop((conversation_id, trace_id))
+
+    async def reconcile_conversation_run(self, conversation_id: str) -> Conversation:
+        async with self.stores.redis.lease("conversation-run-state", conversation_id, ttl_seconds=30) as locked:
+            if not locked:
+                return await self.get_conversation(conversation_id)
+            conversation = await self.get_conversation(conversation_id)
+            if conversation.run_status == "running":
+                entry = await self.stores.redis.get("conversation-run", conversation_id)
+                if entry is None:
+                    return await super().finish_conversation_run(
+                        conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR,
+                    )
+        return await super().reconcile_conversation_run(conversation_id)
+
+    async def _has_live_conversation_run(self, conversation: Conversation) -> bool:
+        entry = await self.stores.redis.get("conversation-run", conversation.id)
+        return entry is not None and entry.value == {"trace_id": conversation.active_trace_id}
 
     async def finish_conversation_run(
         self,
@@ -571,10 +626,32 @@ class PersistentRepository(InMemoryRepository):
         *,
         status: str = "idle",
         error: str | None = None,
+        expected_trace_id: str | None = None,
     ) -> Conversation:
-        conversation = await super().finish_conversation_run(conversation_id, status=status, error=error)
-        await self.stores.redis.delete("conversation-run", conversation_id)
-        return conversation
+        local_traces = [key[1] for key in self._conversation_run_tasks if key[0] == conversation_id]
+        trace_id = expected_trace_id or (local_traces[0] if len(local_traces) == 1 else None)
+        heartbeat = self._conversation_run_tasks.get((conversation_id, trace_id)) if trace_id else None
+        try:
+            async with self.stores.redis.lease(
+                "conversation-run-state", conversation_id, ttl_seconds=30, blocking_timeout_seconds=5,
+            ) as locked:
+                if not locked:
+                    raise conflict("Conversation run state is being updated. Retry the request.")
+                current = await self.get_conversation(conversation_id)
+                if trace_id is not None and current.active_trace_id != trace_id:
+                    return current
+                trace_id = trace_id or current.active_trace_id
+                conversation = await super().finish_conversation_run(
+                    conversation_id, status=status, error=error, expected_trace_id=trace_id,
+                )
+                if trace_id is not None:
+                    await self.stores.redis.delete_if_value("conversation-run", conversation_id, {"trace_id": trace_id})
+                return conversation
+        finally:
+            if heartbeat is not None:
+                self._conversation_run_tasks.pop((conversation_id, trace_id), None)
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
 
     async def get_trace(self, trace_id: str) -> TraceRecord:
         try:

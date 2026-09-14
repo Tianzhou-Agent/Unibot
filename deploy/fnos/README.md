@@ -25,4 +25,4 @@ sh deploy/fnos/start.sh
 
 服务数据保存在 Docker 命名卷中。删除 Compose 项目时不要选择删除数据卷，否则会清空数据库、文档和用户代码工作区。
 
-当前飞牛方案使用 CPU 运行 YOLO，并使用 `local` 代码沙箱。它适合受信任的家庭局域网用户，不应直接暴露到公网，也不适合让不可信用户执行脚本。
+当前飞牛方案使用 CPU 运行 YOLO，默认选择 `local` 代码沙箱，但禁止本地执行。仅在所有用户可信时，才可在 `.env` 中设置 `UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL=true`。本地驱动没有操作系统级用户隔离，不适合让不可信用户执行脚本。管理员 ID、远程能力批准来源与 Kubernetes 部署说明见[容器化部署](../../docs/container-deployment.md)。

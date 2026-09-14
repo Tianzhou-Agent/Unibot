@@ -9,7 +9,7 @@ import pytest
 from deepeval.evaluate import assert_test
 from deepeval.metrics import GEval, StepEfficiencyMetric, TaskCompletionMetric, ToolCorrectnessMetric
 from deepeval.models import GPTModel
-from deepeval.test_case import LLMTestCase, SingleTurnParams, ToolCall
+from deepeval.test_case import LLMTestCase, SingleTurnParams, ToolCall, ToolCallParams
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sdk import UnibotClient
@@ -83,7 +83,7 @@ def assert_agent_run(
     *,
     task: str,
     expected_output: str,
-    expected_tools: list[str] | None,
+    expected_tools: list[str] | list[ToolCall] | None,
     criteria: str,
     completion_threshold: float = 0.7,
     efficiency_threshold: float = 0.6,
@@ -97,7 +97,7 @@ def assert_agent_run(
         expected_output=expected_output,
         tools_called=_completed_tools(run.trace),
         expected_tools=(
-            [ToolCall(name=name, input_parameters={}) for name in expected_tools]
+            [ToolCall(name=item) if isinstance(item, str) else item for item in expected_tools]
             if expected_tools is not None
             else None
         ),
@@ -146,6 +146,11 @@ def assert_agent_run(
             ToolCorrectnessMetric(
                 threshold=1,
                 should_exact_match=True,
+                evaluation_params=(
+                    [ToolCallParams.INPUT_PARAMETERS, ToolCallParams.OUTPUT]
+                    if expected_tools and all(isinstance(item, ToolCall) for item in expected_tools)
+                    else []
+                ),
                 model=judge,
                 async_mode=False,
             ),
@@ -161,84 +166,38 @@ def _required(value: str | None, name: str) -> str:
 
 def _completed_tools(trace: dict[str, Any]) -> list[ToolCall]:
     completed_kinds = {"tool.completed", "aina.completed", "builtin.completed"}
-    return [
-        ToolCall(name=str(event["target_id"]), input_parameters={})
+    arguments_by_call = {
+        event["details"]["call_id"]: event["details"]["arguments"]
         for event in trace["events"]
-        if event.get("kind") in completed_kinds and event.get("target_id")
-    ]
+        if event.get("kind") in {"tool.requested", "aina.requested", "builtin.requested"}
+        and "call_id" in event.get("details", {}) and "arguments" in event["details"]
+    }
+    spans_by_call = {
+        span["logical_call_id"]: span
+        for span in trace.get("spans", []) if span.get("logical_call_id")
+    }
+    tools = []
+    for event in trace["events"]:
+        if event.get("kind") not in completed_kinds or not event.get("target_id"):
+            continue
+        details = event.get("details", {})
+        call_id = details.get("call_id")
+        span = spans_by_call.get(call_id, {})
+        tools.append(ToolCall(
+            name=str(event["target_id"]),
+            input_parameters=arguments_by_call.get(call_id, span.get("input")),
+            output=details.get("result", span.get("output")),
+        ))
+    return tools
 
 
 def _deepeval_trace(run: AgentRun) -> dict[str, Any]:
-    steps: list[dict[str, Any]] = []
-    for event in run.trace["events"]:
-        kind = event["kind"]
-        details = event.get("details", {})
-        if kind == "model.completed":
-            tool_call_count = int(details.get("tool_call_count", 0))
-            steps.append(
-                {
-                    "name": (
-                        "Construct the required validated capability call"
-                        if tool_call_count
-                        else "Compose the final user-facing answer"
-                    ),
-                    "type": "model",
-                    "iteration": details.get("iteration"),
-                    "tool_call_count": tool_call_count,
-                    "required": True,
-                    "required_reason": (
-                        "The model must translate the natural-language request into the capability's JSON arguments."
-                        if tool_call_count
-                        else "The model must translate the structured capability result into the final answer."
-                    ),
-                }
-            )
-        elif kind == "routing.scope.activated":
-            steps.append(
-                {
-                    "name": "Route to the matching AINA",
-                    "type": "routing",
-                    "matched_aina": event.get("target_id"),
-                    "required": True,
-                    "required_reason": "The unified agent selected the AINA entrypoint required by the request.",
-                }
-            )
-        elif kind in {"tool.completed", "aina.completed", "builtin.completed"}:
-            target_id = str(event.get("target_id") or "capability")
-            required_reason = "This capability performs the operation requested by the user."
-            if target_id == "request_clarification":
-                required_reason = (
-                    "Only request_clarification can create the required host-rendered interactive form; "
-                    "plain text cannot satisfy a form request."
-                )
-            steps.append(
-                {
-                    "name": f"Execute {target_id}",
-                    "type": event.get("target_type"),
-                    "status": "completed",
-                    "required": True,
-                    "required_reason": required_reason,
-                }
-            )
-        elif kind in {"tool.failed", "aina.failed", "builtin.failed"}:
-            steps.append(
-                {
-                    "name": f"Handle failure from {event.get('target_id')}",
-                    "type": event.get("target_type"),
-                    "status": "failed",
-                    "code": details.get("code"),
-                }
-            )
-        elif kind.startswith("approval."):
-            steps.append(
-                {
-                    "name": kind,
-                    "type": "approval",
-                    "status": event["status"],
-                    "required": True,
-                    "required_reason": "The platform requires approval for this high-risk operation.",
-                }
-            )
+    # Preserve observations, including failures and repeated calls. Whether a step
+    # was necessary is the grader's decision, never an annotation from the agent.
+    steps = [
+        {"name": event["kind"], **event}
+        for event in run.trace["events"]
+    ]
     return {
         "name": "unibot-agent-run",
         "input": run.input,
@@ -246,13 +205,11 @@ def _deepeval_trace(run: AgentRun) -> dict[str, Any]:
         "status": run.trace["status"],
         "iterations": run.response["iterations"],
         "runtime_contract": (
-            "A model call is not a Tool or AINA capability call. A capability workflow requires one model "
-            "step to select the capability and, after execution, one model step to convert its result into a "
-            "user-facing answer. Those are distinct required steps. Routing and capability discovery metadata "
-            "are not remote capability executions. memory.forget and every high-risk capability must pass the "
-            "approval gate before execution; that approval is a mandatory safety step, never optional overhead. "
-            "A host-rendered form can only be produced by request_clarification, and a remote Tool can only run "
-            "after the model constructs schema-valid JSON arguments."
+            "Events and spans are two views of the same run, linked by call ID; do not count them twice. "
+            "Requested and completed events describe one attempt. Routing activates a capability scope. "
+            "Evaluate necessity, repeated attempts, arguments, results, and failures against the user's task. "
+            "Approval is a platform prerequisite for high-risk operations, but the operation itself may be unnecessary."
         ),
         "steps": steps,
+        "spans": run.trace.get("spans", []),
     }

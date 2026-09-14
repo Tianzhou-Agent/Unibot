@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -40,6 +41,7 @@ from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.base import Usage
@@ -61,6 +63,7 @@ from tianzhou_agent_platform.core.context_compression import (
     active_history,
     estimate_request_tokens,
     plan_compression,
+    request_input_budget,
     serialized_state,
     summary_message,
     summary_request,
@@ -144,6 +147,7 @@ class AgentState(TypedDict, total=False):
     final_status: Literal["completed", "approval_required", "failed"] | None
     approval: ApprovalRecord | None
     call_counts: dict[str, int]
+    retryable_calls: set[str]
     widgets: list[WidgetDefinition]
     memory_context: list[MemoryRecord]
     base_system_prompt: str
@@ -177,6 +181,7 @@ class AgentRuntime:
         sandbox_service: SandboxService | None = None,
         task_service: TaskService | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
+        auth_enforced: bool = False,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -187,6 +192,7 @@ class AgentRuntime:
         self.sandbox_service = sandbox_service
         self.task_service = task_service
         self.checkpointer = checkpointer
+        self.auth_enforced = auth_enforced
         graph = StateGraph(AgentState, context_schema=AgentContext)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
@@ -201,6 +207,8 @@ class AgentRuntime:
 
     @staticmethod
     def _after_model(state: AgentState) -> str:
+        if state.get("final_status") is not None:
+            return "end"
         last = state["messages"][-1]
         return "tools" if last.get("tool_calls") else "end"
 
@@ -224,6 +232,22 @@ class AgentRuntime:
             messages_with_tasks,
             active_function_names=set(capabilities),
         )
+        input_budget = request_input_budget(current_context_window_tokens(self.settings.context_window_tokens))
+        input_tokens = estimate_request_tokens(provider_messages, state["tool_definitions"])
+        if input_tokens > input_budget:
+            content = (
+                f"The conversation exceeds the model context budget ({input_tokens} estimated input tokens; "
+                f"{input_budget} available after reserving space for the answer). "
+                "The original messages and tool results were preserved. Narrow the request or use a model "
+                "with a larger context window to continue."
+            )
+            await self._emit(event_sink, {"type": "error", "code": "CONTEXT_BUDGET_EXCEEDED", "source": "model"})
+            return {
+                **state,
+                "messages": [*state["messages"], {"role": "assistant", "content": content}],
+                "final_content": content,
+                "final_status": "failed",
+            }
         tool_choice: dict[str, Any] | str | None = None
         if iterations == 1 and state.get("forced_function"):
             tool_choice = {
@@ -241,6 +265,34 @@ class AgentRuntime:
         )
 
         message = result.message
+        if result.finish_reason in {"length", "max_tokens"}:
+            notice = "[Incomplete response: the model reached its output limit. Please ask it to continue.]"
+            partial = message.get("content") or ""
+            messages = [*state["messages"], message]
+            if message.get("tool_calls"):
+                for call in message["tool_calls"]:
+                    await self._append_tool_error(
+                        state, event_sink, messages,
+                        call_id=str(call.get("id") or ""),
+                        name=str((call.get("function") or {}).get("name") or ""),
+                        code="MODEL_OUTPUT_TRUNCATED",
+                        message="The model response was incomplete; this tool call was not executed.",
+                    )
+                messages.append({"role": "assistant", "content": notice})
+            else:
+                messages[-1] = {**message, "content": f"{partial}\n\n{notice}" if partial else notice}
+            await self._emit(event_sink, {"type": "message.delta", "delta": f"\n\n{notice}"})
+            await self._emit(event_sink, {"type": "error", "code": "MODEL_OUTPUT_TRUNCATED", "source": "model"})
+            return {
+                **state,
+                "messages": messages,
+                "iterations": iterations,
+                "usage_input": state.get("usage_input", 0) + result.input_tokens,
+                "usage_output": state.get("usage_output", 0) + result.output_tokens,
+                "usage_estimated": state.get("usage_estimated", False) or result.usage_estimated,
+                "final_content": f"{partial}\n\n{notice}" if partial else notice,
+                "final_status": "failed",
+            }
         if not message.get("content") and not message.get("tool_calls"):
             message = {"role": "assistant", "content": "The model returned an empty response."}
             final_status: Literal["completed", "approval_required", "failed"] = "failed"
@@ -323,6 +375,7 @@ class AgentRuntime:
             }
 
         call_counts = dict(state.get("call_counts", {}))
+        retryable_calls = set(state.get("retryable_calls", set()))
         widgets = list(state.get("widgets", []))
         async_task_message: str | None = None
         tool_failed = False
@@ -379,8 +432,8 @@ class AgentRuntime:
 
             normalized_arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
             signature = hashlib.sha256(f"{name}:{normalized_arguments}".encode()).hexdigest()
-            call_counts[signature] = call_counts.get(signature, 0) + 1
-            if call_counts[signature] > 1:
+            attempts = call_counts.get(signature, 0)
+            if attempts and (signature not in retryable_calls or attempts >= 3):
                 tool_failed = True
                 await self._append_tool_error(
                     state,
@@ -392,6 +445,8 @@ class AgentRuntime:
                     message="The same capability call was already attempted in this run.",
                 )
                 continue
+            call_counts[signature] = attempts + 1
+            retryable_calls.discard(signature)
 
             try:
                 validate_value(
@@ -493,6 +548,14 @@ class AgentRuntime:
                         )
             except PlatformError as exc:
                 tool_failed = True
+                retryable = (
+                    exc.retryable
+                    and capability.kind == "tool"
+                    and cast(ToolRecord, capability.value).side_effect_level == "none"
+                    and call_counts[signature] < 3
+                )
+                if retryable:
+                    retryable_calls.add(signature)
                 await self._append_tool_error(
                     state,
                     event_sink,
@@ -502,6 +565,7 @@ class AgentRuntime:
                     code=exc.code,
                     message=exc.message,
                     capability=capability,
+                    retryable=retryable,
                 )
             except (TypeError, ValueError) as exc:
                 tool_failed = True
@@ -526,6 +590,7 @@ class AgentRuntime:
             **state,
             "messages": messages,
             "call_counts": call_counts,
+            "retryable_calls": retryable_calls,
             "approval": None,
             "widgets": widgets,
             "tool_definitions": [item.llm_definition() for item in next_capabilities.values()],
@@ -639,8 +704,6 @@ class AgentRuntime:
             widgets.extend(produced_widgets)
         content = json.dumps(result_payload, ensure_ascii=False, default=str)
         result_size_bytes = len(content.encode("utf-8"))
-        if len(content) > 50_000:
-            content = f"{content[:50_000]}\n[tool output truncated]"
         messages.append(
             {
                 "role": "tool",
@@ -724,6 +787,7 @@ class AgentRuntime:
             "content": await self._system_prompt(
                 selected_aina,
                 memory_context=state.get("memory_context") or None,
+                conversation=conversation,
             ),
         }
         state["base_system_prompt"] = messages[0]["content"]
@@ -749,8 +813,11 @@ class AgentRuntime:
         message: str,
         capability: Capability | None = None,
         recovery: dict[str, Any] | None = None,
+        retryable: bool = False,
     ) -> None:
-        instruction = "The capability did not complete. Do not claim success; retry or report the failure."
+        instruction = "The capability did not complete. Do not claim success; report the failure."
+        if retryable:
+            instruction = "The read-only capability failed transiently. You may retry the same call; do not claim success."
         if recovery is not None:
             instruction = (
                 f"Activate AINA {recovery['owner_aina_id']} by calling "
@@ -761,7 +828,7 @@ class AgentRuntime:
             "error": {
                 "code": code,
                 "message": message,
-                "retryable": code in {"TIMEOUT", "RATE_LIMITED"},
+                "retryable": retryable,
             },
             "instruction": instruction,
         }
@@ -835,6 +902,13 @@ class AgentRuntime:
                     ui_context=request.ui_context,
                     event_sink=event_sink,
                 )
+        except asyncio.CancelledError:
+            await self._cleanup_failed_run(
+                conversation.id,
+                trace_id,
+                error="The agent run was interrupted. Please retry the request.",
+            )
+            raise
         except PlatformError as exc:
             await self._cleanup_failed_run(
                 conversation.id,
@@ -857,6 +931,7 @@ class AgentRuntime:
             conversation.id,
             status=run_status,
             error=response.content if response.status == "failed" else None,
+            expected_trace_id=trace_id,
         )
         return response
 
@@ -874,6 +949,7 @@ class AgentRuntime:
                     conversation_id,
                     status="failed",
                     error=error,
+                    expected_trace_id=trace_id,
                 )
         except Exception:
             logger.exception(
@@ -924,7 +1000,7 @@ class AgentRuntime:
                 forced_capability=requested_capability,
                 event_sink=event_sink,
                 capabilities={selected.function_name: selected},
-                system_prompt=await self._system_prompt(memory_context=memory_context),
+                system_prompt=await self._system_prompt(memory_context=memory_context, conversation=conversation),
             )
 
         if preferred_aina_id is not None:
@@ -957,7 +1033,7 @@ class AgentRuntime:
             trace_id=trace_id,
             event_sink=event_sink,
             capabilities=await self._entry_capabilities(conversation),
-            system_prompt=await self._system_prompt(memory_context=memory_context),
+            system_prompt=await self._system_prompt(memory_context=memory_context, conversation=conversation),
             memory_context=memory_context,
         )
 
@@ -979,7 +1055,7 @@ class AgentRuntime:
             forced_capability=f"aina:{selected.capability_id}" if direct and remote else None,
             event_sink=event_sink,
             capabilities=capabilities,
-            system_prompt=await self._system_prompt(aina, memory_context=memory_context),
+            system_prompt=await self._system_prompt(aina, memory_context=memory_context, conversation=conversation),
             memory_context=memory_context,
         )
 
@@ -1010,11 +1086,12 @@ class AgentRuntime:
                     approved_call_ids={str(call.get("id")) for call in approval.tool_calls},
                     resume=True,
                 )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await self.repository.finish_conversation_run(
                 conversation.id,
                 status="failed",
                 error="The approved agent run failed.",
+                expected_trace_id=approval.trace_id,
             )
             raise
         await self.repository.set_approval_status(approval_id, "executed")
@@ -1022,6 +1099,7 @@ class AgentRuntime:
             conversation.id,
             status="idle" if response.status == "completed" else response.status,
             error=response.content if response.status == "failed" else None,
+            expected_trace_id=approval.trace_id,
         )
         return response
 
@@ -1081,14 +1159,20 @@ class AgentRuntime:
         usage = [0, 0]
 
         async def compress() -> tuple[list[dict[str, Any]], int, int]:
+            compression_messages = summary_request(plan)
+            input_budget = request_input_budget(current_context_window_tokens(self.settings.context_window_tokens))
+            if estimate_request_tokens(compression_messages) > input_budget:
+                raise ValueError("The complete transcript exceeds the compression model input budget")
             result = await self.llm.complete(
-                messages=summary_request(plan),
+                messages=compression_messages,
                 tools=[],
                 trace_id=trace_id,
                 context_type="compression",
                 context_id=conversation.id,
             )
             usage[:] = [result.input_tokens, result.output_tokens]
+            if result.finish_reason in {"length", "max_tokens"} or result.message.get("tool_calls"):
+                raise ValueError("The context compression model returned an incomplete summary")
             raw_summary = result.message.get("content")
             summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
             if not summary:
@@ -1142,7 +1226,7 @@ class AgentRuntime:
             capabilities = await self._available_capabilities(conversation)
         recovery_capabilities = await self._available_capabilities(conversation)
         forced_function = self._resolve_forced_capability(forced_capability, capabilities)
-        resolved_system_prompt = system_prompt or await self._system_prompt()
+        resolved_system_prompt = system_prompt or await self._system_prompt(conversation=conversation)
         tool_definitions = [item.llm_definition() for item in capabilities.values()]
         messages, compression_input_tokens, compression_output_tokens = await self._prepare_context(
             conversation=conversation,
@@ -1168,6 +1252,7 @@ class AgentRuntime:
             "usage_output": compression_output_tokens,
             "usage_estimated": False,
             "call_counts": {},
+            "retryable_calls": set(),
             "approval": None,
             "final_content": "",
             "final_status": None,
@@ -1240,6 +1325,7 @@ class AgentRuntime:
         selected_aina: AinaRecord | None = None,
         *,
         memory_context: list[MemoryRecord] | None = None,
+        conversation: Conversation | None = None,
     ) -> str:
         if selected_aina is not None:
             manifest = selected_aina.manifest
@@ -1283,7 +1369,16 @@ class AgentRuntime:
                 sections.append(_memory_context_block(memory_context))
             return "\n\n".join(sections)
 
-        platform_skills = [item for item in await self.repository.list_skills() if item.status == "published"]
+        platform_skills = [
+            item for item in await self.repository.list_skills()
+            if item.status == "published" and capability_visible(
+                item,
+                user_id=conversation.user_id if conversation else "",
+                tenant_id=conversation.tenant_id if conversation else "",
+                auth_enforced=self.auth_enforced,
+                is_admin=bool(conversation and self.settings.is_platform_admin(user_id=conversation.user_id)),
+            )
+        ]
         sections = [
             self.settings.system_prompt,
             _platform_tool_guidance(),
@@ -1324,10 +1419,16 @@ class AgentRuntime:
             limit=8,
         )
 
-    async def _system_capabilities(self) -> dict[str, Capability]:
+    async def _system_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         capabilities: dict[str, Capability] = {}
         for tool in await self.repository.list_tools():
-            if tool.status != "published":
+            if tool.status != "published" or not capability_visible(
+                tool,
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+                auth_enforced=self.auth_enforced,
+                is_admin=self.settings.is_platform_admin(user_id=conversation.user_id),
+            ):
                 continue
             function_name = _function_name("tool", tool.tool_id)
             capabilities[function_name] = Capability(
@@ -1514,7 +1615,7 @@ class AgentRuntime:
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         return {
-            **await self._fallback_capabilities(),
+            **await self._fallback_capabilities(conversation),
             **await self._available_aina_capabilities(conversation),
         }
 
@@ -1522,7 +1623,7 @@ class AgentRuntime:
         """Expose direct host tools and only conversational AINA entrypoints on the first model turn."""
         aina_capabilities = await self._available_aina_capabilities(conversation)
         return {
-            **await self._system_capabilities(),
+            **await self._system_capabilities(conversation),
             **{
                 function_name: capability
                 for function_name, capability in aina_capabilities.items()
@@ -1530,10 +1631,10 @@ class AgentRuntime:
             },
         }
 
-    async def _fallback_capabilities(self) -> dict[str, Capability]:
+    async def _fallback_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         """Keep stable built-ins resolvable when their calls remain in conversation history."""
         return {
-            **await self._system_capabilities(),
+            **await self._system_capabilities(conversation),
             **self._memory_capabilities(),
             **self._document_capabilities(),
             **self._sandbox_capabilities(),
@@ -1594,7 +1695,7 @@ class AgentRuntime:
         }
         task_capabilities = {
             function_name: capability
-            for function_name, capability in (await self._system_capabilities()).items()
+            for function_name, capability in (await self._system_capabilities(conversation)).items()
             if capability.capability_id in TASK_TOOL_IDS
         }
         if aina.manifest.aina.id == UNIBOT_MEMORY_ID:
@@ -1615,14 +1716,14 @@ class AgentRuntime:
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected, **task_capabilities, **switch_capabilities}
         if declared_tool_ids:
-            for function_name, capability in (await self._system_capabilities()).items():
+            for function_name, capability in (await self._system_capabilities(conversation)).items():
                 if capability.kind == "tool" and capability.capability_id in declared_tool_ids:
                     capabilities[function_name] = replace(
                         capability,
                         owner_aina_id=aina.manifest.aina.id,
                     )
         if any(item.kind == "form" for item in aina.manifest.capabilities.ui):
-            for function_name, capability in (await self._system_capabilities()).items():
+            for function_name, capability in (await self._system_capabilities(conversation)).items():
                 if capability.capability_id == REQUEST_CLARIFICATION_TOOL_ID:
                     capabilities[function_name] = capability
         return capabilities, aina

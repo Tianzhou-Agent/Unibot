@@ -10,7 +10,28 @@ from langchain_core.messages import AIMessage
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
 from tianzhou_agent_platform.core.llm import OpenAICompatibleClient, _response_from_result, _result_from_message
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.model_settings import ModelRuntimeConfig, use_model_runtime
+
+
+@pytest.mark.asyncio
+async def test_model_output_reserve_is_sent_and_oversized_requests_are_rejected_before_network():
+    requests = []
+
+    def provider(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop",
+            "message": {"role": "assistant", "content": "ok"}}]})
+
+    settings = AgentSettings(_env_file=None, llm_base_url="https://provider.invalid/v1",
+                             llm_api_key="test", llm_model="test", context_window_tokens=4096)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
+        client = OpenAICompatibleClient(settings, http_client)
+        await client.complete(messages=[{"role": "user", "content": "Hello"}], tools=[])
+        assert requests[0]["max_completion_tokens"] == 1024
+        with pytest.raises(PlatformError, match="context budget"):
+            await client.complete(messages=[{"role": "user", "content": "x" * 16_000}], tools=[])
+        assert len(requests) == 1
 
 
 @pytest.mark.asyncio

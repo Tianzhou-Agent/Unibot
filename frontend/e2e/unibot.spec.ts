@@ -465,7 +465,10 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     }
     if (method === "POST" && path === "/conversations") {
       const payload = request.postDataJSON() as JsonObject;
+      let sequence = 1;
+      while (state.conversations.some((item) => item.id === `conv-e2e-${sequence}`)) sequence += 1;
       const created = conversation({
+        id: `conv-e2e-${sequence}`,
         title: payload.title,
         category: payload.category,
         user_id: payload.user_id ?? "anonymous",
@@ -920,6 +923,25 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       });
     }
     if (method === "GET" && path === "/admin/conversations") return json(route, state.conversations);
+    if (method === "GET" && path === "/admin/users") {
+      const userIds = new Set(state.conversations.map((record) => String(record.user_id)));
+      const query = url.searchParams.get("query") ?? "";
+      return json(route, { items: [...userIds].filter((id) => id.includes(query)).map((id) => ({
+        id, name: `E2E 用户 ${id}`, email: `${id}@example.com`, tenant_id: "default", avatar_url: null, created_at: NOW,
+      })), has_more: false });
+    }
+    if (method === "GET" && path === "/admin/obs/traces") {
+      const userId = url.searchParams.get("user_id");
+      const records = Object.values(state.obsSessions).flatMap((session) => session.traces as JsonObject[]);
+      return json(route, { items: records.filter((record) => record.user_id === userId), has_more: false });
+    }
+    if (method === "GET" && /^\/admin\/obs\/traces\/[^/]+$/.test(path)) {
+      const traceId = decodeURIComponent(path.split("/")[4]);
+      const userId = url.searchParams.get("user_id");
+      const detail = Object.values(state.obsSessions).find((session) => (session.traces as JsonObject[])
+        .some((record) => record.trace_id === traceId && record.user_id === userId));
+      return json(route, detail ?? null);
+    }
     if (method === "GET" && path === "/admin/traces") return json(route, []);
     if (method === "GET" && path === "/admin/llm-calls") return json(route, []);
     if (method === "GET" && path === "/admin/operations/overview") {
@@ -1100,6 +1122,207 @@ test("FE-E2E-001 新建会话并展示流式回复", async ({ page }) => {
   await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 });
 
+for (const [surface, path] of [
+  ["Chat", "/chat/conv-e2e-1"],
+  ["Canvas", "/canvas/unibot-documents?conversation=conv-e2e-1"],
+]) {
+  test(`FE-E2E-COPY-001 ${surface} 复制指定回复并保留 Markdown`, async ({ page }, testInfo) => {
+    const replies = [
+      "## 发布计划 🚀\n\n- **负责人**：林晨\n- [x] 测试通过\n\n```python\nprint('你好，Unibot')\n```\n",
+      "第二条独立回复。",
+    ];
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await installMockApi(page, {
+      conversations: [conversation({
+        messages: replies.map((content, index) => ({
+          id: `msg-copy-${index}`,
+          role: "assistant",
+          content,
+          content_type: "text",
+          widgets: [],
+          created_at: NOW,
+        })),
+      })],
+    });
+    await page.goto(path);
+
+    const copyButtons = page.getByRole("button", { name: "复制", exact: true });
+    await expect(copyButtons).toHaveCount(2);
+    await copyButtons.nth(0).click();
+    // Windows 剪贴板会将换行转换为 CRLF。
+    await expect.poll(() => page.evaluate(async () => (
+      (await navigator.clipboard.readText()).replace(/\r\n/g, "\n")
+    ))).toBe(replies[0]);
+    await expect(page.getByRole("status").filter({ hasText: "已复制" })).toHaveCount(1);
+    await expect(page.getByRole("status").filter({ hasText: "已复制" })).toHaveCount(0);
+
+    await copyButtons.nth(1).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(replies[1]);
+    await expect(page.getByRole("status").filter({ hasText: "已复制" })).toHaveCount(1);
+    await page.screenshot({ path: testInfo.outputPath("reply-copied.png") });
+  });
+}
+
+test("FE-E2E-COPY-002 复制失败时提示并允许重试", async ({ page }) => {
+  const content = "浏览器拒绝复制后，仍可重试。";
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await installMockApi(page, {
+    conversations: [conversation({
+      messages: [{
+        id: "msg-copy-retry",
+        role: "assistant",
+        content,
+        content_type: "text",
+        widgets: [],
+        created_at: NOW,
+      }],
+    })],
+  });
+  await page.goto("/chat/conv-e2e-1");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError")),
+    });
+  });
+
+  const copy = page.getByRole("button", { name: "复制", exact: true });
+  await copy.click();
+  await expect(page.getByRole("status")).toHaveText("复制失败，请重试或手动选择文字");
+  await expect(copy).toBeEnabled();
+  await expect(page.getByText("已复制", { exact: true })).toHaveCount(0);
+
+  await page.evaluate(() => Reflect.deleteProperty(navigator.clipboard, "writeText"));
+  await copy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(content);
+  await expect(page.getByRole("status")).toHaveText("已复制");
+});
+
+for (const [surface, path, inputName, sendName] of [
+  ["Chat", "/chat", "消息", "发送消息"],
+  ["Canvas", "/canvas/unibot-documents", "画布消息", "发送画布消息"],
+]) {
+  for (const failurePoint of ["create", "stream"]) {
+    test(`FE-E2E-DRAFT-001 ${surface} retains and retries a draft after ${failurePoint} failure`, async ({ page }) => {
+      const state = await installMockApi(page);
+      let failNext = true;
+      await page.route(failurePoint === "create" ? "**/api/conversations" : "**/api/chat/stream", async (route) => {
+        if (route.request().method() === "POST" && failNext) {
+          failNext = false;
+          return json(route, { error: { message: "暂时无法发送，请重试" } }, 503);
+        }
+        return route.fallback();
+      });
+      await page.goto(path);
+      const input = page.getByRole("textbox", { name: inputName, exact: true });
+      const draft = "  保留我的草稿\n包括换行和 emoji 🧪  ";
+      await input.fill(draft);
+      await page.getByRole("button", { name: sendName, exact: true }).click();
+      await expect(page.getByRole("alert")).toHaveText("发送未完成，草稿已保留，可重试。");
+      await expect(input).toBeEnabled();
+      await expect(input).toHaveValue(draft);
+      await page.getByRole("button", { name: sendName, exact: true }).click();
+      await expect(input).toHaveValue("");
+      await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+      expect(state.lastStreamPayload?.message).toBe(draft.trim());
+      expect(state.conversations).toHaveLength(1);
+    });
+  }
+
+  test(`FE-E2E-IME-001 ${surface} confirms composition without sending and preserves Enter shortcuts`, async ({ page }) => {
+    const state = await installMockApi(page);
+    await page.goto(path);
+    const input = page.getByRole("textbox", { name: inputName, exact: true });
+    await input.fill("中文确认");
+    await input.dispatchEvent("compositionstart");
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13 });
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveValue("中文确认");
+    await input.dispatchEvent("compositionend");
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
+    await expect(input).toBeEnabled();
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229 });
+    await expect(input).toBeEnabled();
+    await input.press("End");
+    await input.press("Shift+Enter");
+    await input.pressSequentially("继续");
+    await expect(input).toHaveValue("中文确认\n继续");
+    expect(state.conversations).toHaveLength(0);
+    expect(state.lastStreamPayload).toBeNull();
+    await input.press("Enter");
+    await expect(input).toHaveValue("");
+    await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+    expect(state.lastStreamPayload?.message).toBe("中文确认\n继续");
+  });
+}
+
+test("FE-E2E-DRAFT-002 a completed message stays sent if its title update fails", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.route("**/api/conversations/*", (route) => route.request().method() === "PATCH"
+    ? json(route, { error: { message: "标题更新暂时失败" } }, 503)
+    : route.fallback());
+  await page.goto("/chat");
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  await input.fill("已经完成的消息");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(state.lastStreamPayload?.message).toBe("已经完成的消息");
+});
+
+test("FE-E2E-REGISTRY-001 ordinary authenticated users can browse but cannot manage the registry", async ({ page }) => {
+  await installMockApi(page);
+  await page.route("**/api/auth/config", (route) => json(route, { auth_required: true, registration_enabled: true, github_enabled: false }));
+  await page.route("**/api/auth/me", (route) => json(route, { user: {
+    id: "ordinary-user", name: "普通用户", email: "ordinary@example.com", tenant_id: "default",
+    is_admin: false, providers: ["password"], avatar_url: null,
+  } }));
+  await page.goto("/plugin");
+  await expect(page.getByText("注册和删除能力定义需要管理员权限。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^注册/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^删除 / })).toHaveCount(0);
+});
+
+test("FE-E2E-MOBILE-001 phone navigation overlays content and both send buttons fit", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installMockApi(page);
+  await page.goto("/chat");
+  await expect(page.getByLabel("快捷导航", { exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "对话列表" })).toHaveCount(0);
+  const mainWidth = await page.locator("main").evaluate((element) => element.getBoundingClientRect().width);
+  await page.getByRole("button", { name: "展开导航" }).click();
+  await expect(page.getByRole("navigation", { name: "对话列表" })).toBeVisible();
+  expect(await page.locator("main").evaluate((element) => element.getBoundingClientRect().width)).toBe(mainWidth);
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("快捷导航", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "展开导航" }).click();
+  await page.getByRole("button", { name: "关闭导航" }).click({ position: { x: 370, y: 200 } });
+  await expect(page.getByLabel("快捷导航", { exact: true })).toBeVisible();
+
+  for (const [path, inputName, sendName] of [
+    ["/chat", "消息", "发送消息"],
+    ["/canvas/unibot-documents", "画布消息", "发送画布消息"],
+  ]) {
+    await page.goto(path);
+    if (inputName === "画布消息") await page.getByRole("button", { name: "显示对话" }).click();
+    const input = page.getByRole("textbox", { name: inputName, exact: true });
+    await input.fill("手机上发送");
+    const send = page.getByRole("button", { name: sendName, exact: true });
+    const box = await send.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+    await send.click();
+    await expect(input).toHaveValue("");
+    await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByRole("navigation", { name: "对话列表" })).toBeVisible();
+  await expect(page.getByLabel("快捷导航", { exact: true })).toHaveCount(0);
+});
+
 test("FE-E2E-001W Demo · 场景说明：进入工作区并直接发起任务", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/chat");
@@ -1200,7 +1423,7 @@ test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ pa
 });
 
 test("FE-E2E-001WAA 创建工作区期间切换用户不会写入旧 actor 响应", async ({ page }) => {
-  const state = await installMockApi(page, { workspaceCreateDelayMs: 300 });
+  const state = await installMockApi(page, { workspaceCreateDelayMs: 1000 });
   await page.goto("/chat");
   await page.getByRole("button", { name: "创建工作区", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
@@ -1208,7 +1431,8 @@ test("FE-E2E-001WAA 创建工作区期间切换用户不会写入旧 actor 响�
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
   await expect.poll(() => state.lastWorkspaceCreatePayload?.user_id).toBe("anonymous");
 
-  await page.getByRole("button", { name: "切换身份，当前普通用户" }).evaluate((button: HTMLButtonElement) => button.click());
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+  await page.getByRole("menuitem", { name: "切换为管理员", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
   await expect.poll(() => state.lastWorkspaceListScope?.user_id).toBe("admin-zhou-ran");
   await expect(dialog.getByText("当前用户已切换，请重新创建工作区。", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/chat$/);
@@ -1774,24 +1998,21 @@ test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭�
   expect(state.ainaProjects).toHaveLength(0);
 });
 
-test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
+test("FE-E2E-004 管理员按用户查看运行摘要及 Trace I/O", async ({ page }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
   await installMockApi(page, {
     conversations: [conversation()],
     obsSessions: { "conv-e2e-1": successfulObsSession("conv-e2e-1") },
   });
-  await page.goto("/admin/observability");
+  await page.goto("/admin/observability?userId=anonymous");
 
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("运行统计").getByText("3", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "调试模式已关闭" })).toBeVisible();
-  await page.getByRole("button", { name: "开启", exact: true }).click();
+  await expect(page.getByLabel("用户调用统计").getByText("3", { exact: true })).toBeVisible();
 
-  await expect(page.getByText("trace-e2e-1", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "复制 Trace ID trace-e2e-1", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
-  await page.getByText("trace-e2e-1", { exact: true }).click();
+  await expect(page.getByLabel("Trace 列表").getByText(OBS_TRACE_ID, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: `复制 Trace ID ${OBS_TRACE_ID}`, exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(OBS_TRACE_ID);
   await expect(page.getByRole("button", { name: "调用链", exact: true })).toBeVisible();
   const spanTree = page.getByLabel("Span 调用树");
   await expect(spanTree.getByText("agent.run", { exact: true })).toBeVisible();
@@ -1808,16 +2029,16 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await spanTree.getByText("demo.lookup", { exact: true }).click();
   await expect(spanTree.getByLabel("demo.lookup 输入")).toContainText("Unibot");
   await expect(spanTree.getByLabel("demo.lookup 输出")).toContainText("工具返回正常");
+  await page.getByRole("button", { name: "复制 Conversation ID", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
   await page.getByRole("button", { name: "模型请求 1", exact: true }).click();
-  await expect(page.getByRole("button", { name: "已有会话 1 Trace conv-e2e-1", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Trace 列表").getByText("租户 default · 会话 conv-e2e-1", { exact: true })).toBeVisible();
   const modelRequestList = page.getByLabel("当前 Trace 的模型请求");
   await expect(modelRequestList.getByRole("button", {
     name: "请求 1 成功 debug-model 129 ms 120 Token",
     exact: true,
   })).toBeVisible();
   await expect(page.getByText("总耗时 129 ms · 120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "复制 Conversation ID conv-e2e-1", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
   await expect(page.getByRole("heading", { name: OBS_MODEL_SPAN_ID, exact: true })).toBeVisible();
   const requestJson = page.getByLabel("模型请求 JSON");
   await expect(requestJson).toContainText("排查模型调用");
@@ -1832,30 +2053,30 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await expect(page.getByLabel("模型响应 JSON")).toContainText("模型返回正常");
 });
 
-test("FE-E2E-004A 管理员按目标会话加载且保留无 OBS 数据的会话组", async ({ page }) => {
+test("FE-E2E-004A 管理员可选择无 OBS 数据的用户并通过链接加载目标 Trace", async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("unibot:mock-role", "admin");
     window.localStorage.setItem("unibot:debug-mode", "true");
   });
   await installMockApi(page, {
     conversations: [
-      conversation({ id: "conv-empty", title: "旧会话无 OBS" }),
+      conversation({ id: "conv-empty", user_id: "empty-user", title: "旧会话无 OBS" }),
       conversation({ id: "conv-loaded", title: "目标会话" }),
     ],
     obsSessions: { "conv-loaded": successfulObsSession("conv-loaded") },
   });
 
   await page.goto("/admin/observability");
-
+  await page.getByLabel("用户列表").getByRole("button", { name: /E2E 用户 empty-user/ }).click();
   const traceList = page.getByLabel("Trace 列表");
-  await expect(traceList.getByText("旧会话无 OBS", { exact: true })).toBeVisible();
-  await expect(traceList.getByText("目标会话", { exact: true })).toBeVisible();
-  await traceList.getByRole("button", { name: /目标会话 0 Trace conv-loaded/ }).click();
-  await expect(traceList.getByText("trace-e2e-1", { exact: true })).toBeVisible();
+  await expect(traceList.getByText("当前时间范围内没有调用记录。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "关闭用户观测抽屉" }).click();
+  await expect(page.getByLabel("用户列表").getByRole("button", { name: /E2E 用户 empty-user/ })).toBeVisible();
 
-  await page.goto("/admin/observability?sessionId=conv-loaded");
-  await expect(traceList.getByText("trace-e2e-1", { exact: true })).toBeVisible();
-  await expect(traceList.getByRole("button", { name: /目标会话 1 Trace conv-loaded/ })).toHaveAttribute("aria-expanded", "true");
+  await page.goto(`/admin/observability?userId=anonymous&traceId=${OBS_TRACE_ID}`);
+  await expect(traceList.getByText(OBS_TRACE_ID, { exact: true })).toBeVisible();
+  await expect(traceList.getByText("租户 default · 会话 conv-loaded", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Span 调用树").getByText("model.complete", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ page }) => {
@@ -2196,7 +2417,7 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await page.getByRole("link", { name: "运营", exact: true }).click();
   await expect(page.getByRole("heading", { name: "运营增长", exact: true })).toBeVisible();
   await expect(page.getByLabel("运营核心指标").getByText("2", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("document-assistant", { exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "document-assistantv1.0.0", exact: true })).toBeVisible();
   await expect(page.getByText("权限用户分母尚未接入", { exact: true })).toBeVisible();
   await expect(page.getByText("Mock 数据", { exact: true })).toHaveCount(0);
 });
@@ -2684,7 +2905,7 @@ test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page 
 
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("只属于进行中会话的问题");
   await page.getByRole("button", { name: "发送消息" }).click();
-  await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
+  await expect(main.getByRole("paragraph").filter({ hasText: "只属于进行中会话的问题" })).toBeVisible();
 
   await page.getByTestId("conversation-row-conv-other").click();
   await expect(page).toHaveURL(/\/chat\/conv-other$/);
@@ -2744,7 +2965,7 @@ test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async (
 
   await page.getByRole("textbox", { name: "画布消息" }).fill("只属于文档 Canvas 的问题");
   await page.getByRole("button", { name: "发送画布消息" }).click();
-  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
+  await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
 
   await page.getByRole("button", { name: "切换到记忆", exact: true }).click();
   await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-canvas-streaming$/);

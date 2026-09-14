@@ -58,6 +58,8 @@ export default function ChatModePage() {
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
+  const [composerVersion, setComposerVersion] = useState(0);
+  const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
   const [streamText, setStreamText] = useState("");
   const [activity, setActivity] = useState<string | null>(null);
@@ -174,7 +176,7 @@ export default function ChatModePage() {
       if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
       setError(apiErrorMessage(loadError));
     } finally {
-      if (!silent && requestId === loadRequestRef.current) setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, []);
 
@@ -184,6 +186,10 @@ export default function ChatModePage() {
       && localRunWorkspaceIdRef.current === routeWorkspaceId
       && localRunConversationIdRef.current === conversationId,
     );
+    if (composerConversationIdRef.current !== (conversationId ?? null)) {
+      composerConversationIdRef.current = conversationId ?? null;
+      setComposerVersion((current) => current + 1);
+    }
     setConversation((current) => (
       current && current.id === conversationId && (current.workspace_id ?? null) === routeWorkspaceId ? current : null
     ));
@@ -222,6 +228,7 @@ export default function ChatModePage() {
 
   useEffect(() => {
     const reset = () => {
+      setComposerVersion((current) => current + 1);
       runGenerationRef.current += 1;
       streamAbortRef.current?.abort();
       streamAbortRef.current = null;
@@ -289,6 +296,7 @@ export default function ChatModePage() {
         setConversation(targetConversation);
         setTitleDraft(targetConversation.title);
         runConversationId = targetConversation.id;
+        composerConversationIdRef.current = targetConversation.id;
         localRunConversationIdRef.current = targetConversation.id;
         localRunWorkspaceIdRef.current = routeWorkspaceId;
         activeConversationIdRef.current = targetConversation.id;
@@ -347,16 +355,18 @@ export default function ChatModePage() {
         .find((action) => action.kind === "open_aina" && action.aina_id);
       if (openAction?.aina_id) {
         await openAina(openAction.aina_id, completed.conversation_id);
-        return;
+        return true;
       }
       if (conversationId !== completed.conversation_id) {
         navigate(workspaceChatPath(routeWorkspaceId, completed.conversation_id), { replace: true });
       }
       await loadConversation(completed.conversation_id);
+      return true;
     } catch (sendError) {
       if (isActiveRun()) {
-        setError(apiErrorMessage(sendError));
         if (runConversationId) await loadConversation(runConversationId, true);
+        if (isActiveRun()) setError(apiErrorMessage(sendError));
+        return Boolean(completion);
       }
     } finally {
       const activeRun = isActiveRun();
@@ -604,6 +614,7 @@ export default function ChatModePage() {
           </div>
           {!deleted ? (
             <ChatComposer
+              key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${composerVersion}`}
               disabled={sending || loading}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
@@ -760,30 +771,38 @@ function ChatComposer({
   disabled: boolean;
   initialText: string;
   sessionId: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean | undefined>;
 }) {
   const [text, setText] = useState(initialText);
+  const [sendFailed, setSendFailed] = useState(false);
+  const composingRef = useRef(false);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
-    onSend(value);
-    setText("");
+    setSendFailed(false);
+    const sent = await onSend(value);
+    if (sent) setText((current) => current === text ? "" : current);
+    else if (sent === false) setSendFailed(true);
   }
 
   return (
     <div className="bg-white px-4 pb-5 pt-3 md:px-6">
       <div className="mx-auto max-w-[760px] space-y-2">
         <TaskTreeWidget sessionId={sessionId} />
+        {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">发送未完成，草稿已保留，可重试。</p> : null}
         <form
           onSubmit={submit}
           className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
         >
           <textarea
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => { setText(event.target.value); setSendFailed(false); }}
+            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionEnd={() => { composingRef.current = false; }}
             onKeyDown={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 submit(event);

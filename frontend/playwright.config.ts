@@ -14,6 +14,7 @@ export default defineConfig({
   ],
   use: {
     baseURL: "http://127.0.0.1:5173",
+    timezoneId: "Asia/Shanghai",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
