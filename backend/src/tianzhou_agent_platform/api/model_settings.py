@@ -20,7 +20,6 @@ from tianzhou_agent_platform.core.model_settings import (
     models_url,
     provider_view,
 )
-from tianzhou_agent_platform.core.llm import create_openai_chat_model
 
 
 def create_model_settings_router() -> APIRouter:
@@ -225,16 +224,18 @@ def create_model_settings_router() -> APIRouter:
         error: str | None = None
         try:
             client: httpx.AsyncClient = request.app.state.model_health_http_client
-            chat_model = create_openai_chat_model(
+            from tianzhou_agent_platform.model_providers.factory import create_native_chat_model
+
+            chat_model = create_native_chat_model(
                 model=model.model,
                 api_key=provider.api_key,
                 base_url=provider.base_url,
                 timeout_seconds=provider.timeout_seconds,
-                client=client,
+                http_client=client,
                 max_completion_tokens=1,
             )
             await chat_model.ainvoke([{"role": "user", "content": "Reply with OK."}])
-        except (openai.OpenAIError, ValueError) as exc:
+        except Exception as exc:
             error = str(exc)
         return ModelHealthResult(
             status="unhealthy" if error else "healthy",

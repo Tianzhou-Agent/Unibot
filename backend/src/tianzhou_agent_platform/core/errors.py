@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import Field
+
+from tianzhou_agent_platform.core.base import StrictModel, utc_now
+
 
 @dataclass(slots=True)
 class PlatformError(Exception):
@@ -16,6 +20,19 @@ class PlatformError(Exception):
 
     def __str__(self) -> str:
         return self.message
+
+
+class StandardError(StrictModel):
+    code: str
+    message: str
+    retryable: bool
+    source: str
+    user_message: str
+    trace_id: str
+
+
+class ErrorEnvelope(StrictModel):
+    error: StandardError
 
 
 def not_found(resource: str, resource_id: str) -> PlatformError:

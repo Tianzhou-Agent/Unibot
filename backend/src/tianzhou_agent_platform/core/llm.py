@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,10 +19,14 @@ from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.chat import LLMCallRecord
-from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
+from tianzhou_agent_platform.core.context_compression import (
+    estimate_request_tokens,
+    output_token_reserve,
+    request_input_budget,
+)
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.model_settings import current_model_runtime
-from tianzhou_agent_platform.core.trace_details import sanitize_trace_data
+from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, current_model_runtime
+from tianzhou_agent_platform.core.trace_details import redact_trace_data
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 LLMCallSink = Callable[[LLMCallRecord], Awaitable[None]]
@@ -33,6 +38,7 @@ class LLMResult:
     message: dict[str, Any]
     input_tokens: int = 0
     output_tokens: int = 0
+    usage_estimated: bool = False
     finish_reason: str | None = None
     first_token_at: datetime | None = None
     ttft_ms: float | None = None
@@ -64,15 +70,25 @@ class OpenAICompatibleClient:
         call_sink: LLMCallSink | None = None,
     ) -> None:
         self.settings = settings
-        self._client = client or httpx.AsyncClient()
-        self._owns_client = client is None
+        self._injected_client = client
         self._call_sink = call_sink
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        return
 
-    def _chat_model(self) -> ChatOpenAI:
+    @asynccontextmanager
+    async def _http_client(self) -> AsyncIterator[httpx.AsyncClient]:
+        if self._injected_client is not None:
+            yield self._injected_client
+            return
+        # Fresh sockets avoid reusing a dead keepalive connection through a local HTTP proxy.
+        client = httpx.AsyncClient()
+        try:
+            yield client
+        finally:
+            await client.aclose()
+
+    def _chat_model(self, http_client: httpx.AsyncClient) -> ChatOpenAI:
         runtime_model = current_model_runtime()
         base_url = runtime_model.base_url if runtime_model else self.settings.llm_base_url
         api_key = (
@@ -97,7 +113,10 @@ class OpenAICompatibleClient:
             api_key=api_key,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
-            client=self._client,
+            client=http_client,
+            max_completion_tokens=output_token_reserve(
+                current_context_window_tokens(self.settings.context_window_tokens)
+            ),
         )
 
     async def complete(
@@ -198,7 +217,7 @@ class OpenAICompatibleClient:
             context_id=context_id,
         )
         try:
-            message = await self._bound_model(tools, tool_choice).ainvoke(messages)
+            message = await self._ainvoke(messages, tools, tool_choice)
         except openai.OpenAIError as exc:
             await self._fail_call(call, started, exc)
             raise
@@ -208,6 +227,21 @@ class OpenAICompatibleClient:
         result = _result_from_message(message)
         await self._complete_call(call, started, result)
         return result
+
+    async def _ainvoke(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None,
+    ) -> AIMessage | AIMessageChunk:
+        try:
+            async with self._http_client() as http_client:
+                return await self._bound_model(http_client, tools, tool_choice).ainvoke(messages)
+        except openai.APIConnectionError:
+            if self._injected_client is not None:
+                raise
+            async with self._http_client() as http_client:
+                return await self._bound_model(http_client, tools, tool_choice).ainvoke(messages)
 
     async def _stream_complete(
         self,
@@ -235,7 +269,7 @@ class OpenAICompatibleClient:
         first_token_at: datetime | None = None
         ttft_ms: float | None = None
         try:
-            async for chunk in self._bound_model(tools, tool_choice).astream(messages):
+            async for chunk in self._astream(messages, tools, tool_choice):
                 aggregate = chunk if aggregate is None else aggregate + chunk
                 delta = _message_text(chunk.content)
                 if delta:
@@ -259,6 +293,20 @@ class OpenAICompatibleClient:
             await self._fail_call(call, started, error)
             raise error
         result = _result_from_message(aggregate)
+        if result.input_tokens == 0 and result.output_tokens == 0:
+            result.input_tokens = estimate_request_tokens(messages, tools)
+            result.output_tokens = estimate_request_tokens([result.message])
+            result.usage_estimated = True
+            logger.warning(
+                "Model stream completed without usage metadata; using estimates "
+                "call_id=%s model=%s finish_reason=%s output_chars=%d input_tokens=%d output_tokens=%d",
+                call.call_id,
+                call.model,
+                result.finish_reason,
+                len(str(result.message.get("content") or "")),
+                result.input_tokens,
+                result.output_tokens,
+            )
         result.first_token_at = first_token_at
         result.ttft_ms = ttft_ms
         await self._complete_call(call, started, result)
@@ -276,19 +324,29 @@ class OpenAICompatibleClient:
         context_type: str | None,
         context_id: str | None,
     ) -> tuple[LLMCallRecord, float]:
+        context_window = current_context_window_tokens(self.settings.context_window_tokens)
+        input_tokens = estimate_request_tokens(messages, tools)
+        if input_tokens > request_input_budget(context_window):
+            raise PlatformError(
+                "CONTEXT_BUDGET_EXCEEDED",
+                "The model request exceeds the context budget after reserving space for the answer.",
+                status_code=400,
+                source="model",
+            )
         endpoint, model = self._request_target()
         request: dict[str, Any] = {
             "model": model,
             "messages": deepcopy(messages),
             "stream": stream,
-            "context_window": self.settings.context_window_tokens,
-            "estimated_prompt_tokens": estimate_request_tokens(messages, tools),
+            "context_window": context_window,
+            "estimated_prompt_tokens": input_tokens,
+            "max_completion_tokens": output_token_reserve(context_window),
         }
         if tools:
             request["tools"] = deepcopy(tools)
         if tool_choice is not None:
             request["tool_choice"] = deepcopy(tool_choice)
-        request = sanitize_trace_data(request)
+        request = redact_trace_data(request)
         call = LLMCallRecord(
             call_id=f"llm_{uuid4().hex}",
             trace_id=trace_id,
@@ -307,7 +365,7 @@ class OpenAICompatibleClient:
         completed = call.model_copy(
             update={
                 "status": "completed",
-                "response": sanitize_trace_data(_response_from_result(call.model, result)),
+                "response": redact_trace_data(_response_from_result(call.model, result)),
                 "duration_ms": (perf_counter() - started) * 1000,
                 "first_token_at": result.first_token_at,
                 "ttft_ms": result.ttft_ms,
@@ -321,9 +379,9 @@ class OpenAICompatibleClient:
         failed = call.model_copy(
             update={
                 "status": "failed",
-                "response": sanitize_trace_data(_response_from_error(exc)),
+                "response": redact_trace_data(_response_from_error(exc)),
                 "duration_ms": (perf_counter() - started) * 1000,
-                "error": sanitize_trace_data(str(exc)),
+                "error": redact_trace_data(_exception_detail(exc)),
                 "completed_at": completed_at,
             }
         )
@@ -353,12 +411,31 @@ class OpenAICompatibleClient:
         endpoint = normalized if normalized.endswith("/chat/completions") else f"{normalized}/chat/completions"
         return endpoint, model
 
+    async def _astream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None,
+    ) -> AsyncIterator[AIMessageChunk]:
+        try:
+            async with self._http_client() as http_client:
+                async for chunk in self._bound_model(http_client, tools, tool_choice).astream(messages):
+                    yield chunk
+                return
+        except openai.APIConnectionError:
+            if self._injected_client is not None:
+                raise
+        async with self._http_client() as http_client:
+            async for chunk in self._bound_model(http_client, tools, tool_choice).astream(messages):
+                yield chunk
+
     def _bound_model(
         self,
+        http_client: httpx.AsyncClient,
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None,
     ) -> Any:
-        model = self._chat_model()
+        model = self._chat_model(http_client)
         if not tools:
             return model
         return model.bind_tools(tools, tool_choice=tool_choice)
@@ -394,6 +471,13 @@ def _result_from_message(message: AIMessage | AIMessageChunk) -> LLMResult:
 
 
 def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
+    usage: dict[str, Any] = {
+        "prompt_tokens": result.input_tokens,
+        "completion_tokens": result.output_tokens,
+        "total_tokens": result.input_tokens + result.output_tokens,
+    }
+    if result.usage_estimated:
+        usage.update({"estimated": True, "source": "estimated"})
     return {
         "object": "chat.completion",
         "model": model,
@@ -404,11 +488,7 @@ def _response_from_result(model: str, result: LLMResult) -> dict[str, Any]:
                 "finish_reason": result.finish_reason,
             }
         ],
-        "usage": {
-            "prompt_tokens": result.input_tokens,
-            "completion_tokens": result.output_tokens,
-            "total_tokens": result.input_tokens + result.output_tokens,
-        },
+        "usage": usage,
     }
 
 
@@ -429,7 +509,7 @@ def _response_from_error(exc: Exception) -> dict[str, Any]:
                 "source": exc.source,
             }
         }
-    return {"error": {"type": type(exc).__name__, "message": str(exc)}}
+    return {"error": {"type": type(exc).__name__, "message": _exception_detail(exc)}}
 
 
 def _message_text(content: Any) -> str:
@@ -478,6 +558,17 @@ def _openai_base_url(value: str) -> str:
     return normalized[: -len(suffix)] if normalized.endswith(suffix) else normalized
 
 
+def _exception_detail(exc: BaseException) -> str:
+    detail = str(exc).strip() or type(exc).__name__
+    cause = exc.__cause__ or exc.__context__
+    if cause is None:
+        return detail
+    cause_text = f"{type(cause).__name__}: {cause}"
+    if cause_text in detail:
+        return detail
+    return f"{detail} ({cause_text})"
+
+
 def _map_openai_error(exc: openai.OpenAIError) -> PlatformError:
     if isinstance(exc, openai.APITimeoutError):
         return PlatformError(
@@ -494,6 +585,7 @@ def _map_openai_error(exc: openai.OpenAIError) -> PlatformError:
             status_code=502,
             retryable=True,
             source="model",
+            debug={"provider_error": _exception_detail(exc)},
         )
     status_code = getattr(exc, "status_code", None)
     return PlatformError(

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Awaitable, cast
 from uuid import uuid4
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from langgraph.checkpoint.memory import InMemorySaver
 
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
@@ -26,12 +28,55 @@ from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.auth import SESSION_COOKIE
 from tianzhou_agent_platform.api.dependencies import RequestActor
 from tianzhou_agent_platform.api.router import create_router
+
+
+class _LegacyAgentAdapter:
+    """ChatService execution port over AgentRuntime (create_agent loop)."""
+
+    def __init__(self, agent_runtime: Any) -> None:
+        self._runtime = agent_runtime
+
+    async def run(self, request: Any, *, event_sink: Any | None = None, trace_id: str | None = None) -> Any:
+        return await self._runtime.chat(request, event_sink=event_sink, trace_id=trace_id)
+
+    async def chat(self, request: Any, *, event_sink: Any | None = None, trace_id: str | None = None) -> Any:
+        return await self._runtime.chat(request, event_sink=event_sink, trace_id=trace_id)
+
+    async def confirm(self, conversation_id: str, approval_id: str, action: Any) -> Any:
+        return await self._runtime.confirm(
+            approval_id, user_id=action.user_id, tenant_id=action.tenant_id
+        )
+
+    async def deny(self, conversation_id: str, approval_id: str, action: Any) -> Any:
+        await self._runtime.deny(
+            approval_id, user_id=action.user_id, tenant_id=action.tenant_id
+        )
+        from tianzhou_agent_platform.conversations.schemas import ChatResponse
+
+        return ChatResponse(
+            conversation_id=conversation_id,
+            content="",
+            status="completed",
+            trace_id="",
+            iterations=0,
+        )
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
+from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
+from tianzhou_agent_platform.core.observability_query import ObsQueryService
+from tianzhou_agent_platform.core.observability_stream import RedisObsIngestWorker
+from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
+from tianzhou_agent_platform.core.operations_analytics import OperationsAnalyticsService
+from tianzhou_agent_platform.core.observation_logging import ObservationLogHandler
 from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.core.telemetry import DurableBufferSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
+from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
+from tianzhou_agent_platform.store.observability_raw import RawIoWriter
+from tianzhou_agent_platform.store.observability_store import ObservabilityStore
+from tianzhou_agent_platform.store.observability_buffer import build_producer_instance_id
+from tianzhou_agent_platform.store.observability_redis import RedisObsBuffer
 from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
 from tianzhou_agent_platform.store.runtime_check import (
     RUNTIME_CHECK_RESOURCE,
@@ -43,6 +88,8 @@ from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
 from tianzhou_agent_platform.auth.service import AuthService
+from tianzhou_agent_platform.tasks.service import TaskEventBroker, TaskService
+from tianzhou_agent_platform.tasks.store import InMemorySessionTaskStore, MySqlSessionTaskStore
 
 
 def create_app(
@@ -63,15 +110,78 @@ def create_app(
     resolved_settings = settings or AgentSettings()
     storage_stores: StorageStores | None = None
     resolved_repository: InMemoryRepository
+
+    # OBS pipeline: Redis Streams durable buffer, dedicated MySQL pool and raw IO.
+    obs_store: ObservabilityStore | None = None
+    obs_buffer: RedisObsBuffer | None = None
+    obs_ingest_worker: RedisObsIngestWorker | None = None
+    legacy_wal_ingest_worker: ObsIngestWorker | None = None
+    obs_query_service: ObsQueryService | None = None
+    raw_io_writer: RawIoWriter | None = None
+    if resolved_settings.obs_enabled and storage_settings is not None:
+        obs_store = ObservabilityStore.from_dsn(storage_settings.mysql_dsn.get_secret_value())
+        raw_io_writer = RawIoWriter(
+            resolved_settings.obs_raw_root,
+            max_file_size_bytes=storage_settings.nas_max_file_size_bytes,
+        )
+        producer_instance_id = build_producer_instance_id(resolved_settings.node_id)
+        obs_redis_secret = storage_settings.obs_redis_dsn or storage_settings.redis_dsn
+        obs_redis_url = obs_redis_secret.get_secret_value()
+        obs_buffer = RedisObsBuffer.from_url(
+            obs_redis_url,
+            producer_instance_id,
+            socket_timeout=storage_settings.redis_timeout_seconds,
+            stream_key=resolved_settings.obs_redis_stream_key,
+            producers_key=resolved_settings.obs_redis_producers_key,
+            durability_timeout_ms=resolved_settings.obs_redis_durability_timeout_ms,
+            wait_replicas=resolved_settings.obs_redis_wait_replicas,
+        )
+        obs_ingest_worker = RedisObsIngestWorker.from_url(
+            obs_redis_url,
+            obs_store,
+            producer_instance_id,
+            socket_timeout=storage_settings.redis_timeout_seconds,
+            stream_key=resolved_settings.obs_redis_stream_key,
+            group_name=resolved_settings.obs_redis_group_name,
+            dlq_key=resolved_settings.obs_redis_dlq_key,
+            producers_key=resolved_settings.obs_redis_producers_key,
+            claim_idle_ms=resolved_settings.obs_redis_claim_idle_ms,
+            producer_stale_seconds=resolved_settings.obs_redis_producer_stale_seconds,
+            durability_timeout_ms=resolved_settings.obs_redis_durability_timeout_ms,
+            wait_replicas=resolved_settings.obs_redis_wait_replicas,
+            retention_days=resolved_settings.obs_retention_days,
+            raw_root=resolved_settings.obs_raw_root,
+        )
+        # Transition-only reader: drain records created by versions that still
+        # used the file WAL. No new runtime records are written there.
+        legacy_wal_ingest_worker = ObsIngestWorker(
+            resolved_settings.obs_wal_root,
+            obs_store,
+            producer_instance_id,
+            wal_max_bytes=resolved_settings.obs_wal_max_bytes,
+        )
+        obs_query_service = ObsQueryService(obs_store, resolved_settings.obs_raw_root)
+
     if repository is None and storage_settings is not None:
         storage_stores = create_storage_stores(
             storage_settings,
             mysql_resource_tables={
                 **repository_tables,
+                **graph_checkpoint_tables,
                 RUNTIME_CHECK_RESOURCE: runtime_check_table,
             },
         )
-        resolved_repository = PersistentRepository(storage_stores)
+        resolved_repository = PersistentRepository(
+            storage_stores,
+            # Disabling the OBS pipeline keeps legacy Trace/LLMCall tables
+            # writable and restart-recoverable.
+            persist_observability=not resolved_settings.obs_enabled,
+            obs_trace_status_resolver=(
+                (lambda trace_id: _resolve_obs_trace_status(obs_store, trace_id))
+                if obs_store is not None
+                else None
+            ),
+        )
     else:
         resolved_repository = repository or InMemoryRepository()
     resolved_document_service = document_service or (
@@ -86,18 +196,59 @@ def create_app(
     resolved_sandbox_service = sandbox_service or create_sandbox_service(
         resolved_settings,
         resolved_repository,
+        enforce_isolation=enforce_auth,
+        persistent_workspace_root=(
+            storage_settings.nas_root_path / "workspaces"
+            if storage_settings is not None
+            else None
+        ),
     )
-    observability = ObservabilityAspect(resolved_repository)
+    tracer_provider = (
+        setup_tracer_provider(
+            DurableBufferSpanProcessor(obs_buffer),
+            service_instance_id=obs_buffer.producer_instance_id,
+        )
+        if obs_buffer is not None
+        else None
+    )
+    observability = ObservabilityAspect(
+        resolved_repository,
+        buffer=obs_buffer,
+        raw_io_writer=raw_io_writer,
+        # Final fallback: direct OBS MySQL write when Redis is unavailable.
+        obs_store=obs_store,
+        # P0 fix: the aspect needs a Tracer (start_span), not a TracerProvider.
+        tracer=(tracer_provider.get_tracer("unibot") if tracer_provider is not None else None),
+    )
+    obs_log_handler = (
+        ObservationLogHandler(obs_buffer) if obs_buffer is not None else None
+    )
     managed_aina_runtime = ManagedAinaRuntime(
         resolved_settings,
         resolved_repository,
         aina_project_service,
         resolved_sandbox_service,
     )
-    resolved_llm = llm or OpenAICompatibleClient(
-        resolved_settings,
-        call_sink=observability.record_llm_call,
-    )
+    # Default production model is a native BaseChatModel (no completion-port wrap).
+    if llm is not None:
+        resolved_llm = llm
+    elif resolved_settings.llm_model and resolved_settings.llm_base_url:
+        from tianzhou_agent_platform.model_providers.factory import create_native_chat_model
+
+        resolved_llm = create_native_chat_model(
+            model=resolved_settings.llm_model,
+            api_key=resolved_settings.llm_api_key.get_secret_value()
+            if resolved_settings.llm_api_key
+            else "",
+            base_url=resolved_settings.llm_base_url,
+            timeout_seconds=resolved_settings.llm_timeout_seconds,
+            max_retries=0,
+        )
+    else:
+        resolved_llm = OpenAICompatibleClient(
+            resolved_settings,
+            call_sink=observability.record_llm_call,
+        )
     document_edit_task_service = (
         DocumentEditTaskService(resolved_document_service, resolved_repository, resolved_llm)
         if resolved_document_service is not None
@@ -108,6 +259,7 @@ def create_app(
         resolved_settings,
         capability_http_client,
         managed_runtime=managed_aina_runtime,
+        enforce_destination_policy=enforce_auth,
     )
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
@@ -121,6 +273,22 @@ def create_app(
         repository=resolved_repository,
         github_http_client=github_auth_http_client,
     )
+    task_store = (
+        MySqlSessionTaskStore(storage_stores.mysql, storage_stores.redis)
+        if storage_stores is not None
+        else InMemorySessionTaskStore()
+    )
+    task_service = TaskService(
+        resolved_repository,
+        task_store,
+        event_broker=TaskEventBroker(storage_stores.redis if storage_stores is not None else None),
+        verification_timeout_seconds=resolved_settings.capability_timeout_seconds,
+    )
+    agent_checkpointer = (
+        MySqlCheckpointSaver(storage_stores.mysql)
+        if storage_stores is not None
+        else InMemorySaver()
+    )
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
@@ -128,7 +296,27 @@ def create_app(
             if storage_stores is not None and storage_settings is not None:
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
+                await cast(MySqlCheckpointSaver, agent_checkpointer).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
+            await task_service.initialize()
+            if obs_buffer is not None and obs_store is not None:
+                # Startup order: OBS tables -> Redis durability check/group -> producer/consumer.
+                resolved_settings.obs_raw_root.mkdir(parents=True, exist_ok=True)
+                await obs_store.create_tables()
+                await obs_store.backfill_operations()
+                await obs_buffer.initialize()
+                if obs_ingest_worker is not None:
+                    await obs_ingest_worker.initialize()
+                obs_buffer.start()
+                if obs_log_handler is not None:
+                    logging.getLogger().addHandler(obs_log_handler)
+                if obs_ingest_worker is not None:
+                    obs_ingest_worker.start()
+                if (
+                    legacy_wal_ingest_worker is not None
+                    and resolved_settings.obs_wal_root.is_dir()
+                ):
+                    legacy_wal_ingest_worker.start()
             await ensure_builtin_ainas(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
@@ -146,6 +334,20 @@ def create_app(
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
+            # Stop new records, flush the Redis producer, then stop the consumer.
+            if obs_log_handler is not None:
+                logging.getLogger().removeHandler(obs_log_handler)
+            if obs_buffer is not None:
+                obs_buffer.close()
+                await obs_buffer.wait_closed()
+            if obs_ingest_worker is not None:
+                await obs_ingest_worker.stop()
+            if legacy_wal_ingest_worker is not None:
+                await legacy_wal_ingest_worker.stop()
+            if obs_buffer is not None:
+                shutdown_tracer_provider()
+            if obs_store is not None:
+                await obs_store.close()
             await gateway.aclose()
             await resolved_sandbox_service.aclose()
             await vision_client.aclose()
@@ -166,6 +368,19 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.repository = resolved_repository
     app.state.llm = resolved_llm
+    # Feature services (Phase 1A). Concrete repository is injected via protocols.
+    from tianzhou_agent_platform.conversations.service import ConversationService
+    from tianzhou_agent_platform.model_providers.service import ModelProviderService
+    from tianzhou_agent_platform.services.chat import ChatService
+
+    conversation_service = ConversationService(resolved_repository)
+    model_provider_service = ModelProviderService(resolved_repository)
+    app.state.conversation_service = conversation_service
+    app.state.model_provider_service = model_provider_service
+    app.state.chat_service = ChatService(
+        conversation_service,
+        legacy_agent=None,  # wired below once agent_runtime is constructed
+    )
     app.state.capability_gateway = gateway
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
@@ -176,21 +391,52 @@ def create_app(
     app.state.storage_stores = storage_stores
     app.state.storage_status = None
     app.state.observability = observability
+    app.state.obs_store = obs_store
+    app.state.obs_ingest_worker = obs_ingest_worker
+    app.state.legacy_wal_ingest_worker = legacy_wal_ingest_worker
+    app.state.obs_buffer = obs_buffer
+    app.state.obs_log_handler = obs_log_handler
+    app.state.obs_query = obs_query_service or ObsQueryService(None, None)
+    app.state.agent_checkpointer = agent_checkpointer
+    app.state.operations_analytics = OperationsAnalyticsService(obs_store)
+    from tianzhou_agent_platform.core.run_events import RunEventPublisher
+
     app.state.agent_runtime = AgentRuntime(
         settings=resolved_settings,
         repository=resolved_repository,
         llm=resolved_llm,
         gateway=gateway,
-        observability=observability,
         document_service=resolved_document_service,
         document_edit_task_service=document_edit_task_service,
         sandbox_service=resolved_sandbox_service,
+        task_service=task_service,
+        checkpointer=agent_checkpointer,
+        auth_enforced=enforce_auth,
+        events=RunEventPublisher(observability),
+    )
+    # HTTP path goes through ChatService (acceptance A7). The AgentRuntime
+    # implements the create_agent loop and is adapted as the execution port.
+    native_runner = None
+    if resolved_settings.native_agent_enabled:
+        from tianzhou_agent_platform.services.agent_integration.runner import NativeAgentRunner
+
+        native_runner = NativeAgentRunner(
+            model=resolved_settings.llm_model or "gpt-4o-mini",
+            conversations=conversation_service,
+            checkpointer=agent_checkpointer,
+            model_run_limit=resolved_settings.max_agent_iterations,
+        )
+    app.state.chat_service = ChatService(
+        conversation_service,
+        legacy_agent=_LegacyAgentAdapter(app.state.agent_runtime),
+        native_runner=native_runner,
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service
     app.state.vision_client = vision_client
     app.state.auth_service = auth_service
+    app.state.task_service = task_service
     app.state.auth_enforced = enforce_auth
 
     @app.middleware("http")
@@ -227,6 +473,26 @@ def create_app(
 
 
 app = create_app(storage_settings=StorageSettings(), enforce_auth=True)
+
+
+def _resolve_obs_trace_status(store: ObservabilityStore | None, trace_id: str) -> Awaitable[str | None]:
+    """Phase-four fallback: resolve a trace's status from the OBS pipeline."""
+
+    async def resolver() -> str | None:
+        if store is None:
+            return None
+        canonical_trace_id = (
+            trace_id[6:]
+            if trace_id.startswith("trace_") and len(trace_id) == 38
+            else trace_id
+        )
+        try:
+            trace = await store.get_trace(canonical_trace_id)
+        except Exception:  # noqa: BLE001 - resolver must never break reconciliation
+            return None
+        return trace["status"] if trace else None
+
+    return resolver()
 
 
 def run() -> None:

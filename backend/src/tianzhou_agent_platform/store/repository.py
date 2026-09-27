@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,13 +15,15 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
-from tianzhou_agent_platform.core.feedback import FeedbackRecord
-from tianzhou_agent_platform.core.conversation import Conversation
+from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
-from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
+from tianzhou_agent_platform.core.feedback import FeedbackRecord
+from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceUpdate
+from tianzhou_agent_platform.model_providers.models import ModelProviderRecord
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
-from tianzhou_agent_platform.core.repository import (
+from tianzhou_agent_platform.store.memory_repository import (
     AINA_PROJECTS_RESOURCE,
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,
@@ -35,8 +41,10 @@ from tianzhou_agent_platform.core.repository import (
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
     USERS_RESOURCE,
+    WORKSPACES_RESOURCE,
     FEEDBACKS_RESOURCE,
     InMemoryRepository,
+    INTERRUPTED_RUN_ERROR,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.errors import StorageValidationError
@@ -44,6 +52,8 @@ from tianzhou_agent_platform.store.models import StoreQuery
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
 repository_metadata = MetaData()
+CONVERSATION_RUN_TTL_SECONDS = 15 * 60
+CONVERSATION_RUN_HEARTBEAT_SECONDS = 30
 
 
 def _record_table(name: str) -> Table:
@@ -59,6 +69,7 @@ def _record_table(name: str) -> Table:
 repository_tables = {
     resource: _record_table(resource)
     for resource in (
+        WORKSPACES_RESOURCE,
         CONVERSATIONS_RESOURCE,
         MEMORIES_RESOURCE,
         TOOLS_RESOURCE,
@@ -82,14 +93,37 @@ repository_tables = {
 
 
 class PersistentRepository(InMemoryRepository):
-    """MySQL-backed repository with Redis write-through cache and run locks."""
+    """MySQL-backed repository with Redis write-through cache and run locks.
 
-    def __init__(self, stores: StorageStores) -> None:
+    Migration phase four (design 19/17.3): Trace/LLMCall records are no longer
+    persisted through the generic repository — they flow through the OTel +
+    WAL + OBS MySQL pipeline instead. ``persist_observability=True`` restores
+    the legacy behavior for rollback verification windows.
+    """
+
+    _OBSERVABILITY_RESOURCES = frozenset({TRACES_RESOURCE, LLM_CALLS_RESOURCE})
+
+    def __init__(
+        self,
+        stores: StorageStores,
+        *,
+        persist_observability: bool = False,
+        obs_trace_status_resolver: Callable[[str], Awaitable[str | None]] | None = None,
+    ) -> None:
         super().__init__()
         self.stores = stores
+        self.persist_observability = persist_observability
+        self._legacy_observability_load_lock = asyncio.Lock()
+        self._legacy_traces_loaded = False
+        self._legacy_llm_calls_loaded = False
+        # Phase four: conversation run reconciliation falls back to the OBS
+        # pipeline when a trace is no longer in the in-memory repository.
+        self.obs_trace_status_resolver = obs_trace_status_resolver
+        self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
 
     async def initialize(self) -> None:
         await self.stores.mysql.create_tables(repository_metadata)
+        workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
         conversations = await self._load_models(CONVERSATIONS_RESOURCE, Conversation)
         memories = await self._load_models(MEMORIES_RESOURCE, MemoryRecord)
         tools = await self._load_models(TOOLS_RESOURCE, ToolRecord)
@@ -97,8 +131,6 @@ class PersistentRepository(InMemoryRepository):
         ainas = await self._load_models(AINAS_RESOURCE, AinaRecord)
         aina_projects = await self._load_models(AINA_PROJECTS_RESOURCE, AinaProjectRecord)
         installations = await self._load_models(INSTALLATIONS_RESOURCE, AinaInstallation)
-        traces = await self._load_models(TRACES_RESOURCE, TraceRecord)
-        llm_calls = await self._load_models(LLM_CALLS_RESOURCE, LLMCallRecord)
         approvals = await self._load_models(APPROVALS_RESOURCE, ApprovalRecord)
         model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
         scheduled_tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
@@ -111,8 +143,19 @@ class PersistentRepository(InMemoryRepository):
         sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
         users = await self._load_models(USERS_RESOURCE, UserRecord)
         feedbacks = await self._load_models(FEEDBACKS_RESOURCE, FeedbackRecord)
+        traces = (
+            await self._load_models(TRACES_RESOURCE, TraceRecord)
+            if self.persist_observability
+            else []
+        )
+        llm_calls = (
+            await self._load_models(LLM_CALLS_RESOURCE, LLMCallRecord)
+            if self.persist_observability
+            else []
+        )
 
         async with self._lock:
+            self._workspaces = {item.id: item for item in workspaces}
             self._conversations = {item.id: item for item in conversations}
             self._memories = {item.id: item for item in memories}
             self._tools = {item.tool_id: item for item in tools}
@@ -122,8 +165,13 @@ class PersistentRepository(InMemoryRepository):
             self._installations = {
                 (item.tenant_id, item.user_id, item.aina_id): item for item in installations
             }
+            # The normal OBS path does not load historical Trace/LLMCall rows
+            # at startup. The rollback switch restores the complete legacy
+            # behavior, including restart recovery.
             self._traces = {item.trace_id: item for item in traces}
             self._llm_calls = {item.call_id: item for item in llm_calls}
+            self._legacy_traces_loaded = self.persist_observability
+            self._legacy_llm_calls_loaded = self.persist_observability
             self._approvals = {item.id: item for item in approvals}
             self._model_providers = {item.id: item for item in model_providers}
             self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}
@@ -158,6 +206,16 @@ class PersistentRepository(InMemoryRepository):
         await self._refresh_users()
         return await super().find_user_by_email(email)
 
+    async def list_users(
+        self,
+        *,
+        query: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[UserRecord]:
+        await self._refresh_users()
+        return await super().list_users(query=query, limit=limit, offset=offset)
+
     async def upsert_github_user(
         self,
         *,
@@ -184,6 +242,43 @@ class PersistentRepository(InMemoryRepository):
         async with self._lock:
             self._users = {item.id: item for item in users}
         return users
+
+    async def get_workspace(self, workspace_id: str) -> Workspace:
+        record = await self.stores.mysql.read(WORKSPACES_RESOURCE, workspace_id)
+        if record is None:
+            async with self._lock:
+                self._workspaces.pop(workspace_id, None)
+            raise not_found("Workspace", workspace_id)
+        workspace = Workspace.model_validate(record.values["payload"])
+        async with self._lock:
+            self._workspaces[workspace.id] = workspace
+        return self._copy(workspace)
+
+    async def list_workspaces(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[Workspace]:
+        await self._refresh_workspaces()
+        return await super().list_workspaces(user_id=user_id, tenant_id=tenant_id)
+
+    async def update_workspace(self, workspace_id: str, data: WorkspaceUpdate) -> Workspace:
+        async with self.stores.redis.lease(
+            "workspace-write",
+            workspace_id,
+            ttl_seconds=30,
+        ) as acquired:
+            if not acquired:
+                raise conflict("Workspace is being updated. Retry the request.")
+            await self.get_workspace(workspace_id)
+            return await super().update_workspace(workspace_id, data)
+
+    async def _refresh_workspaces(self) -> list[Workspace]:
+        workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
+        async with self._lock:
+            self._workspaces = {item.id: item for item in workspaces}
+        return workspaces
 
     async def create_aina_project(self, project: AinaProjectRecord) -> AinaProjectRecord:
         async with self.stores.redis.lease(
@@ -342,17 +437,28 @@ class PersistentRepository(InMemoryRepository):
             return None
         return AinaProjectRecord.model_validate(record.values["payload"])
 
-    async def get_sandbox_for_actor(self, *, user_id: str, tenant_id: str) -> SandboxRecord:
+    async def get_sandbox_for_actor(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_id: str | None = None,
+    ) -> SandboxRecord:
         sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
         async with self._lock:
             self._sandboxes = {item.id: item for item in sandboxes}
-        return await super().get_sandbox_for_actor(user_id=user_id, tenant_id=tenant_id)
+        return await super().get_sandbox_for_actor(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
 
     async def list_sandbox_executions(
         self,
         *,
         user_id: str,
         tenant_id: str,
+        workspace_id: str | None = None,
         limit: int = 50,
     ) -> list[SandboxExecution]:
         executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
@@ -361,6 +467,7 @@ class PersistentRepository(InMemoryRepository):
         return await super().list_sandbox_executions(
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_id=workspace_id,
             limit=limit,
         )
 
@@ -392,6 +499,7 @@ class PersistentRepository(InMemoryRepository):
         user_id: str | None = None,
         tenant_id: str | None = None,
         document_name: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[DocumentEditTask]:
         tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
         async with self._lock:
@@ -400,6 +508,7 @@ class PersistentRepository(InMemoryRepository):
             user_id=user_id,
             tenant_id=tenant_id,
             document_name=document_name,
+            workspace_id=workspace_id,
         )
 
     async def put_document_edit_task(
@@ -447,19 +556,70 @@ class PersistentRepository(InMemoryRepository):
         return sorted(matching, key=lambda item: item.started_at, reverse=True)[:limit]
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
-        acquired = await self.stores.redis.set_if_absent(
-            "conversation-run",
-            conversation_id,
-            {"trace_id": trace_id},
-            ttl_seconds=15 * 60,
-        )
-        if not acquired.written:
-            raise conflict("This conversation already has a running request")
+        async with self.stores.redis.lease("conversation-run-state", conversation_id, ttl_seconds=30) as locked:
+            if not locked:
+                raise conflict("Conversation run state is being updated. Retry the request.")
+            conversation = await self.get_conversation(conversation_id)
+            acquired = await self.stores.redis.set_if_absent(
+                "conversation-run", conversation_id, {"trace_id": trace_id},
+                ttl_seconds=CONVERSATION_RUN_TTL_SECONDS,
+            )
+            if not acquired.written:
+                raise conflict("This conversation already has a running request")
+            try:
+                # Owning the lease proves the previous worker no longer owns this run.
+                if conversation.run_status == "running":
+                    await super().finish_conversation_run(
+                        conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR,
+                    )
+                conversation = await super().start_conversation_run(conversation_id, trace_id)
+            except BaseException:
+                await self.stores.redis.delete_if_value("conversation-run", conversation_id, {"trace_id": trace_id})
+                raise
+            heartbeat = asyncio.create_task(
+                self._renew_conversation_run(conversation_id, trace_id, asyncio.current_task())
+            )
+            self._conversation_run_tasks[(conversation_id, trace_id)] = heartbeat
+            return conversation
+
+    async def _renew_conversation_run(
+        self, conversation_id: str, trace_id: str, owner: asyncio.Task[Any] | None,
+    ) -> None:
         try:
-            return await super().start_conversation_run(conversation_id, trace_id)
-        except Exception:
-            await self.stores.redis.delete("conversation-run", conversation_id)
-            raise
+            while owner is not None and not owner.done():
+                await asyncio.sleep(CONVERSATION_RUN_HEARTBEAT_SECONDS)
+                try:
+                    renewed = await self.stores.redis.refresh_if_value(
+                        "conversation-run", conversation_id, {"trace_id": trace_id},
+                        ttl_seconds=CONVERSATION_RUN_TTL_SECONDS,
+                    )
+                    if renewed.written:
+                        continue
+                except Exception:
+                    pass
+                # Stop execution when ownership cannot be established; do not replay effects.
+                owner.cancel()
+                return
+        finally:
+            if self._conversation_run_tasks.get((conversation_id, trace_id)) is asyncio.current_task():
+                self._conversation_run_tasks.pop((conversation_id, trace_id))
+
+    async def reconcile_conversation_run(self, conversation_id: str) -> Conversation:
+        async with self.stores.redis.lease("conversation-run-state", conversation_id, ttl_seconds=30) as locked:
+            if not locked:
+                return await self.get_conversation(conversation_id)
+            conversation = await self.get_conversation(conversation_id)
+            if conversation.run_status == "running":
+                entry = await self.stores.redis.get("conversation-run", conversation_id)
+                if entry is None:
+                    return await super().finish_conversation_run(
+                        conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR,
+                    )
+        return await super().reconcile_conversation_run(conversation_id)
+
+    async def _has_live_conversation_run(self, conversation: Conversation) -> bool:
+        entry = await self.stores.redis.get("conversation-run", conversation.id)
+        return entry is not None and entry.value == {"trace_id": conversation.active_trace_id}
 
     async def finish_conversation_run(
         self,
@@ -467,14 +627,125 @@ class PersistentRepository(InMemoryRepository):
         *,
         status: str = "idle",
         error: str | None = None,
+        expected_trace_id: str | None = None,
     ) -> Conversation:
-        conversation = await super().finish_conversation_run(conversation_id, status=status, error=error)
-        await self.stores.redis.delete("conversation-run", conversation_id)
-        return conversation
+        local_traces = [key[1] for key in self._conversation_run_tasks if key[0] == conversation_id]
+        trace_id = expected_trace_id or (local_traces[0] if len(local_traces) == 1 else None)
+        heartbeat = self._conversation_run_tasks.get((conversation_id, trace_id)) if trace_id else None
+        try:
+            async with self.stores.redis.lease(
+                "conversation-run-state", conversation_id, ttl_seconds=30, blocking_timeout_seconds=5,
+            ) as locked:
+                if not locked:
+                    raise conflict("Conversation run state is being updated. Retry the request.")
+                current = await self.get_conversation(conversation_id)
+                if trace_id is not None and current.active_trace_id != trace_id:
+                    return current
+                trace_id = trace_id or current.active_trace_id
+                conversation = await super().finish_conversation_run(
+                    conversation_id, status=status, error=error, expected_trace_id=trace_id,
+                )
+                if trace_id is not None:
+                    await self.stores.redis.delete_if_value("conversation-run", conversation_id, {"trace_id": trace_id})
+                return conversation
+        finally:
+            if heartbeat is not None:
+                self._conversation_run_tasks.pop((conversation_id, trace_id), None)
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def get_trace(self, trace_id: str) -> TraceRecord:
+        try:
+            return await super().get_trace(trace_id)
+        except PlatformError as exc:
+            if exc.code != "RESOURCE_NOT_FOUND" or self._legacy_traces_loaded:
+                raise
+            # Migration fallback: look up one legacy row on demand without
+            # bringing the complete historical trace table into memory.
+            record = await self.stores.mysql.read(TRACES_RESOURCE, trace_id)
+            if record is None:
+                raise
+            trace = TraceRecord.model_validate(record.values["payload"])
+            async with self._lock:
+                self._traces.setdefault(trace.trace_id, trace)
+            return self._copy(trace)
+
+    async def list_traces(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[TraceRecord]:
+        await self._load_legacy_traces_on_demand()
+        return await super().list_traces(user_id=user_id, tenant_id=tenant_id)
+
+    async def list_llm_calls(
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        trace_ids: set[str] | None = None,
+        context_ids: set[str] | None = None,
+    ) -> list[LLMCallRecord]:
+        await self._load_legacy_llm_calls_on_demand()
+        return await super().list_llm_calls(
+            limit=limit,
+            offset=offset,
+            trace_ids=trace_ids,
+            context_ids=context_ids,
+        )
+
+    async def count_llm_calls(
+        self,
+        *,
+        trace_ids: set[str] | None = None,
+        context_ids: set[str] | None = None,
+    ) -> int:
+        await self._load_legacy_llm_calls_on_demand()
+        return await super().count_llm_calls(
+            trace_ids=trace_ids,
+            context_ids=context_ids,
+        )
+
+    async def _load_legacy_traces_on_demand(self) -> None:
+        if self._legacy_traces_loaded:
+            return
+        async with self._legacy_observability_load_lock:
+            if self._legacy_traces_loaded:
+                return
+            traces = await self._load_models(
+                TRACES_RESOURCE,
+                TraceRecord,
+                cache_in_redis=False,
+            )
+            async with self._lock:
+                for trace in traces:
+                    self._traces.setdefault(trace.trace_id, trace)
+            self._legacy_traces_loaded = True
+
+    async def _load_legacy_llm_calls_on_demand(self) -> None:
+        if self._legacy_llm_calls_loaded:
+            return
+        async with self._legacy_observability_load_lock:
+            if self._legacy_llm_calls_loaded:
+                return
+            calls = await self._load_models(
+                LLM_CALLS_RESOURCE,
+                LLMCallRecord,
+                cache_in_redis=False,
+            )
+            async with self._lock:
+                for call in calls:
+                    self._llm_calls.setdefault(call.call_id, call)
+            self._legacy_llm_calls_loaded = True
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         if not isinstance(value, BaseModel):
             raise TypeError(f"Persistent repository value for {resource!r} is not a Pydantic model")
+        # Phase four: Trace/LLMCall stay in memory only; the WAL + OBS MySQL
+        # pipeline owns their durability now.
+        if resource in self._OBSERVABILITY_RESOURCES and not self.persist_observability:
+            return
         payload = value.model_dump(mode="json")
         values = {"payload": payload, "updated_at": datetime.now(UTC)}
         existing = await self.stores.mysql.read(resource, record_id)
@@ -485,6 +756,8 @@ class PersistentRepository(InMemoryRepository):
         await self.stores.redis.set(f"repository:{resource}", record_id, payload)
 
     async def _delete_record(self, resource: str, record_id: str) -> None:
+        if resource in self._OBSERVABILITY_RESOURCES and not self.persist_observability:
+            return
         await self.stores.mysql.delete(resource, record_id)
         await self.stores.redis.delete(f"repository:{resource}", record_id)
 
@@ -492,6 +765,8 @@ class PersistentRepository(InMemoryRepository):
         self,
         resource: str,
         model: type[ModelT],
+        *,
+        cache_in_redis: bool = True,
     ) -> list[ModelT]:
         values: list[ModelT] = []
         offset = 0
@@ -501,7 +776,8 @@ class PersistentRepository(InMemoryRepository):
                 payload = record.values["payload"]
                 item = model.model_validate(payload)
                 values.append(item)
-                await self.stores.redis.set(f"repository:{resource}", str(record.id), payload)
+                if cache_in_redis:
+                    await self.stores.redis.set(f"repository:{resource}", str(record.id), payload)
             if len(page.items) < page.limit:
                 break
             offset += len(page.items)

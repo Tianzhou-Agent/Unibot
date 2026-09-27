@@ -18,7 +18,6 @@ from tianzhou_agent_platform.aina.document.task_models import (
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.llm import LLMClient
-from tianzhou_agent_platform.core.model_settings import use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageValidationError
 
@@ -701,47 +700,76 @@ class DocumentEditWorker:
             user_id=task.user_id,
             tenant_id=task.tenant_id,
         )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Revise exactly one Markdown section. Return the complete section through the provided "
-                    "function. Keep the first heading at the same Markdown level. Do not add a peer or parent "
-                    "heading. Do not discuss the change."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Document: {task.document_name}\n"
-                    f"Task: {task.description}\n"
-                    f"Current instruction: {instruction}\n\n"
-                    f"Current section:\n{section.draft_content}"
-                ),
-            },
-        ]
-        with use_model_runtime(runtime_model):
-            result = await self.service.llm.complete(
-                messages=messages,
-                tools=[_SUBMIT_DRAFT_TOOL],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "submit_document_section_draft"},
-                },
-                context_type="document_edit_task",
-                context_id=task.id,
-            )
-        calls = result.message.get("tool_calls") or []
+        system = (
+            "Revise exactly one Markdown section. Return the complete section through the provided "
+            "function. Keep the first heading at the same Markdown level. Do not add a peer or parent "
+            "heading. Do not discuss the change."
+        )
+        user = (
+            f"Document: {task.document_name}\n"
+            f"Task: {task.description}\n"
+            f"Current instruction: {instruction}\n\n"
+            f"Current section:\n{section.draft_content}"
+        )
+        tool_choice = {
+            "type": "function",
+            "function": {"name": "submit_document_section_draft"},
+        }
+        # Migration window: injected LLMClient (tests/legacy) keeps the old port;
+        # production uses native ainvoke via model_providers.factory. Phase 7
+        # removes the LLMClient branch after fixtures move to BaseChatModel.
+        if self.service.llm is not None and hasattr(self.service.llm, "complete"):
+            from tianzhou_agent_platform.core.model_settings import use_model_runtime
+
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+            with use_model_runtime(runtime_model):
+                result = await self.service.llm.complete(
+                    messages=messages,
+                    tools=[_SUBMIT_DRAFT_TOOL],
+                    tool_choice=tool_choice,
+                    context_type="document_edit_task",
+                    context_id=task.id,
+                )
+            calls = result.message.get("tool_calls") or []
+            if len(calls) != 1:
+                raise ValueError("The model did not submit a document section draft")
+            function = calls[0].get("function") or {}
+            if function.get("name") != "submit_document_section_draft":
+                raise ValueError("The model returned an unexpected draft function")
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValueError("The model returned invalid draft arguments") from exc
+            content = arguments.get("section_content")
+            if not isinstance(content, str):
+                raise ValueError("The model draft did not contain section_content")
+            return content
+
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
+
+        if runtime_model is None:
+            raise ValueError("No model provider is configured for document editing")
+        model = create_model_from_runtime(runtime_model, max_retries=0)
+        bound = model.bind_tools([_SUBMIT_DRAFT_TOOL], tool_choice=tool_choice)
+        response = await bound.ainvoke(
+            [SystemMessage(content=system), HumanMessage(content=user)]
+        )
+        calls = getattr(response, "tool_calls", None) or []
         if len(calls) != 1:
             raise ValueError("The model did not submit a document section draft")
-        function = calls[0].get("function") or {}
-        if function.get("name") != "submit_document_section_draft":
+        function = calls[0]
+        name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+        if name != "submit_document_section_draft":
             raise ValueError("The model returned an unexpected draft function")
-        try:
-            arguments = json.loads(function.get("arguments") or "{}")
-        except json.JSONDecodeError as exc:
-            raise ValueError("The model returned invalid draft arguments") from exc
-        content = arguments.get("section_content")
+        args = function.get("args") if isinstance(function, dict) else getattr(function, "args", {})
+        if not isinstance(args, dict):
+            raise ValueError("The model returned invalid draft arguments")
+        content = args.get("section_content")
         if not isinstance(content, str):
             raise ValueError("The model draft did not contain section_content")
         return content

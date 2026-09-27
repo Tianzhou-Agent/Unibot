@@ -4,6 +4,12 @@ This matrix covers every Agent behavior currently exposed by the product. Determ
 failure invariants; DeepEval owns real-model decisions and answer quality; Playwright owns browser rendering and
 navigation. A row is complete only when every applicable layer is automated.
 
+> **LangChain cutover note (2026-09-24):** production agent loop is `langchain.agents.create_agent`
+> (`core/agent.py` `_run`). Custom StateGraph model/tool nodes are not compiled. Residual deterministic
+> failures live in `test_agent_resilience.py` (error envelopes, empty/truncated status, dedup/retry bounds)
+> plus tool-span / builtin-AINA discovery details in `test_chat_api.py` tool traces. See
+> `docs/langchain-migration-status.md` for removal triggers.
+
 | Area | Deterministic contract coverage | Real-model DeepEval | Browser E2E | Required invariant |
 | --- | --- | --- | --- | --- |
 | User authentication and isolation | `test_auth.py` covers password sessions, logout, impersonation rejection, OAuth state and PKCE | Not applicable: identity flows are deterministic | `auth.spec.ts` | Password hashes never leave storage, session cookies are HttpOnly, GitHub tokens are not persisted, and authenticated callers cannot select another actor. |
