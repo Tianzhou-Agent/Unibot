@@ -257,3 +257,57 @@ def test_model_health_check_reports_latency_and_uses_selected_model() -> None:
     assert response.json()["latency_ms"] >= 0
     assert json.loads(requests[0].content)["model"] == "team-fast"
     assert requests[0].headers["Authorization"] == "Bearer user-secret-key-value"
+
+
+def test_native_agent_uses_the_users_selected_model_configuration(monkeypatch: Any) -> None:
+    # Production path: no injected model, so the app builds native ChatOpenAI models itself. The selected
+    # provider model must serve the request instead of the llm_* environment model built at startup.
+    import tianzhou_agent_platform.main as main_module
+    from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
+
+    requests: list[httpx.Request] = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": body["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "selected model response"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    monkeypatch.setattr(
+        main_module,
+        "create_model_from_runtime",
+        lambda runtime: create_model_from_runtime(runtime, http_client=http_client),
+    )
+    with TestClient(create_app(settings=_settings())) as client:
+        created = client.post("/model-settings/providers", json=_provider_payload()).json()
+        selected_model = created["models"][1]
+        client.post(
+            f"/model-settings/providers/{created['id']}/models/{selected_model['id']}/default",
+            json={},
+        )
+        response = client.post("/chat", json={"message": "你好"})
+
+    asyncio.run(http_client.aclose())
+    assert response.status_code == 200
+    assert response.json()["content"] == "selected model response"
+    assert response.json()["usage"]["input_tokens"] == 7
+    assert requests
+    assert all(request.url == httpx.URL("https://user-provider.invalid/v1/chat/completions") for request in requests)
+    assert all(request.headers["Authorization"] == "Bearer user-secret-key-value" for request in requests)
+    assert all(json.loads(request.content)["model"] == "team-reasoning" for request in requests)

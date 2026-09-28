@@ -799,13 +799,19 @@ class DocumentEditWorker:
                 raise ValueError("The model draft did not contain section_content")
             return content
 
+        from langchain_core.language_models.chat_models import BaseChatModel
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
 
-        if runtime_model is None:
+        # The actor's selected provider model when one is configured, else the app's configured model
+        # (e.g. the llm_* settings); only when neither exists is document editing unavailable.
+        if runtime_model is not None:
+            model = create_model_from_runtime(runtime_model, max_retries=0)
+        elif isinstance(self.service.llm, BaseChatModel):
+            model = self.service.llm
+        else:
             raise ValueError("No model provider is configured for document editing")
-        model = create_model_from_runtime(runtime_model, max_retries=0)
         bound = model.bind_tools([_SUBMIT_DRAFT_TOOL], tool_choice=tool_choice)
         response = await bound.ainvoke(
             [SystemMessage(content=system), HumanMessage(content=user)]

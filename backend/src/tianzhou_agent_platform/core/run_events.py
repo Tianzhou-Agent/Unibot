@@ -40,6 +40,8 @@ class RunEventPublisher:
     def __init__(self, backend: Any | None = None) -> None:
         self._backend = backend
         self._root_spans: dict[str, str] = {}
+        # Spans this publisher opened; finishing any other id would only log "span not found" in the backend.
+        self._open_spans: set[str] = set()
 
     def root_span_id(self, trace_id: str) -> str | None:
         return self._root_spans.get(trace_id)
@@ -85,11 +87,13 @@ class RunEventPublisher:
             await start(trace_id, parent_span_id=parent, **fields)
         except Exception:  # noqa: BLE001
             return
+        self._open_spans.add(str(fields.get("span_id")))
 
     async def finish_span(self, trace_id: str, span_id: str, status: str, **fields: Any) -> None:
         finish = getattr(self._backend, "finish_span", None)
-        if finish is None:
+        if finish is None or span_id not in self._open_spans:
             return
+        self._open_spans.discard(span_id)
         try:
             await finish(trace_id, span_id, status, **fields)
         except Exception:  # noqa: BLE001
@@ -131,6 +135,22 @@ class RunEventPublisher:
         except Exception:  # noqa: BLE001
             pass
         self._root_spans[trace_id] = root_span_id
+        self._open_spans.add(root_span_id)
+        return root_span_id
+
+    async def resume(self, trace_id: str, *, conversation_id: str) -> str | None:
+        """Re-open a run's root span when it continues after an approval (possibly on another instance)."""
+        ensure = getattr(self._backend, "ensure_agent_root_span", None)
+        if ensure is None:
+            return None
+        from uuid import uuid4
+
+        try:
+            root_span_id = await ensure(trace_id, span_id=f"span_{uuid4().hex}", conversation_id=conversation_id)
+        except Exception:  # noqa: BLE001
+            return None
+        self._root_spans[trace_id] = root_span_id
+        self._open_spans.add(root_span_id)
         return root_span_id
 
     async def finish(self, trace_id: str, status: str) -> None:

@@ -367,6 +367,7 @@ class AgentRuntime:
         auth_enforced: bool = False,
         events: Any | None = None,
         llm_call_sink: Callable[[Any], Awaitable[None]] | None = None,
+        model_factory: Callable[[Any], BaseChatModel] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -385,6 +386,10 @@ class AgentRuntime:
         self.events = events or NULL_RUN_EVENTS
         # Persists /llm-calls records of the agent's model requests (the sink is injected by the app).
         self.llm_call_sink = llm_call_sink
+        # Builds the native model for the actor's selected provider model (model settings). Without it the
+        # configured model serves every request (e.g. an explicitly injected model).
+        self.model_factory = model_factory
+        self._runtime_models: dict[tuple[Any, ...], BaseChatModel] = {}
 
     async def _record_user_request(
         self,
@@ -740,25 +745,7 @@ class AgentRuntime:
             error=response.content if response.status == "failed" else None,
             expected_trace_id=trace_id,
         )
-        root_span_id = self.events.root_span_id(trace_id)
-        if response.status != "approval_required" and root_span_id is not None:
-            await self.events.finish_span(
-                trace_id,
-                root_span_id,
-                "completed" if response.status == "completed" else "failed",
-                output_data={
-                    "content": response.content,
-                    "status": response.status,
-                    "message_id": response.message_id,
-                    "widgets": [widget.model_dump(mode="json") for widget in response.widgets],
-                },
-                attributes={
-                    "iterations": response.iterations,
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                    "usage_estimated": response.usage.estimated,
-                },
-            )
+        await self._finish_root_span(trace_id, response)
         await self.events.finish(
             trace_id,
             "completed" if response.status == "completed" else ("approval_required" if response.status == "approval_required" else "failed"),
@@ -936,6 +923,29 @@ class AgentRuntime:
             memory_context=memory_context,
         )
 
+    async def _finish_root_span(self, trace_id: str, response: ChatResponse) -> None:
+        """Close the run's root span with the public response (a paused run keeps it open for the resume)."""
+        root_span_id = self.events.root_span_id(trace_id)
+        if response.status == "approval_required" or root_span_id is None:
+            return
+        await self.events.finish_span(
+            trace_id,
+            root_span_id,
+            "completed" if response.status == "completed" else "failed",
+            output_data={
+                "content": response.content,
+                "status": response.status,
+                "message_id": response.message_id,
+                "widgets": [widget.model_dump(mode="json") for widget in response.widgets],
+            },
+            attributes={
+                "iterations": response.iterations,
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "usage_estimated": response.usage.estimated,
+            },
+        )
+
     async def confirm(self, approval_id: str, *, user_id: str, tenant_id: str) -> ChatResponse:
         approval = await self.repository.get_approval(approval_id)
         if approval.user_id != user_id or approval.tenant_id != tenant_id:
@@ -958,6 +968,8 @@ class AgentRuntime:
             details={"approval_id": approval_id},
         )
         await self.repository.start_conversation_run(conversation.id, approval.trace_id)
+        # The resumed tool calls and model requests are recorded as children of the run's root span.
+        await self.events.resume(approval.trace_id, conversation_id=conversation.id)
         try:
             runtime_model = await self.repository.get_default_model_runtime(
                 user_id=user_id,
@@ -985,6 +997,7 @@ class AgentRuntime:
             error=response.content if response.status == "failed" else None,
             expected_trace_id=approval.trace_id,
         )
+        await self._finish_root_span(approval.trace_id, response)
         await self.events.finish(
             approval.trace_id,
             "completed" if response.status == "completed" else "failed",
@@ -1102,7 +1115,7 @@ class AgentRuntime:
             ]
             started = perf_counter()
             try:
-                result = await self._model.ainvoke(
+                result = await self._request_model().ainvoke(
                     native_request,
                     config={"metadata": {"context_type": "compression", "trace_id": trace_id}},
                 )
@@ -1209,6 +1222,24 @@ class AgentRuntime:
                 },
             )
             return active_messages, usage[0], usage[1]
+
+    def _request_model(self) -> Any:
+        """Chat model serving this request: the actor's selected provider model, else the configured model."""
+        runtime = current_model_runtime()
+        if runtime is None or self.model_factory is None:
+            return self._model
+        key = (
+            runtime.provider_id,
+            runtime.model_id,
+            runtime.model,
+            runtime.base_url,
+            runtime.api_key,
+            runtime.timeout_seconds,
+        )
+        model = self._runtime_models.get(key)
+        if model is None:
+            model = self._runtime_models[key] = self.model_factory(runtime)
+        return model
 
     def _model_target(self) -> tuple[str, str]:
         """(model name, chat completions endpoint) of the model serving this request."""
@@ -1611,6 +1642,7 @@ class AgentRuntime:
                         cap = registry.get(str(call.get("name")))
                         if cap is None:
                             continue
+                        call_token = current_tool_call_id.set(str(call.get("id") or "") or None)
                         try:
                             outcome = await _make_invoke(cap)(**(call.get("args") or {}))
                             native_messages.append(
@@ -1629,10 +1661,12 @@ class AgentRuntime:
                                     status="error",
                                 )
                             )
+                        finally:
+                            current_tool_call_id.reset(call_token)
                     native_messages.append(AIMessage(content="The requested operation was completed."))
 
         agent = build_agent(
-            model=self._model,
+            model=self._request_model(),
             tools=native_tools,
             system_prompt=resolved_system_prompt,
             middleware=middleware,

@@ -533,6 +533,43 @@ def test_high_risk_tool_waits_for_confirmation() -> None:
     assert calls == 1
 
 
+def test_approved_tool_call_is_traced_under_the_resumed_root_span(caplog: Any) -> None:
+    # Resuming after an approval used to finish tool spans that were never started (no root span on the
+    # resume path), logging "Trace span ... was not found" and dropping the executed call from the trace.
+    llm = ScriptedLLM(
+        [
+            call_first_tool(arguments='{"recipient": "user@example.com"}', call_id="call_send"),
+            assistant("Sent."),
+        ]
+    )
+    remote = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"sent": True})))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=remote)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.send",
+                "name": "Send message",
+                "description": "Send a message to an external recipient.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"recipient": {"type": "string"}},
+                    "required": ["recipient"],
+                },
+                "endpoint": "https://tool.invalid/send",
+                "side_effect_level": "high",
+            },
+        )
+        pending = client.post("/chat", json={"message": "Send the message"}).json()
+        confirmed = client.post(f"/approvals/{pending['approval']['id']}/confirm", json={}).json()
+        trace = client.get(f"/traces/{pending['trace_id']}").json()
+
+    assert confirmed["status"] == "completed"
+    tool_span = next(span for span in trace["spans"] if span["kind"] == "tool")
+    assert tool_span["logical_call_id"] == "call_send"
+    assert tool_span["status"] == "completed"
+    assert "finish_span failed" not in caplog.text
+
+
 def test_high_risk_tool_denial_closes_pending_call_without_execution() -> None:
     calls = 0
 

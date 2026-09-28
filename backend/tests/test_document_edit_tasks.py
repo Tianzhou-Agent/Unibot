@@ -384,3 +384,37 @@ async def test_worker_recovers_a_task_interrupted_after_drafts_finished(tmp_path
     )
 
     assert recovered.status == "reviewing"
+
+
+def test_edit_task_drafts_with_the_configured_native_model_without_a_provider(tmp_path: Path) -> None:
+    # Production builds a native model from the llm_* settings; it has no legacy complete() and no model-settings
+    # provider exists, which used to fail every edit task with "No model provider is configured".
+    from langchain_core.messages import AIMessage
+
+    from tests.support.fake_chat_model import ScriptedChatModel
+
+    llm = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "submit_document_section_draft",
+                        "args": {"section_content": "## One\n\nAI one."},
+                        "id": "call_draft",
+                    }
+                ],
+            )
+        ]
+    )
+    assert not hasattr(llm, "complete")
+    with TestClient(_app(tmp_path, llm)) as client:  # type: ignore[arg-type]
+        client.post("/documents", json={"name": "guide", "content": "# Guide\n\n## One\n\nOld one.\n"})
+        created = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={"description": "Improve chapter one", "sections": [{"heading": "One", "occurrence": 1}]},
+        )
+        task = _wait_for_review(client, created.json()["id"])
+
+    assert task["status"] == "reviewing"
+    assert task["sections"][0]["draft_content"] == "## One\n\nAI one."

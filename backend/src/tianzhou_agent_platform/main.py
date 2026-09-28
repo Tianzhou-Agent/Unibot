@@ -61,6 +61,7 @@ class _LegacyAgentAdapter:
             iterations=0,
         )
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
 from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
 from tianzhou_agent_platform.core.agent import AgentRuntime
 from tianzhou_agent_platform.core.observability import ObservabilityAspect
@@ -414,6 +415,8 @@ def create_app(
         auth_enforced=enforce_auth,
         events=RunEventPublisher(observability),
         llm_call_sink=observability.record_llm_call,
+        # Models the app builds itself follow the actor's model settings per request; an injected model is fixed.
+        model_factory=create_model_from_runtime if llm is None else None,
     )
     # HTTP path goes through ChatService (acceptance A7). The AgentRuntime
     # implements the create_agent loop and is adapted as the execution port.
