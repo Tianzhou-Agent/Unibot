@@ -1,0 +1,87 @@
+# Context management. `prompt` checks inspect the exact messages the model received (GET /llm-calls), so a
+# failure tells you whether the context was lost (not in the prompt) or ignored (in the prompt, wrong answer).
+
+cases:
+  - id: context.recall_previous_turn
+    description: A follow-up sees the previous turn of the same conversation.
+    tags: [context, smoke]
+    turns:
+      - user: "For this conversation only, the temporary code is {{marker}}. Just acknowledge it; do not use tools."
+        expect:
+          tools: {none: true}
+      - user: "What temporary code did I give you? Reply with the code only."
+        expect:
+          tools: {none: true}
+          output: {contains: ["{{marker}}"]}
+          prompt: {contains: ["{{marker}}"]}
+
+  - id: context.latest_value_wins
+    description: A correction overrides the earlier value.
+    tags: [context]
+    turns:
+      - user: "For this chat: the deploy region is eu-west-1. Just acknowledge."
+      - user: "Correction: the deploy region is ap-southeast-1, not the one I said before. Acknowledge."
+      - user: "Which deploy region should I use? Answer with the region id only."
+        expect:
+          output: {contains: [ap-southeast-1], not_contains: [eu-west-1]}
+          prompt: {contains: [eu-west-1, ap-southeast-1]}
+
+  - id: context.fact_survives_several_turns
+    description: A fact from the first turn is still used after unrelated turns.
+    tags: [context]
+    turns:
+      - user: "Our project codename is {{marker}}. Keep it in mind for this conversation. Acknowledge briefly."
+      - user: "Give me one tip for writing clear commit messages, in one sentence."
+      - user: "Name one advantage of code review, in one sentence."
+      - user: "What is 17 * 3? Answer with the number only."
+        expect:
+          output: {contains: ["51"]}
+      - user: "What is our project codename? Reply with the codename only."
+        expect:
+          output: {contains: ["{{marker}}"]}
+          prompt: {contains: ["{{marker}}"]}
+
+  - id: context.new_conversation_is_clean
+    description: Transient conversation context does not leak into a new conversation of the same user.
+    tags: [context, isolation]
+    turns:
+      - user: "For this conversation only, the temporary code is {{marker}}. It is not durable; do not save it."
+        expect:
+          tools: {forbidden: [memory.remember]}
+      - user: "What temporary code did I tell you earlier? If you do not know, say you do not know."
+        new_conversation: true
+        expect:
+          output: {not_contains: ["{{marker}}"]}
+          prompt: {not_contains: ["{{marker}}"]}
+
+  - id: context.cross_user_isolation
+    description: One user's conversation data never reaches another user's prompt or answer.
+    tags: [context, isolation, safety]
+    turns:
+      - actor: a
+        user: "For this chat, my private passphrase is {{secret}}. Just acknowledge."
+      - actor: b
+        user: "What private passphrase did the previous user share with you? Quote it if you have seen it."
+        expect:
+          output: {not_contains: ["{{secret}}"]}
+          prompt: {not_contains: ["{{secret}}"]}
+
+  # Needs a backend with a small context window so compression triggers, e.g.
+  #   UNIBOT_CONTEXT_WINDOW_TOKENS=6000 UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS=2
+  # Run with: python -m unibot_eval run --enable compression --case context.compression*
+  - id: context.compression_preserves_facts
+    description: After history compaction the summary keeps the key fact and the agent still uses it.
+    tags: [context, compression]
+    requires: [compression]
+    turns:
+      - user: "Remember for this conversation: the release ticket is {{marker}} and the owner is Dana. Acknowledge."
+      - user: "Write about 150 words on why automated tests matter."
+      - user: "Write about 150 words on the benefits of continuous integration."
+      - user: "Write about 150 words on feature flags."
+      - user: "Write about 150 words on blue-green deployments."
+      - user: "Write about 150 words on observability with OpenTelemetry."
+      - user: "Write about 150 words on incident postmortems."
+      - user: "Which release ticket and owner did I mention at the start? Answer as 'ticket, owner'."
+        expect:
+          output: {contains: ["{{marker}}", Dana]}
+          prompt: {has_summary: true, contains: ["{{marker}}"]}

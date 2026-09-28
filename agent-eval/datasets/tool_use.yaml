@@ -1,0 +1,95 @@
+# Tool selection, argument extraction and result utilisation.
+# Capability names are the trace target ids (list_app, open_aina, describe_aina, request_clarification,
+# memory.remember, ...). Placeholders such as {{marker}} get a fresh random value on every attempt.
+
+cases:
+  - id: chat.no_tool_exact_reply
+    description: A direct instruction is answered without touching any capability.
+    tags: [tool_use, no_tool, smoke]
+    turns:
+      - user: "Reply with exactly {{marker}} and nothing else. Do not call any tool or application."
+        expect:
+          tools: {none: true}
+          output: {equals: "{{marker}}"}
+          budget: {max_iterations: 1}
+
+  - id: chat.general_knowledge_no_tool
+    description: General knowledge must not trigger a false tool call.
+    tags: [tool_use, no_tool]
+    turns:
+      - user: "用两三句话解释 HTTP 404 和 500 状态码的区别。"
+        expect:
+          tools: {none: true}
+          output: {contains: ["404", "500"]}
+          judge:
+            rubric: correctness
+            criteria: >-
+              404 must be described as the requested resource not being found (a client-side error) and 500 as a
+              server-side internal error. The answer is concise and in Chinese.
+
+  - id: builtin.list_app
+    description: Application discovery selects list_app exactly once and reports only returned apps.
+    tags: [tool_use, builtin, smoke]
+    turns:
+      - user: "列出应用"
+        expect:
+          tools: {expected: [list_app], mode: strict}
+          widgets: [{kind: app_list}]
+          budget: {max_iterations: 3, max_duplicate_calls: 0}
+          judge:
+            rubric: groundedness
+            criteria: >-
+              The answer lists or summarises only the applications returned by list_app and does not invent any
+              application that is absent from the capability result.
+
+  - id: builtin.describe_aina
+    description: A read-only question about a named AINA uses describe_aina, not open_aina.
+    tags: [tool_use, builtin]
+    turns:
+      - user: "unibot-memory 这个应用有哪些能力？"
+        expect:
+          tools: {expected: [describe_aina], mode: superset, forbidden: [open_aina]}
+          tool_args:
+            - {tool: describe_aina, args: {aina_id: "re:memory|记忆"}}
+          judge:
+            rubric: groundedness
+            criteria: The capabilities described must come from the describe_aina result, not from guesses.
+
+  - id: builtin.open_aina
+    description: Opening an app selects open_aina with the right id and returns a navigation widget.
+    tags: [tool_use, builtin]
+    turns:
+      - user: "打开 unibot-memory 应用"
+        expect:
+          tools: {expected: [open_aina], mode: superset}
+          tool_args:
+            - {tool: open_aina, args: {aina_id: unibot-memory}}
+          widgets: [{kind: navigation}]
+          budget: {max_duplicate_calls: 0}
+
+  - id: builtin.clarification_form
+    description: Missing information is requested through a prefilled host-rendered form.
+    tags: [tool_use, builtin]
+    turns:
+      - user: "用表单向我收集项目名称和截止日期，项目名称预填为 Unibot。"
+        expect:
+          tools: {expected: [request_clarification], mode: superset}
+          widgets:
+            - {kind: form, fields: {fields: [{value: Unibot}]}}
+          judge:
+            rubric: correctness
+            criteria: >-
+              The text points the user to the form and does not invent a deadline. Evaluate only the text; the form
+              itself is validated separately.
+
+  - id: builtin.multi_step_efficiency
+    description: A two-part request uses each needed capability once, without redundant calls.
+    tags: [tool_use, builtin, efficiency]
+    turns:
+      - user: "先列出所有应用，然后告诉我 unibot-scheduler 能做什么。"
+        expect:
+          tools: {expected: [list_app, describe_aina], mode: superset, forbidden: [open_aina]}
+          budget: {max_duplicate_calls: 0, max_iterations: 4}
+          judge:
+            rubric: groundedness
+            criteria: Both parts are answered and the scheduler description is grounded in capability results.

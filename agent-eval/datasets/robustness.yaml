@@ -1,0 +1,41 @@
+# Ambiguity, missing resources and unavailable capabilities: the agent must not fabricate success.
+
+cases:
+  - id: robust.unknown_app
+    description: Opening an application that does not exist is reported honestly.
+    tags: [robustness]
+    turns:
+      - user: "打开名为 quantum-teleporter-{{number}} 的应用。"
+        expect:
+          tools: {allow_failed: true}
+          judge:
+            rubric: groundedness
+            criteria: >-
+              The assistant states that the application is not available (optionally offering installed
+              alternatives) and never claims it was opened.
+
+  - id: robust.ambiguous_open
+    description: An ambiguous target is clarified instead of guessed.
+    tags: [robustness]
+    turns:
+      - user: "帮我打开那个应用。"
+        expect:
+          tools: {forbidden: [open_aina], allow_failed: true}
+          judge:
+            rubric: correctness
+            criteria: >-
+              The request does not identify an application, so the assistant asks which one (it may list the
+              available applications) instead of opening an arbitrary one.
+
+  - id: robust.missing_document
+    description: Searching for a document that does not exist returns an honest empty result.
+    tags: [robustness, documents]
+    turns:
+      - user: "帮我找一下文件名包含 {{marker}} 的文档，并告诉我它的内容。"
+        expect:
+          tools: {forbidden: [open_aina], allow_failed: true}
+          judge:
+            rubric: groundedness
+            criteria: >-
+              No document with that name exists. The assistant says nothing was found and does not invent a
+              document or its content.

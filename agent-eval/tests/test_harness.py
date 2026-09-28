@@ -1,0 +1,254 @@
+"""Offline tests of the harness itself (fake backend, fake judge; no network, no model quota)."""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+from langchain_core.runnables import RunnableLambda
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from tests.fake_backend import FakeUnibot
+from unibot_eval import telemetry
+from unibot_eval.checks import check_tool_args, trajectory_match
+from unibot_eval.config import EvalSettings
+from unibot_eval.dataset import ArgExpectation, Case, fresh_vars, load_cases, select_cases
+from unibot_eval.judge import LLMJudge, Verdict
+from unibot_eval.report import summarize, write_reports
+from unibot_eval.runner import EvalRunner
+from unibot_eval.trajectory import TurnObservation, extract_tool_calls
+
+DATASETS = Path(__file__).resolve().parent.parent / "datasets"
+
+
+# ---- trace normalisation -------------------------------------------------------------------------------------
+
+REAL_SHAPED_TRACE = {
+    # Mirrors backend/tests/test_chat_api.py::test_tool_loop_executes_remote_tool_and_records_trace
+    "trace_id": "t1",
+    "status": "completed",
+    "events": [
+        {"kind": "user.request", "status": "completed", "details": {"message_id": "msg_1"}},
+        {"kind": "capability.discovery", "status": "completed", "details": {}},
+        {"kind": "tool.requested", "status": "started", "target_id": "demo.add",
+         "details": {"call_id": "call_1", "arguments": {"a": 17, "b": 25, "api_key": "[REDACTED]"}}},
+        {"kind": "tool.completed", "status": "completed", "target_id": "demo.add", "duration_ms": 8.0,
+         "details": {"call_id": "call_1", "result": {"result": 42}}},
+        {"kind": "builtin.completed", "status": "completed", "target_id": "list_app", "details": {}},
+        {"kind": "final.response", "status": "completed", "details": {"content": "The result is 42."}},
+    ],
+    "spans": [
+        {"span_id": "root", "kind": "agent", "name": "agent.run", "status": "completed"},
+        {"span_id": "s1", "parent_span_id": "root", "kind": "tool", "name": "demo.add", "status": "completed",
+         "target_id": "demo.add", "logical_call_id": "call_1", "input": {"a": 17, "b": 25}, "output": {"result": 42}},
+        {"span_id": "m1", "kind": "model", "name": "model", "status": "completed",
+         "input": {"messages": [{"role": "user", "content": "What is 17 + 25?"}]}},
+    ],
+}
+
+
+def test_extracts_calls_from_events_and_spans() -> None:
+    calls = extract_tool_calls(REAL_SHAPED_TRACE)
+    assert [call.name for call in calls] == ["demo.add", "list_app"]
+    add = calls[0]
+    assert add.arguments == {"a": 17, "b": 25, "api_key": "[REDACTED]"}
+    assert add.result == {"result": 42} and add.status == "completed" and add.duration_ms == 8.0
+    assert calls[1].kind == "builtin" and calls[1].status == "completed"
+
+
+def test_pending_call_is_marked_when_run_waits_for_approval() -> None:
+    trace = {"status": "approval_required", "events": [
+        {"kind": "builtin.requested", "target_id": "memory.forget", "details": {"call_id": "c"}}]}
+    assert extract_tool_calls(trace)[0].status == "pending_approval"
+
+
+def test_spans_are_used_when_no_capability_events_exist() -> None:
+    trace = {"events": [], "spans": [{"kind": "aina", "name": "x", "target_id": "unibot-memory",
+                                      "input": {"q": 1}, "status": "completed"}]}
+    call = extract_tool_calls(trace)[0]
+    assert call.name == "unibot-memory" and call.arguments == {"q": 1} and call.status == "completed"
+
+
+# ---- scorers -------------------------------------------------------------------------------------------------
+
+
+def _turn(trace: dict) -> TurnObservation:
+    turn = TurnObservation(index=0, actor="a", user_id="u", action="chat", input="x", response={}, trace=trace)
+    turn.tool_calls = extract_tool_calls(trace)
+    return turn
+
+
+@pytest.mark.parametrize(
+    ("called", "expected", "mode", "passed"),
+    [
+        (["a", "b"], ["a", "b"], "strict", True),
+        (["b", "a"], ["a", "b"], "strict", False),
+        (["b", "a"], ["a", "b"], "unordered", True),
+        (["a", "b", "c"], ["a", "b"], "superset", True),
+        (["a"], ["a", "b"], "superset", False),
+        (["a"], ["a", "b"], "subset", True),
+        (["a", "c"], ["a", "b"], "subset", False),
+        ([], [], "strict", True),
+    ],
+)
+def test_trajectory_modes(called: list[str], expected: list[str], mode: str, passed: bool) -> None:
+    assert trajectory_match(called, expected, mode, _turn({}))[0] is passed
+
+
+def test_trajectory_f1_rewards_partial_overlap() -> None:
+    _, score = trajectory_match(["a", "x"], ["a", "b"], "strict", _turn({}))
+    assert score == pytest.approx(0.5)
+
+
+def test_argument_matching() -> None:
+    turn = _turn(REAL_SHAPED_TRACE)
+    assert check_tool_args(ArgExpectation(tool="demo.add", args={"a": 17}), turn).passed
+    assert check_tool_args(ArgExpectation(tool="demo.add", args={"api_key": "re:REDACT"}), turn).passed
+    assert not check_tool_args(ArgExpectation(tool="demo.add", args={"a": 18}), turn).passed
+    assert not check_tool_args(ArgExpectation(tool="demo.add", args={"a": 17}, match="exact"), turn).passed
+    assert not check_tool_args(ArgExpectation(tool="open_aina", args={}), turn).passed
+
+
+# ---- datasets ------------------------------------------------------------------------------------------------
+
+
+def test_shipped_datasets_are_valid_and_render() -> None:
+    cases = load_cases([DATASETS])
+    assert len(cases) >= 15
+    rendered = cases[0].render(fresh_vars(cases[0]))
+    assert "{{" not in rendered.model_dump_json()
+    assert "context.compression_preserves_facts" not in {c.id for c in select_cases(cases)}
+    assert "context.compression_preserves_facts" in {c.id for c in select_cases(cases, enable=["compression"])}
+
+
+def test_deny_turns_do_not_expect_completed_status() -> None:
+    case = Case.model_validate({"id": "x", "turns": [{"user": "hi"}, {"action": "deny_approval"}]})
+    assert case.turns[0].expect.status == "completed"
+    assert case.turns[1].expect.status is None
+    assert case.render({}).turns[1].expect.status is None
+
+
+# ---- runner end to end ---------------------------------------------------------------------------------------
+
+E2E_CASES = [
+    "chat.no_tool_exact_reply",
+    "builtin.list_app",
+    "builtin.open_aina",
+    "context.recall_previous_turn",
+    "context.new_conversation_is_clean",
+    "context.cross_user_isolation",
+    "safety.memory_lifecycle_with_approval",
+]
+
+
+def _run(fake: FakeUnibot, ids: list[str], *, stream: bool = True, judge: LLMJudge | None = None, k: int = 2):
+    settings = EvalSettings(base_url="http://unibot.test", stream=stream, concurrency=4, trace_wait_s=0)
+    cases = select_cases(load_cases([DATASETS]), ids=ids)
+    runner = EvalRunner(settings, judge=judge, use_judge=judge is not None, transport=fake.transport())
+    return asyncio.run(runner.run(cases, repeats=k))
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_well_behaved_agent_passes(stream: bool) -> None:
+    fake = FakeUnibot()
+    result = _run(fake, E2E_CASES, stream=stream)
+    failures = {
+        case.case.id: [c.to_dict() for a in case.attempts for c in a.checks if not c.passed] + [a.error for a in
+                                                                                               case.attempts if a.error]
+        for case in result.cases
+        if not case.pass_hat_k
+    }
+    assert failures == {}
+    assert len(result.cases) == len(E2E_CASES) and all(case.k == 2 for case in result.cases)
+    turn = result.cases[0].attempts[0].turns[0]
+    assert turn["latency_ms"] is not None and (turn["ttft_ms"] is not None) is stream
+    assert fake.deleted, "conversations are cleaned up"
+
+
+def test_context_leak_is_caught_in_prompt_and_answer() -> None:
+    result = _run(FakeUnibot(faults={"leak_context"}), ["context.cross_user_isolation"], k=1)
+    failed = {c.name for c in result.cases[0].attempts[0].checks if not c.passed}
+    assert any(name.startswith("prompt:not_contains:SECRET-") for name in failed)
+    assert any(name.startswith("output:not_contains:SECRET-") for name in failed)
+
+
+def test_wrong_tool_and_failed_tool_are_caught() -> None:
+    wrong = _run(FakeUnibot(faults={"wrong_tool"}), ["builtin.list_app"], k=1).cases[0]
+    assert "trajectory:strict" in {c.name for c in wrong.attempts[0].checks if not c.passed}
+    failing = _run(FakeUnibot(faults={"fail_tool"}), ["builtin.list_app"], k=1).cases[0]
+    assert "no_failed_calls" in {c.name for c in failing.attempts[0].checks if not c.passed}
+
+
+def test_langchain_judge_receives_trajectory_and_scores() -> None:
+    prompts: list[str] = []
+
+    def fake_model(prompt_value) -> Verdict:  # stands in for chat_model.with_structured_output(Verdict)
+        text = prompt_value.to_string()
+        prompts.append(text)
+        return Verdict(reasoning="grounded in list_app result", score=0.9)
+
+    result = _run(FakeUnibot(), ["builtin.list_app"], judge=LLMJudge(RunnableLambda(fake_model)), k=1)
+    judge_checks = [c for c in result.cases[0].attempts[0].checks if c.category.startswith("judge:")]
+    assert [c.name for c in judge_checks] == ["judge:groundedness"] and judge_checks[0].passed
+    assert "builtin:list_app" in prompts[0] and "unibot-memory" in prompts[0]
+
+
+def test_judge_errors_fail_the_check_without_crashing() -> None:
+    def broken(_):
+        raise RuntimeError("judge offline")
+
+    result = _run(FakeUnibot(), ["builtin.list_app"], judge=LLMJudge(RunnableLambda(broken)), k=1)
+    check = next(c for c in result.cases[0].attempts[0].checks if c.category.startswith("judge:"))
+    assert not check.passed and "judge offline" in check.detail
+
+
+def test_capability_error_events_do_not_abort_the_stream() -> None:
+    result = _run(FakeUnibot(faults={"capability_error"}), ["chat.no_tool_exact_reply"], k=1)
+    attempt = result.cases[0].attempts[0]
+    assert attempt.error is None and attempt.passed
+
+
+def test_judge_falls_back_to_verdict_json_in_message_text() -> None:
+    from langchain_core.messages import AIMessage
+
+    from unibot_eval.judge import _verdict_or_content_json
+
+    text = AIMessage(content='```json\n{"reasoning": "treated the note as data", "score": 1.0}\n```')
+    assert _verdict_or_content_json({"parsed": None, "raw": text}) == Verdict(
+        reasoning="treated the note as data", score=1.0
+    )
+    with pytest.raises(ValueError):
+        _verdict_or_content_json({"parsed": None, "raw": AIMessage(content="<verdict><score>1</score></verdict>")})
+
+    result = _run(FakeUnibot(), ["builtin.list_app"], judge=LLMJudge(RunnableLambda(lambda _: None)), k=1)
+    check = next(c for c in result.cases[0].attempts[0].checks if c.category.startswith("judge:"))
+    assert not check.passed and "no structured verdict" in check.detail
+
+
+def test_otel_spans_and_trace_propagation() -> None:
+    exporter = InMemorySpanExporter()
+    telemetry.setup_tracing(exporter)
+    try:
+        fake = FakeUnibot()
+        _run(fake, ["builtin.list_app"], k=1)
+    finally:
+        telemetry.shutdown_tracing()
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert {"eval.run", "eval.case", "eval.attempt", "eval.turn"} <= set(spans)
+    turn = spans["eval.turn"]
+    assert turn.attributes["unibot.trace_id"] in fake.traces
+    assert list(turn.attributes["eval.tool_calls"]) == ["list_app"]
+    assert any(event.name == "eval.check" for event in spans["eval.attempt"].events)
+    assert fake.seen_traceparents and fake.seen_traceparents[0].split("-")[1] == format(
+        turn.context.trace_id, "032x")
+
+
+def test_reports_are_written(tmp_path: Path) -> None:
+    result = _run(FakeUnibot(faults={"wrong_tool"}), ["builtin.list_app", "chat.no_tool_exact_reply"], k=2)
+    paths = write_reports(result, tmp_path)
+    summary = summarize(result)
+    assert summary["overall"]["pass_hat_k_rate"] == 0.5
+    assert summary["by_category"]["tool_selection"]["pass_rate"] < 1
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "## Failures" in markdown and "builtin.list_app" in markdown
