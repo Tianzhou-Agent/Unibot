@@ -556,7 +556,9 @@ class PersistentRepository(InMemoryRepository):
         return sorted(matching, key=lambda item: item.started_at, reverse=True)[:limit]
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
-        async with self.stores.redis.lease("conversation-run-state", conversation_id, ttl_seconds=30) as locked:
+        async with self.stores.redis.lease(
+            "conversation-run-state", conversation_id, ttl_seconds=30, blocking_timeout_seconds=5,
+        ) as locked:
             if not locked:
                 raise conflict("Conversation run state is being updated. Retry the request.")
             conversation = await self.get_conversation(conversation_id)

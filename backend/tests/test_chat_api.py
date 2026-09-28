@@ -7,6 +7,7 @@ import threading
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -483,6 +484,51 @@ def test_tool_failure_is_isolated_and_returned_to_the_model() -> None:
     tool_span = next(span for span in trace.json()["spans"] if span["kind"] == "tool")
     assert tool_span["status"] == "failed"
     assert tool_span["error"]["code"] == "DEPENDENCY_FAILED"
+
+
+@pytest.mark.parametrize("remote_status", [200, 503])
+def test_stream_reports_each_tool_call_as_it_starts_and_finishes(remote_status: int) -> None:
+    async def remote(_: httpx.Request) -> httpx.Response:
+        if remote_status == 200:
+            return httpx.Response(200, json={"result": 42})
+        return httpx.Response(503, json={"error": "offline"})
+
+    llm = ScriptedLLM([call_first_tool(arguments='{"a": 17}'), assistant("done")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.add",
+                "name": "Add numbers",
+                "description": "Add values.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"a": {"type": "integer"}},
+                    "required": ["a"],
+                },
+                "endpoint": "https://tool.invalid/add",
+                "retries": 0,
+            },
+        )
+        with client.stream(
+            "POST", "/chat/stream", json={"message": "Use the tool", "capability": "tool:demo.add"},
+        ) as response:
+            events = [json.loads(line[5:]) for line in response.iter_lines() if line.startswith("data:")]
+
+    requested = next(event for event in events if event["type"] == "tool.requested")
+    completed = next(event for event in events if event["type"] == "tool.completed")
+    assert events.index(requested) < events.index(completed)
+    assert requested["id"] == "demo.add"
+    assert requested["call_id"] == completed["call_id"] == "call_1"
+    assert requested["name"] == completed["name"] == llm.calls[0]["tool_choice"]["function"]["name"]
+    assert json.loads(requested["arguments"]) == {"a": 17}
+    if remote_status == 200:
+        assert completed["status"] == "completed"
+        assert json.loads(completed["result"]) == {"result": 42}
+    else:
+        assert completed["status"] == "failed"
+        assert json.loads(completed["result"])["error"]["code"] == "DEPENDENCY_FAILED"
 
 
 def test_high_risk_tool_waits_for_confirmation() -> None:

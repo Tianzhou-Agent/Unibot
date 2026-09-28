@@ -4,7 +4,8 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "react-rout
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ModelSelector } from "@/components/chat/ModelSelector";
-import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
+import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/components/chat/LiveTurn";
+import { isToolSequenceContinuation, toolSequenceCallCount, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { Topbar } from "@/components/layout/Topbar";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
@@ -35,7 +36,7 @@ export default function CanvasModePage() {
   const [messages, setMessages] = useState<BackendMessage[]>([]);
   const [loading, setLoading] = useState(!canvas);
   const [sending, setSending] = useState(false);
-  const [streamText, setStreamText] = useState("");
+  const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
@@ -95,7 +96,7 @@ export default function CanvasModePage() {
       const running = record.run_status === "running";
       setRecoveringRun(running);
       setSending(running);
-      setActivity(running ? "正在处理，请稍候…" : null);
+      setActivity(null);
     }
     setError(record.run_error ?? null);
     return record;
@@ -123,7 +124,7 @@ export default function CanvasModePage() {
       setMessages([]);
       setSending(false);
       setRecoveringRun(false);
-      setStreamText("");
+      setLiveItems([]);
       setActivity(null);
       setApproval(null);
       setLastRun(null);
@@ -185,7 +186,7 @@ export default function CanvasModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [messages, streamText, activity, approval, sending, clarificationWidgets]);
+  }, [messages, liveItems, activity, approval, sending, clarificationWidgets]);
 
   async function sendMessage(text: string) {
     const prompt = text.trim();
@@ -213,8 +214,8 @@ export default function CanvasModePage() {
     };
     setMessages((current) => [...current, optimistic]);
     setSending(true);
-    setStreamText("");
-    setActivity(debugMode ? "正在连接 AINA…" : "正在处理，请稍候…");
+    setLiveItems([]);
+    setActivity(null);
     setError(null);
     setApproval(null);
     let completion: ChatResponse | null = null;
@@ -257,10 +258,7 @@ export default function CanvasModePage() {
             streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
           }
           if (!isActiveRun()) return;
-          if (event.type === "message.delta") setStreamText((current) => current + event.delta);
-          if (event.type === "tool.requested") setActivity(debugMode ? `正在调用 ${event.id}…` : "正在处理，请稍候…");
-          if (event.type === "tool.completed") setActivity(debugMode ? "调用完成，正在整理结果…" : "正在整理结果…");
-          if (event.type === "routing.started") setActivity(debugMode ? "正在匹配 AINA…" : "正在处理，请稍候…");
+          setLiveItems((current) => applyLiveEvent(current, event));
           if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
             setError(streamFailure);
@@ -300,7 +298,7 @@ export default function CanvasModePage() {
       }
       if (activeRun) {
         setSending(false);
-        setStreamText("");
+        setLiveItems([]);
         setActivity(null);
       }
     }
@@ -462,20 +460,8 @@ export default function CanvasModePage() {
                     onPrompt={(prompt) => void sendMessage(prompt)}
                   />
                 ))}
-                {streamText ? (
-                  <AssistantMessage
-                    message={{
-                      id: "canvas-stream",
-                      role: "assistant",
-                      content: streamText,
-                      createdAt: new Date().toISOString(),
-                      runState: "running",
-                    }}
-                  />
-                ) : null}
-                {activity ? (
-                  <ToolActivityCard text={activity} compact />
-                ) : null}
+                <LiveTurn items={liveItems} compact debugMode={debugMode} />
+                {sending ? <ThinkingIndicator label={activity} compact /> : null}
                 {approval ? (
                   <ApprovalCard
                     approval={approval}

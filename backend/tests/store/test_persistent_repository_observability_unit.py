@@ -376,6 +376,20 @@ async def test_finishing_a_run_waits_for_concurrent_reconciliation():
 
 
 @pytest.mark.asyncio
+async def test_starting_a_run_waits_for_concurrent_reconciliation():
+    stores = _stores()
+    repository = PersistentRepository(stores)
+    await repository.initialize()
+    conversation = await repository.create_conversation(ConversationCreate())
+    async with stores.redis.lease("conversation-run-state", conversation.id, ttl_seconds=30):
+        start = asyncio.create_task(repository.start_conversation_run(conversation.id, "trace_wait"))
+        await asyncio.sleep(0.02)
+        assert not start.done()
+    assert (await start).run_status == "running"
+    await repository.finish_conversation_run(conversation.id)
+
+
+@pytest.mark.asyncio
 async def test_lost_lease_cancels_its_worker_and_releases_local_heartbeat(monkeypatch):
     monkeypatch.setattr("tianzhou_agent_platform.store.repository.CONVERSATION_RUN_HEARTBEAT_SECONDS", 0.01)
     stores = _stores()

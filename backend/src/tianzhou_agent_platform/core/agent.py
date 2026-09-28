@@ -96,6 +96,9 @@ _HIGH_RISK_MARKERS = (
     "sensitive.third_party",
 )
 
+# Larger results are left off live tool events; the UI shows them after the turn reloads.
+_LIVE_TOOL_RESULT_MAX_BYTES = 16_000
+
 logger = logging.getLogger(__name__)
 
 from tianzhou_agent_platform.core.run_events import NULL_RUN_EVENTS  # noqa: E402
@@ -1462,9 +1465,10 @@ class AgentRuntime:
                             message="Only one AINA scope can be activated per model response.",
                         )
                     run_scope.activated_in_batch = True
-                    aina, _installation = cast(tuple[AinaRecord, AinaInstallation], cap.value)
-                    if aina.manifest.runtime.type == "builtin":
-                        return await _activate_scope(cap, call_id, arguments)
+                aina_activation = (
+                    cap.kind == "aina"
+                    and cast(tuple[AinaRecord, AinaInstallation], cap.value)[0].manifest.runtime.type == "builtin"
+                )
 
                 span_id = f"span_{uuid4().hex}"
                 await self.events.push(
@@ -1491,20 +1495,41 @@ class AgentRuntime:
                     logical_call_id=call_id,
                     input_data=arguments,
                 )
-                await self._emit(event_sink, {"type": "tool.requested", "kind": cap.kind, "id": cap.capability_id})
+                await self._emit(event_sink, {
+                    "type": "tool.requested",
+                    "kind": cap.kind,
+                    "id": cap.capability_id,
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False, default=str),
+                })
                 prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
                 try:
-                    outcome = await self._invoke_resolved_capability(
-                        state=run_state,  # type: ignore[arg-type]
-                        event_sink=event_sink,
-                        capability=cap,
-                        call_id=call_id,
-                        function_name=name,
-                        arguments=arguments,
-                        available_tool_ids=[item.capability_id for item in registry.values() if item.kind == "tool"],
-                        messages=prompt_holder,
-                        widgets=run_scope.widgets,
-                    )
+                    if aina_activation:
+                        # A built-in AINA call only loads that AINA's capabilities into scope, but it is still a
+                        # model tool call, so it gets the same span and events as any other capability.
+                        started = perf_counter()
+                        activation = await _activate_scope(cap, call_id, arguments)
+                        outcome = ResolvedCapabilityOutcome(
+                            result=activation,
+                            result_size_bytes=len(json.dumps(activation, ensure_ascii=False).encode("utf-8")),
+                            duration_ms=(perf_counter() - started) * 1000,
+                            widgets=[],
+                            widget_state=run_scope.widgets,
+                            activated_scope=True,
+                        )
+                    else:
+                        outcome = await self._invoke_resolved_capability(
+                            state=run_state,  # type: ignore[arg-type]
+                            event_sink=event_sink,
+                            capability=cap,
+                            call_id=call_id,
+                            function_name=name,
+                            arguments=arguments,
+                            available_tool_ids=[item.capability_id for item in registry.values() if item.kind == "tool"],
+                            messages=prompt_holder,
+                            widgets=run_scope.widgets,
+                        )
                 except (PlatformError, TypeError, ValueError) as exc:
                     if isinstance(exc, PlatformError):
                         code, message = exc.code, exc.message
@@ -1525,6 +1550,15 @@ class AgentRuntime:
                         "failed",
                         error={"code": code, "message": message, "retryable": getattr(exc, "retryable", False)},
                     )
+                    await self._emit(event_sink, {
+                        "type": "tool.completed",
+                        "kind": cap.kind,
+                        "id": cap.capability_id,
+                        "call_id": call_id,
+                        "name": name,
+                        "status": "failed",
+                        "result": json.dumps({"error": {"code": code, "message": message}}, ensure_ascii=False),
+                    })
                     await _fail(
                         cap, call_id=call_id, function_name=name, code=code, message=message, retryable=retryable
                     )
@@ -1564,7 +1598,19 @@ class AgentRuntime:
                         "widgets": outcome.widgets,
                     },
                 )
-                await self._emit(event_sink, {"type": "tool.completed", "kind": cap.kind, "id": cap.capability_id})
+                await self._emit(event_sink, {
+                    "type": "tool.completed",
+                    "kind": cap.kind,
+                    "id": cap.capability_id,
+                    "call_id": call_id,
+                    "name": name,
+                    "status": "completed",
+                    "result": (
+                        json.dumps(outcome.result, ensure_ascii=False, default=str)
+                        if outcome.result_size_bytes <= _LIVE_TOOL_RESULT_MAX_BYTES
+                        else None
+                    ),
+                })
                 if cap.capability_id == CREATE_EDIT_TASK_TOOL_ID:
                     run_scope.direct_reply = _edit_task_reply(outcome.result)
                 return outcome
