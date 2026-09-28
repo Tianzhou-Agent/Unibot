@@ -96,6 +96,9 @@ _HIGH_RISK_MARKERS = (
     "sensitive.third_party",
 )
 
+# Larger results are left off live tool events; the UI shows them after the turn reloads.
+_LIVE_TOOL_RESULT_MAX_BYTES = 16_000
+
 logger = logging.getLogger(__name__)
 
 from tianzhou_agent_platform.core.run_events import NULL_RUN_EVENTS  # noqa: E402
@@ -1491,7 +1494,14 @@ class AgentRuntime:
                     logical_call_id=call_id,
                     input_data=arguments,
                 )
-                await self._emit(event_sink, {"type": "tool.requested", "kind": cap.kind, "id": cap.capability_id})
+                await self._emit(event_sink, {
+                    "type": "tool.requested",
+                    "kind": cap.kind,
+                    "id": cap.capability_id,
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False, default=str),
+                })
                 prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
                 try:
                     outcome = await self._invoke_resolved_capability(
@@ -1525,6 +1535,15 @@ class AgentRuntime:
                         "failed",
                         error={"code": code, "message": message, "retryable": getattr(exc, "retryable", False)},
                     )
+                    await self._emit(event_sink, {
+                        "type": "tool.completed",
+                        "kind": cap.kind,
+                        "id": cap.capability_id,
+                        "call_id": call_id,
+                        "name": name,
+                        "status": "failed",
+                        "result": json.dumps({"error": {"code": code, "message": message}}, ensure_ascii=False),
+                    })
                     await _fail(
                         cap, call_id=call_id, function_name=name, code=code, message=message, retryable=retryable
                     )
@@ -1564,7 +1583,19 @@ class AgentRuntime:
                         "widgets": outcome.widgets,
                     },
                 )
-                await self._emit(event_sink, {"type": "tool.completed", "kind": cap.kind, "id": cap.capability_id})
+                await self._emit(event_sink, {
+                    "type": "tool.completed",
+                    "kind": cap.kind,
+                    "id": cap.capability_id,
+                    "call_id": call_id,
+                    "name": name,
+                    "status": "completed",
+                    "result": (
+                        json.dumps(outcome.result, ensure_ascii=False, default=str)
+                        if outcome.result_size_bytes <= _LIVE_TOOL_RESULT_MAX_BYTES
+                        else None
+                    ),
+                })
                 if cap.capability_id == CREATE_EDIT_TASK_TOOL_ID:
                     run_scope.direct_reply = _edit_task_reply(outcome.result)
                 return outcome

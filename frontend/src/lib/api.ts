@@ -68,7 +68,16 @@ export function apiErrorMessage(error: unknown): string {
 
 export type StreamEvent =
   | { type: "message.delta"; delta: string }
-  | { type: "tool.requested" | "tool.completed"; kind: "tool" | "aina" | "builtin"; id: string }
+  | { type: "tool.requested"; kind: "tool" | "aina" | "builtin"; id: string; call_id: string; name: string; arguments: string }
+  | {
+      type: "tool.completed";
+      kind: "tool" | "aina" | "builtin";
+      id: string;
+      call_id: string;
+      name: string;
+      status: "completed" | "failed";
+      result: string | null;
+    }
   | { type: "routing.started"; candidate_count: number }
   | { type: "routing.completed"; kind: "aina" | "system"; id?: string | null }
   | { type: "approval.required"; approval_id: string; capabilities: string[] }

@@ -74,3 +74,47 @@
     @apply btn border border-danger-ring bg-white text-danger hover:bg-danger-soft;
   }
 }
+
+@layer components {
+  /* A bright band sweeps across the text, like a glint of light. */
+  .thinking-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      theme("colors.ink.subtle") 0%,
+      theme("colors.ink.subtle") 35%,
+      theme("colors.accent.DEFAULT") 50%,
+      theme("colors.ink.subtle") 65%,
+      theme("colors.ink.subtle") 100%
+    );
+    background-size: 250% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: thinking-shimmer 2.2s linear infinite, thinking-word-in 0.35s ease-out;
+  }
+  .thinking-glow {
+    filter: drop-shadow(0 0 4px theme("colors.accent.DEFAULT / 55%"));
+    animation: thinking-glow 1.6s ease-in-out infinite;
+  }
+  @keyframes thinking-shimmer {
+    from { background-position: 100% 0; }
+    to { background-position: -150% 0; }
+  }
+  @keyframes thinking-word-in {
+    from { opacity: 0; transform: translateY(2px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes thinking-glow {
+    0%, 100% { opacity: 0.55; transform: scale(0.92); }
+    50% { opacity: 1; transform: scale(1.08); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .thinking-shimmer {
+      animation: none;
+      color: theme("colors.accent.DEFAULT");
+    }
+    .thinking-glow {
+      animation: none;
+    }
+  }
+}

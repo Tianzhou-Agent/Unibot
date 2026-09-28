@@ -4,7 +4,6 @@ import {
   Database,
   FileText,
   Globe2,
-  Loader2,
   Search,
   TerminalSquare,
   Wrench,
@@ -135,18 +134,6 @@ export function ToolCallCard({
         </div>
       ) : null}
     </details>
-  );
-}
-
-export function ToolActivityCard({ text, compact = false }: { text: string; compact?: boolean }) {
-  return (
-    <div className={classNames("flex items-center gap-2.5 rounded-xl border border-line bg-white px-3.5", compact ? "min-h-9" : "min-h-10")} aria-live="polite">
-      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
-      <span className={classNames("font-medium text-ink", compact ? "text-[11.5px]" : "text-[12.5px]")}>工具调用</span>
-      <span className="h-0.5 w-0.5 rounded-full bg-ink-subtle" />
-      <span className={classNames("min-w-0 flex-1 truncate text-ink-subtle", compact ? "text-[10.5px]" : "text-[12px]")}>{text}</span>
-      <span className="font-mono text-[10px] text-accent">运行中</span>
-    </div>
   );
 }
 

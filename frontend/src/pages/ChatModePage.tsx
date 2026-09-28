@@ -13,7 +13,8 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
-import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
+import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/components/chat/LiveTurn";
+import { isToolSequenceContinuation, toolSequenceCallCount, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -61,7 +62,7 @@ export default function ChatModePage() {
   const [composerVersion, setComposerVersion] = useState(0);
   const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
-  const [streamText, setStreamText] = useState("");
+  const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
@@ -169,7 +170,7 @@ export default function ChatModePage() {
       setDeleted(false);
       if (localRunConversationIdRef.current !== id) {
         setSending(record.run_status === "running");
-        setActivity(record.run_status === "running" ? "正在处理，请稍候…" : null);
+        setActivity(null);
       }
       setError(record.run_error ?? null);
     } catch (loadError) {
@@ -200,7 +201,7 @@ export default function ChatModePage() {
       localRunConversationIdRef.current = null;
       localRunWorkspaceIdRef.current = null;
       setOptimisticUser(null);
-      setStreamText("");
+      setLiveItems([]);
       setActivity(null);
       setSending(false);
       setClarificationWidgets([]);
@@ -240,7 +241,7 @@ export default function ChatModePage() {
       setError(null);
       setDeleted(false);
       setOptimisticUser(null);
-      setStreamText("");
+      setLiveItems([]);
       setActivity(null);
       setSending(false);
       setClarificationWidgets([]);
@@ -251,7 +252,7 @@ export default function ChatModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending, clarificationWidgets]);
+  }, [conversation?.messages, optimisticUser, liveItems, activity, approval, sending, clarificationWidgets]);
 
   async function sendMessage(text: string) {
     if (sending || deleted) return;
@@ -265,8 +266,8 @@ export default function ChatModePage() {
       created_at: new Date().toISOString(),
     };
     setOptimisticUser(localMessage);
-    setStreamText("");
-    setActivity(debugMode ? "正在连接模型…" : "正在处理，请稍候…");
+    setLiveItems([]);
+    setActivity(null);
     setError(null);
     setApproval(null);
     setSending(true);
@@ -318,18 +319,7 @@ export default function ChatModePage() {
             streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
           }
           if (!isActiveRun()) return;
-          if (event.type === "message.delta") setStreamText((current) => current + event.delta);
-          if (event.type === "tool.requested") {
-            if (debugMode) {
-              const kindLabel = event.kind === "aina" ? "AINA" : event.kind === "builtin" ? "内置工具" : "远程工具";
-              setActivity(`正在调用 ${kindLabel}：${event.id}`);
-            } else {
-              setActivity("正在处理，请稍候…");
-            }
-          }
-          if (event.type === "tool.completed") {
-            setActivity(debugMode ? `${event.id} 已完成，正在整理结果…` : "正在整理结果…");
-          }
+          setLiveItems((current) => applyLiveEvent(current, event));
           if (event.type === "approval.required") setActivity("等待你的授权确认");
           if (event.type === "error") {
             setError(streamFailure);
@@ -377,7 +367,7 @@ export default function ChatModePage() {
       }
       if (activeRun) {
         setOptimisticUser(null);
-        setStreamText("");
+        setLiveItems([]);
         setActivity(null);
         setSending(false);
       }
@@ -586,18 +576,8 @@ export default function ChatModePage() {
                   onPrompt={sendMessage}
                 />
               ))}
-              {streamText ? (
-                <AssistantMessage
-                  message={{
-                    id: "streaming",
-                    role: "assistant",
-                    content: streamText,
-                    createdAt: new Date().toISOString(),
-                    runState: "running",
-                  }}
-                />
-              ) : null}
-              {activity ? <ActivityBubble text={activity} /> : null}
+              <LiveTurn items={liveItems} debugMode={debugMode} />
+              {sending ? <ThinkingIndicator label={activity} /> : null}
               {approval && !deleted ? (
                 <ApprovalCard
                   approval={approval}
@@ -729,10 +709,6 @@ function FailedCallNotice({ conversationId, traceId, failure }: { conversationId
       </Link>
     </div>
   );
-}
-
-function ActivityBubble({ text }: { text: string }) {
-  return <ToolActivityCard text={text} />;
 }
 
 function RunSummary({ response }: { response: ChatResponse }) {
