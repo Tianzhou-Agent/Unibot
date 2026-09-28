@@ -1465,9 +1465,10 @@ class AgentRuntime:
                             message="Only one AINA scope can be activated per model response.",
                         )
                     run_scope.activated_in_batch = True
-                    aina, _installation = cast(tuple[AinaRecord, AinaInstallation], cap.value)
-                    if aina.manifest.runtime.type == "builtin":
-                        return await _activate_scope(cap, call_id, arguments)
+                aina_activation = (
+                    cap.kind == "aina"
+                    and cast(tuple[AinaRecord, AinaInstallation], cap.value)[0].manifest.runtime.type == "builtin"
+                )
 
                 span_id = f"span_{uuid4().hex}"
                 await self.events.push(
@@ -1504,17 +1505,31 @@ class AgentRuntime:
                 })
                 prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
                 try:
-                    outcome = await self._invoke_resolved_capability(
-                        state=run_state,  # type: ignore[arg-type]
-                        event_sink=event_sink,
-                        capability=cap,
-                        call_id=call_id,
-                        function_name=name,
-                        arguments=arguments,
-                        available_tool_ids=[item.capability_id for item in registry.values() if item.kind == "tool"],
-                        messages=prompt_holder,
-                        widgets=run_scope.widgets,
-                    )
+                    if aina_activation:
+                        # A built-in AINA call only loads that AINA's capabilities into scope, but it is still a
+                        # model tool call, so it gets the same span and events as any other capability.
+                        started = perf_counter()
+                        activation = await _activate_scope(cap, call_id, arguments)
+                        outcome = ResolvedCapabilityOutcome(
+                            result=activation,
+                            result_size_bytes=len(json.dumps(activation, ensure_ascii=False).encode("utf-8")),
+                            duration_ms=(perf_counter() - started) * 1000,
+                            widgets=[],
+                            widget_state=run_scope.widgets,
+                            activated_scope=True,
+                        )
+                    else:
+                        outcome = await self._invoke_resolved_capability(
+                            state=run_state,  # type: ignore[arg-type]
+                            event_sink=event_sink,
+                            capability=cap,
+                            call_id=call_id,
+                            function_name=name,
+                            arguments=arguments,
+                            available_tool_ids=[item.capability_id for item in registry.values() if item.kind == "tool"],
+                            messages=prompt_holder,
+                            widgets=run_scope.widgets,
+                        )
                 except (PlatformError, TypeError, ValueError) as exc:
                     if isinstance(exc, PlatformError):
                         code, message = exc.code, exc.message

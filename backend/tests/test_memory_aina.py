@@ -105,11 +105,38 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
         event["kind"] == "routing.scope.activated" and event["target_id"] == "unibot-memory"
         for event in trace.json()["events"]
     )
-    assert not any(
-        event["kind"].startswith("aina.") and event["target_id"] == "unibot-memory"
-        for event in trace.json()["events"]
+    # Activation is a model tool call, so it is recorded like one alongside the routing event.
+    activation = next(
+        event for event in trace.json()["events"]
+        if event["kind"] == "aina.completed" and event["target_id"] == "unibot-memory"
     )
+    assert activation["details"]["result"]["activated"] is True
+    activation_span = next(span for span in trace.json()["spans"] if span["kind"] == "aina")
+    assert activation_span["target_id"] == "unibot-memory"
+    assert activation_span["status"] == "completed"
+    assert activation_span["logical_call_id"] == activation["details"]["call_id"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
+
+
+def test_stream_reports_builtin_aina_activation_as_a_tool_call() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_unibot-memory_", arguments="{}", call_id="call_activate"),
+            assistant("Memory tools are ready."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        with client.stream("POST", "/chat/stream", json={"message": "Open my memory"}) as response:
+            events = [json.loads(line[5:]) for line in response.iter_lines() if line.startswith("data:")]
+
+    tool_events = [event for event in events if event["type"] in {"tool.requested", "tool.completed"}]
+    assert [(event["type"], event["call_id"]) for event in tool_events] == [
+        ("tool.requested", "call_activate"),
+        ("tool.completed", "call_activate"),
+    ]
+    assert tool_events[0]["kind"] == "aina" and tool_events[0]["id"] == "unibot-memory"
+    assert tool_events[1]["status"] == "completed"
+    assert json.loads(tool_events[1]["result"])["activated"] is True
 
 
 def test_builtin_aina_activation_rejects_arguments_then_allows_model_retry() -> None:
