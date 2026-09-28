@@ -237,6 +237,67 @@ class ModelCallRecorder(AgentMiddleware):
             return
 
 
+async def record_standalone_call(
+    call_sink: Callable[[LLMCallRecord], Awaitable[None]] | None,
+    *,
+    trace_id: str,
+    span_id: str | None,
+    context_type: str,
+    context_id: str,
+    model: str,
+    endpoint: str,
+    messages: list[dict[str, Any]],
+    response: AIMessage | None,
+    duration_ms: float,
+    error: Exception | None = None,
+) -> tuple[int, int]:
+    """Persist the /llm-calls record of a model call made outside the agent loop (e.g. context compression).
+
+    Returns the call's (input, output) token usage.
+    """
+    input_tokens, output_tokens, estimated = _usage(response)
+    if call_sink is None:
+        return input_tokens, output_tokens
+    finish_reason = (response.response_metadata or {}).get("finish_reason") if response is not None else None
+    message = {"role": "assistant", "content": _text(response.content)} if response is not None else None
+    usage: dict[str, Any] = {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    if estimated:
+        usage.update({"estimated": True, "source": "estimated"})
+    record = LLMCallRecord(
+        call_id=f"llm_{uuid4().hex}",
+        trace_id=trace_id,
+        span_id=span_id,
+        context_type=context_type,
+        context_id=context_id,
+        endpoint=endpoint,
+        model=model,
+        status="failed" if error is not None else "completed",
+        request=redact_trace_data({"model": model, "messages": messages, "stream": False}),
+        response=redact_trace_data(
+            {"error": _error_details(error)}
+            if error is not None
+            else {
+                "object": "chat.completion",
+                "model": model,
+                "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+                "usage": usage,
+            }
+        ),
+        duration_ms=duration_ms,
+        error=redact_trace_data(str(error)) if error is not None else None,
+        completed_at=datetime.now(UTC),
+    )
+    try:
+        await call_sink(record)
+    except Exception:  # noqa: BLE001 - observation must not fail the caller
+        pass
+    return input_tokens, output_tokens
+
+
 def _usage(message: AIMessage | None) -> tuple[int, int, bool]:
     metadata = getattr(message, "usage_metadata", None) or {}
     if metadata:

@@ -6,10 +6,14 @@ live in model_providers.tokens when observability also needs them.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import math
+from typing import Any, Awaitable, Callable
 
-from langchain.agents.middleware import AgentMiddleware, hook_config
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 
 def request_input_budget(context_window_tokens: int, *, output_reserve: int) -> int:
@@ -22,85 +26,80 @@ def reject_truncated_call(*, finish_reason: str | None) -> bool:
     return finish_reason in {"length", "max_tokens"}
 
 
-class RequestBudgetGuard(AgentMiddleware):
-    """Refuse the provider when the final projected request exceeds the budget.
+def default_output_reserve(context_window_tokens: int) -> int:
+    """Answer space kept free in every request: a quarter of the window, at most 4096 tokens."""
+    return min(4_096, context_window_tokens // 4)
 
-    Checks messages + system prompt + tool definitions + output reserve before
-    every model call (acceptance A4). Oversized content is never sent.
+
+class RequestBudgetGuard(AgentMiddleware):
+    """Refuse the provider when the final request exceeds the context budget (acceptance A4).
+
+    Runs as a model-call wrapper placed inside any scope/prompt policy, so it measures exactly what would be
+    sent (system prompt, projected messages and advertised tool schemas) with space reserved for the answer.
+    An oversized request is answered locally and never reaches the provider; ``exceeded`` holds the reply so
+    the caller can fail the run while the original messages and tool results stay archived.
     """
 
-    def __init__(
-        self,
-        *,
-        context_window_tokens: int,
-        output_reserve: int = 4096,
-        estimate: Any | None = None,
-    ) -> None:
+    def __init__(self, *, context_window_tokens: int, output_reserve: int | None = None) -> None:
+        super().__init__()
         self.context_window_tokens = context_window_tokens
-        self.output_reserve = output_reserve
-        self._estimate = estimate
+        self.output_reserve = (
+            output_reserve if output_reserve is not None else default_output_reserve(context_window_tokens)
+        )
+        self.exceeded: str | None = None
 
-    @hook_config(can_jump_to=["end"])
-    def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        estimate = self._estimate or _estimate_message_tokens
-        messages = (state or {}).get("messages") or []
-        tools = (state or {}).get("tool_definitions") or []
-        context = {}
-        if runtime is not None:
-            context = getattr(runtime, "context", None) or {}
-        system_prompt = context.get("system_prompt") or ""
-        total = estimate(messages) + _estimate_tools_tokens(tools)
-        if system_prompt:
-            total += max(1, len(str(system_prompt)) // 4)
+    def _refusal(self, request: ModelRequest) -> ModelResponse | None:
+        system = request.system_message.content if request.system_message is not None else ""
+        total = estimate_request_tokens(
+            [{"role": "system", "content": system}, *(_message_payload(message) for message in request.messages)],
+            [convert_to_openai_tool(tool) for tool in request.tools],
+        )
         budget = request_input_budget(self.context_window_tokens, output_reserve=self.output_reserve)
         if total <= budget:
             return None
-        content = (
+        self.exceeded = (
             f"The conversation exceeds the model context budget ({total} estimated input tokens; "
             f"{budget} available after reserving space for the answer). "
             "The original messages and tool results were preserved. Narrow the request or use a model "
             "with a larger context window to continue."
         )
-        return {
-            "messages": [AIMessage(content=content)],
-            "jump_to": "end",
-            "final_status": "failed",
-            "final_content": content,
-        }
+        return ModelResponse(result=[AIMessage(content=self.exceeded)])
 
-    async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        return self.before_model(state, runtime)
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        return self._refusal(request) or await handler(request)
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return self._refusal(request) or handler(request)
 
 
-def _estimate_message_tokens(messages: Any) -> int:
-    total = 0
-    for message in messages or []:
-        if isinstance(message, str):
-            total += max(1, len(message) // 4)
-            continue
-        content = getattr(message, "content", None)
-        if isinstance(content, str):
-            total += max(1, len(content) // 4)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, str):
-                    total += max(1, len(block) // 4)
-                elif isinstance(block, dict):
-                    total += max(1, len(str(block.get("text", ""))) // 4)
-        total += 4
+def estimate_request_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> int:
+    """Conservative tokenizer-free estimate for multilingual JSON chat payloads (same rule as the product)."""
+    total = sum(_estimate_value_tokens(message) + 4 for message in messages)
+    if tools:
+        total += _estimate_value_tokens(tools)
     return total
 
 
-def _estimate_tools_tokens(tools: Any) -> int:
-    import json
+def _estimate_value_tokens(value: Any) -> int:
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    ascii_count = sum(character.isascii() for character in text)
+    return math.ceil(ascii_count / 4) + (len(text) - ascii_count)
 
-    if not tools:
-        return 0
-    try:
-        payload = json.dumps(tools, default=str)
-    except TypeError:
-        payload = str(tools)
-    return max(1, len(payload) // 4)
+
+def _message_payload(message: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": getattr(message, "type", "user"), "content": getattr(message, "content", "")}
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        payload["tool_calls"] = tool_calls
+    return payload
 
 
 class OutputGuardMiddleware(AgentMiddleware):

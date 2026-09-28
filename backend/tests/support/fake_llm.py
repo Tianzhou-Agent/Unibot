@@ -169,6 +169,7 @@ class ScriptedLLM(BaseChatModel):
                 "tools": wire_tools,
                 "tool_choice": wire_tool_choice,
                 "stop": kwargs.get("stop"),
+                "context_type": kwargs.get("context_type") or "conversation",
             }
         )
         if not self._queue:
@@ -190,7 +191,7 @@ class ScriptedLLM(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
-        message = self._next(messages, {**kwargs, "stop": stop})
+        message = self._next(messages, {**kwargs, "stop": stop, "context_type": _context_type(run_manager)})
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     async def _agenerate(
@@ -209,7 +210,7 @@ class ScriptedLLM(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        message = self._next(messages, {**kwargs, "stop": stop})
+        message = self._next(messages, {**kwargs, "stop": stop, "context_type": _context_type(run_manager)})
         content = message.content if isinstance(message.content, str) else str(message.content or "")
         yield ChatGenerationChunk(message=AIMessageChunk(content=content, tool_calls=message.tool_calls or []))
 
@@ -366,3 +367,9 @@ def multi_tool_calling(calls: Sequence[tuple[str, dict[str, Any], str]], *, cont
         },
         finish_reason="tool_calls",
     )
+
+
+def _context_type(run_manager: Any) -> str | None:
+    """Callers tag standalone model calls (e.g. compression) through run metadata."""
+    metadata = getattr(run_manager, "metadata", None) or {}
+    return metadata.get("context_type")

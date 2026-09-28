@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -103,6 +103,8 @@ from tianzhou_agent_platform.core.run_events import NULL_RUN_EVENTS  # noqa: E40
 
 
 def _native_to_wire(message: Any) -> dict[str, Any] | None:
+    if isinstance(message, SystemMessage):
+        return {"role": "system", "content": message.content if isinstance(message.content, str) else str(message.content or "")}
     if isinstance(message, HumanMessage):
         return {"role": "user", "content": message.content if isinstance(message.content, str) else str(message.content or "")}
     if isinstance(message, ToolMessage):
@@ -133,13 +135,19 @@ def _native_to_wire(message: Any) -> dict[str, Any] | None:
     return None
 
 
-def _wire_to_native(messages: list[dict[str, Any]]) -> list[Any]:
-    """Provider wire messages -> native messages (system prompt travels separately)."""
+def _wire_to_native(messages: list[dict[str, Any]], *, skip_leading_system: bool = True) -> list[Any]:
+    """Provider wire messages -> native messages.
+
+    The leading system prompt travels separately (the scope policy sets it per request); later system messages,
+    such as the context-compression summary, are part of the transcript and are kept.
+    """
     native: list[Any] = []
-    for item in messages:
+    for index, item in enumerate(messages):
         role = item.get("role")
         content = item.get("content") or ""
         if role == "system":
+            if index > 0 or not skip_leading_system:
+                native.append(SystemMessage(content=content))
             continue
         if role == "user":
             native.append(HumanMessage(content=content))
@@ -171,7 +179,8 @@ def _wire_to_native(messages: list[dict[str, Any]]) -> list[Any]:
 def _project_scope_history(messages: list[Any], visible_names: set[str]) -> list[Any]:
     """Model-request view of the transcript: calls outside the visible scope become non-executable history."""
     wire = [record for message in messages if (record := _native_to_wire(message)) is not None]
-    return _wire_to_native(_provider_messages_for_scope(wire, active_function_names=visible_names))
+    projected = _provider_messages_for_scope(wire, active_function_names=visible_names)
+    return _wire_to_native(projected, skip_leading_system=False)
 
 
 def _is_chat_model(value: Any) -> bool:
@@ -1493,25 +1502,91 @@ class AgentRuntime:
         if plan is None:
             return active_messages, 0, 0
 
+        span_id = f"span_{uuid4().hex}"
+        context_window_tokens = current_context_window_tokens(self.settings.context_window_tokens)
+        next_count = (plan.previous_state.count if plan.previous_state is not None else 0) + 1
+        model_name, endpoint = self._model_target()
+        await self.events.start_span(
+            trace_id,
+            span_id=span_id,
+            kind="internal",
+            name="context.compress",
+            target_id=model_name,
+            input_data={
+                "through_message_id": plan.through_message_id,
+                "summarized_message_count": len(plan.messages_to_summarize),
+            },
+            attributes={
+                "before_tokens": before_tokens,
+                "threshold_tokens": threshold_tokens,
+                "context_window_tokens": context_window_tokens,
+                "compression_count": next_count,
+            },
+        )
+        await self.events.push(
+            trace_id,
+            kind="context.compression.started",
+            status="started",
+            conversation_id=conversation.id,
+            details={
+                "before_tokens": before_tokens,
+                "threshold_tokens": threshold_tokens,
+                "summarized_message_count": len(plan.messages_to_summarize),
+                "retained_message_count": len(plan.retained_messages),
+                "compression_count": next_count,
+            },
+        )
         usage = [0, 0]
 
         async def compress() -> tuple[list[dict[str, Any]], int, int]:
+            from tianzhou_agent_platform.services.agent_integration.model_calls import record_standalone_call
+
             compression_messages = summary_request(plan)
-            input_budget = request_input_budget(current_context_window_tokens(self.settings.context_window_tokens))
-            if estimate_request_tokens(compression_messages) > input_budget:
+            if estimate_request_tokens(compression_messages) > request_input_budget(context_window_tokens):
                 raise ValueError("The complete transcript exceeds the compression model input budget")
-            result = await self.llm.complete(
-                messages=compression_messages,
-                tools=[],
+            native_request = [
+                SystemMessage(content=item["content"])
+                if item["role"] == "system"
+                else HumanMessage(content=item["content"])
+                for item in compression_messages
+            ]
+            started = perf_counter()
+            try:
+                result = await self._model.ainvoke(
+                    native_request,
+                    config={"metadata": {"context_type": "compression", "trace_id": trace_id}},
+                )
+            except Exception as exc:
+                await record_standalone_call(
+                    self.llm_call_sink,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    context_type="compression",
+                    context_id=conversation.id,
+                    model=model_name,
+                    endpoint=endpoint,
+                    messages=compression_messages,
+                    response=None,
+                    duration_ms=(perf_counter() - started) * 1000,
+                    error=exc,
+                )
+                raise
+            usage[:] = await record_standalone_call(
+                self.llm_call_sink,
                 trace_id=trace_id,
+                span_id=span_id,
                 context_type="compression",
                 context_id=conversation.id,
+                model=model_name,
+                endpoint=endpoint,
+                messages=compression_messages,
+                response=result,
+                duration_ms=(perf_counter() - started) * 1000,
             )
-            usage[:] = [result.input_tokens, result.output_tokens]
-            if result.finish_reason in {"length", "max_tokens"} or result.message.get("tool_calls"):
+            finish_reason = (result.response_metadata or {}).get("finish_reason")
+            if finish_reason in {"length", "max_tokens"} or result.tool_calls:
                 raise ValueError("The context compression model returned an incomplete summary")
-            raw_summary = result.message.get("content")
-            summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+            summary = result.content.strip() if isinstance(result.content, str) else ""
             if not summary:
                 raise ValueError("The context compression model returned an empty summary")
 
@@ -1534,17 +1609,63 @@ class AgentRuntime:
                     }
                 ),
             )
-            return compressed_messages, result.input_tokens, result.output_tokens
+            attributes = {
+                "before_tokens": before_tokens,
+                "after_tokens": after_tokens,
+                "threshold_tokens": threshold_tokens,
+                "context_window_tokens": context_window_tokens,
+                "summarized_message_count": len(plan.messages_to_summarize),
+                "retained_message_count": len(plan.retained_messages),
+                "compression_count": next_count,
+                "input_tokens": usage[0],
+                "output_tokens": usage[1],
+            }
+            await self.events.finish_span(
+                trace_id,
+                span_id,
+                "completed",
+                output_data={"through_message_id": plan.through_message_id, "summary_length": len(summary)},
+                attributes=attributes,
+            )
+            await self.events.push(
+                trace_id,
+                kind="context.compacted",
+                status="completed",
+                conversation_id=conversation.id,
+                details=attributes,
+            )
+            return compressed_messages, usage[0], usage[1]
 
         try:
             return await compress()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Context compression failed; preserving the original context",
                 exc_info=True,
                 extra={"trace_id": trace_id, "conversation_id": conversation.id},
             )
+            error = {"type": type(exc).__name__, "message": str(exc)}
+            await self.events.finish_span(trace_id, span_id, "failed", error=error)
+            await self.events.push(
+                trace_id,
+                kind="context.compression.failed",
+                status="failed",
+                conversation_id=conversation.id,
+                details={
+                    "before_tokens": before_tokens,
+                    "threshold_tokens": threshold_tokens,
+                    "compression_count": next_count,
+                    "error": error,
+                },
+            )
             return active_messages, usage[0], usage[1]
+
+    def _model_target(self) -> tuple[str, str]:
+        """(model name, chat completions endpoint) of the model serving this request."""
+        runtime_model = current_model_runtime()
+        model_name = runtime_model.model if runtime_model else (self.settings.llm_model or "unknown")
+        base_url = (runtime_model.base_url if runtime_model else self.settings.llm_base_url) or ""
+        return model_name, f"{base_url.rstrip('/')}/chat/completions"
 
     async def _run(
         self,
@@ -1897,30 +2018,28 @@ class AgentRuntime:
             )
             for cap in registry.values()
         }
-        runtime_model = current_model_runtime()
-        model_name = runtime_model.model if runtime_model else (self.settings.llm_model or "unknown")
-        base_url = (runtime_model.base_url if runtime_model else self.settings.llm_base_url) or ""
+        model_name, endpoint = self._model_target()
         model_calls = ModelCallRecorder(
             events=self.events,
             trace_id=trace_id,
             conversation_id=conversation_id,
             model=model_name,
-            endpoint=f"{base_url.rstrip('/')}/chat/completions",
+            endpoint=endpoint,
             to_wire=_native_to_wire,
             visible_capabilities=lambda: run_scope.visible,
             call_sink=self.llm_call_sink,
             streaming=event_sink is not None,
         )
+        budget_guard = RequestBudgetGuard(
+            context_window_tokens=current_context_window_tokens(self.settings.context_window_tokens)
+        )
+        # Order matters: the scope policy builds the final request, the budget guard measures it (and refuses
+        # oversized ones locally), and only requests that reach the provider are recorded as model calls.
         middleware: list[Any] = [
             CapabilityScopeMiddleware(run_scope),
+            budget_guard,
             model_calls,
             OrderedBatchMiddleware(),
-            RequestBudgetGuard(
-                context_window_tokens=current_context_window_tokens(
-                    self.settings.context_window_tokens
-                ),
-                output_reserve=4096,
-            ),
             OutputGuardMiddleware(),
             model_call_limit,
             approval_gate,
@@ -2115,6 +2234,9 @@ class AgentRuntime:
                     status = "failed"
         if "Incomplete response" in final_content:
             status = "failed"
+        if budget_guard.exceeded is not None and status != "approval_required":
+            status = "failed"
+            final_content = budget_guard.exceeded
 
         # Widget attach to last assistant text message.
         persistent_widgets = [
