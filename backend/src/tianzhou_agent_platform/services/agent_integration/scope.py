@@ -7,11 +7,123 @@ scope. One-AINA-activation rule is enforced here (business policy).
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+import json
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Iterable, Sequence
 
+from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import current_batch
+
+
+@dataclass
+class RunScope:
+    """Mutable capability scope of one agent run.
+
+    Every reachable capability is registered with the agent up front; this object decides which of them the
+    next model request advertises and which system prompt it carries. Tool executors update it when an AINA
+    scope is activated, so the switch takes effect on the following model request.
+    """
+
+    visible: dict[str, Any]
+    system_prompt: str
+    widgets: list[Any] = field(default_factory=list)
+    activated_in_batch: bool = False
+    # Set when a tool completes the turn itself (e.g. a document edit task was created); the next model
+    # request returns this text instead of calling the model.
+    direct_reply: str | None = None
+    # Capability the caller forced (API ``capability``); applied as tool_choice on the first model request only.
+    forced_function: str | None = None
+    # Builds the model-visible error for a call to a name no registered tool has (e.g. a capability id or a
+    # tool owned by an inactive AINA scope): ``(name, call_id) -> tool message content``.
+    on_unknown_tool: Callable[[str, str], Awaitable[str]] | None = None
+    # Rewrites the transcript for the model request given the visible names (historical calls outside the
+    # scope become non-executable context); ``(messages, visible_names) -> messages``.
+    project_messages: Callable[[list[Any], set[str]], list[Any]] | None = None
+    # Records a failed tool result the executor never saw (e.g. a call blocked by the run's attempt budget):
+    # ``(name, call_id, error_payload)``. Executors add the call ids they already recorded to
+    # ``recorded_failures`` so no failure is recorded twice.
+    on_tool_error: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None
+    recorded_failures: set[str] = field(default_factory=set)
+
+
+class CapabilityScopeMiddleware(AgentMiddleware):
+    """Advertise only the run's visible capabilities and the scope's system prompt on every model call."""
+
+    def __init__(self, scope: RunScope) -> None:
+        super().__init__()
+        self.scope = scope
+
+    def _scoped(self, request: ModelRequest) -> ModelRequest:
+        self.scope.activated_in_batch = False  # a new model response starts a new batch
+        tools = filter_advertised_tools(request.tools, allowed_names=set(self.scope.visible))
+        overrides: dict[str, Any] = {
+            "tools": tools,
+            "system_message": SystemMessage(content=self.scope.system_prompt),
+        }
+        if self.scope.project_messages is not None:
+            overrides["messages"] = self.scope.project_messages(list(request.messages), set(self.scope.visible))
+        forced, self.scope.forced_function = self.scope.forced_function, None
+        if forced is not None and forced in self.scope.visible:
+            overrides["tool_choice"] = forced
+        return request.override(**overrides)
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        if self.scope.direct_reply is not None:
+            reply, self.scope.direct_reply = self.scope.direct_reply, None
+            return ModelResponse(result=[AIMessage(content=reply)])
+        return await handler(self._scoped(request))
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        if self.scope.direct_reply is not None:
+            reply, self.scope.direct_reply = self.scope.direct_reply, None
+            return ModelResponse(result=[AIMessage(content=reply)])
+        return handler(self._scoped(request))
+
+    async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+        from tianzhou_agent_platform.services.agent_integration.capability_tools import current_tool_call_id
+
+        call_id = str(request.tool_call.get("id") or "")
+        if request.tool is None and self.scope.on_unknown_tool is not None:
+            name = str(request.tool_call.get("name") or "")
+            return ToolMessage(
+                content=await self.scope.on_unknown_tool(name, call_id),
+                tool_call_id=call_id,
+                name=name,
+                status="error",
+            )
+        token = current_tool_call_id.set(call_id or None)
+        try:
+            result = await handler(request)
+        finally:
+            current_tool_call_id.reset(token)
+        payload = _error_payload(result)
+        if payload is not None and call_id not in self.scope.recorded_failures and self.scope.on_tool_error:
+            await self.scope.on_tool_error(str(request.tool_call.get("name") or ""), call_id, payload)
+        return result
+
+
+def _error_payload(result: Any) -> dict[str, Any] | None:
+    content = getattr(result, "content", None)
+    if not isinstance(content, str):
+        return None
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return None
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        return payload
+    return None
 
 
 def filter_advertised_tools(

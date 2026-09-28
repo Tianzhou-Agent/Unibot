@@ -7,26 +7,14 @@ capability metadata + invoke callbacks to LangChain tools for create_agent.
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, ConfigDict, create_model
 
-
-class _OpenArgs(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-
-def _args_schema(input_schema: dict[str, Any] | None) -> type[BaseModel]:
-    props = (input_schema or {}).get("properties") or {}
-    fields: dict[str, Any] = {}
-    # Accept every declared property as optional Any so ToolNode does not strip
-    # extras; product validation happens in validate_capability_args.
-    for name in props:
-        fields[name] = (Any, None)
-    if not fields:
-        return _OpenArgs
-    return create_model("CapabilityArgs", **fields)  # type: ignore[call-overload]
+# The model's id for the tool call being executed; set by CapabilityScopeMiddleware around each tool call so
+# executors can record the same logical call id the model and the transcript use.
+current_tool_call_id: ContextVar[str | None] = ContextVar("current_tool_call_id", default=None)
 
 
 def validate_capability_args(
@@ -62,9 +50,19 @@ def validate_capability_args(
         ) from exc
 
 
+class CapabilityToolError(Exception):
+    """A handled capability failure whose model-visible payload is already built (error, instruction, recovery)."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(str(payload.get("error", {}).get("message") or "capability failed"))
+        self.payload = payload
+
+
 def format_error_envelope(exc: Exception) -> str:
     from tianzhou_agent_platform.core.errors import PlatformError
 
+    if isinstance(exc, CapabilityToolError):
+        return json.dumps(exc.payload, ensure_ascii=False)
     if isinstance(exc, PlatformError):
         return json.dumps(
             {
@@ -96,16 +94,21 @@ def capability_to_tool(
     description: str,
     input_schema: dict[str, Any],
     invoke: Callable[..., Awaitable[Any]],
+    validate: bool = True,
 ) -> StructuredTool:
-    """Bind one capability to a native tool that calls ``invoke``."""
+    """Bind one capability to a native tool that calls ``invoke``.
+
+    ``validate=False`` leaves argument validation to ``invoke`` so the caller can record the failure.
+    """
 
     async def _arun(**kwargs: Any) -> str:
         try:
-            validate_capability_args(
-                input_schema=input_schema,
-                args=kwargs,
-                function_name=function_name,
-            )
+            if validate:
+                validate_capability_args(
+                    input_schema=input_schema,
+                    args=kwargs,
+                    function_name=function_name,
+                )
             outcome = await invoke(**kwargs)
         except Exception as exc:  # noqa: BLE001
             return format_error_envelope(exc)
@@ -128,10 +131,13 @@ def capability_to_tool(
     _arun.__doc__ = description
     _run.__name__ = function_name
     _run.__doc__ = description
+    # The capability's own JSON Schema is advertised verbatim and arguments reach ``invoke`` exactly as the
+    # model sent them; a generated pydantic model would inject None for omitted optional fields, which the
+    # capability schema then rejects.
     return StructuredTool.from_function(
         _arun,
         coroutine=_arun,
         name=function_name,
         description=description,
-        args_schema=_args_schema(input_schema),
+        args_schema=input_schema or {"type": "object", "properties": {}},
     )

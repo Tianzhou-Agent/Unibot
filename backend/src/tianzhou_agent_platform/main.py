@@ -413,6 +413,7 @@ def create_app(
         checkpointer=agent_checkpointer,
         auth_enforced=enforce_auth,
         events=RunEventPublisher(observability),
+        llm_call_sink=observability.record_llm_call,
     )
     # HTTP path goes through ChatService (acceptance A7). The AgentRuntime
     # implements the create_agent loop and is adapted as the execution port.

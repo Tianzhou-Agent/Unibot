@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from time import perf_counter
-from typing import Any, Awaitable, Callable, Literal, TypedDict, cast
+from typing import Any, Awaitable, Callable, Literal, NoReturn, TypedDict, cast
 from uuid import uuid4
 
 from pydantic import Field
@@ -70,10 +70,15 @@ from tianzhou_agent_platform.core.context_compression import (
     summary_message,
     summary_request,
 )
+from tianzhou_agent_platform.core.capability_discovery import aina_graph, model_scope_details
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.core.llm import EventSink
-from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, use_model_runtime
+from tianzhou_agent_platform.core.model_settings import (
+    current_context_window_tokens,
+    current_model_runtime,
+    use_model_runtime,
+)
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.core.schema import validate_value
 from tianzhou_agent_platform.sandbox.service import SandboxService
@@ -126,6 +131,47 @@ def _native_to_wire(message: Any) -> dict[str, Any] | None:
             item["tool_calls"] = tool_calls
         return item
     return None
+
+
+def _wire_to_native(messages: list[dict[str, Any]]) -> list[Any]:
+    """Provider wire messages -> native messages (system prompt travels separately)."""
+    native: list[Any] = []
+    for item in messages:
+        role = item.get("role")
+        content = item.get("content") or ""
+        if role == "system":
+            continue
+        if role == "user":
+            native.append(HumanMessage(content=content))
+        elif role == "tool":
+            native.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=str(item.get("tool_call_id") or ""),
+                    name=str(item.get("name") or ""),
+                )
+            )
+        else:
+            tool_calls = []
+            for call in item.get("tool_calls") or []:
+                function = call.get("function") or {}
+                args = function.get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw": args}
+                tool_calls.append(
+                    {"name": function.get("name") or call.get("name"), "args": args, "id": call.get("id")}
+                )
+            native.append(AIMessage(content=content, tool_calls=tool_calls))
+    return native
+
+
+def _project_scope_history(messages: list[Any], visible_names: set[str]) -> list[Any]:
+    """Model-request view of the transcript: calls outside the visible scope become non-executable history."""
+    wire = [record for message in messages if (record := _native_to_wire(message)) is not None]
+    return _wire_to_native(_provider_messages_for_scope(wire, active_function_names=visible_names))
 
 
 def _is_chat_model(value: Any) -> bool:
@@ -319,6 +365,7 @@ class AgentRuntime:
         checkpointer: BaseCheckpointSaver[Any] | None = None,
         auth_enforced: bool = False,
         events: Any | None = None,
+        llm_call_sink: Callable[[Any], Awaitable[None]] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -335,6 +382,8 @@ class AgentRuntime:
         self.checkpointer = checkpointer
         self.auth_enforced = auth_enforced
         self.events = events or NULL_RUN_EVENTS
+        # Persists /llm-calls records of the agent's model requests (the sink is injected by the app).
+        self.llm_call_sink = llm_call_sink
 
     async def _record_user_request(
         self,
@@ -966,6 +1015,32 @@ class AgentRuntime:
                 "id": capability.capability_id,
             },
         )
+        await self.events.push(
+            state["trace_id"],
+            kind="routing.scope.activated",
+            status="completed",
+            conversation_id=conversation.id,
+            target_type="aina",
+            target_id=capability.capability_id,
+            details={
+                "call_id": call_id,
+                "function_name": function_name,
+                "arguments": arguments,
+                "model_scope": model_scope_details(
+                    scoped_capabilities,
+                    forced_capability=None,
+                    forced_function=None,
+                ),
+            },
+        )
+        await self._record_scope_resolution(
+            state["trace_id"],
+            conversation,
+            selected=capability,
+            source="model_selection",
+            requested_capability=None,
+            preferred_aina_id=None,
+        )
         return scoped_capabilities
 
     async def _append_tool_error(
@@ -982,28 +1057,7 @@ class AgentRuntime:
         recovery: dict[str, Any] | None = None,
         retryable: bool = False,
     ) -> None:
-        instruction = "The capability did not complete. Do not claim success; report the failure."
-        if retryable:
-            instruction = "The read-only capability failed transiently. You may retry the same call; do not claim success."
-        if recovery is not None:
-            instruction = (
-                f"Activate AINA {recovery['owner_aina_id']} by calling "
-                f"{recovery['entry_function_name']} with an empty object, then retry with the advertised tool. "
-                "Do not claim that the capability completed before its tool succeeds."
-            )
-        payload = {
-            "error": {
-                "code": code,
-                "message": message,
-                "retryable": retryable,
-            },
-            "instruction": instruction,
-        }
-        if recovery is not None:
-            payload["recovery"] = {
-                "owner_aina_id": recovery["owner_aina_id"],
-                "entry_function_name": recovery["entry_function_name"],
-            }
+        payload = _tool_error_payload(code, message, retryable=retryable, recovery=recovery)
         messages.append(
             {
                 "role": "tool",
@@ -1166,6 +1220,26 @@ class AgentRuntime:
         latest_user_message = conversation.messages[-1].content
         memory_context = await self._memory_context(conversation, latest_user_message)
         all_capabilities = await self._available_capabilities(conversation)
+        resolved: Capability | None = None
+        source = "unified_entry"
+        if requested_capability is not None:
+            resolved = all_capabilities.get(
+                self._resolve_forced_capability(requested_capability, all_capabilities) or ""
+            )
+            source = requested_source or "explicit_capability"
+        elif preferred_aina_id is not None:
+            resolved = all_capabilities.get(
+                self._resolve_forced_capability(f"aina:{preferred_aina_id}", all_capabilities) or ""
+            )
+            source = "preferred_aina"
+        await self._record_scope_resolution(
+            trace_id,
+            conversation,
+            selected=resolved,
+            source=source,
+            requested_capability=requested_capability,
+            preferred_aina_id=preferred_aina_id,
+        )
         if requested_capability is not None:
             forced_function = self._resolve_forced_capability(requested_capability, all_capabilities)
             if forced_function is None:
@@ -1229,6 +1303,33 @@ class AgentRuntime:
             capabilities=await self._entry_capabilities(conversation),
             system_prompt=await self._system_prompt(memory_context=memory_context, conversation=conversation),
             memory_context=memory_context,
+        )
+
+    async def _record_scope_resolution(
+        self,
+        trace_id: str,
+        conversation: Conversation,
+        *,
+        selected: Capability | None,
+        source: str,
+        requested_capability: str | None,
+        preferred_aina_id: str | None,
+    ) -> None:
+        await self.events.push(
+            trace_id,
+            kind="routing.scope.resolved",
+            status="completed",
+            conversation_id=conversation.id,
+            target_type=selected.kind if selected is not None else "system",
+            target_id=selected.capability_id if selected is not None else None,
+            details={
+                "source": source,
+                "requested_capability": requested_capability,
+                "preferred_aina_id": preferred_aina_id,
+                "active_aina_ids": conversation.active_aina_ids,
+                "primary_aina_id": conversation.primary_aina_id,
+                "last_aina_id": conversation.last_aina_id,
+            },
         )
 
     async def _run_selected_aina(
@@ -1455,30 +1556,37 @@ class AgentRuntime:
             ApprovalRequired,
         )
         from tianzhou_agent_platform.services.agent_integration.capability_tools import (
+            CapabilityToolError,
             capability_to_tool,
+            current_tool_call_id,
             validate_capability_args,
+        )
+        from tianzhou_agent_platform.services.agent_integration.scope import (
+            CapabilityScopeMiddleware,
+            RunScope,
+        )
+        from tianzhou_agent_platform.services.agent_integration.model_calls import (
+            ModelCallRecorder,
         )
 
         if capabilities is None:
             capabilities = await self._available_capabilities(conversation)
         recovery_capabilities = await self._available_capabilities(conversation)
+        forced_function = self._resolve_forced_capability(forced_capability, capabilities)
         await self.events.push(
             trace_id,
             kind="capability.discovery",
             status="completed",
             conversation_id=conversation.id,
             details={
-                "aina_graph": {
-                    "available_count": sum(1 for c in capabilities.values() if c.kind == "aina"),
-                    "available": [
-                        {"id": cap.capability_id, "kind": cap.kind}
-                        for cap in capabilities.values()
-                        if cap.kind == "aina"
-                    ],
-                }
+                "aina_graph": await aina_graph(self.repository, conversation, capabilities),
+                "model_scope": model_scope_details(
+                    capabilities,
+                    forced_capability=forced_capability,
+                    forced_function=forced_function,
+                ),
             },
         )
-        forced_function = self._resolve_forced_capability(forced_capability, capabilities)
         resolved_system_prompt = system_prompt or await self._system_prompt(conversation=conversation)
         tool_definitions = [item.llm_definition() for item in capabilities.values()]
         messages, compression_input_tokens, compression_output_tokens = await self._prepare_context(
@@ -1492,58 +1600,240 @@ class AgentRuntime:
         tenant_id = conversation.tenant_id
         conversation_id = conversation.id
         workspace_id = conversation.workspace_id
-        widgets: list[WidgetDefinition] = []
-        available_tool_ids = [cap.capability_id for cap in capabilities.values() if cap.kind == "tool"]
+        # Every capability reachable in this run is registered with the agent; RunScope decides which ones the
+        # next model request advertises, so activating an AINA scope switches tools and system prompt mid-run.
+        registry: dict[str, Capability] = {**recovery_capabilities, **capabilities}
+        run_scope = RunScope(
+            visible=dict(capabilities),
+            system_prompt=resolved_system_prompt,
+            forced_function=forced_function,
+            project_messages=_project_scope_history,
+        )
+        run_state: dict[str, Any] = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "conversation_id": conversation_id,
+            "workspace_id": workspace_id,
+            "trace_id": trace_id,
+            "memory_context": memory_context or [],
+        }
 
-        async def _invoke(**kwargs: Any) -> ResolvedCapabilityOutcome:
-            function_name = kwargs.pop("__function_name__", None)
-            # StructuredTool binds by function name; recover from closure.
-            raise AssertionError("placeholder")
+        async def _record_failure(
+            cap: Capability | None,
+            *,
+            call_id: str,
+            function_name: str,
+            payload: dict[str, Any],
+        ) -> None:
+            kind = cap.kind if cap is not None else "tool"
+            error = payload["error"]
+            run_scope.recorded_failures.add(call_id)
+            await self.events.push(
+                trace_id,
+                kind=f"{kind}.failed",
+                status="failed",
+                conversation_id=conversation_id,
+                target_type=kind if cap is not None else "capability",
+                target_id=cap.capability_id if cap is not None else function_name,
+                details={
+                    "call_id": call_id,
+                    "function_name": function_name,
+                    "code": error["code"],
+                    "message": error["message"],
+                    "retryable": error.get("retryable", False),
+                    "recovery": payload.get("recovery"),
+                },
+            )
+            await self._emit(event_sink, {"type": "error", "code": error["code"], "source": "capability"})
+
+        async def _fail(
+            cap: Capability | None,
+            *,
+            call_id: str,
+            function_name: str,
+            code: str,
+            message: str,
+            recovery: dict[str, Any] | None = None,
+            retryable: bool = False,
+        ) -> NoReturn:
+            payload = _tool_error_payload(code, message, retryable=retryable, recovery=recovery)
+            await _record_failure(cap, call_id=call_id, function_name=function_name, payload=payload)
+            raise CapabilityToolError(payload)
+
+        async def _scope_miss(name: str, call_id: str) -> dict[str, Any]:
+            """Error payload for a call outside the visible scope, pointing at the owning AINA when there is one."""
+            recovery = _capability_scope_recovery(name, recovery_capabilities)
+            payload = _tool_error_payload(
+                "CAPABILITY_SCOPE_REQUIRED" if recovery else "RESOURCE_NOT_FOUND",
+                (
+                    f"Capability {name!r} belongs to AINA {recovery['owner_aina_id']!r}, which is not "
+                    "active in the current scope."
+                    if recovery
+                    else f"Capability {name!r} is unavailable."
+                ),
+                recovery=recovery,
+            )
+            await _record_failure(
+                recovery["capability"] if recovery else None,
+                call_id=call_id,
+                function_name=name,
+                payload=payload,
+            )
+            return payload
+
+        async def _unknown_tool(name: str, call_id: str) -> str:
+            return json.dumps(await _scope_miss(name, call_id), ensure_ascii=False)
+
+        async def _unrecorded_tool_error(name: str, call_id: str, payload: dict[str, Any]) -> None:
+            await _record_failure(registry.get(name), call_id=call_id, function_name=name, payload=payload)
+
+        run_scope.on_unknown_tool = _unknown_tool
+        run_scope.on_tool_error = _unrecorded_tool_error
+
+        async def _activate_scope(cap: Capability, call_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
+            scoped = await self._activate_aina_model_scope(
+                run_state,  # type: ignore[arg-type]
+                event_sink=event_sink,
+                capability=cap,
+                call_id=call_id,
+                function_name=cap.function_name,
+                arguments=arguments,
+                messages=prompt_holder,
+            )
+            run_scope.visible = dict(scoped)
+            run_scope.system_prompt = str(prompt_holder[0]["content"])
+            registry.update(scoped)
+            return {
+                "activated": True,
+                "aina_id": cap.capability_id,
+                "available_capability_ids": sorted(item.capability_id for item in scoped.values()),
+            }
 
         def _make_invoke(cap: Capability) -> Callable[..., Awaitable[Any]]:
-            async def _invoke_cap(**arguments: Any) -> ResolvedCapabilityOutcome:
-                call_id = f"call_{uuid4().hex}"
+            async def _invoke_cap(**arguments: Any) -> Any:
+                call_id = current_tool_call_id.get() or f"call_{uuid4().hex}"
+                name = cap.function_name
+                if name not in run_scope.visible:
+                    raise CapabilityToolError(await _scope_miss(name, call_id))
+                try:
+                    validate_capability_args(input_schema=cap.input_schema, args=arguments, function_name=name)
+                except PlatformError as exc:
+                    await _fail(cap, call_id=call_id, function_name=name, code=exc.code, message=exc.message)
+                if cap.kind == "aina":
+                    if run_scope.activated_in_batch:
+                        await _fail(
+                            cap,
+                            call_id=call_id,
+                            function_name=name,
+                            code="CONFLICT",
+                            message="Only one AINA scope can be activated per model response.",
+                        )
+                    run_scope.activated_in_batch = True
+                    aina, _installation = cast(tuple[AinaRecord, AinaInstallation], cap.value)
+                    if aina.manifest.runtime.type == "builtin":
+                        return await _activate_scope(cap, call_id, arguments)
+
+                span_id = f"span_{uuid4().hex}"
                 await self.events.push(
                     trace_id,
                     kind=f"{cap.kind}.requested",
                     status="started",
                     conversation_id=conversation_id,
-                    details={"call_id": call_id, "function": cap.function_name},
+                    target_type=cap.kind,
+                    target_id=cap.capability_id,
+                    details={
+                        "call_id": call_id,
+                        "function_name": name,
+                        "argument_fields": sorted(arguments),
+                        "arguments": arguments,
+                    },
                 )
+                await self.events.start_span(
+                    trace_id,
+                    span_id=span_id,
+                    kind="aina" if cap.kind == "aina" else "tool",
+                    name=name,
+                    target_id=cap.capability_id,
+                    target_version=_capability_version(cap),
+                    logical_call_id=call_id,
+                    input_data=arguments,
+                )
+                await self._emit(event_sink, {"type": "tool.requested", "kind": cap.kind, "id": cap.capability_id})
+                prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
                 try:
                     outcome = await self._invoke_resolved_capability(
-                        state={  # type: ignore[arg-type]
-                            "user_id": user_id,
-                            "tenant_id": tenant_id,
-                            "conversation_id": conversation_id,
-                            "workspace_id": workspace_id,
-                            "trace_id": trace_id,
-                        },
+                        state=run_state,  # type: ignore[arg-type]
                         event_sink=event_sink,
                         capability=cap,
                         call_id=call_id,
-                        function_name=cap.function_name,
+                        function_name=name,
                         arguments=arguments,
-                        available_tool_ids=available_tool_ids,
-                        messages=[],
-                        widgets=widgets,
+                        available_tool_ids=[item.capability_id for item in registry.values() if item.kind == "tool"],
+                        messages=prompt_holder,
+                        widgets=run_scope.widgets,
                     )
-                except Exception as exc:  # noqa: BLE001
-                    await self.events.push(
+                except (PlatformError, TypeError, ValueError) as exc:
+                    if isinstance(exc, PlatformError):
+                        code, message = exc.code, exc.message
+                    elif cap.kind == "aina":
+                        code, message = "DEPENDENCY_FAILED", f"The AINA returned invalid data: {exc}"
+                    else:
+                        code, message = "INVALID_REQUEST", f"Capability arguments produced invalid data: {exc}"
+                    # Only transient failures of side-effect-free remote tools may be retried by the model.
+                    retryable = (
+                        isinstance(exc, PlatformError)
+                        and exc.retryable
+                        and cap.kind == "tool"
+                        and cast(ToolRecord, cap.value).side_effect_level == "none"
+                    )
+                    await self.events.finish_span(
                         trace_id,
-                        kind=f"{cap.kind}.failed",
-                        status="failed",
-                        conversation_id=conversation_id,
-                        details={"call_id": call_id, "error": {"code": getattr(exc, "code", "ERROR"), "message": str(exc)}},
+                        span_id,
+                        "failed",
+                        error={"code": code, "message": message, "retryable": getattr(exc, "retryable", False)},
                     )
-                    raise
+                    await _fail(
+                        cap, call_id=call_id, function_name=name, code=code, message=message, retryable=retryable
+                    )
+                run_scope.widgets = outcome.widget_state
+                if outcome.next_capabilities is not None:
+                    run_scope.visible = dict(outcome.next_capabilities)
+                    run_scope.system_prompt = str(prompt_holder[0]["content"])
+                    registry.update(outcome.next_capabilities)
+                await self.events.finish_span(
+                    trace_id,
+                    span_id,
+                    "completed",
+                    input_data=arguments,
+                    output_data=outcome.result,
+                    attributes={
+                        "arguments": arguments,
+                        "result": outcome.result,
+                        "duration_ms": outcome.duration_ms,
+                        "result_size_bytes": outcome.result_size_bytes,
+                        "widgets": outcome.widgets,
+                    },
+                )
                 await self.events.push(
                     trace_id,
                     kind=f"{cap.kind}.completed",
                     status="completed",
                     conversation_id=conversation_id,
-                    details={"call_id": call_id, "function": cap.function_name},
+                    target_type=cap.kind,
+                    target_id=cap.capability_id,
+                    duration_ms=outcome.duration_ms,
+                    details={
+                        "call_id": call_id,
+                        "function_name": name,
+                        "result": outcome.result,
+                        "result_size_bytes": outcome.result_size_bytes,
+                        "widgets": outcome.widgets,
+                    },
                 )
+                await self._emit(event_sink, {"type": "tool.completed", "kind": cap.kind, "id": cap.capability_id})
+                if cap.capability_id == CREATE_EDIT_TASK_TOOL_ID:
+                    run_scope.direct_reply = _edit_task_reply(outcome.result)
                 return outcome
 
             return _invoke_cap
@@ -1554,11 +1844,12 @@ class AgentRuntime:
                 description=cap.description,
                 input_schema=cap.input_schema,
                 invoke=_make_invoke(cap),
+                validate=False,
             )
-            for cap in capabilities.values()
+            for cap in registry.values()
         ]
         risky_names = {
-            cap.function_name for cap in capabilities.values() if cap.requires_confirmation
+            cap.function_name for cap in registry.values() if cap.requires_confirmation
         }
         approval_gate = ApprovalGateMiddleware(risky_names)
         model_call_limit = ModelCallLimitMiddleware(
@@ -1573,9 +1864,25 @@ class AgentRuntime:
                     input_schema=_schema, args=args, function_name=_name
                 )
             )
-            for cap in capabilities.values()
+            for cap in registry.values()
         }
+        runtime_model = current_model_runtime()
+        model_name = runtime_model.model if runtime_model else (self.settings.llm_model or "unknown")
+        base_url = (runtime_model.base_url if runtime_model else self.settings.llm_base_url) or ""
+        model_calls = ModelCallRecorder(
+            events=self.events,
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            model=model_name,
+            endpoint=f"{base_url.rstrip('/')}/chat/completions",
+            to_wire=_native_to_wire,
+            visible_capabilities=lambda: run_scope.visible,
+            call_sink=self.llm_call_sink,
+            streaming=event_sink is not None,
+        )
         middleware: list[Any] = [
+            CapabilityScopeMiddleware(run_scope),
+            model_calls,
             OrderedBatchMiddleware(),
             RequestBudgetGuard(
                 context_window_tokens=current_context_window_tokens(
@@ -1591,42 +1898,8 @@ class AgentRuntime:
             ),
         ]
 
-        # Convert wire messages to native messages for create_agent.
-        native_messages: list[Any] = []
-        for item in messages:
-            role = item.get("role")
-            content = item.get("content") or ""
-            if role == "system":
-                continue  # system_prompt is passed to create_agent
-            if role == "user":
-                native_messages.append(HumanMessage(content=content))
-            elif role == "tool":
-                native_messages.append(
-                    ToolMessage(
-                        content=content,
-                        tool_call_id=str(item.get("tool_call_id") or ""),
-                        name=str(item.get("name") or ""),
-                    )
-                )
-            else:
-                raw_calls = item.get("tool_calls") or []
-                tool_calls = []
-                for call in raw_calls:
-                    function = call.get("function") or {}
-                    args = function.get("arguments") or {}
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args) if args.strip() else {}
-                        except json.JSONDecodeError:
-                            args = {"_raw": args}
-                    tool_calls.append(
-                        {
-                            "name": function.get("name") or call.get("name"),
-                            "args": args,
-                            "id": call.get("id"),
-                        }
-                    )
-                native_messages.append(AIMessage(content=content, tool_calls=tool_calls or []))
+        # Convert wire messages to native messages for create_agent (system_prompt travels separately).
+        native_messages: list[Any] = _wire_to_native(messages)
 
         if resume and native_messages:
             # Resume path: execute pending tool calls without a new model turn first.
@@ -1636,7 +1909,7 @@ class AgentRuntime:
                 pending = [c for c in last_ai.tool_calls if c.get("id") not in executed]
                 if pending:
                     for call in pending:
-                        cap = capabilities.get(str(call.get("name")))
+                        cap = registry.get(str(call.get("name")))
                         if cap is None:
                             continue
                         try:
@@ -1716,8 +1989,9 @@ class AgentRuntime:
                     trace_id=trace_id,
                     iterations=limit_n,
                     usage=Usage(
-                        input_tokens=compression_input_tokens,
-                        output_tokens=compression_output_tokens,
+                        input_tokens=compression_input_tokens + model_calls.usage.input_tokens,
+                        output_tokens=compression_output_tokens + model_calls.usage.output_tokens,
+                        estimated=model_calls.usage.estimated,
                     ),
                 )
             raise
@@ -1738,9 +2012,9 @@ class AgentRuntime:
         if pending_calls:
             status = "approval_required"
             capability_names = [
-                capabilities[str(c.get("name"))].display_name
+                registry[str(c.get("name"))].display_name
                 for c in approval_gate.pending_batch or pending_calls
-                if str(c.get("name")) in capabilities
+                if str(c.get("name")) in registry
             ]
             batch_calls = approval_gate.pending_batch or (
                 next(
@@ -1758,9 +2032,9 @@ class AgentRuntime:
                 tool_calls=batch_calls,
                 capability_names=capability_names
                 or [
-                    capabilities[str(c.get("name"))].display_name
+                    registry[str(c.get("name"))].display_name
                     for c in batch_calls
-                    if str(c.get("name")) in capabilities
+                    if str(c.get("name")) in registry
                 ]
                 or [str(c.get("name")) for c in pending_calls],
             )
@@ -1813,7 +2087,7 @@ class AgentRuntime:
 
         # Widget attach to last assistant text message.
         persistent_widgets = [
-            widget for widget in widgets if widget.id != f"clarification-{conversation_id}"
+            widget for widget in run_scope.widgets if widget.id != f"clarification-{conversation_id}"
         ]
         if persistent_widgets:
             for message in reversed(new_messages):
@@ -1852,15 +2126,9 @@ class AgentRuntime:
         if event_sink is not None and final_content and status != "approval_required":
             # Single public text sequence (native stream adapter emits one delta here).
             await event_sink({"type": "message.delta", "delta": final_content})
-        await self.events.push(
-            trace_id,
-            kind="final.response",
-            status=status,
-            conversation_id=conversation_id,
-        )
         iterations = max(1, sum(1 for m in new_messages if m.get("role") == "assistant"))
         end_run_ledger()
-        return ChatResponse(
+        response = ChatResponse(
             conversation_id=conversation_id,
             message_id=last_assistant.id if last_assistant else None,
             content=final_content,
@@ -1868,12 +2136,30 @@ class AgentRuntime:
             trace_id=trace_id,
             iterations=iterations,
             usage=Usage(
-                input_tokens=compression_input_tokens,
-                output_tokens=compression_output_tokens,
+                input_tokens=compression_input_tokens + model_calls.usage.input_tokens,
+                output_tokens=compression_output_tokens + model_calls.usage.output_tokens,
+                estimated=model_calls.usage.estimated,
             ),
             approval=approval,
-            widgets=widgets,
+            widgets=run_scope.widgets,
         )
+        await self.events.push(
+            trace_id,
+            kind="final.response",
+            status=status,
+            conversation_id=conversation_id,
+            details={
+                "iterations": response.iterations,
+                "message_id": response.message_id,
+                "content": response.content,
+                "content_length": len(response.content),
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "usage_estimated": response.usage.estimated,
+                "widgets": [{"id": widget.id, "kind": widget.kind} for widget in response.widgets],
+            },
+        )
+        return response
 
     async def _system_prompt(
         self,
@@ -2503,6 +2789,62 @@ def _provider_messages_for_scope(
             pending_stale_call_ids = set()
         scoped_messages.append(copied)
     return scoped_messages
+
+
+def _capability_version(capability: Capability) -> str | None:
+    if capability.kind == "tool":
+        return cast(ToolRecord, capability.value).version
+    if capability.kind == "aina":
+        aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+        return aina.manifest.aina.version
+    return None
+
+
+def _edit_task_reply(result: Any) -> str | None:
+    """Direct completion text after a document edit task was created (no further model call)."""
+    task = result.get("task") if isinstance(result, dict) else None
+    if not isinstance(task, dict):
+        return None
+    title = str(task.get("title") or "文档修改任务")
+    sections = task.get("sections")
+    section_count = len(sections) if isinstance(sections, list) else 0
+    return (
+        f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
+        "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
+        "正式文档会在您确认合并后才更新。"
+    )
+
+
+def _tool_error_payload(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    recovery: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    instruction = "The capability did not complete. Do not claim success; report the failure."
+    if retryable:
+        instruction = "The read-only capability failed transiently. You may retry the same call; do not claim success."
+    if recovery is not None:
+        instruction = (
+            f"Activate AINA {recovery['owner_aina_id']} by calling "
+            f"{recovery['entry_function_name']} with an empty object, then retry with the advertised tool. "
+            "Do not claim that the capability completed before its tool succeeds."
+        )
+    payload: dict[str, Any] = {
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+        },
+        "instruction": instruction,
+    }
+    if recovery is not None:
+        payload["recovery"] = {
+            "owner_aina_id": recovery["owner_aina_id"],
+            "entry_function_name": recovery["entry_function_name"],
+        }
+    return payload
 
 
 def _capability_scope_recovery(

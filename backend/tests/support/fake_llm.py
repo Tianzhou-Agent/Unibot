@@ -7,6 +7,7 @@ drive it. Historical helper names (``ScriptedLLM``, ``assistant``,
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -15,7 +16,15 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import Field, PrivateAttr
+
+
+def _wire_tool_choice(tool_choice: Any) -> Any:
+    """Native tool_choice -> the OpenAI shape regression tests assert on."""
+    if isinstance(tool_choice, str) and tool_choice not in {"auto", "any", "none", "required"}:
+        return {"type": "function", "function": {"name": tool_choice}}
+    return tool_choice
 
 
 @dataclass
@@ -86,7 +95,8 @@ class ScriptedLLM(BaseChatModel):
     def __init__(self, responses: list[Any] | None = None, **data: Any) -> None:
         items = list(responses or data.get("responses") or [])
         super().__init__(responses=items, **{k: v for k, v in data.items() if k != "responses"})
-        object.__setattr__(self, "_queue", items)
+        # Queue and public ``responses`` must be the same list: tests extend ``llm.responses`` after setup.
+        object.__setattr__(self, "_queue", self.responses)
 
     @property
     def _llm_type(self) -> str:
@@ -151,24 +161,13 @@ class ScriptedLLM(BaseChatModel):
                 wire_messages.append(item)
             else:
                 wire_messages.append(dict(message))  # type: ignore[arg-type]
+        wire_tools = [convert_to_openai_tool(item) for item in (tools or [])]
+        wire_tool_choice = _wire_tool_choice(tool_choice)
         self.calls.append(
             {
                 "messages": wire_messages,
-                "tools": [
-                    (
-                        item
-                        if isinstance(item, dict)
-                        else {
-                            "type": "function",
-                            "function": {
-                                "name": getattr(item, "name", ""),
-                                "description": getattr(item, "description", ""),
-                            },
-                        }
-                    )
-                    for item in (tools or [])
-                ],
-                "tool_choice": tool_choice,
+                "tools": wire_tools,
+                "tool_choice": wire_tool_choice,
                 "stop": kwargs.get("stop"),
             }
         )
@@ -176,10 +175,10 @@ class ScriptedLLM(BaseChatModel):
             raise AssertionError("The fake LLM received more calls than expected")
         item = self._queue.pop(0)
         if callable(item):
-            # Historical callables take tools=/messages=/tool_choice= kwargs.
-            try:
-                result = item(messages=list(messages), tools=tools, tool_choice=tool_choice)
-            except TypeError:
+            # Historical callables receive the OpenAI wire shape the tests assert on.
+            if inspect.signature(item).parameters:
+                result = item(messages=wire_messages, tools=wire_tools, tool_choice=wire_tool_choice)
+            else:
                 result = item()
             return _to_ai_message(result)
         return _to_ai_message(item)

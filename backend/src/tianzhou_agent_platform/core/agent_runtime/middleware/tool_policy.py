@@ -22,29 +22,38 @@ def tool_signature(name: str, args: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+MAX_LOGICAL_ATTEMPTS = 3
+
+
 @dataclass
 class RunExecutionLedger:
-    """Cross-batch execution record for one run (survives model iterations)."""
+    """Cross-batch execution record for one run (survives model iterations).
 
-    succeeded: set[str] = field(default_factory=set)
+    An identical logical call (same name and arguments) executes once per run. It may run again only when its
+    last attempt failed with a retryable error, and never more than ``MAX_LOGICAL_ATTEMPTS`` times in total, so
+    neither successful side effects nor non-retryable failures are replayed by a repeating model.
+    """
+
     attempts: dict[str, int] = field(default_factory=dict)
+    retryable: set[str] = field(default_factory=set)
     activated_scope: bool = False
 
-    def claim_success(self, name: str, args: Any) -> bool:
-        """True if this logical call should execute; False if already succeeded."""
+    def may_attempt(self, name: str, args: Any) -> bool:
         sig = tool_signature(name, args)
-        if sig in self.succeeded:
-            return False
-        self.succeeded.add(sig)
-        return True
-
-    def already_succeeded(self, name: str, args: Any) -> bool:
-        return tool_signature(name, args) in self.succeeded
+        attempts = self.attempts.get(sig, 0)
+        return attempts == 0 or (sig in self.retryable and attempts < MAX_LOGICAL_ATTEMPTS)
 
     def bump_attempt(self, name: str, args: Any) -> int:
         sig = tool_signature(name, args)
         self.attempts[sig] = self.attempts.get(sig, 0) + 1
         return self.attempts[sig]
+
+    def record_outcome(self, name: str, args: Any, *, retryable_failure: bool) -> None:
+        sig = tool_signature(name, args)
+        if retryable_failure:
+            self.retryable.add(sig)
+        else:
+            self.retryable.discard(sig)
 
     def attempt_count(self, name: str, args: Any) -> int:
         return self.attempts.get(tool_signature(name, args), 0)
@@ -182,6 +191,19 @@ def _get_or_create_batch(tool_calls: list[dict[str, Any]], *, force_new: bool = 
     return coord
 
 
+def _is_retryable_failure(result: Any) -> bool:
+    """A tool result whose error envelope marks it retryable (``{"error": {"retryable": true}}``)."""
+    content = getattr(result, "content", None)
+    if not isinstance(content, str):
+        return False
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return isinstance(error, dict) and error.get("retryable") is True
+
+
 class OrderedBatchMiddleware(AgentMiddleware):
     """Preserve tool-batch order and run-scoped signature deduplication.
 
@@ -247,72 +269,31 @@ class OrderedBatchMiddleware(AgentMiddleware):
                     status="error",
                 )
 
+        def conflict(message: str) -> ToolMessage:
+            return ToolMessage(
+                content=json.dumps(
+                    {"error": {"code": "CONFLICT", "message": message, "retryable": False, "source": "tool"}},
+                    ensure_ascii=False,
+                ),
+                tool_call_id=call_id,
+                name=name,
+                status="error",
+            )
+
         try:
-            # Run-scoped success dedup (A2): identical name+args already succeeded.
-            if self.enforce_dedup and ledger.already_succeeded(name, args):
-                if call_id:
-                    coord.started.add(call_id)
-                return ToolMessage(
-                    content=json.dumps(
-                        {
-                            "error": {
-                                "code": "CONFLICT",
-                                "message": "Duplicate tool call blocked after a successful identical execution",
-                                "retryable": False,
-                                "source": "tool",
-                            }
-                        },
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=call_id,
-                    name=name,
-                    status="error",
-                )
-            if self.enforce_dedup and call_id in coord.started:
-                return ToolMessage(
-                    content=json.dumps(
-                        {
-                            "error": {
-                                "code": "CONFLICT",
-                                "message": "Duplicate tool call in the same batch was skipped",
-                                "retryable": False,
-                                "source": "tool",
-                            }
-                        },
-                        ensure_ascii=False,
-                    ),
-                    tool_call_id=call_id,
-                    name=name,
-                    status="error",
-                )
             if self.enforce_dedup:
-                if not coord.deduper.claim(name, args):
-                    if call_id:
-                        coord.started.add(call_id)
-                    return ToolMessage(
-                        content=json.dumps(
-                            {
-                                "error": {
-                                    "code": "CONFLICT",
-                                    "message": "Duplicate tool/argument combination already submitted in this batch",
-                                    "retryable": False,
-                                    "source": "tool",
-                                }
-                            },
-                            ensure_ascii=False,
-                        ),
-                        tool_call_id=call_id,
-                        name=name,
-                        status="error",
-                    )
+                if call_id in coord.started:
+                    return conflict("Duplicate tool call in the same batch was skipped")
                 if call_id:
                     coord.started.add(call_id)
+                if not coord.deduper.claim(name, args):
+                    return conflict("Duplicate tool/argument combination already submitted in this batch")
+                # Run-scoped attempt budget (A2): identical name+args run again only after a retryable failure.
+                if not ledger.may_attempt(name, args):
+                    return conflict("The same capability call was already attempted in this run.")
             ledger.bump_attempt(name, args)
             result = await handler(request)
-            # Mark success only for completed non-error results.
-            status = getattr(result, "status", None)
-            if status != "error":
-                ledger.claim_success(name, args)
+            ledger.record_outcome(name, args, retryable_failure=_is_retryable_failure(result))
             return result
         finally:
             if call_id:

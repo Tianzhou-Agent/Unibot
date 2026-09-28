@@ -39,6 +39,10 @@ class RunEventPublisher:
 
     def __init__(self, backend: Any | None = None) -> None:
         self._backend = backend
+        self._root_spans: dict[str, str] = {}
+
+    def root_span_id(self, trace_id: str) -> str | None:
+        return self._root_spans.get(trace_id)
 
     async def push(
         self,
@@ -48,6 +52,9 @@ class RunEventPublisher:
         status: str,
         conversation_id: str | None = None,
         details: dict[str, Any] | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        duration_ms: float | None = None,
     ) -> None:
         if self._backend is None:
             return
@@ -60,8 +67,31 @@ class RunEventPublisher:
                 kind=kind,
                 status=status,
                 conversation_id=conversation_id,
+                target_type=target_type,
+                target_id=target_id,
+                duration_ms=duration_ms,
                 details=details or {},
             )
+        except Exception:  # noqa: BLE001
+            return
+
+    async def start_span(self, trace_id: str, **fields: Any) -> None:
+        """Open a child span (tool/aina/model) under the run's root span."""
+        start = getattr(self._backend, "start_span", None)
+        parent = fields.pop("parent_span_id", None) or self._root_spans.get(trace_id)
+        if start is None or parent is None:
+            return
+        try:
+            await start(trace_id, parent_span_id=parent, **fields)
+        except Exception:  # noqa: BLE001
+            return
+
+    async def finish_span(self, trace_id: str, span_id: str, status: str, **fields: Any) -> None:
+        finish = getattr(self._backend, "finish_span", None)
+        if finish is None:
+            return
+        try:
+            await finish(trace_id, span_id, status, **fields)
         except Exception:  # noqa: BLE001
             return
 
@@ -99,10 +129,12 @@ class RunEventPublisher:
                     conversation_id=conversation_id,
                 )
         except Exception:  # noqa: BLE001
-            return root_span_id
+            pass
+        self._root_spans[trace_id] = root_span_id
         return root_span_id
 
     async def finish(self, trace_id: str, status: str) -> None:
+        self._root_spans.pop(trace_id, None)
         if self._backend is None:
             return
         finish = getattr(self._backend, "finish_trace", None)
