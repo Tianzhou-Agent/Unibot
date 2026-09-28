@@ -15,10 +15,12 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+import openai
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
+from tianzhou_agent_platform.model_providers.errors import map_provider_error
 from tianzhou_agent_platform.observability.models import LLMCallRecord
 from tianzhou_agent_platform.observability.trace_details import redact_trace_data
 
@@ -206,7 +208,7 @@ class ModelCallRecorder(AgentMiddleware):
                     "response": redact_trace_data(
                         {
                             "object": "chat.completion",
-                            "model": self._model,
+                            "model": _served_model(message, self._model),
                             "choices": [{"index": 0, "message": wire_message, "finish_reason": finish_reason}],
                             "usage": usage,
                         }
@@ -282,7 +284,7 @@ async def record_standalone_call(
             if error is not None
             else {
                 "object": "chat.completion",
-                "model": model,
+                "model": _served_model(response, model),
                 "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
                 "usage": usage,
             }
@@ -363,3 +365,27 @@ def _error_details(exc: Exception) -> dict[str, Any]:
     if code is not None:
         return {"code": code, "message": getattr(exc, "message", str(exc)), "retryable": getattr(exc, "retryable", False)}
     return {"type": type(exc).__name__, "message": str(exc)}
+
+
+def _served_model(message: AIMessage | None, requested: str) -> str:
+    """Model the provider reports as having served the call (falls back to the requested one)."""
+    metadata = getattr(message, "response_metadata", None) or {}
+    return str(metadata.get("model_name") or metadata.get("model") or requested)
+
+
+class ProviderErrorMiddleware(AgentMiddleware):
+    """Raise provider (OpenAI-compatible) failures as platform errors with the product's code and retryability.
+
+    Native chat models raise raw ``openai`` exceptions; without this a provider 401 surfaced as a retryable
+    INTERNAL_ERROR ("The agent run failed unexpectedly") instead of DEPENDENCY_FAILED "... returned HTTP 401".
+    """
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        try:
+            return await handler(request)
+        except openai.OpenAIError as exc:
+            raise map_provider_error(exc) from exc

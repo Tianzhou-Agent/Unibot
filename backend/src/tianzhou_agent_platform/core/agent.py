@@ -1292,6 +1292,7 @@ class AgentRuntime:
         )
         from tianzhou_agent_platform.services.agent_integration.model_calls import (
             ModelCallRecorder,
+            ProviderErrorMiddleware,
         )
 
         if capabilities is None:
@@ -1619,6 +1620,7 @@ class AgentRuntime:
             CapabilityScopeMiddleware(run_scope),
             budget_guard,
             model_calls,
+            ProviderErrorMiddleware(),
             OrderedBatchMiddleware(),
             OutputGuardMiddleware(),
             model_call_limit,

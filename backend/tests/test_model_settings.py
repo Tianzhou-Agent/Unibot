@@ -302,12 +302,46 @@ def test_native_agent_uses_the_users_selected_model_configuration(monkeypatch: A
             json={},
         )
         response = client.post("/chat", json={"message": "你好"})
+        llm_calls = client.get("/llm-calls").json()
 
     asyncio.run(http_client.aclose())
     assert response.status_code == 200
     assert response.json()["content"] == "selected model response"
     assert response.json()["usage"]["input_tokens"] == 7
+    served = [call["response"]["model"] for call in llm_calls if call["trace_id"] == response.json()["trace_id"]]
+    assert served and all(model == "team-reasoning" for model in served)
     assert requests
     assert all(request.url == httpx.URL("https://user-provider.invalid/v1/chat/completions") for request in requests)
     assert all(request.headers["Authorization"] == "Bearer user-secret-key-value" for request in requests)
     assert all(json.loads(request.content)["model"] == "team-reasoning" for request in requests)
+
+
+def test_native_provider_auth_failure_is_reported_as_a_dependency_error(monkeypatch: Any) -> None:
+    # Native models raise raw openai exceptions; they must surface as the product's DEPENDENCY_FAILED error,
+    # not as a retryable INTERNAL_ERROR.
+    import tianzhou_agent_platform.main as main_module
+    from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(401, json={"error": {"message": "Invalid API Key", "type": "invalid_key"}})
+        )
+    )
+    monkeypatch.setattr(
+        main_module,
+        "create_model_from_runtime",
+        lambda runtime: create_model_from_runtime(runtime, http_client=http_client),
+    )
+    with TestClient(create_app(settings=_settings())) as client:
+        created = client.post("/model-settings/providers", json=_provider_payload()).json()
+        client.post(
+            f"/model-settings/providers/{created['id']}/models/{created['models'][1]['id']}/default",
+            json={},
+        )
+        response = client.post("/chat", json={"message": "你好"})
+
+    asyncio.run(http_client.aclose())
+    error = response.json()["error"]
+    assert error["code"] == "DEPENDENCY_FAILED"
+    assert "HTTP 401" in error["message"]
+    assert error["retryable"] is False
