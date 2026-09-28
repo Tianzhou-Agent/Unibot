@@ -160,7 +160,7 @@ async def test_chat_service_native_runner_path() -> None:
             return []
 
     class NativeRunner:
-        async def run_turn(self, request: ChatRequest, conversation: Conversation) -> ChatResponse:
+        async def run_turn(self, request: ChatRequest, conversation: Conversation, **_: Any) -> ChatResponse:
             return ChatResponse(
                 conversation_id=conversation.id,
                 message_id="m1",

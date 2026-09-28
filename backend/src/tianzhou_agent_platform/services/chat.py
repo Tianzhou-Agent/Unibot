@@ -55,25 +55,19 @@ class ChatService:
         self._conversations.ensure_ownership(
             conversation, user_id=request.user_id, tenant_id=request.tenant_id
         )
-        # New user input supersedes any pending approval before accepting work.
-        await self._invalidate_pending_approvals(conversation.id)
-
+        # No TypeError fallbacks below: retrying with another signature would re-run a turn whose tools may
+        # already have executed side effects.
         if self._native_runner is not None:
-            try:
-                return await self._native_runner.run_turn(
-                    request, conversation, event_sink=event_sink
-                )
-            except TypeError:
-                return await self._native_runner.run_turn(request, conversation)
+            # New user input supersedes any pending approval before accepting work. The AgentRuntime path does
+            # this itself, recording approval.cancelled and closing the paused run's trace.
+            await self._invalidate_pending_approvals(conversation.id)
+            return await self._native_runner.run_turn(request, conversation, event_sink=event_sink)
         if self._legacy_agent is not None:
             # Accept both ChatService protocol (run) and AgentRuntime (chat).
             run = getattr(self._legacy_agent, "run", None) or getattr(self._legacy_agent, "chat", None)
             if run is None:
                 raise RuntimeError("ChatService has no execution backend configured")
-            try:
-                return await run(request, event_sink=event_sink, trace_id=trace_id)
-            except TypeError:
-                return await run(request)
+            return await run(request, event_sink=event_sink, trace_id=trace_id)
         raise RuntimeError("ChatService has no execution backend configured")
 
     async def confirm(

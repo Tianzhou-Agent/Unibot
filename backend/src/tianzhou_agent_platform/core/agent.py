@@ -1100,7 +1100,11 @@ class AgentRuntime:
             conversation_id=conversation.id,
             user_id=request.user_id,
             tenant_id=request.tenant_id,
-            input_data={"message": request.message},
+            input_data={
+                "message": request.message,
+                "requested_capability": request.capability,
+                "preferred_aina_id": request.preferred_aina_id,
+            },
         )
         try:
             await self.repository.start_conversation_run(conversation.id, trace_id)
@@ -1177,6 +1181,25 @@ class AgentRuntime:
             error=response.content if response.status == "failed" else None,
             expected_trace_id=trace_id,
         )
+        root_span_id = self.events.root_span_id(trace_id)
+        if response.status != "approval_required" and root_span_id is not None:
+            await self.events.finish_span(
+                trace_id,
+                root_span_id,
+                "completed" if response.status == "completed" else "failed",
+                output_data={
+                    "content": response.content,
+                    "status": response.status,
+                    "message_id": response.message_id,
+                    "widgets": [widget.model_dump(mode="json") for widget in response.widgets],
+                },
+                attributes={
+                    "iterations": response.iterations,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "usage_estimated": response.usage.estimated,
+                },
+            )
         await self.events.finish(
             trace_id,
             "completed" if response.status == "completed" else ("approval_required" if response.status == "approval_required" else "failed"),
@@ -1687,7 +1710,13 @@ class AgentRuntime:
         async def _unrecorded_tool_error(name: str, call_id: str, payload: dict[str, Any]) -> None:
             await _record_failure(registry.get(name), call_id=call_id, function_name=name, payload=payload)
 
+        async def _task_projection() -> str:
+            if self.task_service is None:
+                return ""
+            return await self.task_service.context_projection(conversation_id, user_id=user_id, tenant_id=tenant_id)
+
         run_scope.on_unknown_tool = _unknown_tool
+        run_scope.prompt_suffix = _task_projection
         run_scope.on_tool_error = _unrecorded_tool_error
 
         async def _activate_scope(cap: Capability, call_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1704,6 +1733,7 @@ class AgentRuntime:
             run_scope.visible = dict(scoped)
             run_scope.system_prompt = str(prompt_holder[0]["content"])
             registry.update(scoped)
+            run_scope.activated_entries.add(cap.function_name)
             return {
                 "activated": True,
                 "aina_id": cap.capability_id,
@@ -1799,6 +1829,7 @@ class AgentRuntime:
                 run_scope.widgets = outcome.widget_state
                 if outcome.next_capabilities is not None:
                     run_scope.visible = dict(outcome.next_capabilities)
+                    run_scope.activated_entries.add(name)
                     run_scope.system_prompt = str(prompt_holder[0]["content"])
                     registry.update(outcome.next_capabilities)
                 await self.events.finish_span(

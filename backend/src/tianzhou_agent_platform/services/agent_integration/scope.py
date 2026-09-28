@@ -42,11 +42,17 @@ class RunScope:
     # Rewrites the transcript for the model request given the visible names (historical calls outside the
     # scope become non-executable context); ``(messages, visible_names) -> messages``.
     project_messages: Callable[[list[Any], set[str]], list[Any]] | None = None
+    # AINA entry functions activated during this run: their calls stay ordinary context for the rest of the
+    # run instead of being projected as out-of-scope history (the model otherwise echoes the history note).
+    activated_entries: set[str] = field(default_factory=set)
     # Records a failed tool result the executor never saw (e.g. a call blocked by the run's attempt budget):
     # ``(name, call_id, error_payload)``. Executors add the call ids they already recorded to
     # ``recorded_failures`` so no failure is recorded twice.
     on_tool_error: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None
     recorded_failures: set[str] = field(default_factory=set)
+    # Per-request context appended to the scope prompt (e.g. the current task projection), refreshed before
+    # every model call so tool effects earlier in the run are visible.
+    prompt_suffix: Callable[[], Awaitable[str]] | None = None
 
 
 class CapabilityScopeMiddleware(AgentMiddleware):
@@ -56,15 +62,18 @@ class CapabilityScopeMiddleware(AgentMiddleware):
         super().__init__()
         self.scope = scope
 
-    def _scoped(self, request: ModelRequest) -> ModelRequest:
+    def _scoped(self, request: ModelRequest, suffix: str = "") -> ModelRequest:
         self.scope.activated_in_batch = False  # a new model response starts a new batch
         tools = filter_advertised_tools(request.tools, allowed_names=set(self.scope.visible))
+        prompt = f"{self.scope.system_prompt}\n\n{suffix}" if suffix else self.scope.system_prompt
         overrides: dict[str, Any] = {
             "tools": tools,
-            "system_message": SystemMessage(content=self.scope.system_prompt),
+            "system_message": SystemMessage(content=prompt),
         }
         if self.scope.project_messages is not None:
-            overrides["messages"] = self.scope.project_messages(list(request.messages), set(self.scope.visible))
+            overrides["messages"] = self.scope.project_messages(
+                list(request.messages), set(self.scope.visible) | self.scope.activated_entries
+            )
         forced, self.scope.forced_function = self.scope.forced_function, None
         if forced is not None and forced in self.scope.visible:
             overrides["tool_choice"] = forced
@@ -78,7 +87,8 @@ class CapabilityScopeMiddleware(AgentMiddleware):
         if self.scope.direct_reply is not None:
             reply, self.scope.direct_reply = self.scope.direct_reply, None
             return ModelResponse(result=[AIMessage(content=reply)])
-        return await handler(self._scoped(request))
+        suffix = await self.scope.prompt_suffix() if self.scope.prompt_suffix is not None else ""
+        return await handler(self._scoped(request, suffix))
 
     def wrap_model_call(
         self,

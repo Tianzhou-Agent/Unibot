@@ -319,3 +319,25 @@ def test_forget_memory_requires_approval_then_deletes() -> None:
     assert pending.json()["status"] == "approval_required"
     assert confirmed.json()["status"] == "completed"
     assert memories.json()["total"] == 0
+
+
+def test_scope_activated_in_the_same_run_stays_ordinary_context() -> None:
+    # Only earlier turns are projected as non-executable history; projecting the run's own activation made the
+    # model echo the history note instead of calling the newly advertised memory tool.
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_unibot-memory_", arguments="{}", call_id="call_activate"),
+            assistant("Memory is ready."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        client.post("/chat", json={"message": "Use memory tools"})
+
+    second_request = llm.calls[1]["messages"]
+    assert "historical-capability-result" not in json.dumps(second_request, ensure_ascii=False)
+    assert any(
+        call["id"] == "call_activate"
+        for message in second_request
+        if message["role"] == "assistant"
+        for call in message.get("tool_calls") or []
+    )
