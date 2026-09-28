@@ -77,6 +77,104 @@ class RedisStore:
             raise self._map_redis_error(exc) from exc
         return WriteResult(written=bool(written))
 
+    async def set_max_int(
+        self,
+        namespace: str,
+        key: str,
+        value: int,
+        ttl_seconds: int | None = None,
+    ) -> WriteResult:
+        redis_key = self._redis_key(namespace, key)
+        ttl = self._ttl(ttl_seconds)
+        script = """
+local current = redis.call('GET', KEYS[1])
+local candidate = tonumber(ARGV[1])
+if current and tonumber(current) >= candidate then
+  return 0
+end
+if ARGV[2] == '' then
+  redis.call('SET', KEYS[1], ARGV[1])
+else
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+end
+return 1
+"""
+        try:
+            written = await self._client.eval(
+                script,
+                1,
+                redis_key,
+                self._encode(value),
+                "" if ttl is None else str(ttl),
+            )
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        return WriteResult(written=bool(written))
+
+    async def refresh_if_value(
+        self, namespace: str, key: str, value: Any, *, ttl_seconds: int,
+    ) -> WriteResult:
+        script = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+"""
+        try:
+            written = await self._client.eval(
+                script, 1, self._redis_key(namespace, key), self._encode(value), self._ttl(ttl_seconds),
+            )
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        return WriteResult(written=bool(written))
+
+    async def delete_if_value(self, namespace: str, key: str, value: Any) -> DeleteResult:
+        script = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+        try:
+            deleted = await self._client.eval(script, 1, self._redis_key(namespace, key), self._encode(value))
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+        return DeleteResult(deleted=bool(deleted))
+
+    async def publish(self, namespace: str, key: str, value: Any) -> int:
+        channel = self._redis_key(namespace, key)
+        try:
+            return int(await self._client.publish(channel, self._encode(value)))
+        except RedisError as exc:
+            raise self._map_redis_error(exc) from exc
+
+    @asynccontextmanager
+    async def subscribe(self, namespace: str, key: str) -> AsyncIterator[AsyncIterator[Any]]:
+        channel = self._redis_key(namespace, key)
+        pubsub = self._client.pubsub()
+        try:
+            await pubsub.subscribe(channel)
+        except RedisError as exc:
+            await self._close_client(pubsub)
+            raise self._map_redis_error(exc) from exc
+
+        async def messages() -> AsyncIterator[Any]:
+            try:
+                async for message in pubsub.listen():
+                    if message.get("type") == "message":
+                        yield self._decode(message["data"])
+            except RedisError as exc:
+                raise self._map_redis_error(exc) from exc
+
+        try:
+            yield messages()
+        finally:
+            try:
+                await pubsub.unsubscribe(channel)
+            except RedisError:
+                pass
+            await self._close_client(pubsub)
+
     async def delete(self, namespace: str, key: str) -> DeleteResult:
         redis_key = self._redis_key(namespace, key)
         try:
@@ -111,6 +209,7 @@ class RedisStore:
         key: str,
         *,
         ttl_seconds: int,
+        blocking_timeout_seconds: float | None = None,
     ) -> AsyncIterator[bool]:
         """Acquire an ownership-safe redis-py lock and renew it while in use."""
 
@@ -123,7 +222,11 @@ class RedisStore:
             blocking=False,
         )
         try:
-            acquired = bool(await lock.acquire(blocking=False))
+            acquired = bool(
+                await lock.acquire(blocking=True, blocking_timeout=blocking_timeout_seconds)
+                if blocking_timeout_seconds is not None
+                else await lock.acquire(blocking=False)
+            )
         except RedisError as exc:
             raise self._map_redis_error(exc) from exc
         if not acquired:
@@ -155,7 +258,11 @@ class RedisStore:
                 pass
 
     async def close(self) -> None:
-        close = getattr(self._client, "aclose", None) or getattr(self._client, "close", None)
+        await self._close_client(self._client)
+
+    @staticmethod
+    async def _close_client(client: Any) -> None:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
         if close is None:
             return
         result = close()

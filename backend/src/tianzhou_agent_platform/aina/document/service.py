@@ -48,8 +48,18 @@ class DocumentService:
     def __init__(self, nas: NasStore) -> None:
         self._nas = nas
 
-    async def list_documents(self, *, user_id: str, tenant_id: str) -> list[DocumentSummary]:
-        prefix = self._actor_prefix(user_id=user_id, tenant_id=tenant_id)
+    async def list_documents(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> list[DocumentSummary]:
+        prefix = self._actor_prefix(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         metadata = await self._nas.list_files(StoragePath(relative_path=prefix))
         items = [
             self._summary(item, prefix)
@@ -64,6 +74,7 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
         limit: int = 20,
     ) -> list[DocumentSearchResult]:
         normalized_query = query.strip()
@@ -71,8 +82,17 @@ class DocumentService:
             raise StorageValidationError("Document search query cannot be empty")
         pattern = re.compile(re.escape(normalized_query), re.IGNORECASE)
         matches: list[DocumentSearchResult] = []
-        for summary in await self.list_documents(user_id=user_id, tenant_id=tenant_id):
-            document = await self.get_document(summary.name, user_id=user_id, tenant_id=tenant_id)
+        for summary in await self.list_documents(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        ):
+            document = await self.get_document(
+                summary.name,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            )
             name_match = pattern.search(summary.name) is not None
             content_match = pattern.search(document.content)
             if not name_match and content_match is None:
@@ -92,8 +112,18 @@ class DocumentService:
         matches.sort(key=lambda item: ("name" not in item.matched_in, item.name.casefold()))
         return matches[:limit]
 
-    async def list_folders(self, *, user_id: str, tenant_id: str) -> list[DocumentFolder]:
-        prefix = self._actor_prefix(user_id=user_id, tenant_id=tenant_id)
+    async def list_folders(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> list[DocumentFolder]:
+        prefix = self._actor_prefix(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         directories = await self._nas.list_directories(StoragePath(relative_path=prefix))
         return [
             DocumentFolder(
@@ -104,9 +134,23 @@ class DocumentService:
             if directory.relative_path != prefix
         ]
 
-    async def create_folder(self, path: str, *, user_id: str, tenant_id: str) -> DocumentFolder:
+    async def create_folder(
+        self,
+        path: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> DocumentFolder:
         normalized = normalize_folder_path(path)
-        await self._nas.create_directory(self._path(normalized, user_id=user_id, tenant_id=tenant_id))
+        await self._nas.create_directory(
+            self._path(
+                normalized,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            )
+        )
         return DocumentFolder(path=normalized, name=PurePosixPath(normalized).name)
 
     async def rename_folder(
@@ -116,6 +160,7 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentFolder:
         normalized = normalize_folder_path(path)
         normalized_new_path = normalize_folder_path(new_path)
@@ -124,32 +169,85 @@ class DocumentService:
         if normalized_new_path.startswith(f"{normalized}/"):
             raise StorageValidationError("A folder cannot be moved inside itself")
         await self._nas.move(
-            self._path(normalized, user_id=user_id, tenant_id=tenant_id),
-            self._path(normalized_new_path, user_id=user_id, tenant_id=tenant_id),
+            self._path(
+                normalized,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            ),
+            self._path(
+                normalized_new_path,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            ),
         )
         return DocumentFolder(path=normalized_new_path, name=PurePosixPath(normalized_new_path).name)
 
-    async def delete_folder(self, path: str, *, user_id: str, tenant_id: str) -> bool:
+    async def delete_folder(
+        self,
+        path: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> bool:
         normalized = normalize_folder_path(path)
         result = await self._nas.delete_directory(
-            self._path(normalized, user_id=user_id, tenant_id=tenant_id)
+            self._path(
+                normalized,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            )
         )
         return result.deleted
 
-    async def get_document(self, name: str, *, user_id: str, tenant_id: str) -> DocumentRecord:
+    async def get_document(
+        self,
+        name: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> DocumentRecord:
         normalized = normalize_document_name(name)
-        path = self._path(normalized, user_id=user_id, tenant_id=tenant_id)
+        path = self._path(
+            normalized,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         content = await self._nas.read(path)
         try:
             decoded = content.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise StorageValidationError("Document content is not valid UTF-8") from exc
         metadata = await self._nas.metadata(path)
-        summary = self._summary(metadata, self._actor_prefix(user_id=user_id, tenant_id=tenant_id))
+        summary = self._summary(
+            metadata,
+            self._actor_prefix(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            ),
+        )
         return DocumentRecord(**summary.model_dump(), content=decoded)
 
-    async def get_outline(self, name: str, *, user_id: str, tenant_id: str) -> DocumentOutline:
-        document = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+    async def get_outline(
+        self,
+        name: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> DocumentOutline:
+        document = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         sections = _markdown_sections(document.content)
         return DocumentOutline(
             name=document.name,
@@ -176,8 +274,14 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentSection:
-        document = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        document = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         section = _find_section(_markdown_sections(document.content), heading, occurrence)
         lines = document.content.splitlines(keepends=True)
         return DocumentSection(
@@ -196,15 +300,26 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         normalized = normalize_document_name(name)
         encoded = _encode_content(content)
         await self._nas.write(
-            self._path(normalized, user_id=user_id, tenant_id=tenant_id),
+            self._path(
+                normalized,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            ),
             encoded,
             overwrite=False,
         )
-        return await self.get_document(normalized, user_id=user_id, tenant_id=tenant_id)
+        return await self.get_document(
+            normalized,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
 
     async def update_document(
         self,
@@ -213,13 +328,24 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         normalized = normalize_document_name(name)
-        path = self._path(normalized, user_id=user_id, tenant_id=tenant_id)
+        path = self._path(
+            normalized,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         if not await self._nas.exists(path):
             await self._nas.read(path)
         await self._nas.write(path, _encode_content(content), overwrite=True)
-        return await self.get_document(normalized, user_id=user_id, tenant_id=tenant_id)
+        return await self.get_document(
+            normalized,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
 
     async def update_section(
         self,
@@ -231,8 +357,14 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentSectionUpdateResult:
-        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        current = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         if _document_revision(current.content) != expected_revision:
             raise StorageValidationError(
                 "Document revision changed. Call document.read_section again before retrying the update."
@@ -259,6 +391,7 @@ class DocumentService:
             updated_content,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
         return DocumentSectionUpdateResult(
             name=updated.name,
@@ -279,10 +412,16 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         if not replacements:
             raise StorageValidationError("At least one document section is required")
-        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        current = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         if _document_revision(current.content) != expected_revision:
             raise StorageValidationError("Document revision changed. Review the latest document before merging.")
 
@@ -329,6 +468,7 @@ class DocumentService:
             updated_content,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
 
     async def update_sections(
@@ -339,8 +479,14 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentSectionsUpdateResult:
-        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        current = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         if _document_revision(current.content) != expected_revision:
             raise StorageValidationError(
                 "Document revision changed. Review the latest document before saving."
@@ -351,6 +497,7 @@ class DocumentService:
             content,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
         return DocumentSectionsUpdateResult(
             name=updated.name,
@@ -367,13 +514,20 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
-        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        current = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         return await self.update_document(
             current.name,
             current.content + content,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
         )
 
     async def rename_document(
@@ -383,28 +537,82 @@ class DocumentService:
         *,
         user_id: str,
         tenant_id: str,
+        workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
-        current = await self.get_document(name, user_id=user_id, tenant_id=tenant_id)
+        current = await self.get_document(
+            name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
         normalized_new_name = normalize_document_name(new_name)
         if current.name == normalized_new_name:
             return current
         await self._nas.move(
-            self._path(current.name, user_id=user_id, tenant_id=tenant_id),
-            self._path(normalized_new_name, user_id=user_id, tenant_id=tenant_id),
+            self._path(
+                current.name,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            ),
+            self._path(
+                normalized_new_name,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            ),
         )
-        return await self.get_document(normalized_new_name, user_id=user_id, tenant_id=tenant_id)
+        return await self.get_document(
+            normalized_new_name,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
 
-    async def delete_document(self, name: str, *, user_id: str, tenant_id: str) -> bool:
+    async def delete_document(
+        self,
+        name: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> bool:
         normalized = normalize_document_name(name)
-        result = await self._nas.delete(self._path(normalized, user_id=user_id, tenant_id=tenant_id))
+        result = await self._nas.delete(
+            self._path(
+                normalized,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            )
+        )
         return result.deleted
 
     @staticmethod
-    def _actor_prefix(*, user_id: str, tenant_id: str) -> str:
+    def _actor_prefix(
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> str:
+        if workspace_storage_key is not None:
+            return f"workspaces/{_workspace_segment(workspace_storage_key)}/files"
         return f"documents/t-{_actor_segment(tenant_id)}/u-{_actor_segment(user_id)}"
 
-    def _path(self, name: str, *, user_id: str, tenant_id: str) -> StoragePath:
-        return StoragePath(relative_path=f"{self._actor_prefix(user_id=user_id, tenant_id=tenant_id)}/{name}")
+    def _path(
+        self,
+        name: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> StoragePath:
+        prefix = self._actor_prefix(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
+        return StoragePath(relative_path=f"{prefix}/{name}")
 
     @staticmethod
     def _summary(metadata: FileMetadata, actor_prefix: str) -> DocumentSummary:
@@ -474,6 +682,13 @@ def _actor_segment(value: str) -> str:
     if not normalized:
         raise StorageValidationError("Document actor identifiers must not be empty")
     return quote(normalized, safe="-_")
+
+
+def _workspace_segment(value: str) -> str:
+    normalized = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", normalized):
+        raise StorageValidationError("Workspace storage key is invalid")
+    return normalized
 
 
 def _encode_content(content: str) -> bytes:

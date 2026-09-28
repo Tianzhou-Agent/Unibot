@@ -19,6 +19,9 @@ import {
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { classNames } from "@/lib/utils";
+import { getRawLogs } from "@/lib/obsData";
+import type { ObsOverview, ObsSessionDetail } from "@/lib/obsData";
+import { adaptSessionDetail } from "@/lib/obsAdapter";
 import type { ConversationRecord, LLMCallRecord, TraceRecord, TraceSpan } from "@/types";
 
 type PageView = "conversation" | "overview";
@@ -34,6 +37,12 @@ interface PersonalObservabilityViewProps {
   conversations: ConversationRecord[];
   traces: TraceRecord[];
   llmCalls: LLMCallRecord[];
+  /** 后端聚合 DTO：个人总览（design 12.2），优先于本地 traces/llmCalls 聚合 */
+  obsOverview?: ObsOverview | null;
+  /** 后端聚合 DTO：对话详情，优先于本地 traces/llmCalls 过滤 */
+  obsSession?: ObsSessionDetail | null;
+  /** 个人总览周期切换回调（DTO 模式下由父级重新拉取） */
+  onOverviewPeriodChange?: (period: "day" | "week" | "month") => void;
   /** 是否通过 URL searchParams 同步 tab/logId/traceId（整页场景默认 true；抽屉内嵌场景传 false 用内部状态，避免污染当前页面 URL） */
   urlParams?: boolean;
 }
@@ -43,6 +52,7 @@ interface TokenUsage {
   output: number;
   total: number;
   measured: boolean;
+  estimated: boolean;
 }
 
 interface TokenSample extends TokenUsage {
@@ -61,6 +71,8 @@ interface RawLogEntry {
   input?: unknown;
   output?: unknown;
   error?: unknown;
+  /** OBS 新链路的完整原始日志定位（otel trace/span id），用于按需加载 /obs/raw-logs */
+  rawLog?: { traceId: string; spanId: string };
 }
 
 interface DiagnosticError {
@@ -78,6 +90,9 @@ export function PersonalObservabilityView({
   conversations,
   traces,
   llmCalls,
+  obsOverview = null,
+  obsSession = null,
+  onOverviewPeriodChange,
   urlParams = true,
 }: PersonalObservabilityViewProps) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -104,22 +119,30 @@ export function PersonalObservabilityView({
     }
   }
 
+  const adaptedSession = useMemo(
+    () => (sessionId && obsSession ? adaptSessionDetail(obsSession) : null),
+    [obsSession, sessionId],
+  );
   const conversationTraces = useMemo(
-    () => sessionId
-      ? traces
-        .filter((trace) => trace.conversation_id === sessionId)
-        .sort((left, right) => left.created_at.localeCompare(right.created_at))
-      : [],
-    [sessionId, traces],
+    () => {
+      if (adaptedSession) return adaptedSession.traces;
+      return sessionId
+        ? traces
+          .filter((trace) => trace.conversation_id === sessionId)
+          .sort((left, right) => left.created_at.localeCompare(right.created_at))
+        : [];
+    },
+    [adaptedSession, sessionId, traces],
   );
   const conversationCalls = useMemo(
     () => {
+      if (adaptedSession) return adaptedSession.calls;
       const traceIds = new Set(conversationTraces.map((trace) => trace.trace_id));
       return llmCalls
         .filter((call) => (call.trace_id != null && traceIds.has(call.trace_id)) || call.context_id === sessionId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at));
     },
-    [conversationTraces, llmCalls, sessionId],
+    [adaptedSession, conversationTraces, llmCalls, sessionId],
   );
   const conversation = conversations.find((item) => item.id === sessionId);
   const conversationTitle = conversation?.title
@@ -165,7 +188,7 @@ export function PersonalObservabilityView({
               onFocusRawLog={focusRawLog}
             />
           ) : (
-            <PersonalOverview traces={traces} calls={llmCalls} />
+            <PersonalOverview traces={traces} calls={llmCalls} overview={obsOverview} onPeriodChange={onOverviewPeriodChange} />
           )}
         </div>
       </div>
@@ -248,9 +271,9 @@ function ConversationView({
                   {modelMetrics.map((item) => (
                     <tr key={item.model}>
                       <td className="px-3 py-2 font-mono font-bold text-ink">{item.model}</td>
-                      <td className="px-2.5 py-2">{item.calls}</td><td className="px-2.5 py-2">{formatNumber(item.input)}</td>
-                      <td className="px-2.5 py-2">{formatNumber(item.output)}</td><td className="px-2.5 py-2">{item.toolCalls}</td><td className="px-2.5 py-2">{formatDuration(item.avgTtft)}</td>
-                      <td className="px-2.5 py-2">{formatDuration(item.avgDuration)}</td><td className="px-2.5 py-2">{formatRate(item.outputRate)}</td>
+                      <td className="px-2.5 py-2">{item.calls}</td><td className="px-2.5 py-2">{formatEstimatedNumber(item.input, item.estimated)}</td>
+                      <td className="px-2.5 py-2">{formatEstimatedNumber(item.output, item.estimated)}</td><td className="px-2.5 py-2">{item.toolCalls}</td><td className="px-2.5 py-2">{formatDuration(item.avgTtft)}</td>
+                      <td className="px-2.5 py-2">{formatDuration(item.avgDuration)}</td><td className="px-2.5 py-2">{formatEstimatedRate(item.outputRate, item.estimated)}</td>
                       <td className="px-2.5 py-2">{Math.round(item.successRate * 100)}%</td>
                     </tr>
                   ))}
@@ -356,19 +379,19 @@ function ConversationOverview({
       <ConversationMetricGroup
         icon={<Activity />}
         title="Token 使用"
-        primary={{ label: "Token 总量", value: metrics.usage.measured ? formatNumber(metrics.usage.total) : "—" }}
+        primary={{ label: "Token 总量", value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.total, metrics.usage.estimated) : "—" }}
         details={[
-          { label: "输入 Token", value: metrics.usage.measured ? formatNumber(metrics.usage.input) : "—" },
-          { label: "输出 Token", value: metrics.usage.measured ? formatNumber(metrics.usage.output) : "—" },
+          { label: "输入 Token", value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.input, metrics.usage.estimated) : "—" },
+          { label: "输出 Token", value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.output, metrics.usage.estimated) : "—" },
           { label: "缓存读取", value: metrics.cacheRead.measured ? formatNumber(metrics.cacheRead.value) : "—", hint: metrics.cacheRead.measured ? "已复用的输入 Token" : "模型 Usage 未上报" },
         ]}
       />
       <ConversationMetricGroup
         icon={<Gauge />}
         title="Token 生成速率"
-        primary={{ label: "输出 Token/s", value: formatRate(metrics.outputRate) }}
+        primary={{ label: "输出 Token/s", value: formatEstimatedRate(metrics.outputRate, metrics.rateEstimated) }}
         details={[
-          { label: "总 Token/s", value: formatRate(metrics.totalRate) },
+          { label: "总 Token/s", value: formatEstimatedRate(metrics.totalRate, metrics.rateEstimated) },
           { label: "首 Token", value: formatDuration(metrics.avgTtft), hint: "模型调用平均 TTFT" },
           { label: "平均耗时", value: formatDuration(metrics.avgDuration), hint: "单次模型调用" },
         ]}
@@ -384,7 +407,7 @@ function ConversationOverview({
       <ConversationMetricGroup
         icon={<Layers3 />}
         title="上下文使用"
-        primary={{ label: "当前使用", value: metrics.contextUsed == null ? "—" : formatNumber(metrics.contextUsed), hint: metrics.contextUsed == null ? "模型 Usage 未上报" : "最近一次模型请求的输入 Token" }}
+        primary={{ label: "当前使用", value: formatEstimatedNumber(metrics.contextUsed, metrics.contextEstimated), hint: metrics.contextUsed == null ? "模型 Usage 未上报" : "最近一次模型请求的输入 Token" }}
         details={[
           { label: "总容量", value: formatNumber(metrics.contextCapacity), hint: "默认模型上下文窗口" },
           { label: "压缩次数", value: String(metrics.compressionCount), hint: "已完成的上下文压缩事件" },
@@ -449,8 +472,8 @@ function InteractionSpanTree({ trace, calls, round }: { trace: TraceRecord; call
         <strong className="text-[12px] text-ink">第 {round} 轮交互</strong>
         <TraceStatusDot status={trace.status} />
         <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10.5px] text-ink-subtle" aria-label={`第 ${round} 轮调用树指标`}>
-          <span>输入 <strong className="text-ink-muted">{formatNumber(usage.measured ? usage.input : null)} Token</strong></span>
-          <span>输出 <strong className="text-ink-muted">{formatNumber(usage.measured ? usage.output : null)} Token</strong></span>
+          <span>输入 <strong className="text-ink-muted">{formatEstimatedNumber(usage.measured ? usage.input : null, usage.estimated)} Token</strong></span>
+          <span>输出 <strong className="text-ink-muted">{formatEstimatedNumber(usage.measured ? usage.output : null, usage.estimated)} Token</strong></span>
           <span>时延 <strong className="text-ink-muted">{formatDuration(rootSpan?.duration_ms ?? traceDuration(trace))}</strong></span>
         </div>
       </summary>
@@ -760,9 +783,26 @@ function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedE
 
 function RawLogItem({ entry, focused }: { entry: RawLogEntry; focused: boolean }) {
   const [view, setView] = useState<"input" | "output">("input");
+  const [fullLogState, setFullLogState] = useState<"idle" | "loading" | "loaded" | "empty">("idle");
+  const [fullLogDetail, setFullLogDetail] = useState<unknown>(null);
   const hasInput = entry.input != null;
   const hasOutput = entry.output != null;
   const showSwitch = hasInput && hasOutput;
+  const loadFullLog = async () => {
+    if (!entry.rawLog) return;
+    setFullLogState("loading");
+    try {
+      const result = await getRawLogs(entry.rawLog.traceId, entry.rawLog.spanId);
+      if (result?.status === "ready" && result.detail != null) {
+        setFullLogDetail(result.detail);
+        setFullLogState("loaded");
+      } else {
+        setFullLogState("empty");
+      }
+    } catch {
+      setFullLogState("empty");
+    }
+  };
   return (
     <details
       id={`raw-log-${entry.id}`}
@@ -806,6 +846,20 @@ function RawLogItem({ entry, focused }: { entry: RawLogEntry; focused: boolean }
             className={classNames("rounded-md", focused && "ring-2 ring-danger/60")}
           >
             <JsonPayload label="错误" value={entry.error} danger />
+          </div>
+        ) : null}
+        {entry.rawLog ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={loadFullLog}
+              disabled={fullLogState === "loading"}
+              className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1 text-[10.5px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {fullLogState === "loading" ? "加载中…" : "查看完整原始日志"}
+            </button>
+            {fullLogState === "loaded" ? <JsonPayload label="完整原始日志" value={fullLogDetail} /> : null}
+            {fullLogState === "empty" ? <span className="text-[10.5px] text-ink-subtle">暂无完整日志（未持久化或已清理）。</span> : null}
           </div>
         ) : null}
         {!hasInput && !hasOutput && entry.error == null ? <div className="py-4 text-center text-[11px] text-ink-subtle">该记录没有可用的原始 I/O。</div> : null}
@@ -871,10 +925,94 @@ function JsonSyntax({ value, depth = 0 }: { value: unknown; depth?: number }) {
   return <span className="text-slate-400">{String(value)}</span>;
 }
 
-function PersonalOverview({ traces, calls }: { traces: TraceRecord[]; calls: LLMCallRecord[] }) {
+function PersonalOverview({
+  traces,
+  calls,
+  overview,
+  onPeriodChange,
+}: {
+  traces: TraceRecord[];
+  calls: LLMCallRecord[];
+  overview?: ObsOverview | null;
+  onPeriodChange?: (period: Period) => void;
+}) {
   const [period, setPeriod] = useState<Period>("month");
+  const switchPeriod = (next: Period) => {
+    setPeriod(next);
+    onPeriodChange?.(next);
+  };
   const samples = useMemo(() => buildTokenSamples(traces, calls), [calls, traces]);
   const range = periodRange(period);
+
+  // 后端聚合 DTO 优先：个人总览不再由前端加载全量 LLM Call 计算（design 12.2）
+  if (overview) {
+    const totals = {
+      input: overview.input_tokens,
+      output: overview.output_tokens,
+      total: overview.total_tokens,
+    };
+    const byModel = overview.per_model.map((row) => ({
+      model: row.model,
+      calls: row.call_count,
+      input: row.input_tokens,
+      output: row.output_tokens,
+      total: row.input_tokens + row.output_tokens,
+    }));
+    const dailySamples: TokenSample[] = overview.daily.map((row) => ({
+      id: row.day ?? "unknown",
+      model: "",
+      conversationId: null,
+      createdAt: row.day ?? new Date().toISOString(),
+      input: row.input_tokens,
+      output: row.output_tokens,
+      total: row.input_tokens + row.output_tokens,
+      measured: true,
+      estimated: false,
+    }));
+    return (
+      <div className="space-y-2.5">
+        <section className="px-1 py-1" aria-label="时间范围">
+          <div className="flex flex-wrap items-center gap-2">
+            <CalendarDays className="h-4 w-4 text-accent" />
+            <strong className="mr-2 text-[12px] text-ink">统计周期</strong>
+            {(["day", "week", "month"] as const).map((item) => (
+              <button key={item} type="button" onClick={() => switchPeriod(item)} className={classNames("rounded-md px-2.5 py-1 text-[11px] font-bold", period === item ? "bg-accent text-white" : "bg-app-soft text-ink-muted")}>{periodLabel(item)}</button>
+            ))}
+            {overview.start && overview.end ? (
+              <span className="ml-auto text-[10.5px] text-ink-subtle">{formatDate(new Date(overview.start))} — {formatDate(new Date(overview.end))}</span>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="grid grid-cols-2 overflow-hidden rounded-xl bg-white p-1 md:grid-cols-3 xl:grid-cols-6" aria-label="个人 Token 总览">
+          <MetricCard label="总 Token" value={formatNumber(totals.total)} icon={<Activity />} />
+          <MetricCard label="输入 Token" value={formatNumber(totals.input)} icon={<Brain />} />
+          <MetricCard label="输出 Token" value={formatNumber(totals.output)} icon={<Sparkles />} />
+          <MetricCard label="对话数" value={String(overview.conversation_count)} icon={<MessageSquareText />} />
+          <MetricCard label="交互轮次" value={String(overview.trace_count)} icon={<Route />} />
+          <MetricCard label="活跃天数" value={String(overview.active_days)} icon={<CalendarDays />} />
+        </section>
+
+        <section className="rounded-xl bg-white" aria-label="不同模型 Token 消耗">
+          <SectionHeader icon={<Brain />} title="不同模型 Token 消耗" note={`${byModel.length} 个模型`} />
+          <div className="overflow-x-auto">
+            <table className="min-w-[620px] w-full text-left text-[11.5px]">
+              <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">模型</th><th className="px-2.5 py-2">调用</th><th className="px-2.5 py-2">输入</th><th className="px-2.5 py-2">输出</th><th className="px-2.5 py-2">总 Token</th><th className="px-2.5 py-2">占比</th></tr></thead>
+              <tbody className="divide-y divide-line">
+                {byModel.map((item) => (
+                  <tr key={item.model}><td className="px-3 py-2 font-mono font-bold text-ink">{item.model}</td><td className="px-2.5 py-2">{item.calls}</td><td className="px-2.5 py-2">{formatNumber(item.input)}</td><td className="px-2.5 py-2">{formatNumber(item.output)}</td><td className="px-2.5 py-2 font-bold text-ink">{formatNumber(item.total)}</td><td className="px-2.5 py-2">{totals.total ? `${((item.total / totals.total) * 100).toFixed(1)}%` : "0%"}</td></tr>
+                ))}
+                {byModel.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">当前周期没有 Token 数据。</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <TokenCalendar samples={dailySamples} />
+      </div>
+    );
+  }
+
   const periodSamples = samples.filter((sample) => inRange(sample.createdAt, range.start, range.end));
   const periodTraces = traces.filter((trace) => inRange(trace.created_at, range.start, range.end));
   const totals = periodSamples.reduce((sum, sample) => ({ input: sum.input + sample.input, output: sum.output + sample.output, total: sum.total + sample.total }), { input: 0, output: 0, total: 0 });
@@ -965,17 +1103,17 @@ function callTokenUsage(call: LLMCallRecord): TokenUsage {
   const reportedTotal = numberValue(usage?.total_tokens);
   const measured = input != null || output != null || reportedTotal != null;
   const total = reportedTotal ?? (input ?? 0) + (output ?? 0);
-  return { input: input ?? 0, output: output ?? 0, total, measured };
+  return { input: input ?? 0, output: output ?? 0, total, measured, estimated: usage?.estimated === true || usage?.source === "estimated" };
 }
 
 function spanTokenUsage(span: TraceSpan): TokenUsage {
   const input = numberValue(span.attributes.input_tokens);
   const output = numberValue(span.attributes.output_tokens);
-  return { input: input ?? 0, output: output ?? 0, total: (input ?? 0) + (output ?? 0), measured: input != null || output != null };
+  return { input: input ?? 0, output: output ?? 0, total: (input ?? 0) + (output ?? 0), measured: input != null || output != null, estimated: span.attributes.usage_estimated === true };
 }
 
 function sumTokenUsage(usages: TokenUsage[]): TokenUsage {
-  return usages.reduce((sum, usage) => ({ input: sum.input + usage.input, output: sum.output + usage.output, total: sum.total + usage.total, measured: sum.measured || usage.measured }), { input: 0, output: 0, total: 0, measured: false });
+  return usages.reduce((sum, usage) => ({ input: sum.input + usage.input, output: sum.output + usage.output, total: sum.total + usage.total, measured: sum.measured || usage.measured, estimated: sum.estimated || usage.estimated }), { input: 0, output: 0, total: 0, measured: false, estimated: false });
 }
 
 function buildConversationOverviewMetrics(traces: TraceRecord[], calls: LLMCallRecord[]) {
@@ -1008,6 +1146,7 @@ function buildConversationOverviewMetrics(traces: TraceRecord[], calls: LLMCallR
   const latestCall = [...calls].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
   const latestModelSpan = traces.flatMap((trace) => trace.spans).filter((span) => span.kind === "model").sort((left, right) => right.started_at.localeCompare(left.started_at))[0];
   const latestSpanUsage = latestModelSpan ? spanTokenUsage(latestModelSpan) : null;
+  const latestCallUsage = latestCall ? callTokenUsage(latestCall) : null;
   const latestCallInput = latestCall ? callInputTokens(latestCall) : null;
   const contextUsed = latestCallInput ?? (latestSpanUsage?.measured ? latestSpanUsage.input : null);
   const compressionEvents = traces.flatMap((trace) => trace.events).filter((event) => event.status === "completed" && isContextCompression(event.kind)).length;
@@ -1017,9 +1156,11 @@ function buildConversationOverviewMetrics(traces: TraceRecord[], calls: LLMCallR
     cacheRead: { value: cacheReadValues.reduce((sum, value) => sum + value, 0), measured: cacheReadValues.length > 0 },
     totalRate: rateDuration > 0 && rateUsage.measured ? rateUsage.total / (rateDuration / 1000) : null,
     outputRate: rateDuration > 0 && rateUsage.measured ? rateUsage.output / (rateDuration / 1000) : null,
+    rateEstimated: rateUsage.estimated,
     avgTtft: ttfts.length ? ttfts.reduce((sum, value) => sum + value, 0) / ttfts.length : null,
     avgDuration: durations.length ? durations.reduce((sum, value) => sum + value, 0) / durations.length : null,
     contextUsed,
+    contextEstimated: latestCallInput != null ? (latestCallUsage?.estimated || !latestCallUsage?.measured) : (latestSpanUsage?.estimated ?? false),
     contextCapacity: (latestCall ? callContextCapacity(latestCall) : null) ?? DEFAULT_CONTEXT_CAPACITY,
     compressionCount: compressionEvents || compressionSpans,
   };
@@ -1067,12 +1208,12 @@ function buildModelMetrics(traces: TraceRecord[], calls: LLMCallRecord[]) {
   const records = calls.map((call) => {
     const span = call.span_id ? spansById.get(call.span_id) : undefined;
     const usage = callTokenUsage(call);
-    return { model: call.model || span?.target_id || "未知模型", input: usage.input, output: usage.output, toolCalls: numberValue(span?.attributes.tool_call_count) ?? 0, duration: call.duration_ms ?? span?.duration_ms ?? 0, ttft: call.ttft_ms ?? numberValue(span?.attributes.ttft_ms) ?? null, success: call.status === "completed" };
+    return { model: call.model || span?.target_id || "未知模型", input: usage.input, output: usage.output, estimated: usage.estimated, toolCalls: modelToolCallCount(call.response, span), duration: call.duration_ms ?? span?.duration_ms ?? 0, ttft: call.ttft_ms ?? numberValue(span?.attributes.ttft_ms) ?? null, success: call.status === "completed" };
   });
   const recordedSpanIds = new Set(calls.map((call) => call.span_id).filter(Boolean));
   for (const span of modelSpans.filter((item) => !recordedSpanIds.has(item.span_id))) {
     const usage = spanTokenUsage(span);
-    records.push({ model: span.target_id || span.name, input: usage.input, output: usage.output, toolCalls: numberValue(span.attributes.tool_call_count) ?? 0, duration: span.duration_ms ?? 0, ttft: numberValue(span.attributes.ttft_ms), success: span.status === "completed" });
+    records.push({ model: span.target_id || span.name, input: usage.input, output: usage.output, estimated: usage.estimated, toolCalls: modelToolCallCount(span.output, span), duration: span.duration_ms ?? 0, ttft: numberValue(span.attributes.ttft_ms), success: span.status === "completed" });
   }
   const grouped = new Map<string, typeof records>();
   for (const record of records) grouped.set(record.model, [...(grouped.get(record.model) ?? []), record]);
@@ -1081,8 +1222,19 @@ function buildModelMetrics(traces: TraceRecord[], calls: LLMCallRecord[]) {
     const output = items.reduce((sum, item) => sum + item.output, 0);
     const duration = items.reduce((sum, item) => sum + item.duration, 0);
     const ttfts = items.map((item) => item.ttft).filter((value): value is number => value != null);
-    return { model, calls: items.length, input, output, toolCalls: items.reduce((sum, item) => sum + item.toolCalls, 0), avgDuration: items.length ? duration / items.length : null, avgTtft: ttfts.length ? ttfts.reduce((sum, value) => sum + value, 0) / ttfts.length : null, outputRate: duration > 0 ? output / (duration / 1000) : null, successRate: items.length ? items.filter((item) => item.success).length / items.length : 0 };
+    return { model, calls: items.length, input, output, estimated: items.some((item) => item.estimated), toolCalls: items.reduce((sum, item) => sum + item.toolCalls, 0), avgDuration: items.length ? duration / items.length : null, avgTtft: ttfts.length ? ttfts.reduce((sum, value) => sum + value, 0) / ttfts.length : null, outputRate: duration > 0 ? output / (duration / 1000) : null, successRate: items.length ? items.filter((item) => item.success).length / items.length : 0 };
   });
+}
+
+function modelToolCallCount(responseValue: unknown, span?: TraceSpan) {
+  const recorded = numberValue(span?.attributes.tool_call_count);
+  if (recorded != null) return recorded;
+  const response = asRecord(responseValue);
+  const message = asRecord(response?.message);
+  const firstChoice = asRecord(asArray(response?.choices)[0]);
+  const choiceMessage = asRecord(firstChoice?.message);
+  const toolCalls = response?.tool_calls ?? message?.tool_calls ?? choiceMessage?.tool_calls;
+  return asArray(toolCalls).length;
 }
 
 function capabilityMetrics(spans: TraceSpan[]) {
@@ -1185,21 +1337,31 @@ function toolCallNames(toolCalls: unknown[]) {
     .filter((name): name is string => typeof name === "string");
 }
 
+function spanRawLogRef(span?: TraceSpan): { traceId: string; spanId: string } | undefined {
+  const traceId = span?.attributes?.otel_trace_id;
+  const spanId = span?.attributes?.otel_span_id;
+  if (typeof traceId === "string" && typeof spanId === "string" && traceId && spanId) {
+    return { traceId, spanId };
+  }
+  return undefined;
+}
+
 function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[] {
   const root = findRootSpan(trace);
   const logs: RawLogEntry[] = [];
   if (root) {
     const rootIo = resolveSpanIo(root, trace);
-    logs.push({ id: `${root.span_id}-user`, traceId: trace.trace_id, role: "user", title: "交互输入", subtitle: root.span_id, input: rootIo.input, error: root.error ?? undefined });
+    logs.push({ id: `${root.span_id}-user`, traceId: trace.trace_id, role: "user", title: "交互输入", subtitle: root.span_id, input: rootIo.input, error: root.error ?? undefined, rawLog: spanRawLogRef(root) });
   }
   calls.forEach((call, index) => {
     const requestMessages = asArray(call.request.messages);
+    const ownerSpan = trace.spans.find((span) => span.attributes?.otel_span_id === call.span_id || span.span_id === call.span_id);
     requestMessages.forEach((message, messageIndex) => {
       const record = asRecord(message);
       const role = normalizeRole(record?.role);
-      if (role === "system") logs.push({ id: `${call.call_id}-context-${messageIndex}`, traceId: trace.trace_id, role, title: `模型上下文 · ${role}`, subtitle: call.model, input: message });
+      if (role === "system") logs.push({ id: `${call.call_id}-context-${messageIndex}`, traceId: trace.trace_id, role, title: `模型上下文 · ${role}`, subtitle: call.model, input: message, rawLog: spanRawLogRef(ownerSpan) });
     });
-    logs.push({ id: call.call_id, traceId: trace.trace_id, role: "assistant", title: `模型请求 ${index + 1} · ${call.model}`, subtitle: call.call_id, input: call.request, output: call.response ?? undefined, error: call.error ?? undefined });
+    logs.push({ id: call.call_id, traceId: trace.trace_id, role: "assistant", title: `模型请求 ${index + 1} · ${call.model}`, subtitle: call.call_id, input: call.request, output: call.response ?? undefined, error: call.error ?? undefined, rawLog: spanRawLogRef(ownerSpan) });
   });
   const callSpanIds = new Set(calls.map((call) => call.span_id).filter(Boolean));
   trace.spans.filter((span) => span.kind === "model" && !callSpanIds.has(span.span_id)).forEach((span, index) => {
@@ -1213,6 +1375,7 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
       input: io.input,
       output: io.output,
       error: span.error ?? undefined,
+      rawLog: spanRawLogRef(span),
     });
   });
   trace.spans.filter((span) => span.kind === "tool" || span.kind === "aina").forEach((span) => {
@@ -1226,6 +1389,7 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
       input: io.input,
       output: io.output,
       error: span.error ?? undefined,
+      rawLog: spanRawLogRef(span),
     });
   });
   trace.spans.filter((span) => span.kind === "internal" && (span.status === "failed" || span.error)).forEach((span) => {
@@ -1239,6 +1403,7 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
       input: io.input,
       output: io.output,
       error: span.error ?? undefined,
+      rawLog: spanRawLogRef(span),
     });
   });
   return logs;
@@ -1393,7 +1558,9 @@ function formatDate(date: Date) { return date.toLocaleDateString("zh-CN"); }
 function formatDateTime(iso: string) { return new Date(iso).toLocaleString("zh-CN"); }
 function formatMonth(date: Date) { return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}`; }
 function formatNumber(value: number | null) { return value == null ? "—" : Math.round(value).toLocaleString("zh-CN"); }
+function formatEstimatedNumber(value: number | null, estimated: boolean) { return value == null ? "—" : `${estimated ? "≈" : ""}${formatNumber(value)}`; }
 function formatDuration(value: number | null) { return value == null ? "—" : value < 1000 ? `${value.toFixed(0)} ms` : `${(value / 1000).toFixed(2)} s`; }
 function formatRate(value: number | null) { return value == null ? "—" : `${value.toFixed(1)} Token/s`; }
+function formatEstimatedRate(value: number | null, estimated: boolean) { return value == null ? "—" : `${estimated ? "≈" : ""}${formatRate(value)}`; }
 function periodLabel(period: Period) { return period === "day" ? "日" : period === "week" ? "周" : "月"; }
 function heatColor(value: number, max: number) { if (!value || !max) return "bg-slate-100"; const ratio = value / max; return ratio <= 0.25 ? "bg-emerald-100" : ratio <= 0.5 ? "bg-emerald-300" : ratio <= 0.75 ? "bg-emerald-500" : "bg-emerald-700"; }

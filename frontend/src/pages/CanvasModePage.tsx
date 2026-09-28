@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowUp, Bot, Loader2, MessageSquareText, PanelRightOpen, Sparkles, Wrench } from "lucide-react";
+import { ArrowLeft, ArrowUp, Bot, MessageSquareText, PanelRightOpen, Sparkles } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ModelSelector } from "@/components/chat/ModelSelector";
+import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { Topbar } from "@/components/layout/Topbar";
+import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
-import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
-import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext } from "@/types";
+import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
+import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext, WidgetDefinition } from "@/types";
 
 export default function CanvasModePage() {
-  const { ainaId = "" } = useParams<{ ainaId: string }>();
+  const { workspaceId, ainaId = "" } = useParams<{ workspaceId?: string; ainaId: string }>();
+  const routeWorkspaceId = workspaceId ?? null;
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -36,16 +40,39 @@ export default function CanvasModePage() {
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
+  const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
   const [recoveringRun, setRecoveringRun] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const [composerVersion, setComposerVersion] = useState(0);
+  const composerConversationIdRef = useRef<string | null>(conversationId);
   const activeAinaIdRef = useRef(ainaId);
+  const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const activeConversationIdRef = useRef<string | null>(conversationId);
-  const localRunRef = useRef<{ ainaId: string; conversationId: string | null } | null>(null);
+  const localRunRef = useRef<{ workspaceId: string | null; ainaId: string; conversationId: string | null } | null>(null);
   const loadRequestRef = useRef(0);
+  const runGenerationRef = useRef(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
-  const loadConversation = useCallback(async (id: string, expectedAinaId = activeAinaIdRef.current, force = false) => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+    };
+  }, []);
+
+  const loadConversation = useCallback(async (
+    id: string,
+    expectedAinaId = activeAinaIdRef.current,
+    force = false,
+    expectedWorkspaceId = activeWorkspaceIdRef.current,
+  ) => {
     const requestId = ++loadRequestRef.current;
     const [record, pendingApprovals] = await Promise.all([
       api.get<ConversationRecord>(`/conversations/${id}`),
@@ -53,11 +80,15 @@ export default function CanvasModePage() {
     ]);
     if (
       requestId !== loadRequestRef.current
+      || activeWorkspaceIdRef.current !== expectedWorkspaceId
       || activeAinaIdRef.current !== expectedAinaId
       || activeConversationIdRef.current !== id
     ) return null;
+    if ((record.workspace_id ?? null) !== expectedWorkspaceId) {
+      throw new Error("该对话不属于当前工作区，请从左侧选择正确的工作区。");
+    }
     const localRun = localRunRef.current;
-    const isCurrentLocalRun = localRun?.ainaId === expectedAinaId && localRun.conversationId === id;
+    const isCurrentLocalRun = localRun?.workspaceId === activeWorkspaceIdRef.current && localRun?.ainaId === expectedAinaId && localRun.conversationId === id;
     if (!isCurrentLocalRun || force) setMessages(record.messages);
     setApproval(pendingApprovals[0] ?? null);
     if (!isCurrentLocalRun || force) {
@@ -73,12 +104,22 @@ export default function CanvasModePage() {
   useEffect(() => {
     let cancelled = false;
     const routeConversationId = searchParams.get("conversation") ?? stateCanvas?.conversation_id ?? null;
+    if (composerConversationIdRef.current !== routeConversationId) {
+      composerConversationIdRef.current = routeConversationId;
+      setComposerVersion((current) => current + 1);
+    }
+    activeWorkspaceIdRef.current = routeWorkspaceId;
     activeAinaIdRef.current = ainaId;
     activeConversationIdRef.current = routeConversationId;
     loadRequestRef.current += 1;
-    const continuingLocalRun = localRunRef.current?.ainaId === ainaId
+    const continuingLocalRun = localRunRef.current?.workspaceId === routeWorkspaceId
+      && localRunRef.current?.ainaId === ainaId
       && localRunRef.current.conversationId === routeConversationId;
     if (!continuingLocalRun) {
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      localRunRef.current = null;
       setMessages([]);
       setSending(false);
       setRecoveringRun(false);
@@ -88,6 +129,7 @@ export default function CanvasModePage() {
       setLastRun(null);
       setError(null);
       setDocumentTaskContext(null);
+      setClarificationWidgets([]);
     }
     const supplied = stateCanvas?.aina_id === ainaId ? stateCanvas : null;
     if (supplied) {
@@ -100,6 +142,7 @@ export default function CanvasModePage() {
     api
       .post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...actor,
+        workspace_id: routeWorkspaceId,
         conversation_id: routeConversationId,
       })
       .then((opened) => {
@@ -116,14 +159,20 @@ export default function CanvasModePage() {
     return () => {
       cancelled = true;
     };
-  }, [ainaId, searchParams, stateCanvas]);
+  }, [ainaId, routeWorkspaceId, searchParams, stateCanvas]);
 
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
       return;
     }
-    void loadConversation(conversationId, ainaId).catch((loadError) => setError(apiErrorMessage(loadError)));
+    let active = true;
+    void loadConversation(conversationId, ainaId).catch((loadError) => {
+      if (active) setError(apiErrorMessage(loadError));
+    });
+    return () => {
+      active = false;
+    };
   }, [ainaId, conversationId, loadConversation]);
 
   useEffect(() => {
@@ -136,15 +185,23 @@ export default function CanvasModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [messages, streamText, activity, approval, sending]);
+  }, [messages, streamText, activity, approval, sending, clarificationWidgets]);
 
   async function sendMessage(text: string) {
     const prompt = text.trim();
     if (!prompt || sending) return;
+    setClarificationWidgets([]);
     const runAinaId = ainaId;
     let runConversationId = conversationId;
-    localRunRef.current = { ainaId: runAinaId, conversationId: runConversationId };
-    const isActiveRun = () => activeAinaIdRef.current === runAinaId
+    localRunRef.current = { workspaceId: routeWorkspaceId, ainaId: runAinaId, conversationId: runConversationId };
+    const runGeneration = ++runGenerationRef.current;
+    streamAbortRef.current?.abort();
+    const streamController = new AbortController();
+    streamAbortRef.current = streamController;
+    const isActiveRun = () => mountedRef.current
+      && runGenerationRef.current === runGeneration
+      && activeWorkspaceIdRef.current === routeWorkspaceId
+      && activeAinaIdRef.current === runAinaId
       && activeConversationIdRef.current === runConversationId;
     const optimistic: BackendMessage = {
       id: uid("canvas-user"),
@@ -167,17 +224,20 @@ export default function CanvasModePage() {
       if (!targetConversationId) {
         const created = await api.post<ConversationRecord>("/conversations", {
           ...actor,
+          workspace_id: routeWorkspaceId,
           title: `${canvas?.name ?? runAinaId} 对话`,
           category: "general",
           active_aina_ids: [runAinaId],
           primary_aina_id: runAinaId,
         });
+        if (!isActiveRun()) return;
         targetConversationId = created.id;
         runConversationId = created.id;
-        localRunRef.current = { ainaId: runAinaId, conversationId: created.id };
+        localRunRef.current = { workspaceId: routeWorkspaceId, ainaId: runAinaId, conversationId: created.id };
         activeConversationIdRef.current = created.id;
         setConversationId(created.id);
-        navigate(`/canvas/${runAinaId}?conversation=${created.id}`, {
+        composerConversationIdRef.current = created.id;
+        navigate(workspaceCanvasPath(routeWorkspaceId, runAinaId, created.id), {
           replace: true,
           state: canvas ? { canvas: { ...canvas, conversation_id: created.id } } : undefined,
         });
@@ -186,6 +246,7 @@ export default function CanvasModePage() {
         {
           message: prompt,
           conversation_id: targetConversationId,
+          workspace_id: routeWorkspaceId,
           preferred_aina_id: runAinaId,
           ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
           ...actor,
@@ -205,32 +266,39 @@ export default function CanvasModePage() {
             setError(streamFailure);
           }
         },
+        streamController.signal,
       );
       if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
       if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       setLastRun(completed);
+      setClarificationWidgets(completed.widgets.filter(isClarificationWidget));
       setApproval(completed.approval ?? null);
       activeConversationIdRef.current = completed.conversation_id;
       setConversationId(completed.conversation_id);
       await loadConversation(completed.conversation_id, runAinaId, true);
+      if (!isActiveRun()) return;
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
       if (openAction?.aina_id) {
         await openAina(openAction.aina_id, completed.conversation_id);
-        return;
+        return true;
       }
+      return true;
     } catch (sendError) {
       if (isActiveRun()) {
         setMessages((current) => current.filter((message) => message.id !== optimistic.id));
         setError(apiErrorMessage(sendError));
+        return Boolean(completion);
       }
     } finally {
-      const isCurrentRun = localRunRef.current?.ainaId === runAinaId
-        && localRunRef.current.conversationId === runConversationId;
-      if (isCurrentRun) localRunRef.current = null;
-      if (isActiveRun()) {
+      const activeRun = isActiveRun();
+      if (runGenerationRef.current === runGeneration) {
+        localRunRef.current = null;
+        if (streamAbortRef.current === streamController) streamAbortRef.current = null;
+      }
+      if (activeRun) {
         setSending(false);
         setStreamText("");
         setActivity(null);
@@ -261,14 +329,23 @@ export default function CanvasModePage() {
   }
 
   async function openAina(targetAinaId: string, targetConversationId = conversationId) {
+    const expectedWorkspaceId = routeWorkspaceId;
+    const expectedAinaId = ainaId;
+    const expectedConversationId = targetConversationId ?? null;
+    const isCurrentRoute = () => mountedRef.current
+      && activeWorkspaceIdRef.current === expectedWorkspaceId
+      && activeAinaIdRef.current === expectedAinaId
+      && activeConversationIdRef.current === expectedConversationId;
     try {
       const opened = await api.post<AinaCanvasResponse>(`/ainas/${targetAinaId}/open`, {
         ...actor,
+        workspace_id: routeWorkspaceId,
         conversation_id: targetConversationId,
       });
-      navigate(opened.route, { state: { canvas: opened } });
+      if (!isCurrentRoute()) return;
+      navigate(workspaceCanvasPath(routeWorkspaceId, targetAinaId, targetConversationId), { state: { canvas: opened } });
     } catch (openError) {
-      setError(apiErrorMessage(openError));
+      if (isCurrentRoute()) setError(apiErrorMessage(openError));
     }
   }
 
@@ -276,6 +353,14 @@ export default function CanvasModePage() {
     () => messages.filter((message) => message.role !== "system"),
     [messages],
   );
+  const toolResultsByCallId = useMemo(() => new Map(
+    visibleMessages
+      .filter((message) => message.role === "tool" && message.tool_call_id)
+      .map((message) => [message.tool_call_id as string, message]),
+  ), [visibleMessages]);
+  const requestedToolCallIds = useMemo(() => new Set(
+    visibleMessages.flatMap((message) => message.tool_calls?.map((call) => call.id) ?? []),
+  ), [visibleMessages]);
 
   return (
     <div className="flex h-full flex-col bg-app-bg">
@@ -310,7 +395,7 @@ export default function CanvasModePage() {
             </div>
             <button
               type="button"
-              onClick={() => navigate(conversationId ? `/chat/${conversationId}` : "/chat")}
+              onClick={() => navigate(workspaceChatPath(routeWorkspaceId, conversationId))}
               className="btn-outline h-8"
             >
               <ArrowLeft className="h-3.5 w-3.5" />退出画布
@@ -324,20 +409,18 @@ export default function CanvasModePage() {
         {!loading && canvas ? (
           <div className={classNames(
             "grid h-full min-h-0 grid-cols-1",
-            ainaId === "unibot-documents"
-              ? "lg:grid-cols-[minmax(280px,320px)_minmax(0,1fr)]"
-              : "lg:grid-cols-[minmax(320px,360px)_minmax(0,1fr)]",
+            "lg:grid-cols-[360px_minmax(0,1fr)]",
           )}>
             <section className={classNames(
               "min-h-0 flex-col overflow-hidden bg-white lg:flex lg:border-r lg:border-line",
               mobilePane === "chat" ? "flex" : "hidden",
             )}>
-              <header className="flex items-center gap-3 border-b border-line px-4 py-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-soft text-accent">
-                  <Bot className="h-4.5 w-4.5" />
+              <header className="flex h-[72px] items-center gap-3 border-b border-line px-4">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-soft text-accent">
+                  <Bot className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <h2 className="truncate text-[13.5px] font-extrabold text-ink">与 {canvas.name} 对话</h2>
+                  <h2 className="truncate text-[13px] font-semibold text-ink">与 {canvas.name} 对话</h2>
                   <p className="truncate text-[10.5px] text-ink-muted">描述需求，也可在右侧应用直接操作</p>
                 </div>
               </header>
@@ -351,14 +434,32 @@ export default function CanvasModePage() {
                     </div>
                   </div>
                 ) : null}
-                {visibleMessages.map((message) => (
-                  <CanvasMessage
-                    key={message.id}
-                    message={message}
+                {visibleMessages.map((message, index) => {
+                  if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+                  const continuesToolSequence = isToolSequenceContinuation(visibleMessages, index);
+                  return (
+                    <CanvasMessage
+                      key={message.id}
+                      message={message}
+                      onOpenAina={(id) => void openAina(id)}
+                      onPrompt={(prompt) => void sendMessage(prompt)}
+                      debugMode={debugMode}
+                      conversationId={conversationId ?? ""}
+                      workspaceId={routeWorkspaceId}
+                      toolResultsByCallId={toolResultsByCallId}
+                      requestedToolCallIds={requestedToolCallIds}
+                      showToolHeader={!continuesToolSequence}
+                      toolHeaderCount={toolSequenceCallCount(visibleMessages, index)}
+                    />
+                  );
+                })}
+                {clarificationWidgets.map((widget) => (
+                  <SessionWidgetRenderer
+                    key={widget.id}
+                    widget={widget}
+                    workspaceId={routeWorkspaceId}
                     onOpenAina={(id) => void openAina(id)}
                     onPrompt={(prompt) => void sendMessage(prompt)}
-                    debugMode={debugMode}
-                    conversationId={conversationId ?? ""}
                   />
                 ))}
                 {streamText ? (
@@ -373,9 +474,7 @@ export default function CanvasModePage() {
                   />
                 ) : null}
                 {activity ? (
-                  <div className="flex items-center gap-2 rounded-lg border border-accent-ring bg-accent-soft px-3 py-2.5 text-[11.5px] font-semibold text-accent-hover">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />{activity}
-                  </div>
+                  <ToolActivityCard text={activity} compact />
                 ) : null}
                 {approval ? (
                   <ApprovalCard
@@ -389,7 +488,13 @@ export default function CanvasModePage() {
                 {error ? <p className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">{error}</p> : null}
                 <div ref={endRef} />
               </div>
-              <CanvasComposer disabled={sending} context={documentTaskContext} onSend={(text) => void sendMessage(text)} />
+              <CanvasComposer
+                key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${ainaId}:${composerVersion}`}
+                disabled={sending}
+                context={documentTaskContext}
+                sessionId={conversationId}
+                onSend={sendMessage}
+              />
             </section>
 
             <section className={classNames(
@@ -398,9 +503,11 @@ export default function CanvasModePage() {
             )}>
               <div className="min-h-0 flex-1 overflow-hidden">
                 <MainWidgetRenderer
-                  key={canvas.main_widget.id}
+                  key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${canvas.main_widget.id}`}
                   ainaId={canvas.aina_id}
                   widget={canvas.main_widget}
+                  workspaceId={routeWorkspaceId}
+                  documentName={searchParams.get("document")}
                   disabled={false}
                   refreshToken={lastRun?.trace_id}
                   onOpenAina={(id) => void openAina(id)}
@@ -427,29 +534,32 @@ function CanvasMessage({
   onPrompt,
   debugMode,
   conversationId,
+  workspaceId,
+  toolResultsByCallId,
+  requestedToolCallIds,
+  showToolHeader,
+  toolHeaderCount,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
   conversationId: string;
+  workspaceId: string | null;
+  toolResultsByCallId: ReadonlyMap<string, BackendMessage>;
+  requestedToolCallIds: ReadonlySet<string>;
+  showToolHeader: boolean;
+  toolHeaderCount: number;
 }) {
   if (message.role === "user") return <UserMessage content={message.content} />;
   if (message.role === "tool") {
-    if (!debugMode) return null;
-    return (
-      <details className="rounded-lg border border-line bg-white px-3 py-2 text-[10.5px] text-ink-muted">
-        <summary className="flex cursor-pointer items-center gap-1.5 font-bold">
-          <Wrench className="h-3 w-3" />{message.name ?? "能力调用"}
-        </summary>
-        <pre className="mt-2 whitespace-pre-wrap break-all">{formatJson(message.content)}</pre>
-      </details>
-    );
+    if (message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+    return <ToolResultCard message={message} compact debugMode={debugMode} />;
   }
   const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
     <div className="space-y-2">
-      {message.content && (!hasToolCalls || debugMode) ? (
+      {message.content ? (
         <AssistantMessage
           conversationId={conversationId}
           message={{
@@ -461,39 +571,59 @@ function CanvasMessage({
           }}
         />
       ) : null}
-      {message.widgets?.map((widget) => (
-        <SessionWidgetRenderer key={widget.id} widget={widget} onOpenAina={onOpenAina} onPrompt={onPrompt} />
+      {hasToolCalls ? (
+        <ToolCallList
+          calls={message.tool_calls ?? []}
+          resultsByCallId={toolResultsByCallId}
+          compact
+          debugMode={debugMode}
+          showHeader={showToolHeader}
+          headerCount={toolHeaderCount}
+        />
+      ) : null}
+      {message.widgets?.filter((widget) => !isClarificationWidget(widget)).map((widget) => (
+        <SessionWidgetRenderer key={widget.id} widget={widget} workspaceId={workspaceId} onOpenAina={onOpenAina} onPrompt={onPrompt} />
       ))}
     </div>
   );
 }
 
-function CanvasComposer({ disabled, context, onSend }: {
+function CanvasComposer({ disabled, context, sessionId, onSend }: {
   disabled: boolean;
   context: DocumentTaskContext | null;
-  onSend: (text: string) => void;
+  sessionId: string | null;
+  onSend: (text: string) => Promise<boolean | undefined>;
 }) {
   const [text, setText] = useState("");
+  const [sendFailed, setSendFailed] = useState(false);
+  const composingRef = useRef(false);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
-    onSend(value);
-    setText("");
+    setSendFailed(false);
+    const sent = await onSend(value);
+    if (sent) setText((current) => current === text ? "" : current);
+    else if (sent === false) setSendFailed(true);
   }
 
   return (
-    <form onSubmit={submit} className="border-t border-line bg-white p-3">
-      <div className="rounded-xl border border-line-strong p-2 focus-within:border-accent">
+    <div className="space-y-2 border-t border-line bg-white p-3">
+      <TaskTreeWidget sessionId={sessionId} />
+      {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">发送未完成，草稿已保留，可重试。</p> : null}
+      <form onSubmit={submit} className="rounded-xl border border-line-strong p-2 shadow-soft focus-within:border-accent">
         {context ? <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[9.5px] text-accent">
           <Sparkles className="h-3 w-3 shrink-0" />
           <span className="truncate">对话上下文：{context.taskTitle} / {context.sectionHeading}</span>
         </div> : null}
         <textarea
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => { setText(event.target.value); setSendFailed(false); }}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
           onKeyDown={(event) => {
+            if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               submit(event);
@@ -519,8 +649,8 @@ function CanvasComposer({ disabled, context, onSend }: {
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
         </div>
-      </div>
-    </form>
+      </form>
+    </div>
   );
 }
 
@@ -545,12 +675,4 @@ function CanvasSkeleton() {
       <div className="animate-pulse bg-line/60" />
     </div>
   );
-}
-
-function formatJson(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
 }

@@ -7,22 +7,25 @@ import {
   Check,
   RotateCcw,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
+import { isToolSequenceContinuation, toolSequenceCallCount, ToolActivityCard, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
-import { SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
-import { loadAllPersonalLlmCalls } from "@/lib/obsData";
+import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
+import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
+import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
 import type {
   AinaCanvasResponse,
   ApprovalRecord,
@@ -32,6 +35,7 @@ import type {
   LLMCallRecord,
   TraceRecord,
   TraceSpan,
+  WidgetDefinition,
 } from "@/types";
 
 interface MessageFailure {
@@ -42,8 +46,10 @@ interface MessageFailure {
 }
 
 export default function ChatModePage() {
-  const { conversationId } = useParams<{ conversationId: string }>();
+  const { workspaceId, conversationId } = useParams<{ workspaceId?: string; conversationId?: string }>();
+  const routeWorkspaceId = workspaceId ?? null;
   const navigate = useNavigate();
+  const location = useLocation();
   const { debugMode } = useDebugMode();
   const { profile } = useMockSession();
   const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
@@ -52,12 +58,15 @@ export default function ChatModePage() {
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
+  const [composerVersion, setComposerVersion] = useState(0);
+  const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
   const [streamText, setStreamText] = useState("");
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
+  const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -66,22 +75,47 @@ export default function ChatModePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const endRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
+  const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const localRunConversationIdRef = useRef<string | null>(null);
+  const localRunWorkspaceIdRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
+  const runGenerationRef = useRef(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   activeConversationIdRef.current = conversationId ?? null;
+  activeWorkspaceIdRef.current = routeWorkspaceId;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     if (!conversationId) return;
     let active = true;
     const actorQuery = `tenant_id=${encodeURIComponent(profile.tenantId)}&user_id=${encodeURIComponent(profile.actorUserId)}`;
-    const querySuffix = `?${actorQuery}`;
-    void Promise.all([
-      loadAllPersonalLlmCalls(actorQuery),
-      api.get<TraceRecord[]>(`/traces${querySuffix}`),
-    ]).then(([calls, traceData]) => {
-      if (active) {
-        setLlmCalls(calls);
-        setTraces(traceData);
+    void getObsSession(conversationId).catch(() => null).then(async (session) => {
+      if (!active) return;
+      if (session) {
+        const adapted = adaptSessionDetail(session);
+        setLlmCalls(adapted.calls);
+        setTraces(adapted.traces);
+        return;
       }
+      // OBS 未启用或会话尚未迁移：只在此时读取旧 Trace/LLM Call。
+      const legacy = await loadLegacyPersonalObsSession(conversationId, actorQuery);
+      if (!active) return;
+      setLlmCalls(legacy.calls);
+      setTraces(legacy.traces);
+    }).catch(() => {
+      if (!active) return;
+      setLlmCalls([]);
+      setTraces([]);
     });
     return () => { active = false; };
   }, [conversationId, profile.actorUserId, profile.tenantId]);
@@ -126,6 +160,9 @@ export default function ChatModePage() {
         api.get<ApprovalRecord[]>(`/approvals?conversation_id=${id}&status=pending`),
       ]);
       if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
+      if ((record.workspace_id ?? null) !== activeWorkspaceIdRef.current) {
+        throw new Error("该对话不属于当前工作区，请从左侧选择正确的工作区。");
+      }
       setConversation(record);
       setApproval(pendingApprovals[0] ?? null);
       setTitleDraft(record.title);
@@ -139,20 +176,34 @@ export default function ChatModePage() {
       if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
       setError(apiErrorMessage(loadError));
     } finally {
-      if (!silent && requestId === loadRequestRef.current) setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     const continuingLocalRun = Boolean(
-      conversationId && localRunConversationIdRef.current === conversationId,
+      conversationId
+      && localRunWorkspaceIdRef.current === routeWorkspaceId
+      && localRunConversationIdRef.current === conversationId,
     );
-    setConversation((current) => (current?.id === conversationId ? current : null));
+    if (composerConversationIdRef.current !== (conversationId ?? null)) {
+      composerConversationIdRef.current = conversationId ?? null;
+      setComposerVersion((current) => current + 1);
+    }
+    setConversation((current) => (
+      current && current.id === conversationId && (current.workspace_id ?? null) === routeWorkspaceId ? current : null
+    ));
     if (!continuingLocalRun) {
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      localRunConversationIdRef.current = null;
+      localRunWorkspaceIdRef.current = null;
       setOptimisticUser(null);
       setStreamText("");
       setActivity(null);
       setSending(false);
+      setClarificationWidgets([]);
     }
     setApproval(null);
     setLastRun(null);
@@ -165,7 +216,7 @@ export default function ChatModePage() {
       setConversation(null);
       setLoading(false);
     }
-  }, [conversationId, loadConversation]);
+  }, [conversationId, loadConversation, routeWorkspaceId]);
 
   useEffect(() => {
     if (!conversationId || conversation?.run_status !== "running") return;
@@ -177,6 +228,12 @@ export default function ChatModePage() {
 
   useEffect(() => {
     const reset = () => {
+      setComposerVersion((current) => current + 1);
+      runGenerationRef.current += 1;
+      streamAbortRef.current?.abort();
+      streamAbortRef.current = null;
+      localRunConversationIdRef.current = null;
+      localRunWorkspaceIdRef.current = null;
       setConversation(null);
       setApproval(null);
       setLastRun(null);
@@ -186,6 +243,7 @@ export default function ChatModePage() {
       setStreamText("");
       setActivity(null);
       setSending(false);
+      setClarificationWidgets([]);
     };
     window.addEventListener("unibot:new-conversation", reset);
     return () => window.removeEventListener("unibot:new-conversation", reset);
@@ -193,10 +251,11 @@ export default function ChatModePage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
-  }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending]);
+  }, [conversation?.messages, optimisticUser, streamText, activity, approval, sending, clarificationWidgets]);
 
   async function sendMessage(text: string) {
     if (sending || deleted) return;
+    setClarificationWidgets([]);
     const localMessage: BackendMessage = {
       id: uid("local"),
       role: "user",
@@ -213,6 +272,15 @@ export default function ChatModePage() {
     setSending(true);
     let runConversationId = conversation?.id ?? null;
     localRunConversationIdRef.current = runConversationId;
+    localRunWorkspaceIdRef.current = routeWorkspaceId;
+    const runGeneration = ++runGenerationRef.current;
+    streamAbortRef.current?.abort();
+    const streamController = new AbortController();
+    streamAbortRef.current = streamController;
+    const isActiveRun = () => mountedRef.current
+      && runGenerationRef.current === runGeneration
+      && activeConversationIdRef.current === runConversationId
+      && activeWorkspaceIdRef.current === routeWorkspaceId;
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
     try {
@@ -220,16 +288,20 @@ export default function ChatModePage() {
       if (!targetConversation) {
         targetConversation = await api.post<ConversationRecord>("/conversations", {
           ...actor,
+          workspace_id: routeWorkspaceId,
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
           category: "general",
         });
+        if (!isActiveRun()) return;
         setConversation(targetConversation);
         setTitleDraft(targetConversation.title);
         runConversationId = targetConversation.id;
+        composerConversationIdRef.current = targetConversation.id;
         localRunConversationIdRef.current = targetConversation.id;
+        localRunWorkspaceIdRef.current = routeWorkspaceId;
         activeConversationIdRef.current = targetConversation.id;
         notifyConversationsChanged();
-        navigate(`/chat/${targetConversation.id}`, { replace: true });
+        navigate(workspaceChatPath(routeWorkspaceId, targetConversation.id), { replace: true });
       }
       runConversationId = targetConversation.id;
       localRunConversationIdRef.current = targetConversation.id;
@@ -237,6 +309,7 @@ export default function ChatModePage() {
         {
           message: text,
           conversation_id: targetConversation.id,
+          workspace_id: routeWorkspaceId,
           ...actor,
         },
         (event: StreamEvent) => {
@@ -244,7 +317,7 @@ export default function ChatModePage() {
           if (event.type === "error") {
             streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
           }
-          if (activeConversationIdRef.current !== targetConversation.id) return;
+          if (!isActiveRun()) return;
           if (event.type === "message.delta") setStreamText((current) => current + event.delta);
           if (event.type === "tool.requested") {
             if (debugMode) {
@@ -262,39 +335,47 @@ export default function ChatModePage() {
             setError(streamFailure);
           }
         },
+        streamController.signal,
       );
       if (!completion) throw new Error(streamFailure ?? "智能体流程结束前没有返回完成事件。");
+      if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       if (["New conversation", "新对话"].includes(targetConversation.title)) {
         await api.patch(`/conversations/${completed.conversation_id}`, {
           title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
         });
       }
+      if (!isActiveRun()) return;
       notifyConversationsChanged();
-      if (activeConversationIdRef.current !== completed.conversation_id) return;
       setLastRun(completed);
+      setClarificationWidgets(completed.widgets.filter(isClarificationWidget));
       setApproval(completed.approval ?? null);
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
       if (openAction?.aina_id) {
         await openAina(openAction.aina_id, completed.conversation_id);
-        return;
+        return true;
       }
       if (conversationId !== completed.conversation_id) {
-        navigate(`/chat/${completed.conversation_id}`, { replace: true });
+        navigate(workspaceChatPath(routeWorkspaceId, completed.conversation_id), { replace: true });
       }
       await loadConversation(completed.conversation_id);
+      return true;
     } catch (sendError) {
-      if (runConversationId && activeConversationIdRef.current === runConversationId) {
-        setError(apiErrorMessage(sendError));
-        await loadConversation(runConversationId, true);
+      if (isActiveRun()) {
+        if (runConversationId) await loadConversation(runConversationId, true);
+        if (isActiveRun()) setError(apiErrorMessage(sendError));
+        return Boolean(completion);
       }
     } finally {
-      if (localRunConversationIdRef.current === runConversationId) {
+      const activeRun = isActiveRun();
+      if (runGenerationRef.current === runGeneration) {
         localRunConversationIdRef.current = null;
+        localRunWorkspaceIdRef.current = null;
+        if (streamAbortRef.current === streamController) streamAbortRef.current = null;
       }
-      if (runConversationId && activeConversationIdRef.current === runConversationId) {
+      if (activeRun) {
         setOptimisticUser(null);
         setStreamText("");
         setActivity(null);
@@ -365,22 +446,41 @@ export default function ChatModePage() {
   }
 
   async function openAina(ainaId: string, targetConversationId = conversation?.id) {
+    const expectedWorkspaceId = routeWorkspaceId;
+    const expectedConversationId = targetConversationId ?? null;
+    const isCurrentRoute = () => mountedRef.current
+      && activeWorkspaceIdRef.current === expectedWorkspaceId
+      && activeConversationIdRef.current === expectedConversationId;
     setError(null);
     try {
       const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
         ...actor,
+        workspace_id: routeWorkspaceId,
         conversation_id: targetConversationId,
       });
-      navigate(canvas.route, { state: { canvas } });
+      if (!isCurrentRoute()) return;
+      navigate(workspaceCanvasPath(routeWorkspaceId, ainaId, targetConversationId), { state: { canvas } });
     } catch (openError) {
-      setError(apiErrorMessage(openError));
+      if (isCurrentRoute()) setError(apiErrorMessage(openError));
     }
   }
+
+  const initialPrompt = (location.state as { initialPrompt?: string } | null)?.initialPrompt?.trim()
+    || searchParams.get("prompt")?.trim()
+    || "";
 
   const messages = useMemo(
     () => [...(conversation?.messages ?? []), ...(optimisticUser ? [optimisticUser] : [])],
     [conversation?.messages, optimisticUser],
   );
+  const toolResultsByCallId = useMemo(() => new Map(
+    messages
+      .filter((message) => message.role === "tool" && message.tool_call_id)
+      .map((message) => [message.tool_call_id as string, message]),
+  ), [messages]);
+  const requestedToolCallIds = useMemo(() => new Set(
+    messages.flatMap((message) => message.tool_calls?.map((call) => call.id) ?? []),
+  ), [messages]);
 
   const title = conversation?.title === "New conversation" ? "新对话" : conversation?.title ?? "新对话";
   const badge = deleted
@@ -391,7 +491,7 @@ export default function ChatModePage() {
 
   return (
     <>
-    <div className="h-full flex flex-col bg-app-bg">
+    <div className="flex h-full flex-col bg-app-bg">
       <Topbar
         title={title}
         badge={badge}
@@ -447,26 +547,45 @@ export default function ChatModePage() {
       ) : null}
 
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5" aria-live="polite">
-          <div className="max-w-4xl mx-auto space-y-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
+          <div className="mx-auto max-w-[760px] space-y-7">
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
               ) : null}
               {!loading && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
               {!deleted
-                ? messages.map((message) => (
-                    <ConversationMessage
-                      key={message.id}
-                      message={message}
-                      onOpenAina={(ainaId) => void openAina(ainaId)}
-                      onPrompt={sendMessage}
-                      debugMode={debugMode}
-                      conversationId={conversation?.id ?? ""}
-                      failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
-                    />
-                  ))
+                ? messages.map((message, index) => {
+                    if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+                    const continuesToolSequence = isToolSequenceContinuation(messages, index);
+                    return (
+                      <div key={message.id} className={continuesToolSequence ? "!mt-2" : undefined}>
+                        <ConversationMessage
+                          message={message}
+                          onOpenAina={(ainaId) => void openAina(ainaId)}
+                          onPrompt={sendMessage}
+                          debugMode={debugMode}
+                          conversationId={conversation?.id ?? ""}
+                          workspaceId={routeWorkspaceId}
+                          failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
+                          toolResultsByCallId={toolResultsByCallId}
+                          requestedToolCallIds={requestedToolCallIds}
+                          showToolHeader={!continuesToolSequence}
+                          toolHeaderCount={toolSequenceCallCount(messages, index)}
+                        />
+                      </div>
+                    );
+                  })
                 : null}
+              {clarificationWidgets.map((widget) => (
+                <SessionWidgetRenderer
+                  key={widget.id}
+                  widget={widget}
+                  workspaceId={routeWorkspaceId}
+                  onOpenAina={(ainaId) => void openAina(ainaId)}
+                  onPrompt={sendMessage}
+                />
+              ))}
               {streamText ? (
                 <AssistantMessage
                   message={{
@@ -495,7 +614,10 @@ export default function ChatModePage() {
           </div>
           {!deleted ? (
             <ChatComposer
+              key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${composerVersion}`}
               disabled={sending || loading}
+              initialText={initialPrompt}
+              sessionId={conversation?.id ?? conversationId ?? null}
               onSend={sendMessage}
             />
           ) : null}
@@ -517,14 +639,24 @@ function ConversationMessage({
   onPrompt,
   debugMode,
   conversationId,
+  workspaceId,
   failures,
+  toolResultsByCallId,
+  requestedToolCallIds,
+  showToolHeader,
+  toolHeaderCount,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
   onPrompt: (prompt: string) => void;
   debugMode: boolean;
   conversationId: string;
+  workspaceId: string | null;
   failures: MessageFailure[];
+  toolResultsByCallId: ReadonlyMap<string, BackendMessage>;
+  requestedToolCallIds: ReadonlySet<string>;
+  showToolHeader: boolean;
+  toolHeaderCount: number;
 }) {
   const failure = failures[0] ?? null;
   if (message.role === "system") return null;
@@ -538,12 +670,14 @@ function ConversationMessage({
       </div>
     );
   }
-  if (message.role === "tool") return debugMode ? <ToolResultMessage message={message} /> : null;
+  if (message.role === "tool") {
+    if (message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+    return <ToolResultCard message={message} debugMode={debugMode} />;
+  }
   const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
     <div className="space-y-2">
-      {debugMode && hasToolCalls ? <ToolCallMessage message={message} /> : null}
-      {message.content && (!hasToolCalls || debugMode) ? (
+      {message.content ? (
         <AssistantMessage
           conversationId={conversationId}
           message={{
@@ -555,10 +689,20 @@ function ConversationMessage({
           }}
         />
       ) : null}
-      {message.widgets?.map((widget) => (
+      {hasToolCalls ? (
+        <ToolCallList
+          calls={message.tool_calls ?? []}
+          resultsByCallId={toolResultsByCallId}
+          debugMode={debugMode}
+          showHeader={showToolHeader}
+          headerCount={toolHeaderCount}
+        />
+      ) : null}
+      {message.widgets?.filter((widget) => !isClarificationWidget(widget)).map((widget) => (
         <SessionWidgetRenderer
           key={widget.id}
           widget={widget}
+          workspaceId={workspaceId}
           onOpenAina={onOpenAina}
           onPrompt={onPrompt}
         />
@@ -587,57 +731,8 @@ function FailedCallNotice({ conversationId, traceId, failure }: { conversationId
   );
 }
 
-function ToolCallMessage({ message }: { message: BackendMessage }) {
-  return (
-    <div className="rounded-lg border border-accent-ring bg-accent-soft px-3.5 py-3">
-      <div className="flex items-center gap-2 text-[12.5px] font-bold text-accent-hover">
-        <Wrench className="w-4 h-4" />
-        智能体请求调用能力
-      </div>
-      <div className="mt-2 space-y-1.5">
-        {message.tool_calls?.map((call) => (
-          <div key={call.id} className="rounded-md border border-accent-ring/70 bg-white px-2.5 py-2">
-            <div className="font-mono text-[11.5px] text-ink">{call.function.name}</div>
-            <div className="mt-1 font-mono text-[10.5px] text-ink-muted break-all">
-              {call.function.arguments}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ToolResultMessage({ message }: { message: BackendMessage }) {
-  const isError = toolResultIsError(message.content);
-  return (
-    <details className="rounded-lg border border-line bg-white px-3.5 py-2.5">
-      <summary className="cursor-pointer text-[12px] font-bold text-ink-muted">
-        {isError ? "能力调用失败" : "能力调用结果"} · {message.name}
-      </summary>
-      <pre className="mt-2 whitespace-pre-wrap break-all text-[10.5px] leading-relaxed text-ink-muted">
-        {formatJson(message.content)}
-      </pre>
-    </details>
-  );
-}
-
-function toolResultIsError(content: string): boolean {
-  try {
-    const payload: unknown = JSON.parse(content);
-    return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "error");
-  } catch {
-    return false;
-  }
-}
-
 function ActivityBubble({ text }: { text: string }) {
-  return (
-    <div className="rounded-lg border border-accent-ring bg-accent-soft h-11 px-3.5 flex items-center gap-2.5">
-      <span className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
-      <span className="text-accent-hover text-[12.5px] font-semibold">{text}</span>
-    </div>
-  );
+  return <ToolActivityCard text={text} />;
 }
 
 function RunSummary({ response }: { response: ChatResponse }) {
@@ -645,7 +740,7 @@ function RunSummary({ response }: { response: ChatResponse }) {
     <div className="flex items-center justify-end gap-2 text-[10.5px] text-ink-muted">
       <span>{response.iterations} 次模型迭代</span>
       <span>·</span>
-      <span>{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
+      <span>{response.usage.estimated ? "≈" : ""}{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
       <span>·</span>
       <Link to={`/obs?sessionId=${encodeURIComponent(response.conversation_id)}`} className="text-accent hover:underline">
         查看调用记录
@@ -669,57 +764,75 @@ function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; det
 
 function ChatComposer({
   disabled,
+  initialText,
+  sessionId,
   onSend,
 }: {
   disabled: boolean;
-  onSend: (text: string) => void;
+  initialText: string;
+  sessionId: string | null;
+  onSend: (text: string) => Promise<boolean | undefined>;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText);
+  const [sendFailed, setSendFailed] = useState(false);
+  const composingRef = useRef(false);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
-    onSend(value);
-    setText("");
+    setSendFailed(false);
+    const sent = await onSend(value);
+    if (sent) setText((current) => current === text ? "" : current);
+    else if (sent === false) setSendFailed(true);
   }
 
   return (
-    <form onSubmit={submit} className="border-t border-line bg-white px-5 py-3">
-      <div className="max-w-4xl mx-auto rounded-xl border border-line-strong bg-white p-2.5 shadow-soft focus-within:border-accent">
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              submit(event);
-            }
-          }}
-          disabled={disabled}
-          rows={2}
-          placeholder="给 Unibot 发消息；Enter 发送，Shift+Enter 换行"
-          aria-label="消息"
-          className="w-full bg-transparent px-1 text-[13px] leading-[1.5] text-ink placeholder:text-ink-muted outline-none resize-none disabled:opacity-60"
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <ModelSelector disabled={disabled} />
-          <button
-            type="submit"
-            disabled={disabled || !text.trim()}
-            className={classNames(
-              "w-9 h-9 rounded-lg flex items-center justify-center text-white transition-colors",
-              !disabled && text.trim()
-                ? "bg-accent hover:bg-accent-hover"
-                : "bg-ink-subtle cursor-not-allowed",
-            )}
-            aria-label="发送消息"
-          >
-            <ArrowUp className="w-4 h-4" />
-          </button>
-        </div>
+    <div className="bg-white px-4 pb-5 pt-3 md:px-6">
+      <div className="mx-auto max-w-[760px] space-y-2">
+        <TaskTreeWidget sessionId={sessionId} />
+        {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">发送未完成，草稿已保留，可重试。</p> : null}
+        <form
+          onSubmit={submit}
+          className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
+        >
+          <textarea
+            value={text}
+            onChange={(event) => { setText(event.target.value); setSendFailed(false); }}
+            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionEnd={() => { composingRef.current = false; }}
+            onKeyDown={(event) => {
+              if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submit(event);
+              }
+            }}
+            disabled={disabled}
+            rows={1}
+            placeholder="补充约束，或继续安排下一步…"
+            aria-label="消息"
+            className="w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
+          />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <ModelSelector disabled={disabled} />
+            <button
+              type="submit"
+              disabled={disabled || !text.trim()}
+              className={classNames(
+                "flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors",
+                !disabled && text.trim()
+                  ? "bg-accent hover:bg-accent-hover"
+                  : "bg-ink cursor-not-allowed opacity-80",
+              )}
+              aria-label="发送消息"
+            >
+              <ArrowUp className="w-4 h-4" />
+            </button>
+          </div>
+        </form>
       </div>
-    </form>
+    </div>
   );
 }
 
@@ -774,12 +887,4 @@ function ChatSkeleton() {
       ))}
     </div>
   );
-}
-
-function formatJson(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
 }

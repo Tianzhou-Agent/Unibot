@@ -40,6 +40,7 @@ class DocumentSectionSelection(StrictModel):
 class DocumentEditTaskCreate(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    workspace_id: str | None = None
     description: str = Field(min_length=1, max_length=20_000)
     sections: list[DocumentSectionSelection] = Field(min_length=1, max_length=50)
 
@@ -79,6 +80,7 @@ class DocumentEditTask(StrictModel):
     base_revision: str
     user_id: str
     tenant_id: str
+    workspace_id: str | None = None
     sections: list[DocumentDraftSection]
     attempt_count: int = Field(default=1, ge=1)
     version: int = 1
@@ -115,6 +117,7 @@ class DocumentEditTaskListResponse(StrictModel):
 class DocumentDraftUpdate(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    workspace_id: str | None = None
     content: str = Field(max_length=1_048_576)
     expected_draft_revision: int = Field(ge=0)
 
@@ -122,6 +125,7 @@ class DocumentDraftUpdate(StrictModel):
 class DocumentDraftAiRevision(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    workspace_id: str | None = None
     instruction: str = Field(min_length=1, max_length=20_000)
     expected_draft_revision: int = Field(ge=0)
 
@@ -137,3 +141,4 @@ class DocumentDraftAiRevision(StrictModel):
 class DocumentEditTaskActor(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    workspace_id: str | None = None

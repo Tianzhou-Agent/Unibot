@@ -91,7 +91,11 @@ def test_register_install_and_automatically_invoke_remote_aina() -> None:
     with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
         registered = client.post("/ainas", json=_manifest())
         installed = client.post("/ainas/com.example.arithmetic/install", json={})
-        response = client.post("/chat", json={"message": "Please multiply 6 by 7"})
+        workspace = client.post("/workspaces", json={"name": "AINA workspace"}).json()
+        response = client.post(
+            "/chat",
+            json={"message": "Please multiply 6 by 7", "workspace_id": workspace["id"]},
+        )
         trace = client.get(f"/traces/{response.json()['trace_id']}")
         uninstalled = client.delete("/ainas/com.example.arithmetic/install")
 
@@ -101,6 +105,7 @@ def test_register_install_and_automatically_invoke_remote_aina() -> None:
     assert response.json()["content"] == "The AINA result is 42."
     assert invoked[0]["input"] == {"input": "multiply 6 by 7"}
     assert invoked[0]["conversation_id"] == response.json()["conversation_id"]
+    assert invoked[0]["context"]["workspace_id"] == workspace["id"]
     assert any(event["kind"] == "aina.completed" for event in trace.json()["events"])
     assert uninstalled.status_code == 204
 

@@ -25,6 +25,7 @@ class UnibotClient:
         message: str,
         *,
         conversation_id: str | None = None,
+        workspace_id: str | None = None,
         user_id: str = "anonymous",
         tenant_id: str = "default",
         capability: str | None = None,
@@ -35,6 +36,7 @@ class UnibotClient:
             json={
                 "message": message,
                 "conversation_id": conversation_id,
+                "workspace_id": workspace_id,
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "capability": capability,
@@ -48,12 +50,18 @@ class UnibotClient:
         self,
         *,
         title: str = "新对话",
+        workspace_id: str | None = None,
         user_id: str = "anonymous",
         tenant_id: str = "default",
     ) -> dict[str, Any]:
         response = await self._client.post(
             "/conversations",
-            json={"title": title, "user_id": user_id, "tenant_id": tenant_id},
+            json={
+                "title": title,
+                "workspace_id": workspace_id,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+            },
         )
         response.raise_for_status()
         return cast(dict[str, Any], response.json())

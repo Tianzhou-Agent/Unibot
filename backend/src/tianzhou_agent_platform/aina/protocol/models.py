@@ -156,6 +156,7 @@ class OpenAinaRequest(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
     conversation_id: str | None = None
+    workspace_id: str | None = None
 
 
 class AinaCanvasResponse(StrictModel):

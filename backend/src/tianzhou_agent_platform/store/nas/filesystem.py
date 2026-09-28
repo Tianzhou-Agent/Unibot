@@ -4,7 +4,7 @@ import asyncio
 import mimetypes
 import os
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 from tianzhou_agent_platform.store.errors import (
     StorageBackendUnavailableError,
@@ -15,6 +15,25 @@ from tianzhou_agent_platform.store.errors import (
     StorageValidationError,
 )
 from tianzhou_agent_platform.store.models import DeleteResult, FileMetadata, StoragePath
+
+
+def _relative_to_root(target: PurePath, root: PurePath) -> PurePath | None:
+    # Windows resolve() may retain the extended prefix during concurrent writes.
+    # Normalize only for comparison; filesystem operations keep the resolved path.
+    if isinstance(target, PureWindowsPath):
+        paths = []
+        for path in (target, root):
+            value = str(path)
+            if value.startswith("\\\\?\\UNC\\"):
+                value = "\\\\" + value[8:]
+            elif value.startswith("\\\\?\\"):
+                value = value[4:]
+            paths.append(PureWindowsPath(value))
+        target, root = paths
+    try:
+        return target.relative_to(root)
+    except ValueError:
+        return None
 
 
 class NasStore:
@@ -136,7 +155,7 @@ class NasStore:
         if not self._root_path.exists():
             raise StorageBackendUnavailableError("NAS root path is unavailable")
         target = (self._root_path / path.relative_path).resolve(strict=False)
-        if not target.is_relative_to(self._root_path):
+        if _relative_to_root(target, self._root_path) is None:
             raise StoragePolicyViolationError("NAS path escapes the configured root")
         return target
 
@@ -170,10 +189,11 @@ class NasStore:
             if not file.is_file():
                 continue
             resolved = file.resolve(strict=False)
-            if not resolved.is_relative_to(self._root_path):
+            relative = _relative_to_root(resolved, self._root_path)
+            if relative is None:
                 continue
             stat = resolved.stat()
-            relative_path = resolved.relative_to(self._root_path).as_posix()
+            relative_path = relative.as_posix()
             content_type, _ = mimetypes.guess_type(resolved.name)
             items.append(
                 FileMetadata(
@@ -195,6 +215,7 @@ class NasStore:
             if not directory.is_dir():
                 continue
             resolved = directory.resolve(strict=False)
-            if resolved.is_relative_to(self._root_path):
-                items.append(StoragePath(relative_path=resolved.relative_to(self._root_path).as_posix()))
+            relative = _relative_to_root(resolved, self._root_path)
+            if relative is not None:
+                items.append(StoragePath(relative_path=relative.as_posix()))
         return sorted(items, key=lambda item: item.relative_path.casefold())

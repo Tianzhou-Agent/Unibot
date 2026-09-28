@@ -3,6 +3,7 @@ import { AlertTriangle, FileText, ListTree, RefreshCw } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { api, apiErrorMessage } from "@/lib/api";
 import { documentApiPath } from "@/lib/documentPaths";
+import { useMockSession } from "@/lib/mockSession";
 import { classNames } from "@/lib/utils";
 import type {
   DocumentSectionRecord,
@@ -10,7 +11,8 @@ import type {
   WidgetDocumentSectionDefinition,
 } from "@/types";
 
-export function DocumentOutlineWidget({ widget }: { widget: WidgetDefinition }) {
+export function DocumentOutlineWidget({ widget, workspaceId }: { widget: WidgetDefinition; workspaceId?: string | null }) {
+  const { profile } = useMockSession();
   const sections = useMemo(() => widget.sections ?? [], [widget.sections]);
   const defaultSection = useMemo(() => chooseDefaultSection(sections), [sections]);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(defaultSection?.index ?? null);
@@ -40,9 +42,10 @@ export function DocumentOutlineWidget({ widget }: { widget: WidgetDefinition }) 
     const query = new URLSearchParams({
       heading: selected.heading,
       occurrence: String(selected.occurrence),
-      user_id: "anonymous",
-      tenant_id: "default",
+      user_id: profile.actorUserId,
+      tenant_id: profile.tenantId,
     });
+    if (workspaceId) query.set("workspace_id", workspaceId);
     void api
       .get<DocumentSectionRecord>(`/documents/${documentApiPath(documentName)}/sections?${query}`)
       .then((result) => {
@@ -60,7 +63,7 @@ export function DocumentOutlineWidget({ widget }: { widget: WidgetDefinition }) 
     return () => {
       active = false;
     };
-  }, [reloadKey, selected, widget.document_name]);
+  }, [profile.actorUserId, profile.tenantId, reloadKey, selected, widget.document_name, workspaceId]);
 
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white shadow-soft" aria-label={`文档章节 ${widget.title}`}>

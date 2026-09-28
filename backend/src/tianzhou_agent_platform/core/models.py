@@ -52,6 +52,7 @@ from tianzhou_agent_platform.core.chat import (
     TraceSpan,
 )
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate, Message
+from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceCreate, WorkspaceUpdate
 
 __all__ = [
     "AinaCapabilities",
@@ -101,5 +102,8 @@ __all__ = [
     "WidgetApp",
     "WidgetDefinition",
     "WidgetField",
+    "Workspace",
+    "WorkspaceCreate",
+    "WorkspaceUpdate",
     "utc_now",
 ]

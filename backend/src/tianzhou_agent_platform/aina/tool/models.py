@@ -25,4 +25,6 @@ class ToolCreate(StrictModel):
 
 
 class ToolRecord(ToolCreate):
+    owner_user_id: str | None = None
+    tenant_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)

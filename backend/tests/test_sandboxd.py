@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 
-def load_sandboxd(monkeypatch, tmp_path, *, output_limit: int = 1_000_000):
+def load_sandboxd(
+    monkeypatch,
+    tmp_path,
+    *,
+    output_limit: int = 1_000_000,
+    runtime_path: Path | None = None,
+):
     monkeypatch.setenv("SANDBOX_WORKSPACE", str(tmp_path))
+    if runtime_path is None:
+        monkeypatch.delenv("SANDBOX_RUNTIME", raising=False)
+    else:
+        monkeypatch.setenv("SANDBOX_RUNTIME", str(runtime_path))
     monkeypatch.setenv("SANDBOX_OUTPUT_LIMIT_BYTES", str(output_limit))
     source = Path(__file__).resolve().parents[2] / "sandbox" / "sandboxd" / "app.py"
     spec = importlib.util.spec_from_file_location("test_sandboxd_app", source)
@@ -39,6 +50,32 @@ def test_sandboxd_executes_in_persistent_workspace(monkeypatch, tmp_path) -> Non
     assert first.status_code == 200
     assert first.json()["stdout"].strip() == "created"
     assert second.json()["stdout"].strip() == "persisted"
+
+
+def test_sandboxd_keeps_home_and_dependency_caches_in_runtime(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime"
+    module = load_sandboxd(monkeypatch, workspace, runtime_path=runtime)
+    with TestClient(module.app) as client:
+        response = client.post(
+            "/exec",
+            json={
+                "language": "python",
+                "script": (
+                    "import json, os; from pathlib import Path; "
+                    "print(json.dumps({'cwd': str(Path.cwd()), 'home': os.environ['HOME'], "
+                    "'pip': os.environ['PIP_TARGET'], 'npm': os.environ['npm_config_prefix']}))"
+                ),
+            },
+        )
+
+    environment = json.loads(response.json()["stdout"])
+    assert environment == {
+        "cwd": str(workspace.resolve()),
+        "home": str(runtime.resolve()),
+        "pip": str(runtime.resolve() / ".python-packages"),
+        "npm": str(runtime.resolve() / ".npm-global"),
+    }
 
 
 def test_sandboxd_preserves_utf8_output(monkeypatch, tmp_path) -> None:

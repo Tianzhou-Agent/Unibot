@@ -69,7 +69,9 @@ async def test_a2a_runtime_uses_agent_card_and_send_message() -> None:
         )
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
-    gateway = RemoteCapabilityGateway(AgentSettings(_env_file=None), http_client)
+    gateway = RemoteCapabilityGateway(
+        AgentSettings(_env_file=None, capability_allowed_origins="https://a2a.invalid"), http_client,
+    )
     manifest = AinaManifest.model_validate(
         {
             "protocol_version": "1.0",

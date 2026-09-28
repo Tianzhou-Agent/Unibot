@@ -4,11 +4,15 @@ import json
 from typing import cast
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.llm import LLMResult
 from tianzhou_agent_platform.main import create_app
 
@@ -20,6 +24,7 @@ def _settings() -> AgentSettings:
         llm_api_key=SecretStr("test-key"),
         llm_model="test-model",
         max_agent_iterations=6,
+        capability_allowed_origins="https://tool.invalid,https://aina.invalid",
     )
 
 
@@ -260,3 +265,81 @@ def test_empty_model_response_marks_run_failed() -> None:
     assert response.json()["status"] == "failed"
     assert response.json()["content"] == "The model returned an empty response."
     assert trace.json()["status"] == "failed"
+
+
+@pytest.mark.parametrize("side_effect_level,always_timeout,expected_calls", [
+    ("none", False, 2), ("none", True, 3), ("low", False, 1),
+])
+def test_transient_retries_are_bounded_and_only_for_read_only_tools(side_effect_level, always_timeout, expected_calls):
+    calls = 0
+
+    async def remote(request):
+        nonlocal calls
+        calls += 1
+        if always_timeout or calls == 1:
+            raise httpx.ReadTimeout("temporary timeout", request=request)
+        return httpx.Response(200, json={"result": 7})
+
+    llm = ScriptedLLM([
+        *[call_first_tool(arguments='{"value":7}', call_id=f"retry_{i}") for i in range(4)],
+        assistant("Finished checking the tool outcomes."),
+    ])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        assert client.post("/tools", json=_tool_definition(side_effect_level=side_effect_level)).status_code == 201
+        response = client.post("/chat", json={"message": "Run it", "capability": "tool:resilience.tool"})
+        trace = client.get(f"/traces/{response.json()['trace_id']}").json()
+    assert response.status_code == 200
+    assert calls == expected_calls
+    errors = [json.loads(message["content"])["error"] for message in llm.calls[-1]["messages"]
+              if message.get("role") == "tool" and "error" in json.loads(message["content"])]
+    assert errors[0]["retryable"] == (side_effect_level == "none")
+    assert errors[-1]["retryable"] is False
+    recorded = [event["details"]["retryable"] for event in trace["events"] if event["kind"] == "tool.failed"]
+    assert recorded == [error["retryable"] for error in errors]
+
+
+@pytest.mark.parametrize("with_tool_call", [False, True])
+def test_truncated_model_response_is_failed_and_never_executes_partial_tool_calls(with_tool_call):
+    requests = []
+
+    def truncated(**kwargs):
+        message = (call_first_tool(arguments='{"value":1}')(**kwargs).message
+                   if with_tool_call else {"role": "assistant", "content": "Partial answer"})
+        return LLMResult(message=message, finish_reason="length")
+
+    llm = ScriptedLLM([truncated])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: requests.append(request)))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post("/tools", json=_tool_definition())
+        response = client.post("/chat", json={"message": "Run it", "capability": "tool:resilience.tool"}).json()
+        conversation = client.get(f"/conversations/{response['conversation_id']}").json()
+        trace = client.get(f"/traces/{response['trace_id']}").json()
+    assert response["status"] == trace["status"] == "failed"
+    assert "Incomplete response" in response["content"]
+    assert not requests
+    assert conversation["run_status"] == "failed"
+    if with_tool_call:
+        assert any(message["role"] == "tool" and "MODEL_OUTPUT_TRUNCATED" in message["content"]
+                   for message in conversation["messages"])
+    else:
+        assert "Partial answer" in response["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side_effect_level,expected_calls", [("none", 2), ("low", 1), ("high", 1)])
+async def test_transport_retries_do_not_repeat_operations_with_side_effects(side_effect_level, expected_calls):
+    calls = []
+
+    def timeout(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("Outcome unknown", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as http_client:
+        gateway = RemoteCapabilityGateway(_settings(), http_client)
+        tool = ToolRecord(**_tool_definition(side_effect_level=side_effect_level, retries=1))
+        with pytest.raises(PlatformError, match="timed out"):
+            await gateway.invoke_tool(tool, arguments={"value": 7}, call_id="call",
+                                      user_id="u", tenant_id="t", conversation_id="c", trace_id="trace")
+        assert len(calls) == expected_calls
+        await gateway.aclose()

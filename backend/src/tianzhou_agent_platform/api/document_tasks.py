@@ -8,7 +8,9 @@ from tianzhou_agent_platform.aina.document.task_models import (
     DocumentEditTaskCreate,
     DocumentEditTaskListResponse,
 )
+from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, document_edit_tasks
+from tianzhou_agent_platform.core.errors import PlatformError
 
 
 def create_document_task_router() -> APIRouter:
@@ -35,12 +37,14 @@ def create_document_task_router() -> APIRouter:
         request: Request,
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
+        workspace_id: str | None = Query(default=None),
     ) -> DocumentEditTaskListResponse:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         items = await document_edit_tasks(request).list_tasks(
             name,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
+            workspace_id=workspace_id,
         )
         return DocumentEditTaskListResponse(items=items, total=len(items))
 
@@ -50,9 +54,18 @@ def create_document_task_router() -> APIRouter:
         request: Request,
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
+        workspace_id: str | None = Query(default=None),
     ) -> DocumentEditTask:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        return await document_edit_tasks(request).get_task(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            workspace_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+        )
+        return await service.get_task(
             task_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
@@ -69,7 +82,15 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).update_draft(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.update_draft(
             task_id,
             section_id,
             scoped.content,
@@ -90,7 +111,15 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).request_ai_revision(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.request_ai_revision(
             task_id,
             section_id,
             scoped.instruction,
@@ -110,7 +139,15 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).merge_section(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.merge_section(
             task_id,
             section_id,
             user_id=scoped.user_id,
@@ -128,7 +165,15 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).abandon_section(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.abandon_section(
             task_id,
             section_id,
             user_id=scoped.user_id,
@@ -146,7 +191,15 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).retry_failed(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.retry_failed(
             task_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
@@ -162,7 +215,15 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).abandon_task(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.abandon_task(
             task_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
@@ -177,9 +238,18 @@ def create_document_task_router() -> APIRouter:
         request: Request,
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
+        workspace_id: str | None = Query(default=None),
     ) -> Response:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        await document_edit_tasks(request).delete_task(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            workspace_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+        )
+        await service.delete_task(
             task_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
@@ -196,10 +266,35 @@ def create_document_task_router() -> APIRouter:
         request: Request,
     ) -> DocumentEditTask:
         scoped = bind_actor(request, payload)
-        return await document_edit_tasks(request).merge_task(
+        service = document_edit_tasks(request)
+        await _require_task_workspace(
+            service,
+            task_id,
+            scoped.workspace_id,
+            user_id=scoped.user_id,
+            tenant_id=scoped.tenant_id,
+        )
+        return await service.merge_task(
             task_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
         )
 
     return router
+
+
+async def _require_task_workspace(
+    service: DocumentEditTaskService,
+    task_id: str,
+    workspace_id: str | None,
+    *,
+    user_id: str,
+    tenant_id: str,
+) -> None:
+    task = await service.get_task(task_id, user_id=user_id, tenant_id=tenant_id)
+    if task.workspace_id != workspace_id:
+        raise PlatformError(
+            "CONFLICT",
+            "Document task does not belong to the requested workspace",
+            status_code=409,
+        )

@@ -18,6 +18,7 @@ import "ace-builds/src-noconflict/mode-python";
 import "ace-builds/src-noconflict/mode-sh";
 import "ace-builds/src-noconflict/theme-one_dark";
 import { api, apiErrorMessage } from "@/lib/api";
+import { useMockSession } from "@/lib/mockSession";
 import { classNames } from "@/lib/utils";
 import type {
   SandboxExecution,
@@ -26,7 +27,6 @@ import type {
   SandboxStatus,
 } from "@/types";
 
-const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 const EDITOR_LANGUAGE: Record<SandboxExecutionLanguage, { file: string; label: string; mode: string }> = {
   python: { file: "main.py", label: "Python", mode: "python" },
   bash: { file: "script.sh", label: "Bash", mode: "sh" },
@@ -60,7 +60,17 @@ const EXAMPLES: Record<SandboxExecutionLanguage, string> = {
   shell: "echo \"Hello from the sandbox shell\"",
 };
 
-export function CodeRunnerMainWidget() {
+export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | null }) {
+  const { profile } = useMockSession();
+  const scope = useMemo<Record<string, string>>(
+    () => ({
+      user_id: profile.actorUserId,
+      tenant_id: profile.tenantId,
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+    }),
+    [profile.actorUserId, profile.tenantId, workspaceId],
+  );
+  const scopeQuery = useMemo(() => new URLSearchParams(scope).toString(), [scope]);
   const [sandbox, setSandbox] = useState<SandboxRecord | null>(null);
   const [executions, setExecutions] = useState<SandboxExecution[]>([]);
   const [selectedExecution, setSelectedExecution] = useState<SandboxExecution | null>(null);
@@ -73,17 +83,17 @@ export function CodeRunnerMainWidget() {
 
   const loadHistory = useCallback(async () => {
     const history = await api.get<SandboxExecution[]>(
-      `/sandboxes/executions?user_id=${ACTOR.user_id}&tenant_id=${ACTOR.tenant_id}`,
+      `/sandboxes/executions?${scopeQuery}`,
     );
     setExecutions(history);
     setSelectedExecution((current) => current ?? history[0] ?? null);
-  }, []);
+  }, [scopeQuery]);
 
   const ensureSandbox = useCallback(async () => {
-    const record = await api.post<SandboxRecord>("/sandboxes/ensure", ACTOR);
+    const record = await api.post<SandboxRecord>("/sandboxes/ensure", scope);
     setSandbox(record);
     return record;
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +117,7 @@ export function CodeRunnerMainWidget() {
     setSandbox((current) => (current ? { ...current, status: "busy" } : current));
     try {
       const execution = await api.post<SandboxExecution>("/sandboxes/execute", {
-        ...ACTOR,
+        ...scope,
         language,
         script: scripts[language],
         timeout_seconds: timeoutSeconds,
@@ -136,7 +146,7 @@ export function CodeRunnerMainWidget() {
   async function stopSandbox() {
     setNotice(null);
     try {
-      const record = await api.post<SandboxRecord>("/sandboxes/stop", ACTOR);
+      const record = await api.post<SandboxRecord>("/sandboxes/stop", scope);
       setSandbox(record);
       setNotice({ tone: "success", text: "运行容器已停止，工作区文件仍会保留。" });
     } catch (error) {
@@ -145,14 +155,24 @@ export function CodeRunnerMainWidget() {
   }
 
   async function resetSandbox() {
-    if (!window.confirm("确定重置当前沙箱吗？工作区文件和执行历史都会被删除。")) return;
+    const confirmed = window.confirm(
+      workspaceId
+        ? "确定重置当前运行环境吗？依赖缓存和执行历史会被删除，工作区 NAS 产物会保留。"
+        : "确定重置当前沙箱吗？工作区文件和执行历史都会被删除。",
+    );
+    if (!confirmed) return;
     setNotice(null);
     try {
-      await api.delete(`/sandboxes/current?user_id=${ACTOR.user_id}&tenant_id=${ACTOR.tenant_id}`);
+      await api.delete(`/sandboxes/current?${scopeQuery}`);
       setExecutions([]);
       setSelectedExecution(null);
       const record = await ensureSandbox();
-      setNotice({ tone: "success", text: `沙箱 ${record.runtime_name} 已重建。` });
+      setNotice({
+        tone: "success",
+        text: workspaceId
+          ? `运行环境 ${record.runtime_name} 已重建，NAS 产物已保留。`
+          : `沙箱 ${record.runtime_name} 已重建。`,
+      });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
     }
@@ -184,7 +204,9 @@ export function CodeRunnerMainWidget() {
                 <StatusBadge status={status} />
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-ink-muted">
-                每个用户使用独立工作区。Python、npm 等用户级依赖安装到工作区后可跨容器重启保留。
+                {workspaceId
+                  ? "代码产物写入当前工作区 NAS；Python、npm 依赖和临时文件保存在独立运行环境中。"
+                  : "每个用户使用独立沙箱。Python、npm 等用户级依赖可跨容器停止与恢复保留。"}
               </p>
             </div>
             <button type="button" onClick={() => void stopSandbox()} className="btn-outline h-8 text-[11px]">

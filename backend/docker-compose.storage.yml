@@ -20,7 +20,8 @@ services:
       - mysql-data:/var/lib/mysql
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:16379:6379"
     healthcheck:
@@ -28,6 +29,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    volumes:
+      - redis-data:/data
 
   nas:
     image: alpine:3.20
@@ -42,3 +45,4 @@ services:
 
 volumes:
   mysql-data:
+  redis-data:

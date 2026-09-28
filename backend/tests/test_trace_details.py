@@ -3,7 +3,11 @@ from pydantic import SecretStr
 
 from tests.support.fake_llm import ScriptedLLM, assistant
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.trace_details import REDACTED, sanitize_trace_data
+from tianzhou_agent_platform.core.trace_details import (
+    REDACTED,
+    redact_trace_data,
+    sanitize_trace_data,
+)
 from tianzhou_agent_platform.main import create_app
 
 
@@ -63,6 +67,10 @@ def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
         "list_app",
         "open_aina",
         "request_clarification",
+        "task_create",
+        "task_delete",
+        "task_query",
+        "task_update",
     }
     assert all(item["owner_aina_id"] is None for item in discovery["model_scope"]["standalone"])
 
@@ -102,3 +110,38 @@ def test_trace_sanitizer_bounds_large_values() -> None:
 
     assert sanitized["content"].endswith("[TRUNCATED 1000 CHARS]")
     assert sanitized["items"][-1] == "[TRUNCATED 10 ITEMS]"
+
+
+def test_raw_trace_redaction_covers_private_signing_ssh_and_cloud_keys() -> None:
+    pem = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "private-material\n"
+        "-----END OPENSSH PRIVATE KEY-----"
+    )
+    certificate = "-----BEGIN CERTIFICATE-----\npublic-material\n-----END CERTIFICATE-----"
+
+    assert redact_trace_data(
+        {
+            "privateKey": "private-value",
+            "signing_key": "signing-value",
+            "sshPrivateKey": "ssh-value",
+            "awsSecretAccessKey": "cloud-value",
+            "safe_text": f"prefix {pem} suffix",
+            "assignment_text": (
+                "aws_secret_access_key=cloud-value private_key: private-value "
+                "signing_key=signing-value ssh_private_key:ssh-value"
+            ),
+            "certificate": certificate,
+        }
+    ) == {
+        "privateKey": REDACTED,
+        "signing_key": REDACTED,
+        "sshPrivateKey": REDACTED,
+        "awsSecretAccessKey": REDACTED,
+        "safe_text": f"prefix {REDACTED} suffix",
+        "assignment_text": (
+            f"aws_secret_access_key={REDACTED} private_key: {REDACTED} "
+            f"signing_key={REDACTED} ssh_private_key:{REDACTED}"
+        ),
+        "certificate": certificate,
+    }

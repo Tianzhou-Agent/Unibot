@@ -1,10 +1,15 @@
 import { expect, test, type Page, type Route } from "playwright/test";
 
 const NOW = "2026-07-12T04:00:00.000Z";
+const OBS_TRACE_ID = "11111111111111111111111111111111";
+const OBS_ROOT_SPAN_ID = "aaaaaaaaaaaaaaaa";
+const OBS_MODEL_SPAN_ID = "bbbbbbbbbbbbbbbb";
+const OBS_TOOL_SPAN_ID = "cccccccccccccccc";
 
 type JsonObject = Record<string, unknown>;
 
 interface MockState {
+  workspaces: JsonObject[];
   ainas: JsonObject[];
   ainaProjects: JsonObject[];
   conversations: JsonObject[];
@@ -13,7 +18,10 @@ interface MockState {
   modelProviders: JsonObject[];
   feedbacks: JsonObject[];
   legacySpanIo: boolean;
+  obsSessions: Record<string, JsonObject>;
   streamDelayMs: number;
+  workspaceCreateDelayMs: number;
+  workspaceConversationDelayMs: Record<string, number>;
   staleFirstConversationLoadMs: number;
   conversationLoadCount: number;
   documentTasks: JsonObject[];
@@ -22,6 +30,11 @@ interface MockState {
   documentContent: string;
   documentMergeConflict: boolean;
   lastStreamPayload: JsonObject | null;
+  lastWorkspaceListScope: JsonObject | null;
+  lastWorkspaceCreatePayload: JsonObject | null;
+  lastDocumentTreeScope: JsonObject | null;
+  lastDocumentSectionScope: JsonObject | null;
+  lastSandboxEnsurePayload: JsonObject | null;
   streamWidgets: JsonObject[];
   sandbox: JsonObject | null;
   sandboxExecutions: JsonObject[];
@@ -34,6 +47,7 @@ function conversation(overrides: JsonObject = {}): JsonObject {
     id: "conv-e2e-1",
     user_id: "anonymous",
     tenant_id: "default",
+    workspace_id: null,
     title: "已有会话",
     category: "general",
     status: "active",
@@ -44,6 +58,20 @@ function conversation(overrides: JsonObject = {}): JsonObject {
     config: {},
     enabled_ainas: [],
     messages: [],
+    created_at: NOW,
+    updated_at: NOW,
+    ...overrides,
+  };
+}
+
+function workspace(overrides: JsonObject = {}): JsonObject {
+  return {
+    id: "workspace-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    name: "E2E 工作区",
+    description: "用于验证工作区隔离。",
+    storage_key: "workspace-e2e-1",
     created_at: NOW,
     updated_at: NOW,
     ...overrides,
@@ -132,8 +160,136 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
+function obsSpan(overrides: JsonObject = {}): JsonObject {
+  return {
+    span_id: "span-e2e-1",
+    otel_span_id: "span-e2e-1",
+    trace_id: OBS_TRACE_ID,
+    parent_span_id: null,
+    sequence_no: 1,
+    kind: "internal",
+    name: "internal",
+    target_id: null,
+    model: null,
+    status: "completed",
+    started_at: NOW,
+    first_output_at: null,
+    completed_at: NOW,
+    duration_ms: null,
+    ttft_ms: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    input: null,
+    output: null,
+    attributes: {},
+    error: null,
+    raw_io_path: null,
+    raw_io_status: null,
+    ...overrides,
+  };
+}
+
+function obsSessionDetail(sessionId: string, overrides: JsonObject = {}): JsonObject {
+  return {
+    session_id: sessionId,
+    traces: [],
+    spans: [],
+    events: [],
+    ...overrides,
+  };
+}
+
+/** 与 /traces 与 /llm-calls mock 语义一致的成功会话（agent + model + tool 三个 span）。 */
+function successfulObsSession(sessionId: string): JsonObject {
+  return obsSessionDetail(sessionId, {
+    traces: [{
+      trace_id: OBS_TRACE_ID,
+      legacy_trace_id: "trace-e2e-1",
+      root_span_id: OBS_ROOT_SPAN_ID,
+      session_id: sessionId,
+      user_id: "anonymous",
+      tenant_id: "default",
+      status: "completed",
+      started_at: NOW,
+      completed_at: NOW,
+      duration_ms: 180,
+      input_tokens: 90,
+      output_tokens: 30,
+      cache_read_tokens: 20,
+      message_count: 2,
+      compression_count: 1,
+      error_count: 0,
+      attributes: {},
+    }],
+    events: [
+      { event_id: "ev-1", trace_id: OBS_TRACE_ID, span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "排查模型调用", requested_capability: null, preferred_aina_id: null } },
+      { event_id: "ev-2", trace_id: OBS_TRACE_ID, span_id: null, name: "context.compacted", status: "completed", occurred_at: NOW, attributes: { before_tokens: 110, after_tokens: 90 } },
+      { event_id: "ev-3", trace_id: OBS_TRACE_ID, span_id: null, name: "agent.completed", status: "completed", occurred_at: NOW, attributes: {} },
+      { event_id: "ev-4", trace_id: OBS_TRACE_ID, span_id: null, name: "final.response", status: "completed", occurred_at: NOW, attributes: { content: "模型返回正常", input_tokens: 90, output_tokens: 30 } },
+    ],
+    spans: [
+      obsSpan({
+        span_id: "span-agent-e2e-1",
+        otel_span_id: OBS_ROOT_SPAN_ID,
+        parent_span_id: null,
+        sequence_no: 1,
+        kind: "agent",
+        name: "agent.run",
+        target_id: "unibot",
+        status: "completed",
+        duration_ms: 180,
+        input: { message: "排查模型调用", requested_capability: null, preferred_aina_id: null },
+        output: { content: "模型返回正常", status: "completed" },
+        attributes: { conversation_id: sessionId },
+      }),
+      obsSpan({
+        span_id: "span-model-e2e-1",
+        otel_span_id: OBS_MODEL_SPAN_ID,
+        trace_id: OBS_TRACE_ID,
+        parent_span_id: OBS_ROOT_SPAN_ID,
+        sequence_no: 2,
+        kind: "model",
+        name: "model.complete",
+        target_id: "debug-model",
+        model: "debug-model",
+        status: "completed",
+        started_at: NOW,
+        first_output_at: NOW,
+        completed_at: NOW,
+        duration_ms: 128.5,
+        ttft_ms: 42,
+        input_tokens: 90,
+        output_tokens: 30,
+        cache_read_tokens: 20,
+        input: { model: "debug-model", messages: [{ role: "user", content: "排查模型调用" }], stream: true },
+        output: {
+          choices: [{ index: 0, message: { role: "assistant", content: "模型返回正常" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 90, completion_tokens: 30, total_tokens: 120, prompt_tokens_details: { cached_tokens: 20 } },
+        },
+        attributes: { input_tokens: 90, output_tokens: 30, ttft_ms: 42 },
+      }),
+      obsSpan({
+        span_id: "span-tool-e2e-1",
+        otel_span_id: OBS_TOOL_SPAN_ID,
+        parent_span_id: OBS_ROOT_SPAN_ID,
+        sequence_no: 3,
+        kind: "tool",
+        name: "demo.lookup",
+        target_id: "demo.lookup",
+        status: "completed",
+        duration_ms: 51,
+        input: { query: "Unibot" },
+        output: { result: "工具返回正常" },
+        attributes: { target_version: "1.0.0" },
+      }),
+    ],
+  });
+}
+
 async function installMockApi(page: Page, initial: Partial<MockState> = {}): Promise<MockState> {
   const state: MockState = {
+    workspaces: initial.workspaces ?? [],
     ainas: initial.ainas ?? [],
     ainaProjects: initial.ainaProjects ?? [],
     conversations: initial.conversations ?? [],
@@ -142,7 +298,10 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     modelProviders: initial.modelProviders ?? [],
     feedbacks: initial.feedbacks ?? [],
     legacySpanIo: initial.legacySpanIo ?? false,
+    obsSessions: initial.obsSessions ?? {},
     streamDelayMs: initial.streamDelayMs ?? 0,
+    workspaceCreateDelayMs: initial.workspaceCreateDelayMs ?? 0,
+    workspaceConversationDelayMs: initial.workspaceConversationDelayMs ?? {},
     staleFirstConversationLoadMs: initial.staleFirstConversationLoadMs ?? 0,
     conversationLoadCount: 0,
     documentTasks: initial.documentTasks ?? [],
@@ -151,6 +310,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     documentContent: initial.documentContent ?? "# 使用指南\n\n## 简介\n\n旧内容。\n",
     documentMergeConflict: initial.documentMergeConflict ?? false,
     lastStreamPayload: null,
+    lastWorkspaceListScope: null,
+    lastWorkspaceCreatePayload: null,
+    lastDocumentTreeScope: null,
+    lastDocumentSectionScope: null,
+    lastSandboxEnsurePayload: null,
     streamWidgets: initial.streamWidgets ?? [],
     sandbox: initial.sandbox ?? null,
     sandboxExecutions: initial.sandboxExecutions ?? [],
@@ -204,6 +368,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     }
 
     if (method === "POST" && path === "/sandboxes/ensure") {
+      state.lastSandboxEnsurePayload = request.postDataJSON() as JsonObject;
       state.sandbox ??= {
         id: "sandbox-e2e",
         user_id: "anonymous",
@@ -258,12 +423,58 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return route.fulfill({ status: 204, body: "" });
     }
 
+    if (method === "GET" && path === "/workspaces") {
+      const userId = url.searchParams.get("user_id");
+      const tenantId = url.searchParams.get("tenant_id");
+      state.lastWorkspaceListScope = { user_id: userId, tenant_id: tenantId };
+      return json(route, state.workspaces.filter((workspace) => (
+        (!userId || workspace.user_id === userId) && (!tenantId || workspace.tenant_id === tenantId)
+      )));
+    }
+    if (method === "POST" && path === "/workspaces") {
+      const payload = request.postDataJSON() as JsonObject;
+      state.lastWorkspaceCreatePayload = payload;
+      if (state.workspaceCreateDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, state.workspaceCreateDelayMs));
+      }
+      const workspace = {
+        id: `workspace-e2e-${state.workspaces.length + 1}`,
+        user_id: payload.user_id ?? "anonymous",
+        tenant_id: payload.tenant_id ?? "default",
+        name: payload.name,
+        description: payload.description ?? "",
+        storage_key: `workspace-e2e-${state.workspaces.length + 1}`,
+        created_at: NOW,
+        updated_at: NOW,
+      };
+      state.workspaces.push(workspace);
+      return json(route, workspace, 201);
+    }
     if (method === "GET" && path === "/conversations") {
-      return json(route, state.conversations.filter((item) => item.status !== "deleted"));
+      const workspaceId = url.searchParams.get("workspace_id");
+      const userId = url.searchParams.get("user_id");
+      const tenantId = url.searchParams.get("tenant_id");
+      const delay = workspaceId ? state.workspaceConversationDelayMs[workspaceId] ?? 0 : 0;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      return json(route, state.conversations.filter((item) => (
+        item.status !== "deleted"
+        && (!workspaceId || item.workspace_id === workspaceId)
+        && (!userId || item.user_id === userId)
+        && (!tenantId || item.tenant_id === tenantId)
+      )));
     }
     if (method === "POST" && path === "/conversations") {
       const payload = request.postDataJSON() as JsonObject;
-      const created = conversation({ title: payload.title, category: payload.category });
+      let sequence = 1;
+      while (state.conversations.some((item) => item.id === `conv-e2e-${sequence}`)) sequence += 1;
+      const created = conversation({
+        id: `conv-e2e-${sequence}`,
+        title: payload.title,
+        category: payload.category,
+        user_id: payload.user_id ?? "anonymous",
+        tenant_id: payload.tenant_id ?? "default",
+        workspace_id: payload.workspace_id ?? null,
+      });
       state.conversations.push(created);
       return json(route, created, 201);
     }
@@ -440,6 +651,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return json(route, { items: [{ name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW }], total: 1 });
     }
     if (method === "GET" && path === "/documents/tree") {
+      state.lastDocumentTreeScope = {
+        user_id: url.searchParams.get("user_id"),
+        tenant_id: url.searchParams.get("tenant_id"),
+        workspace_id: url.searchParams.get("workspace_id"),
+      };
       return json(route, {
         folders: state.documentFolders.map((folderPath) => ({ path: folderPath, name: folderPath.split("/").at(-1) })),
         documents: [{ name: state.documentName, size_bytes: state.documentContent.length, modified_at: NOW }],
@@ -606,6 +822,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return route.fulfill({ status: 204 });
     }
     if (method === "GET" && /^\/documents\/[^/]+\/sections$/.test(path)) {
+      state.lastDocumentSectionScope = {
+        user_id: url.searchParams.get("user_id"),
+        tenant_id: url.searchParams.get("tenant_id"),
+        workspace_id: url.searchParams.get("workspace_id"),
+      };
       const heading = url.searchParams.get("heading") ?? "未命名章节";
       const content = heading === "使用指南"
         ? state.documentContent
@@ -642,11 +863,16 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           : { source: "environment", provider_name: "环境变量", model_name: "env-model", model: "env-model" },
       });
     }
+    if (method === "DELETE" && /^\/model-settings\/providers\/[^/]+$/.test(path)) {
+      const providerId = path.split("/")[3];
+      state.modelProviders = state.modelProviders.filter((provider) => provider.id !== providerId);
+      return route.fulfill({ status: 204 });
+    }
     if (method === "POST" && path === "/model-settings/providers/discover-models") {
       return json(route, {
         models: [
           { id: "team-fast", name: "快速模型" },
-          { id: "team-coder", name: "代码模型" },
+          { id: "team-coder", name: "代码模型", context_window_tokens: 262144 },
         ],
       });
     }
@@ -660,6 +886,115 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       return json(route, state.modelProviders.find((provider) => provider.id === providerId));
     }
     if (method === "GET" && path === "/health") return json(route, { status: "ok" });
+    if (method === "GET" && /^\/obs\/sessions\/[^/]+$/.test(path)) {
+      return json(route, state.obsSessions[decodeURIComponent(path.split("/")[3])] ?? null);
+    }
+    if (method === "GET" && /^\/admin\/obs\/sessions\/[^/]+$/.test(path)) {
+      return json(route, state.obsSessions[decodeURIComponent(path.split("/")[4])] ?? null);
+    }
+    if (method === "GET" && path === "/obs/overview") {
+      return json(route, {
+        range: "week",
+        trace_count: 1,
+        input_tokens: 90,
+        output_tokens: 30,
+        cache_read_tokens: 20,
+        total_tokens: 120,
+        error_count: 0,
+        active_days: 1,
+        conversation_count: 1,
+        per_model: [{ model: "debug-model", call_count: 1, input_tokens: 90, output_tokens: 30, cache_read_tokens: 20 }],
+        daily: [{ day: "2026-07-12", trace_count: 1, input_tokens: 90, output_tokens: 30, cache_read_tokens: 20 }],
+      });
+    }
+    if (method === "GET" && path === "/admin/obs/overview") {
+      return json(route, {
+        range: "week",
+        trace_count: 3,
+        input_tokens: 270,
+        output_tokens: 90,
+        cache_read_tokens: 60,
+        total_tokens: 360,
+        error_count: 0,
+        active_days: 1,
+        conversation_count: 1,
+        per_model: [{ model: "debug-model", call_count: 1, input_tokens: 90, output_tokens: 30, cache_read_tokens: 20 }],
+        daily: [{ day: "2026-07-12", trace_count: 3, input_tokens: 270, output_tokens: 90, cache_read_tokens: 60 }],
+      });
+    }
+    if (method === "GET" && path === "/admin/conversations") return json(route, state.conversations);
+    if (method === "GET" && path === "/admin/users") {
+      const userIds = new Set(state.conversations.map((record) => String(record.user_id)));
+      const query = url.searchParams.get("query") ?? "";
+      return json(route, { items: [...userIds].filter((id) => id.includes(query)).map((id) => ({
+        id, name: `E2E 用户 ${id}`, email: `${id}@example.com`, tenant_id: "default", avatar_url: null, created_at: NOW,
+      })), has_more: false });
+    }
+    if (method === "GET" && path === "/admin/obs/traces") {
+      const userId = url.searchParams.get("user_id");
+      const records = Object.values(state.obsSessions).flatMap((session) => session.traces as JsonObject[]);
+      return json(route, { items: records.filter((record) => record.user_id === userId), has_more: false });
+    }
+    if (method === "GET" && /^\/admin\/obs\/traces\/[^/]+$/.test(path)) {
+      const traceId = decodeURIComponent(path.split("/")[4]);
+      const userId = url.searchParams.get("user_id");
+      const detail = Object.values(state.obsSessions).find((session) => (session.traces as JsonObject[])
+        .some((record) => record.trace_id === traceId && record.user_id === userId));
+      return json(route, detail ?? null);
+    }
+    if (method === "GET" && path === "/admin/traces") return json(route, []);
+    if (method === "GET" && path === "/admin/llm-calls") return json(route, []);
+    if (method === "GET" && path === "/admin/operations/overview") {
+      return json(route, {
+        range: "week",
+        context: {
+          version: "v1",
+          timezone: "Asia/Shanghai",
+          window: "最近 7 个自然日",
+          from_at: "2026-08-08T00:00:00+08:00",
+          to_at: NOW,
+          as_of: NOW,
+        },
+        availability: { operations: true, eligible_users: false, department: false, user_type: false },
+        summary: {
+          dau: 2,
+          wau: 3,
+          mau: 4,
+          dau_mau: 50,
+          request_count: 6,
+          successful_requests: 5,
+          failed_requests: 1,
+          pending_requests: 0,
+          active_users: 3,
+          requests_per_active_user: 2,
+          platform_penetration: null,
+          d7_retention: 50,
+        },
+        trend: [
+          { date: "2026-08-13", requests: 2, active_users: 1 },
+          { date: "2026-08-14", requests: 4, active_users: 2 },
+        ],
+        retention: {
+          d1: { rate: 75, cohort_users: 4 },
+          d7: { rate: 50, cohort_users: 2 },
+          d30: { rate: null, cohort_users: 0 },
+        },
+        agents: [{
+          agent_id: "document-assistant",
+          agent_version: "1.0.0",
+          eligible_users: null,
+          active_users: 2,
+          penetration: null,
+          requests: 5,
+          positive_rate: 80,
+          d7_retention: 50,
+        }],
+        cohorts: {
+          week: [{ cohort: "2026-08-10", users: 2, retention: [100, null, null, null, null] }],
+          month: [{ cohort: "2026-08-01", users: 4, retention: [100, null, null, null, null] }],
+        },
+      });
+    }
     if (method === "GET" && path === "/admin/summary") {
       return json(route, { conversations: 2, tools: 1, skills: 1, ainas: 2, installations: 1, traces: 1, llm_calls: 1, memories: 3 });
     }
@@ -785,6 +1120,404 @@ test("FE-E2E-001 新建会话并展示流式回复", async ({ page }) => {
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
   await expect(page.locator("main p").filter({ hasText: "请执行前端端到端测试" })).toBeVisible();
   await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+});
+
+for (const [surface, path] of [
+  ["Chat", "/chat/conv-e2e-1"],
+  ["Canvas", "/canvas/unibot-documents?conversation=conv-e2e-1"],
+]) {
+  test(`FE-E2E-COPY-001 ${surface} 复制指定回复并保留 Markdown`, async ({ page }, testInfo) => {
+    const replies = [
+      "## 发布计划 🚀\n\n- **负责人**：林晨\n- [x] 测试通过\n\n```python\nprint('你好，Unibot')\n```\n",
+      "第二条独立回复。",
+    ];
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await installMockApi(page, {
+      conversations: [conversation({
+        messages: replies.map((content, index) => ({
+          id: `msg-copy-${index}`,
+          role: "assistant",
+          content,
+          content_type: "text",
+          widgets: [],
+          created_at: NOW,
+        })),
+      })],
+    });
+    await page.goto(path);
+
+    const copyButtons = page.getByRole("button", { name: "复制", exact: true });
+    await expect(copyButtons).toHaveCount(2);
+    await copyButtons.nth(0).click();
+    // Windows 剪贴板会将换行转换为 CRLF。
+    await expect.poll(() => page.evaluate(async () => (
+      (await navigator.clipboard.readText()).replace(/\r\n/g, "\n")
+    ))).toBe(replies[0]);
+    await expect(page.getByRole("status").filter({ hasText: "已复制" })).toHaveCount(1);
+    await expect(page.getByRole("status").filter({ hasText: "已复制" })).toHaveCount(0);
+
+    await copyButtons.nth(1).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(replies[1]);
+    await expect(page.getByRole("status").filter({ hasText: "已复制" })).toHaveCount(1);
+    await page.screenshot({ path: testInfo.outputPath("reply-copied.png") });
+  });
+}
+
+test("FE-E2E-COPY-002 复制失败时提示并允许重试", async ({ page }) => {
+  const content = "浏览器拒绝复制后，仍可重试。";
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await installMockApi(page, {
+    conversations: [conversation({
+      messages: [{
+        id: "msg-copy-retry",
+        role: "assistant",
+        content,
+        content_type: "text",
+        widgets: [],
+        created_at: NOW,
+      }],
+    })],
+  });
+  await page.goto("/chat/conv-e2e-1");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError")),
+    });
+  });
+
+  const copy = page.getByRole("button", { name: "复制", exact: true });
+  await copy.click();
+  await expect(page.getByRole("status")).toHaveText("复制失败，请重试或手动选择文字");
+  await expect(copy).toBeEnabled();
+  await expect(page.getByText("已复制", { exact: true })).toHaveCount(0);
+
+  await page.evaluate(() => Reflect.deleteProperty(navigator.clipboard, "writeText"));
+  await copy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(content);
+  await expect(page.getByRole("status")).toHaveText("已复制");
+});
+
+for (const [surface, path, inputName, sendName] of [
+  ["Chat", "/chat", "消息", "发送消息"],
+  ["Canvas", "/canvas/unibot-documents", "画布消息", "发送画布消息"],
+]) {
+  for (const failurePoint of ["create", "stream"]) {
+    test(`FE-E2E-DRAFT-001 ${surface} retains and retries a draft after ${failurePoint} failure`, async ({ page }) => {
+      const state = await installMockApi(page);
+      let failNext = true;
+      await page.route(failurePoint === "create" ? "**/api/conversations" : "**/api/chat/stream", async (route) => {
+        if (route.request().method() === "POST" && failNext) {
+          failNext = false;
+          return json(route, { error: { message: "暂时无法发送，请重试" } }, 503);
+        }
+        return route.fallback();
+      });
+      await page.goto(path);
+      const input = page.getByRole("textbox", { name: inputName, exact: true });
+      const draft = "  保留我的草稿\n包括换行和 emoji 🧪  ";
+      await input.fill(draft);
+      await page.getByRole("button", { name: sendName, exact: true }).click();
+      await expect(page.getByRole("alert")).toHaveText("发送未完成，草稿已保留，可重试。");
+      await expect(input).toBeEnabled();
+      await expect(input).toHaveValue(draft);
+      await page.getByRole("button", { name: sendName, exact: true }).click();
+      await expect(input).toHaveValue("");
+      await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+      expect(state.lastStreamPayload?.message).toBe(draft.trim());
+      expect(state.conversations).toHaveLength(1);
+    });
+  }
+
+  test(`FE-E2E-IME-001 ${surface} confirms composition without sending and preserves Enter shortcuts`, async ({ page }) => {
+    const state = await installMockApi(page);
+    await page.goto(path);
+    const input = page.getByRole("textbox", { name: inputName, exact: true });
+    await input.fill("中文确认");
+    await input.dispatchEvent("compositionstart");
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13 });
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveValue("中文确认");
+    await input.dispatchEvent("compositionend");
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
+    await expect(input).toBeEnabled();
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229 });
+    await expect(input).toBeEnabled();
+    await input.press("End");
+    await input.press("Shift+Enter");
+    await input.pressSequentially("继续");
+    await expect(input).toHaveValue("中文确认\n继续");
+    expect(state.conversations).toHaveLength(0);
+    expect(state.lastStreamPayload).toBeNull();
+    await input.press("Enter");
+    await expect(input).toHaveValue("");
+    await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+    expect(state.lastStreamPayload?.message).toBe("中文确认\n继续");
+  });
+}
+
+test("FE-E2E-DRAFT-002 a completed message stays sent if its title update fails", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.route("**/api/conversations/*", (route) => route.request().method() === "PATCH"
+    ? json(route, { error: { message: "标题更新暂时失败" } }, 503)
+    : route.fallback());
+  await page.goto("/chat");
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  await input.fill("已经完成的消息");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(state.lastStreamPayload?.message).toBe("已经完成的消息");
+});
+
+test("FE-E2E-REGISTRY-001 ordinary authenticated users can browse but cannot manage the registry", async ({ page }) => {
+  await installMockApi(page);
+  await page.route("**/api/auth/config", (route) => json(route, { auth_required: true, registration_enabled: true, github_enabled: false }));
+  await page.route("**/api/auth/me", (route) => json(route, { user: {
+    id: "ordinary-user", name: "普通用户", email: "ordinary@example.com", tenant_id: "default",
+    is_admin: false, providers: ["password"], avatar_url: null,
+  } }));
+  await page.goto("/plugin");
+  await expect(page.getByText("注册和删除能力定义需要管理员权限。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^注册/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^删除 / })).toHaveCount(0);
+});
+
+test("FE-E2E-MOBILE-001 phone navigation overlays content and both send buttons fit", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installMockApi(page);
+  await page.goto("/chat");
+  await expect(page.getByLabel("快捷导航", { exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "对话列表" })).toHaveCount(0);
+  const mainWidth = await page.locator("main").evaluate((element) => element.getBoundingClientRect().width);
+  await page.getByRole("button", { name: "展开导航" }).click();
+  await expect(page.getByRole("navigation", { name: "对话列表" })).toBeVisible();
+  expect(await page.locator("main").evaluate((element) => element.getBoundingClientRect().width)).toBe(mainWidth);
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("快捷导航", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "展开导航" }).click();
+  await page.getByRole("button", { name: "关闭导航" }).click({ position: { x: 370, y: 200 } });
+  await expect(page.getByLabel("快捷导航", { exact: true })).toBeVisible();
+
+  for (const [path, inputName, sendName] of [
+    ["/chat", "消息", "发送消息"],
+    ["/canvas/unibot-documents", "画布消息", "发送画布消息"],
+  ]) {
+    await page.goto(path);
+    if (inputName === "画布消息") await page.getByRole("button", { name: "显示对话" }).click();
+    const input = page.getByRole("textbox", { name: inputName, exact: true });
+    await input.fill("手机上发送");
+    const send = page.getByRole("button", { name: sendName, exact: true });
+    const box = await send.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+    await send.click();
+    await expect(input).toHaveValue("");
+    await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByRole("navigation", { name: "对话列表" })).toBeVisible();
+  await expect(page.getByLabel("快捷导航", { exact: true })).toHaveCount(0);
+});
+
+test("FE-E2E-001W Demo · 场景说明：进入工作区并直接发起任务", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/chat");
+
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
+  await dialog.getByLabel("名称").fill("产品发布计划");
+  await dialog.getByLabel("描述").fill("集中保存发布相关对话与产物");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
+  await expect(page.locator("main").getByText("产品发布计划", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "搜索或创建任务", exact: true }).fill("生成发布检查清单");
+  await page.getByRole("button", { name: "开始任务", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\?prompt=/);
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("生成发布检查清单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
+  await expect(page.locator("main p").filter({ hasText: "生成发布检查清单" })).toBeVisible();
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  expect(state.lastStreamPayload?.workspace_id).toBe("workspace-e2e-1");
+
+  await page.getByRole("link", { name: "文件", exact: true }).click();
+  await expect(page).toHaveURL(/\/files$/);
+  await page.getByRole("region", { name: "产品发布计划文件层级", exact: true }).getByRole("link", { name: /guide\.md/ }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/canvas\/unibot-documents\?document=guide\.md$/);
+  const editor = page.getByRole("textbox", { name: "全文 Markdown 编辑器" });
+  await editor.fill("# 发布检查清单\n\n- [x] Demo 场景已跑通\n");
+  await page.getByRole("button", { name: "保存文档" }).click();
+  await expect(editor).toHaveValue(/Demo 场景已跑通/);
+  expect(state.documentContent).toContain("Demo 场景已跑通");
+});
+
+test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
+  const state = await installMockApi(page);
+  await page.goto("/chat");
+
+  await expect.poll(() => state.lastWorkspaceListScope?.user_id).toBe("admin-zhou-ran");
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
+  await dialog.getByLabel("名称").fill("管理员工作区");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1$/);
+  expect(state.lastWorkspaceCreatePayload).toMatchObject({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+  });
+  await expect.poll(() => state.lastDocumentTreeScope).toEqual({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+    workspace_id: "workspace-e2e-1",
+  });
+
+  await page.goto("/workspaces/workspace-e2e-1/canvas/unibot-documents");
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
+  await expect.poll(() => state.lastDocumentTreeScope?.user_id).toBe("admin-zhou-ran");
+
+  state.conversations.push(conversation({
+    id: "conv-admin-outline",
+    user_id: "admin-zhou-ran",
+    workspace_id: "workspace-e2e-1",
+    messages: [{
+      id: "msg-admin-outline",
+      role: "assistant",
+      content: "请选择章节。",
+      content_type: "text",
+      widgets: [{
+        id: "outline-admin",
+        kind: "document_outline",
+        title: "guide.md",
+        description: "管理员章节读取",
+        markdown: null,
+        fields: [],
+        actions: [],
+        apps: [],
+        document_name: "guide.md",
+        sections: [{ index: 1, heading: "使用指南", level: 1, occurrence: 1, line_start: 1, line_end: 6 }],
+      }],
+      created_at: NOW,
+    }],
+  }));
+  await page.goto("/workspaces/workspace-e2e-1/chat/conv-admin-outline");
+  await expect(page.getByRole("region", { name: "文档章节 guide.md" })).toBeVisible();
+  await expect.poll(() => state.lastDocumentSectionScope).toEqual({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+    workspace_id: "workspace-e2e-1",
+  });
+
+  await page.goto("/workspaces/workspace-e2e-1/canvas/unibot-code-runner");
+  await expect.poll(() => state.lastSandboxEnsurePayload).toEqual({
+    user_id: "admin-zhou-ran",
+    tenant_id: "default",
+    workspace_id: "workspace-e2e-1",
+  });
+});
+
+test("FE-E2E-001WAA 创建工作区期间切换用户不会写入旧 actor 响应", async ({ page }) => {
+  const state = await installMockApi(page, { workspaceCreateDelayMs: 1000 });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "创建工作区", exact: true });
+  await dialog.getByLabel("名称").fill("不应写入当前列表");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect.poll(() => state.lastWorkspaceCreatePayload?.user_id).toBe("anonymous");
+
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+  await page.getByRole("menuitem", { name: "切换为管理员", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+  await expect.poll(() => state.lastWorkspaceListScope?.user_id).toBe("admin-zhou-ran");
+  await expect(dialog.getByText("当前用户已切换，请重新创建工作区。", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.locator('aside a[href="/workspaces/workspace-e2e-1"]')).toHaveCount(0);
+});
+
+test("FE-E2E-001WB 快速切换工作区不会被慢响应覆盖", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+    conversations: [
+      conversation({ id: "conv-a", workspace_id: "workspace-a", title: "A 的会话" }),
+      conversation({ id: "conv-b", workspace_id: "workspace-b", title: "B 的会话" }),
+    ],
+    workspaceConversationDelayMs: { "workspace-a": 350 },
+  });
+  const slowRequest = page.waitForRequest((request) => (
+    request.url().includes("/api/conversations?") && request.url().includes("workspace_id=workspace-a")
+  ));
+  await page.goto("/workspaces/workspace-a");
+  await slowRequest;
+  await page.locator('aside a[href="/workspaces/workspace-b"]').click();
+
+  const main = page.locator("main");
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+  await expect(main.getByText("B 的会话", { exact: true })).toBeVisible();
+  await page.waitForTimeout(450);
+  await expect(main.getByText("B 的会话", { exact: true })).toBeVisible();
+  await expect(main.getByText("A 的会话", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("conversation-row-conv-b")).toBeVisible();
+});
+
+test("FE-E2E-001WC 离开运行中的工作区聊天后不会跳回旧路由", async ({ page }) => {
+  const state = await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+    streamDelayMs: 300,
+  });
+  await page.goto("/workspaces/workspace-a/chat");
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("开始一个慢任务");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
+  await page.locator('aside a[href="/workspaces/workspace-b"]').click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+  await page.waitForTimeout(450);
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+});
+
+test("FE-E2E-001WD 离开运行中的 Workspace Canvas 后不会执行旧打开动作", async ({ page }) => {
+  const state = await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+    conversations: [conversation({
+      id: "conv-canvas-workspace",
+      workspace_id: "workspace-a",
+      title: "Workspace Canvas 会话",
+    })],
+    streamDelayMs: 300,
+    streamWidgets: [{
+      id: "open-memory-after-run",
+      kind: "navigation",
+      title: "打开记忆",
+      description: "完成后打开另一个 AINA",
+      markdown: null,
+      fields: [],
+      apps: [],
+      actions: [{ id: "open-memory", label: "打开记忆", kind: "open_aina", aina_id: "unibot-memory", style: "primary" }],
+    }],
+  });
+  await page.goto("/workspaces/workspace-a/canvas/unibot-documents?conversation=conv-canvas-workspace");
+  await page.getByRole("textbox", { name: "画布消息" }).fill("运行一个慢 Canvas 任务");
+  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
+  await page.locator('aside a[href="/workspaces/workspace-b"]').click();
+
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
+  await page.waitForTimeout(450);
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b$/);
 });
 
 test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ page }) => {
@@ -1028,7 +1761,6 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
 test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
-
   await expect(page.getByRole("heading", { name: "已有会话" })).toBeVisible();
   const conversationList = page.getByRole("navigation", { name: "对话列表" });
   const conversationRow = page.getByTestId("conversation-row-conv-e2e-1");
@@ -1042,7 +1774,10 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
   await conversationRow.hover();
   await conversationList.getByRole("button", { name: "更多操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await conversationList.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
+  const deleteDialog = page.getByRole("alertdialog", { name: "删除会话", exact: true });
+  await expect(deleteDialog.getByText("重命名后的会话", { exact: true })).toBeVisible();
+  await expect(deleteDialog.getByText("工作区中已经生成的文件和其他产物不会受到影响。", { exact: true })).toBeVisible();
+  await deleteDialog.getByRole("button", { name: "确认删除 重命名后的会话", exact: true }).click();
   await expect(page).toHaveURL(/\/chat$/);
   await expect(conversationList.getByText("重命名后的会话", { exact: true })).toHaveCount(0);
 });
@@ -1050,9 +1785,9 @@ test("FE-E2E-002 在侧栏重命名并删除会话", async ({ page }) => {
 test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ page }) => {
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1");
-
   const row = page.getByTestId("conversation-row-conv-e2e-1");
   const moreButton = row.getByRole("button", { name: "更多操作", exact: true });
+  await expect(row.getByText("等待第一条消息", { exact: true })).toHaveCount(0);
   await expect(moreButton).toHaveCSS("opacity", "0");
 
   await row.hover();
@@ -1062,17 +1797,82 @@ test("FE-E2E-002B 对话操作按钮悬停时显示并垂直居中", async ({ pa
   const buttonBox = await moreButton.boundingBox();
   expect(rowBox).not.toBeNull();
   expect(buttonBox).not.toBeNull();
+  expect(rowBox!.height).toBeLessThan(40);
   expect(Math.abs((buttonBox!.y + buttonBox!.height / 2) - (rowBox!.y + rowBox!.height / 2))).toBeLessThan(2);
 
   await moreButton.click();
   await expect(page.getByRole("menu", { name: "已有会话 对话操作", exact: true })).toBeVisible();
 });
 
-test("FE-E2E-003 在能力中心注册 Tool", async ({ page }) => {
+test("FE-E2E-002C 切换对话不会自动收起导航且图标可展开侧栏", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [workspace()],
+    conversations: [conversation({ workspace_id: "workspace-e2e-1" })],
+  });
+
+  await page.goto("/chat");
+  const mainNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(page.getByRole("button", { name: /新任务/ })).toHaveCount(0);
+  await expect(mainNavigation.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(mainNavigation.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  await page.getByTestId("conversation-row-conv-e2e-1").click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
+  await expect(mainNavigation).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "快捷导航" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "收起导航", exact: true }).click();
+  const rail = page.getByRole("complementary", { name: "快捷导航" });
+  await expect(rail.getByRole("link", { name: "对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(rail.getByRole("link", { name: "文件", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+
+  const expandButton = rail.getByRole("button", { name: "展开导航", exact: true });
+  const botIcon = expandButton.locator("svg.lucide-bot");
+  const expandIcon = expandButton.locator("svg.lucide-panel-left-open");
+  await expect(botIcon).toBeVisible();
+  await expect(expandIcon).toBeHidden();
+  await expandButton.hover();
+  await expect(botIcon).toBeHidden();
+  await expect(expandIcon).toBeVisible();
+  await expandButton.click();
+  await expect(mainNavigation).toBeVisible();
+
+  await page.goto("/workspaces/workspace-e2e-1");
+  const workspaceNavigation = page.getByRole("navigation", { name: "主导航" });
+  await expect(workspaceNavigation.getByRole("link", { name: "对话", exact: true })).not.toHaveClass(/bg-sidebar-active/);
+  await expect(workspaceNavigation.getByRole("link", { name: "文件", exact: true })).toHaveClass(/bg-sidebar-active/);
+});
+
+test("FE-E2E-002D 文件入口按用户和 Workspace 层级展示文件", async ({ page }) => {
+  await installMockApi(page, {
+    workspaces: [
+      workspace({ id: "workspace-a", name: "工作区 A", storage_key: "workspace-a" }),
+      workspace({ id: "workspace-b", name: "工作区 B", storage_key: "workspace-b" }),
+    ],
+  });
+
+  await page.goto("/files");
+  const userFiles = page.getByRole("region", { name: "用户文件文件层级", exact: true });
+  const workspaceAFiles = page.getByRole("region", { name: "工作区 A文件层级", exact: true });
+  const workspaceBFiles = page.getByRole("region", { name: "工作区 B文件层级", exact: true });
+  await expect(userFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
+  await expect(workspaceAFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
+  await expect(workspaceBFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
+
+  await workspaceBFiles.getByRole("link", { name: /guide\.md/ }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b\/canvas\/unibot-documents\?document=guide\.md$/);
+  await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
+});
+
+test("FE-E2E-003 在插件页面注册 Tool", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/apps");
+  await expect(page).toHaveURL(/\/plugin$/);
+  await page.goto("/chat");
+  await page.getByRole("link", { name: "插件", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "能力中心" })).toBeVisible();
+  await expect(page).toHaveURL(/\/plugin$/);
+  await expect(page.getByRole("heading", { name: "插件", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /工具/ }).click();
   await page.getByRole("button", { name: "注册工具" }).click();
   await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.add/);
@@ -1144,8 +1944,13 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
       },
     ],
   });
-  await page.goto("/apps");
+  await page.goto("/plugin");
 
+  const openAppButton = page.getByRole("button", { name: "打开应用", exact: true });
+  await expect(openAppButton).toBeVisible();
+  await expect(openAppButton.locator("svg")).toHaveClass(/lucide-app-window/);
+  await expect(openAppButton).toHaveCSS("background-color", "rgb(15, 17, 21)");
+  await expect(page.getByRole("button", { name: "打开画布", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "查看能力", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "文档编辑器 能力详情" });
   await expect(dialog).toBeVisible();
@@ -1160,7 +1965,7 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
 
 test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭环", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/apps");
+  await page.goto("/plugin");
 
   await page.getByRole("button", { name: "项目模板", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生成 AINA Project 模板", exact: true })).toBeVisible();
@@ -1193,26 +1998,28 @@ test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭�
   expect(state.ainaProjects).toHaveLength(0);
 });
 
-test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
+test("FE-E2E-004 管理员按用户查看运行摘要及 Trace I/O", async ({ page }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
-  await installMockApi(page, { conversations: [conversation()] });
-  await page.goto("/admin/observability");
+  await installMockApi(page, {
+    conversations: [conversation()],
+    obsSessions: { "conv-e2e-1": successfulObsSession("conv-e2e-1") },
+  });
+  await page.goto("/admin/observability?userId=anonymous");
 
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("运行统计").getByText("3", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "调试模式已关闭" })).toBeVisible();
-  await page.getByRole("button", { name: "开启", exact: true }).click();
+  await expect(page.getByLabel("用户调用统计").getByText("3", { exact: true })).toBeVisible();
 
-  await expect(page.getByText("trace-e2e-1", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "复制 Trace ID trace-e2e-1", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("trace-e2e-1");
-  await page.getByText("trace-e2e-1", { exact: true }).click();
+  await expect(page.getByLabel("Trace 列表").getByText(OBS_TRACE_ID, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: `复制 Trace ID ${OBS_TRACE_ID}`, exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(OBS_TRACE_ID);
   await expect(page.getByRole("button", { name: "调用链", exact: true })).toBeVisible();
   const spanTree = page.getByLabel("Span 调用树");
   await expect(spanTree.getByText("agent.run", { exact: true })).toBeVisible();
   await expect(spanTree.getByText("model.complete", { exact: true })).toBeVisible();
   await expect(spanTree.getByText("TTFT 42 ms", { exact: true })).toBeVisible();
+  await expect(spanTree.getByText("model.complete", { exact: true }).locator("..").locator(".."))
+    .toHaveAttribute("style", "margin-left: 24px;");
   await spanTree.getByText("agent.run", { exact: true }).click();
   await expect(spanTree.getByLabel("agent.run 输入")).toContainText("排查模型调用");
   await expect(spanTree.getByLabel("agent.run 输出")).toContainText("模型返回正常");
@@ -1222,17 +2029,17 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await spanTree.getByText("demo.lookup", { exact: true }).click();
   await expect(spanTree.getByLabel("demo.lookup 输入")).toContainText("Unibot");
   await expect(spanTree.getByLabel("demo.lookup 输出")).toContainText("工具返回正常");
+  await page.getByRole("button", { name: "复制 Conversation ID", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
   await page.getByRole("button", { name: "模型请求 1", exact: true }).click();
-  await expect(page.getByRole("button", { name: "已有会话 1 Trace conv-e2e-1", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Trace 列表").getByText("租户 default · 会话 conv-e2e-1", { exact: true })).toBeVisible();
   const modelRequestList = page.getByLabel("当前 Trace 的模型请求");
   await expect(modelRequestList.getByRole("button", {
     name: "请求 1 成功 debug-model 129 ms 120 Token",
     exact: true,
   })).toBeVisible();
   await expect(page.getByText("总耗时 129 ms · 120 Token · 233.5 Output Token/s", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "复制 Conversation ID conv-e2e-1", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
-  await expect(page.getByRole("heading", { name: "llm-e2e-1", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: OBS_MODEL_SPAN_ID, exact: true })).toBeVisible();
   const requestJson = page.getByLabel("模型请求 JSON");
   await expect(requestJson).toContainText("排查模型调用");
   await expect(requestJson.locator("pre")).toHaveClass(/whitespace-pre-wrap/);
@@ -1244,6 +2051,32 @@ test("FE-E2E-004 查看运行摘要并开启 Trace OBS", async ({ page }) => {
   await expect(requestMessage).toHaveCount(0);
   await page.getByRole("button", { name: "响应", exact: true }).click();
   await expect(page.getByLabel("模型响应 JSON")).toContainText("模型返回正常");
+});
+
+test("FE-E2E-004A 管理员可选择无 OBS 数据的用户并通过链接加载目标 Trace", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("unibot:mock-role", "admin");
+    window.localStorage.setItem("unibot:debug-mode", "true");
+  });
+  await installMockApi(page, {
+    conversations: [
+      conversation({ id: "conv-empty", user_id: "empty-user", title: "旧会话无 OBS" }),
+      conversation({ id: "conv-loaded", title: "目标会话" }),
+    ],
+    obsSessions: { "conv-loaded": successfulObsSession("conv-loaded") },
+  });
+
+  await page.goto("/admin/observability");
+  await page.getByLabel("用户列表").getByRole("button", { name: /E2E 用户 empty-user/ }).click();
+  const traceList = page.getByLabel("Trace 列表");
+  await expect(traceList.getByText("当前时间范围内没有调用记录。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "关闭用户观测抽屉" }).click();
+  await expect(page.getByLabel("用户列表").getByRole("button", { name: /E2E 用户 empty-user/ })).toBeVisible();
+
+  await page.goto(`/admin/observability?userId=anonymous&traceId=${OBS_TRACE_ID}`);
+  await expect(traceList.getByText(OBS_TRACE_ID, { exact: true })).toBeVisible();
+  await expect(traceList.getByText("租户 default · 会话 conv-loaded", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Span 调用树").getByText("model.complete", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ page }) => {
@@ -1279,8 +2112,64 @@ test("FE-E2E-004C 工具结果只按顶层 error 字段标记失败", async ({ p
 
   await page.goto("/chat/conv-e2e-1");
 
-  await expect(page.getByText("能力调用结果 · builtin_document_edit_task_create_success", { exact: true })).toBeVisible();
-  await expect(page.getByText("能力调用失败 · builtin_document_edit_task_create_error", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 builtin_document_edit_task_create_success 完成", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 builtin_document_edit_task_create_error 失败", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004E 普通模式按设计稿展示并合并工具调用结果", async ({ page }) => {
+  await installMockApi(page, {
+    conversations: [
+      conversation({
+        messages: [
+          {
+            id: "msg-tool-request",
+            role: "assistant",
+            content: "我先检索公开资料并提取证据。",
+            content_type: "text",
+            tool_calls: [{
+              id: "call-search",
+              type: "function",
+              function: { name: "browser.search", arguments: JSON.stringify({ query: "CNCF survey 2025" }) },
+            }],
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-result",
+            role: "tool",
+            name: "browser.search",
+            tool_call_id: "call-search",
+            content: JSON.stringify({ status: "ok", results: [{ title: "CNCF Annual Survey" }] }),
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+          {
+            id: "msg-tool-summary",
+            role: "assistant",
+            content: "检索完成，已整理关键来源。",
+            content_type: "text",
+            widgets: [],
+            created_at: NOW,
+          },
+        ],
+      }),
+    ],
+  });
+
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText("我先检索公开资料并提取证据。", { exact: true })).toBeVisible();
+  await expect(page.getByText("检索完成，已整理关键来源。", { exact: true })).toBeVisible();
+  const card = page.getByLabel("工具调用 browser.search 完成", { exact: true });
+  await expect(card).toHaveCount(1);
+  await expect(card.getByText("联网搜索", { exact: true })).toBeVisible();
+  await expect(card.getByText("CNCF survey 2025", { exact: true })).toBeVisible();
+  await card.locator("summary").click();
+  await expect(card.getByText("调用参数", { exact: true })).toBeVisible();
+  await expect(card.getByText("返回结果", { exact: true })).toBeVisible();
+
+  await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
+  await expect(page.getByLabel("工具调用 browser.search 完成", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
@@ -1315,7 +2204,7 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
   await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-e2e-1$/);
 });
 
-test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async ({ page }) => {
+test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
   await installMockApi(page, {
     modelProviders: [
@@ -1336,9 +2225,14 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   });
   await page.goto("/settings");
 
-  await expect(page.getByRole("link", { name: "应用", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "设置", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "OBS", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
+  const userMenu = page.getByRole("menu", { name: "用户菜单", exact: true });
+  await expect(userMenu.getByRole("menuitem", { name: "应用", exact: true })).toHaveCount(0);
+  const homeMenuItem = userMenu.getByRole("menuitem", { name: "主页", exact: true });
+  await expect(homeMenuItem).toBeVisible();
+  await expect(homeMenuItem.locator("svg")).toHaveClass(/lucide-house/);
+  await expect(userMenu.getByRole("menuitem", { name: "设置", exact: true })).toBeVisible();
+  await expect(userMenu.getByRole("menuitem", { name: "管理", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   const providerSection = page.getByLabel("Provider 团队模型服务");
   await providerSection.getByRole("heading", { name: "团队模型服务", exact: true }).click();
@@ -1349,15 +2243,48 @@ test("FE-E2E-004B 区分应用、设置和 OBS，并切换默认模型", async (
   await page.getByRole("button", { name: "自动获取", exact: true }).click();
   await expect(page.getByText("已从 Provider 自动添加 1 个模型。", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "模型 3 ID", exact: true })).toHaveValue("team-coder");
+  await expect(page.getByRole("spinbutton", { name: "模型 3 上下文", exact: true })).toHaveValue("262144");
+  await page.getByRole("button", { name: "添加模型", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "模型 4 上下文", exact: true })).toHaveValue("128000");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.getByRole("button", { name: "设为默认" }).click();
   await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("当前模型").getByText("快速模型", { exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "OBS", exact: true }).click();
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
+  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-004F 可从折叠状态删除 Provider", async ({ page }) => {
+  await installMockApi(page, {
+    modelProviders: [
+      {
+        id: "provider-delete-e2e",
+        provider_type: "openai",
+        name: "待删除模型服务",
+        base_url: "https://delete.example.com/v1",
+        api_key_masked: "del******-key",
+        has_api_key: true,
+        timeout_seconds: 60,
+        models: [
+          { id: "model-delete", name: "待删除模型", model: "delete-model", enabled: true, is_default: true },
+        ],
+      },
+    ],
+  });
+  await page.goto("/settings");
+
+  const providerSection = page.getByLabel("Provider 待删除模型服务");
+  await page.getByRole("button", { name: "删除 待删除模型服务", exact: true }).click();
+  await expect(providerSection.getByText("删除后该 Provider 的全部模型配置将不可恢复。", { exact: true })).toBeVisible();
+  await providerSection.getByRole("button", { name: "确认删除", exact: true }).click();
+
+  await expect(page.getByText("Provider 已删除。", { exact: true })).toBeVisible();
+  await expect(providerSection).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "尚未添加 Provider", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
@@ -1368,15 +2295,17 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
         { id: "msg-assistant-obs", role: "assistant", content: "模型返回正常", content_type: "text", widgets: [], trace_id: "trace-e2e-1", created_at: NOW },
       ],
     })],
+    obsSessions: { "conv-e2e-1": successfulObsSession("conv-e2e-1") },
     legacySpanIo: true,
   });
   await page.goto("/admin/observability");
 
   await expect(page.getByRole("heading", { name: "需要管理员权限", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "可观测", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "OBS", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
+  await expect(page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "OBS", exact: true }).click();
+  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true }).click();
   await expect(page).toHaveURL(/\/obs$/);
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toHaveCount(0);
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
@@ -1464,6 +2393,10 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("button", { name: "月", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "自定义", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Token 消耗日历")).toBeVisible();
+  const modelOverviewRow = page.getByLabel("不同模型 Token 消耗").getByRole("row", { name: /debug-model/ });
+  await expect(modelOverviewRow.getByRole("cell").nth(4)).toHaveText("120");
+  await expect(modelOverviewRow.getByRole("cell").nth(5)).toHaveText("100.0%");
+  await expect(page.getByLabel("每日 Token 热力图").getByLabel("2026-07-12 120 Token")).toBeVisible();
 
   await page.goto("/admin/observability");
 
@@ -1483,10 +2416,120 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "用户反馈", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "运营", exact: true }).click();
   await expect(page.getByRole("heading", { name: "运营增长", exact: true })).toBeVisible();
+  await expect(page.getByLabel("运营核心指标").getByText("2", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("cell", { name: "document-assistantv1.0.0", exact: true })).toBeVisible();
+  await expect(page.getByText("权限用户分母尚未接入", { exact: true })).toBeVisible();
+  await expect(page.getByText("Mock 数据", { exact: true })).toHaveCount(0);
+});
+
+test("FE-E2E-IR-001A empty new overview falls back to legacy history", async ({ page }) => {
+  await installMockApi(page);
+  await page.route("**/api/obs/overview*", (route) => json(route, {
+    range: "week",
+    trace_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    total_tokens: 0,
+    error_count: 0,
+    active_days: 0,
+    conversation_count: 0,
+    per_model: [],
+    daily: [],
+  }));
+
+  await page.goto("/obs");
+
+  await expect(page.getByLabel("每日 Token 热力图").getByLabel("2026-07-12 120 Token")).toBeVisible();
+});
+
+test("FE-E2E-IR-001B OBS 会话在短暂写入延迟后自动可见", async ({ page }) => {
+  const delayedSession = successfulObsSession("conv-e2e-1");
+  const delayedSpans = delayedSession.spans as JsonObject[];
+  Object.assign(delayedSpans[0], { input_tokens: 1532, output_tokens: 38, cache_read_tokens: 0 });
+  Object.assign(delayedSpans[1], {
+    input_tokens: 1532,
+    output_tokens: 38,
+    cache_read_tokens: 0,
+    output: {
+      role: "assistant",
+      content: "Hi there!",
+      tool_calls: [{ id: "call-e2e-1", type: "function", function: { name: "demo.lookup", arguments: "{}" } }],
+    },
+    attributes: { usage_estimated: true },
+  });
+  await installMockApi(page, {
+    conversations: [conversation()],
+    obsSessions: { "conv-e2e-1": delayedSession },
+  });
+  let sessionReads = 0;
+  await page.route("**/api/obs/sessions/conv-e2e-1", async (route) => {
+    sessionReads += 1;
+    if (sessionReads <= 2) return json(route, null);
+    return route.fallback();
+  });
+
+  await page.goto("/chat/conv-e2e-1");
+  await page.getByRole("button", { name: "查看当前对话观测数据", exact: true }).click();
+
+  await expect(page.getByLabel("模型性能分析").getByText("debug-model", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Token 使用")).toContainText("≈1,570");
+  await expect(page.getByLabel("Token 使用")).toContainText("≈1,532");
+  const modelMetricsRow = page.getByLabel("模型性能分析").getByRole("row", { name: /debug-model/ });
+  await expect(modelMetricsRow.getByRole("cell").nth(2)).toHaveText("≈1,532");
+  await expect(modelMetricsRow.getByRole("cell").nth(3)).toHaveText("≈38");
+  await expect(modelMetricsRow.getByRole("cell").nth(4)).toHaveText("1");
+  expect(sessionReads).toBeGreaterThanOrEqual(3);
+});
+
+test("FE-E2E-IR-001C OBS 交互轮次按开始时间正序展示", async ({ page }) => {
+  const sessionId = "conv-e2e-1";
+  const olderTraceId = "trace-e2e-older";
+  const newerTraceId = "trace-e2e-newer";
+  const olderRootId = "span-agent-e2e-older";
+  const newerRootId = "span-agent-e2e-newer";
+  const detail = obsSessionDetail(sessionId, {
+    // The query API intentionally returns newest first.
+    traces: [
+      {
+        trace_id: newerTraceId, legacy_trace_id: null, root_span_id: newerRootId,
+        session_id: sessionId, user_id: "anonymous", tenant_id: "default", status: "completed",
+        started_at: "2026-08-06T10:00:02Z", completed_at: "2026-08-06T10:00:03Z", duration_ms: 1000,
+        input_tokens: 20, output_tokens: 2, cache_read_tokens: 0, message_count: 2,
+        compression_count: 0, error_count: 0, attributes: {},
+      },
+      {
+        trace_id: olderTraceId, legacy_trace_id: null, root_span_id: olderRootId,
+        session_id: sessionId, user_id: "anonymous", tenant_id: "default", status: "completed",
+        started_at: "2026-08-06T10:00:00Z", completed_at: "2026-08-06T10:00:01Z", duration_ms: 1000,
+        input_tokens: 10, output_tokens: 1, cache_read_tokens: 0, message_count: 2,
+        compression_count: 0, error_count: 0, attributes: {},
+      },
+    ],
+    spans: [
+      obsSpan({ span_id: newerRootId, otel_span_id: newerRootId, trace_id: newerTraceId, kind: "agent", name: "agent.run", started_at: "2026-08-06T10:00:02Z", completed_at: "2026-08-06T10:00:03Z", duration_ms: 1000 }),
+      obsSpan({ span_id: "span-model-e2e-newer", otel_span_id: "span-model-e2e-newer", trace_id: newerTraceId, parent_span_id: newerRootId, kind: "model", name: "model.complete", model: "debug-model", started_at: "2026-08-06T10:00:02Z", completed_at: "2026-08-06T10:00:03Z", input_tokens: 20, output_tokens: 2 }),
+      obsSpan({ span_id: olderRootId, otel_span_id: olderRootId, trace_id: olderTraceId, kind: "agent", name: "agent.run", started_at: "2026-08-06T10:00:00Z", completed_at: "2026-08-06T10:00:01Z", duration_ms: 1000 }),
+      obsSpan({ span_id: "span-model-e2e-older", otel_span_id: "span-model-e2e-older", trace_id: olderTraceId, parent_span_id: olderRootId, kind: "model", name: "model.complete", model: "debug-model", started_at: "2026-08-06T10:00:00Z", completed_at: "2026-08-06T10:00:01Z", input_tokens: 10, output_tokens: 1 }),
+    ],
+  });
+  await installMockApi(page, {
+    conversations: [conversation()],
+    obsSessions: { [sessionId]: detail },
+  });
+
+  await page.goto(`/chat/${sessionId}`);
+  await page.getByRole("button", { name: "查看当前对话观测数据", exact: true }).click();
+  await page.getByRole("tab", { name: "Span 调用树", exact: true }).click();
+
+  await expect(page.getByLabel("第 1 轮调用树指标")).toContainText("输入 10 Token");
+  await expect(page.getByLabel("第 2 轮调用树指标")).toContainText("输入 20 Token");
 });
 
 test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", async ({ page }) => {
   const providerError = "The model provider returned HTTP 503";
+  const otelTraceId = "22222222222222222222222222222222";
+  const otelRootSpanId = "dddddddddddddddd";
   await installMockApi(page, {
     conversations: [conversation({
       run_status: "failed",
@@ -1501,6 +2544,66 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
         created_at: NOW,
       }],
     })],
+    obsSessions: {
+      "conv-e2e-1": obsSessionDetail("conv-e2e-1", {
+        traces: [{
+          trace_id: otelTraceId,
+          legacy_trace_id: "trace-error-e2e",
+          root_span_id: otelRootSpanId,
+          session_id: "conv-e2e-1",
+          user_id: "anonymous",
+          tenant_id: "default",
+          status: "failed",
+          started_at: NOW,
+          completed_at: NOW,
+          duration_ms: 180,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          message_count: 1,
+          compression_count: 0,
+          error_count: 1,
+          attributes: {},
+        }],
+        events: [
+          { event_id: "ev-err-1", trace_id: otelTraceId, span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "复现模型错误" } },
+        ],
+        spans: [
+          obsSpan({
+            span_id: "span-agent-error-e2e",
+            otel_span_id: otelRootSpanId,
+            trace_id: otelTraceId,
+            parent_span_id: null,
+            sequence_no: 1,
+            kind: "agent",
+            name: "agent.run",
+            target_id: "unibot",
+            status: "failed",
+            duration_ms: 180,
+            input: { message: "复现模型错误" },
+            output: null,
+            error: { message: providerError },
+          }),
+          obsSpan({
+            span_id: "span-model-error-e2e",
+            otel_span_id: "llm-error-e2e",
+            trace_id: otelTraceId,
+            parent_span_id: otelRootSpanId,
+            sequence_no: 2,
+            kind: "model",
+            name: "model.complete",
+            target_id: "debug-model",
+            model: "debug-model",
+            status: "failed",
+            duration_ms: 128,
+            ttft_ms: null,
+            input: { model: "debug-model", messages: [{ role: "user", content: "复现模型错误" }], stream: true },
+            output: null,
+            error: { message: providerError },
+          }),
+        ],
+      }),
+    },
   });
   await page.route("**/api/traces*", (route) => json(route, [{
     trace_id: "trace-error-e2e",
@@ -1591,6 +2694,33 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
       ],
     })],
   });
+  await page.route("**/api/traces*", (route) => json(route, [{
+    trace_id: "trace-msg-fail-e2e",
+    conversation_id: "conv-e2e-1",
+    user_id: "anonymous",
+    tenant_id: "default",
+    status: "failed",
+    events: [],
+    root_span_id: "span-model-msg-fail-e2e",
+    spans: [{
+      span_id: "span-model-msg-fail-e2e",
+      parent_span_id: null,
+      kind: "model",
+      name: "model.complete",
+      status: "failed",
+      target_id: "debug-model",
+      attempt_no: 1,
+      started_at: NOW,
+      completed_at: NOW,
+      duration_ms: 96,
+      input: { model: "debug-model", messages: [{ role: "user", content: "触发一次失败调用" }] },
+      output: null,
+      attributes: {},
+      error: { message: providerError },
+    }],
+    created_at: NOW,
+    completed_at: NOW,
+  }]));
   await page.route("**/api/llm-calls*", (route) => json(route, [{
     call_id: "llm-msg-fail-e2e",
     trace_id: "trace-msg-fail-e2e",
@@ -1615,6 +2745,9 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
   await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e");
   await chatLogLink.click();
   await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e$/);
+  const legacyTargetLog = page.getByLabel("原始日志 llm-msg-fail-e2e", { exact: true });
+  await expect(legacyTargetLog).toHaveAttribute("open", "");
+  await expect(legacyTargetLog).toContainText(providerError);
 });
 
 test("FE-E2E-IR-005 能力调用失败在对话中持久展示并跳转原始日志", async ({ page }) => {
@@ -1626,6 +2759,49 @@ test("FE-E2E-IR-005 能力调用失败在对话中持久展示并跳转原始日
         { id: "msg-asst-cap-fail", role: "assistant", content: "我查看了你的文档库，目前没有任何 Markdown 文档。", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
       ],
     })],
+    obsSessions: {
+      "conv-e2e-1": obsSessionDetail("conv-e2e-1", {
+        traces: [{
+          trace_id: "trace-cap-fail-e2e",
+          legacy_trace_id: null,
+          root_span_id: "span-cap-fail-e2e",
+          session_id: "conv-e2e-1",
+          user_id: "anonymous",
+          tenant_id: "default",
+          status: "completed",
+          started_at: NOW,
+          completed_at: NOW,
+          duration_ms: 120,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          message_count: 1,
+          compression_count: 0,
+          error_count: 1,
+          attributes: {},
+        }],
+        events: [
+          { event_id: "ev-cap-1", trace_id: "trace-cap-fail-e2e", span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "查看我的文档" } },
+        ],
+        spans: [
+          obsSpan({
+            span_id: "span-cap-fail-e2e",
+            otel_span_id: "otel-cap-fail-e2e",
+            trace_id: "trace-cap-fail-e2e",
+            parent_span_id: null,
+            sequence_no: 1,
+            kind: "tool",
+            name: "builtin_document_list_81bfc296",
+            target_id: "document.list",
+            status: "failed",
+            duration_ms: 120,
+            input: { query: "all" },
+            output: null,
+            error: { code: "CONFLICT", message: conflictError, retryable: false },
+          }),
+        ],
+      }),
+    },
   });
   await page.route("**/api/traces*", (route) => json(route, [{
     trace_id: "trace-cap-fail-e2e",
@@ -1729,7 +2905,7 @@ test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page 
 
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("只属于进行中会话的问题");
   await page.getByRole("button", { name: "发送消息" }).click();
-  await expect(main.getByText("只属于进行中会话的问题", { exact: true })).toBeVisible();
+  await expect(main.getByRole("paragraph").filter({ hasText: "只属于进行中会话的问题" })).toBeVisible();
 
   await page.getByTestId("conversation-row-conv-other").click();
   await expect(page).toHaveURL(/\/chat\/conv-other$/);
@@ -1789,7 +2965,7 @@ test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async (
 
   await page.getByRole("textbox", { name: "画布消息" }).fill("只属于文档 Canvas 的问题");
   await page.getByRole("button", { name: "发送画布消息" }).click();
-  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
+  await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
 
   await page.getByRole("button", { name: "切换到记忆", exact: true }).click();
   await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-canvas-streaming$/);
@@ -1803,6 +2979,53 @@ test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async (
   await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-canvas-streaming$/);
   await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
   await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+});
+
+test("FE-E2E-006A Clarification Widget 提交后消失且不进入消息历史", async ({ page }) => {
+  const state = await installMockApi(page, {
+    conversations: [conversation()],
+    streamWidgets: [
+      {
+        id: "clarification-conv-e2e-1",
+        kind: "form",
+        title: "补充报告信息",
+        description: "整理缺失信息后继续。",
+        markdown: null,
+        fields: [
+          { id: "audience", label: "受众", input_type: "text", placeholder: "", required: true, value: "" },
+          { id: "period", label: "周期", input_type: "text", placeholder: "", required: true, value: "" },
+        ],
+        actions: [
+          {
+            id: "submit-clarification",
+            label: "提交并继续",
+            kind: "prompt",
+            prompt: "以下是我的补充信息：\n受众: {audience}\n周期: {period}",
+            style: "primary",
+          },
+        ],
+        apps: [],
+      },
+    ],
+  });
+  await page.goto("/chat/conv-e2e-1");
+
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("帮我生成报告");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  const widget = page.getByRole("region", { name: "补充报告信息" });
+  await expect(widget).toBeVisible();
+
+  await widget.getByRole("textbox", { name: "受众", exact: true }).fill("管理层");
+  await widget.getByRole("textbox", { name: "周期", exact: true }).fill("本季度");
+  state.streamWidgets = [];
+  await widget.getByRole("button", { name: "提交并继续", exact: true }).click();
+
+  await expect(widget).toHaveCount(0);
+  await expect.poll(() => state.lastStreamPayload?.message).toBe("以下是我的补充信息：\n受众: 管理层\n周期: 本季度");
+  expect((state.conversations[0].messages as JsonObject[]).every((message) => !(message.widgets as JsonObject[]).length)).toBe(true);
+
+  await page.reload();
+  await expect(page.getByRole("region", { name: "补充报告信息" })).toHaveCount(0);
 });
 
 test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {

@@ -5,6 +5,9 @@ Backend settings:
   UNIBOT_SANDBOX_KUBERNETES_NAMESPACE={{ .Release.Namespace }}
   UNIBOT_SANDBOX_RUNTIME_CLASS={{ .Values.runtimeClass.name }}
   UNIBOT_SANDBOX_DEFAULT_IMAGE={{ .Values.sandbox.image.repository }}:{{ .Values.sandbox.image.tag }}
+  # Required before workspace-bound Kubernetes sandboxes are enabled. The PVC
+  # must already exist in this release namespace and support the intended RWX policy.
+  UNIBOT_SANDBOX_KUBERNETES_WORKSPACE_PVC=<pre-created-rwx-pvc>
 
 Verify:
   kubectl get runtimeclass {{ .Values.runtimeClass.name }}

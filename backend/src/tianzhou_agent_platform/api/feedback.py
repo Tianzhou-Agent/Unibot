@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from datetime import UTC, datetime, timedelta
-from typing import TypedDict
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Query, Request, Response
@@ -24,6 +25,9 @@ from tianzhou_agent_platform.core.feedback import (
     FeedbackTrendPoint,
     FeedbackUpsert,
 )
+from tianzhou_agent_platform.core.chat import TraceRecord
+
+logger = logging.getLogger(__name__)
 
 
 def create_feedback_router() -> APIRouter:
@@ -161,17 +165,48 @@ def create_feedback_router() -> APIRouter:
         require_platform_admin(request)
         data_repository = repository(request)
         feedback = await data_repository.get_feedback(feedback_id)
-        traces = await data_repository.list_traces()
-        context = sorted(
-            (
-                trace
-                for trace in traces
-                if trace.conversation_id == feedback.conversation_id
-                and trace.created_at <= feedback.created_at
-            ),
-            key=lambda trace: trace.created_at,
-        )
-        return FeedbackDetail(feedback=feedback, context_traces=context)
+        # New OBS query path first (design 12.4); legacy repository fallback
+        # keeps pre-migration traces readable during the cut-over phase.
+        context: list[Any] = []
+        query = getattr(request.app.state, "obs_query", None)
+        if query is not None and query.enabled:
+            try:
+                context = await query.feedback_context(
+                    tenant_id=feedback.tenant_id,
+                    user_id=feedback.user_id,
+                    session_id=feedback.conversation_id,
+                    before=feedback.created_at,
+                )
+            except Exception:
+                logger.exception("OBS feedback context query failed; falling back to legacy traces")
+                context = []
+        if not context:
+            traces = await data_repository.list_traces()
+            legacy = sorted(
+                (
+                    trace
+                    for trace in traces
+                    if trace.conversation_id == feedback.conversation_id
+                    and trace.created_at <= feedback.created_at
+                ),
+                key=lambda trace: trace.created_at,
+            )
+            context = [
+                {
+                    "trace_id": trace.trace_id,
+                    "root_span_id": trace.root_span_id,
+                    "conversation_id": trace.conversation_id,
+                    "user_id": trace.user_id,
+                    "tenant_id": trace.tenant_id,
+                    "status": trace.status,
+                    "created_at": trace.created_at,
+                    "completed_at": trace.completed_at,
+                    "spans": [span.model_dump(mode="json") for span in trace.spans],
+                    "events": [event.model_dump(mode="json") for event in trace.events],
+                }
+                for trace in legacy
+            ]
+        return FeedbackDetail(feedback=feedback, context_traces=cast(list[TraceRecord], context))
 
     @router.patch("/admin/feedback/{feedback_id}/case", response_model=FeedbackRecord)
     async def update_admin_feedback_case(

@@ -105,12 +105,18 @@ async def invoke_builtin(
                 status_code=503,
                 source="sandbox",
             )
+        conversation = await repository.require_conversation_actor(
+            conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         return await invoke_code_runner_tool(
             sandbox_service,
             tool_id,
             arguments,
             user_id=user_id,
             tenant_id=tenant_id,
+            workspace_id=conversation.workspace_id,
         )
     if tool_id in DOCUMENT_TOOL_IDS:
         if document_service is None:
@@ -120,6 +126,20 @@ async def invoke_builtin(
                 status_code=503,
                 source="storage",
             )
+        conversation = await repository.require_conversation_actor(
+            conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        workspace_id = conversation.workspace_id
+        workspace_storage_key = None
+        if workspace_id is not None:
+            workspace = await repository.require_workspace_actor(
+                workspace_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            workspace_storage_key = workspace.storage_key
         try:
             if tool_id in DOCUMENT_EDIT_TASK_TOOL_IDS:
                 if document_edit_task_service is None:
@@ -134,6 +154,7 @@ async def invoke_builtin(
                     arguments,
                     user_id=user_id,
                     tenant_id=tenant_id,
+                    workspace_id=workspace_id,
                 )
             return await invoke_document_tool(
                 document_service,
@@ -141,6 +162,7 @@ async def invoke_builtin(
                 arguments,
                 user_id=user_id,
                 tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
             )
         except StorageError as exc:
             raise _document_storage_error(exc, tool_id=tool_id, arguments=arguments) from exc

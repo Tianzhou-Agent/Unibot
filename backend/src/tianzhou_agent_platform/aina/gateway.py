@@ -19,6 +19,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
     AinaOutput,
 )
 from tianzhou_agent_platform.aina.security.models import Authentication
+from tianzhou_agent_platform.aina.security.destinations import require_approved_destination
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
@@ -34,13 +35,26 @@ class RemoteCapabilityGateway:
         settings: AgentSettings,
         client: httpx.AsyncClient | None = None,
         managed_runtime: ManagedAinaRuntime | None = None,
+        *,
+        enforce_destination_policy: bool = True,
     ) -> None:
         self.settings = settings
         self._client = client or httpx.AsyncClient()
         self._owns_client = client is None
         self._managed_runtime = managed_runtime
+        self._enforce_destination_policy = enforce_destination_policy
+        # HTTPX request hooks also run for redirects and A2A-discovered URLs.
+        self._client.event_hooks["request"].append(self._check_request_destination)
+
+    def require_approved_destination(self, url: str) -> None:
+        if self._enforce_destination_policy:
+            require_approved_destination(url, self.settings.capability_allowed_origins)
+
+    async def _check_request_destination(self, request: httpx.Request) -> None:
+        self.require_approved_destination(str(request.url))
 
     async def aclose(self) -> None:
+        self._client.event_hooks["request"].remove(self._check_request_destination)
         if self._owns_client:
             await self._client.aclose()
 
@@ -71,6 +85,9 @@ class RemoteCapabilityGateway:
                 source="aina",
             )
         endpoint = str(manifest.runtime.endpoint).rstrip("/")
+        self.require_approved_destination(endpoint)
+        if manifest.health_check is not None:
+            self.require_approved_destination(str(manifest.health_check))
         if manifest.runtime.protocol == "a2a":
             card = await self._resolve_a2a_card(manifest)
             result = {
@@ -131,6 +148,7 @@ class RemoteCapabilityGateway:
         user_id: str,
         tenant_id: str,
         conversation_id: str,
+        workspace_id: str | None = None,
         trace_id: str,
     ) -> tuple[Any, float]:
         validate_value(arguments, tool.input_schema, label=f"Tool {tool.tool_id} arguments")
@@ -143,13 +161,15 @@ class RemoteCapabilityGateway:
             "conversation_id": conversation_id,
             "trace_id": trace_id,
         }
+        if workspace_id is not None:
+            payload["workspace_id"] = workspace_id
         started = perf_counter()
         result = await self._request_json(
             "POST",
             str(tool.endpoint),
             authentication=tool.authentication,
             timeout=tool.timeout_seconds,
-            retries=tool.retries,
+            retries=tool.retries if tool.side_effect_level == "none" else 0,
             source="tool",
             json=payload,
             extra_headers={"Idempotency-Key": call_id},
@@ -166,6 +186,7 @@ class RemoteCapabilityGateway:
         arguments: dict[str, Any],
         call_id: str,
         conversation_id: str,
+        workspace_id: str | None = None,
         trace_id: str,
         available_tools: list[str],
     ) -> tuple[AinaInvokeResponse, float]:
@@ -183,6 +204,7 @@ class RemoteCapabilityGateway:
                 arguments=arguments,
                 call_id=call_id,
                 conversation_id=conversation_id,
+                workspace_id=workspace_id,
                 trace_id=trace_id,
                 available_tools=available_tools,
             )
@@ -217,7 +239,10 @@ class RemoteCapabilityGateway:
             session_id=conversation_id,
             conversation_id=conversation_id,
             input=arguments,
-            context={"source": "agent"},
+            context={
+                "source": "agent",
+                **({"workspace_id": workspace_id} if workspace_id is not None else {}),
+            },
             authorization={"permissions": installation.granted_permissions},
             trace={"trace_id": trace_id},
             available_tools=available_tools,
@@ -228,7 +253,7 @@ class RemoteCapabilityGateway:
             f"{str(manifest.runtime.endpoint).rstrip('/')}/invoke",
             authentication=manifest.authentication,
             timeout=self.settings.capability_timeout_seconds,
-            retries=1,
+            retries=0,
             source="aina",
             json=request.model_dump(mode="json"),
             extra_headers={"Idempotency-Key": request.request_id},
@@ -257,12 +282,15 @@ class RemoteCapabilityGateway:
             base_url=str(manifest.runtime.endpoint).rstrip("/"),
         )
         try:
-            return await resolver.get_agent_card(
+            card = await resolver.get_agent_card(
                 http_kwargs={
                     "headers": self._headers(manifest.authentication),
                     "timeout": self.settings.capability_timeout_seconds,
                 }
             )
+            for interface in card.supported_interfaces:
+                self.require_approved_destination(interface.url)
+            return card
         except (A2AClientError, httpx.HTTPError, ValueError) as exc:
             raise PlatformError(
                 "DEPENDENCY_FAILED",

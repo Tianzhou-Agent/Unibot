@@ -6,33 +6,33 @@ export default {
       colors: {
         // App surfaces
         app: {
-          bg: "#F6F8FB",
+          bg: "#FFFFFF",
           card: "#FFFFFF",
           inverse: "#0F172A",
-          soft: "#F8FAFC",
+          soft: "#FAFAFA",
         },
         // Text
         ink: {
-          DEFAULT: "#0F172A",
-          muted: "#64748B",
-          subtle: "#94A3B8",
+          DEFAULT: "#0F1115",
+          muted: "#61666B",
+          subtle: "#81858C",
           inverse: "#F8FAFC",
-          onDark: "#E2E8F0",
-          onDarkMuted: "#93C5FD",
+          onDark: "#0F1115",
+          onDarkMuted: "#81858C",
         },
         // Accent (blue)
         accent: {
-          DEFAULT: "#2563EB",
-          hover: "#1D4ED8",
-          active: "#1D4ED8",
-          soft: "#EFF6FF",
-          softer: "#DBEAFE",
-          ring: "#BFDBFE",
+          DEFAULT: "#4176E6",
+          hover: "#3569D7",
+          active: "#3569D7",
+          soft: "#E4EDFD",
+          softer: "#EDF3FE",
+          ring: "#D3E2FF",
         },
         // Borders
         line: {
-          DEFAULT: "#E2E8F0",
-          strong: "#CBD5E1",
+          DEFAULT: "rgba(0, 0, 0, 0.04)",
+          strong: "rgba(0, 0, 0, 0.10)",
           dark: "#334155",
         },
         // Status
@@ -45,17 +45,17 @@ export default {
         },
         // Sidebar dark
         sidebar: {
-          bg: "#0F172A",
-          surface: "#1E293B",
-          border: "#334155",
-          hover: "#1E293B",
-          active: "#1D4ED8",
+          bg: "#FAFAFA",
+          surface: "#FFFFFF",
+          border: "rgba(0, 0, 0, 0.04)",
+          hover: "#EBEEF2",
+          active: "#EBEEF2",
         },
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
-        display: ["Geist", "Inter", "system-ui", "sans-serif"],
-        mono: ["Geist Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        sans: ["Noto Sans SC", "Inter", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        display: ["Noto Sans SC", "Inter", "system-ui", "sans-serif"],
+        mono: ["JetBrains Mono", "Geist Mono", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       borderRadius: {
         DEFAULT: "8px",
@@ -64,8 +64,8 @@ export default {
         xl: "14px",
       },
       boxShadow: {
-        card: "0 1px 2px 0 rgba(15, 23, 42, 0.04)",
-        soft: "0 1px 3px 0 rgba(15, 23, 42, 0.06)",
+        card: "0 1px 2px 0 rgba(15, 17, 21, 0.04)",
+        soft: "0 2px 12px 0 rgba(26, 26, 26, 0.05)",
       },
     },
   },

@@ -97,7 +97,7 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
     )
     assert any(item["function"]["name"].startswith("builtin_memory_") for item in llm.calls[1]["tools"])
     assert all(
-        item["function"]["name"].startswith(("builtin_memory_", "aina_"))
+        item["function"]["name"].startswith(("builtin_memory_", "aina_", "builtin_task_"))
         for item in llm.calls[1]["tools"]
     )
     assert "持久记忆管理" in llm.calls[1]["messages"][0]["content"]
@@ -148,7 +148,7 @@ def test_builtin_aina_activation_rejects_arguments_then_allows_model_retry() -> 
         for item in llm.calls[2]["tools"]
     )
     assert all(
-        item["function"]["name"].startswith(("builtin_memory_", "aina_"))
+        item["function"]["name"].startswith(("builtin_memory_", "builtin_task_", "aina_"))
         for item in llm.calls[2]["tools"]
     )
     assert sum(event["kind"] == "routing.scope.activated" for event in trace["events"]) == 1

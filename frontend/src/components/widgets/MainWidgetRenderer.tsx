@@ -18,6 +18,8 @@ const ImageRecognitionMainWidget = lazy(() =>
 export function MainWidgetRenderer({
   ainaId,
   widget,
+  workspaceId,
+  documentName,
   disabled = false,
   onOpenAina,
   onPrompt,
@@ -26,6 +28,8 @@ export function MainWidgetRenderer({
 }: {
   ainaId: string;
   widget: WidgetDefinition;
+  workspaceId?: string | null;
+  documentName?: string | null;
   disabled?: boolean;
   onOpenAina?: (ainaId: string) => void;
   onPrompt?: (prompt: string) => void;
@@ -36,7 +40,7 @@ export function MainWidgetRenderer({
   if (ainaId === "unibot-code-runner") {
     return (
       <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载代码编辑器…</div>}>
-        <CodeRunnerMainWidget />
+        <CodeRunnerMainWidget workspaceId={workspaceId} />
       </Suspense>
     );
   }
@@ -47,7 +51,7 @@ export function MainWidgetRenderer({
       </Suspense>
     );
   }
-  if (widget.kind === "document") return <DocumentWidget disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
+  if (widget.kind === "document") return <DocumentWidget workspaceId={workspaceId} initialDocumentName={documentName} disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   return <DeclarativeMainWidget widget={widget} disabled={disabled} onOpenAina={onOpenAina} onPrompt={onPrompt} />;
 }

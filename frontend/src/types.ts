@@ -136,6 +136,17 @@ export interface SettingsResponse {
 
 export type ConversationStatus = "active" | "archived" | "deleted";
 
+export interface WorkspaceRecord {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  storage_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface BackendMessage {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
@@ -157,6 +168,7 @@ export interface ConversationRecord {
   id: string;
   user_id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   title: string;
   category: string;
   status: ConversationStatus;
@@ -426,7 +438,7 @@ export interface ChatResponse {
   status: "completed" | "approval_required" | "failed";
   trace_id: string;
   iterations: number;
-  usage: { input_tokens: number; output_tokens: number };
+  usage: { input_tokens: number; output_tokens: number; estimated?: boolean };
   approval?: ApprovalRecord | null;
   widgets: WidgetDefinition[];
 }
@@ -484,6 +496,7 @@ export interface SandboxRecord {
   id: string;
   user_id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   image: string;
   driver: "local" | "kubernetes";
   status: SandboxStatus;
@@ -501,6 +514,7 @@ export interface SandboxExecution {
   sandbox_id: string;
   user_id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   language: SandboxExecutionLanguage;
   script: string;
   working_directory: string;
@@ -826,4 +840,34 @@ export interface CapabilityOption {
   value: string;
   label: string;
   kind: "tool" | "aina" | "builtin";
+}
+
+export type TaskStatus = "pending" | "in_progress" | "verifying" | "completed" | "skipped" | "failed";
+export type TaskVerificationStatus = "none" | "pending" | "passed" | "failed" | "error";
+
+export interface SessionTaskNode {
+  task_id: string;
+  session_id: string;
+  owner_user_id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  reason: string;
+  evidence: Record<string, unknown>[];
+  verification_status: TaskVerificationStatus;
+  verification_reason: string;
+  verified_at?: string | null;
+  parent_task_id?: string | null;
+  depth: number;
+  sort_order: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  children: SessionTaskNode[];
+}
+
+export interface TaskTreeSnapshot {
+  session_id: string;
+  revision: number;
+  tasks: SessionTaskNode[];
 }

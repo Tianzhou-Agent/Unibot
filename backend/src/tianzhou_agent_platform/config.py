@@ -4,7 +4,7 @@ import socket
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +47,11 @@ class AgentSettings(BaseSettings):
         default=15.0,
         gt=0,
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_TIMEOUT_SECONDS", "capability_timeout_seconds"),
+    )
+    capability_allowed_origins: str = Field(
+        default="",
+        validation_alias=AliasChoices("UNIBOT_CAPABILITY_ALLOWED_ORIGINS", "capability_allowed_origins"),
+        description="Comma-separated approved HTTP(S) origins for remote Tools and AINA; empty denies all.",
     )
     max_agent_iterations: int = Field(
         default=8,
@@ -101,6 +106,10 @@ class AgentSettings(BaseSettings):
         default="local",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_DRIVER", "sandbox_driver"),
     )
+    sandbox_allow_unsafe_local: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL", "sandbox_allow_unsafe_local"),
+    )
     sandbox_workspace_root: Path = Field(
         default=_BACKEND_ROOT.parent / "data" / "sandboxes",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_WORKSPACE_ROOT", "sandbox_workspace_root"),
@@ -134,6 +143,24 @@ class AgentSettings(BaseSettings):
         default=Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"),
         validation_alias=AliasChoices("UNIBOT_SANDBOX_KUBERNETES_CA_FILE", "sandbox_kubernetes_ca_file"),
     )
+    sandbox_kubernetes_workspace_pvc: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=253,
+        pattern=r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$",
+        validation_alias=AliasChoices(
+            "UNIBOT_SANDBOX_KUBERNETES_WORKSPACE_PVC",
+            "sandbox_kubernetes_workspace_pvc",
+        ),
+    )
+
+    @field_validator("sandbox_kubernetes_workspace_pvc", mode="before")
+    @classmethod
+    def empty_workspace_pvc_disables_kubernetes_workspace_mount(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     sandbox_runtime_class: str = Field(
         default="gvisor",
         validation_alias=AliasChoices("UNIBOT_SANDBOX_RUNTIME_CLASS", "sandbox_runtime_class"),
@@ -200,6 +227,77 @@ class AgentSettings(BaseSettings):
     admin_identities: str = Field(
         default="",
         validation_alias=AliasChoices("UNIBOT_ADMIN_IDENTITIES", "admin_identities"),
+        description="Comma-separated provisioned immutable user IDs; email addresses and logins never grant admin.",
+    )
+    obs_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_OBS_ENABLED", "obs_enabled"),
+        description="Enable the OTel + Redis Streams + OBS MySQL pipeline.",
+    )
+    obs_wal_root: Path = Field(
+        default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "wal",
+        validation_alias=AliasChoices("UNIBOT_OBS_WAL_ROOT", "obs_wal_root"),
+    )
+    obs_wal_max_bytes: int = Field(
+        default=4 * 1024 * 1024 * 1024,
+        gt=0,
+        validation_alias=AliasChoices("UNIBOT_OBS_WAL_MAX_BYTES", "obs_wal_max_bytes"),
+        description="Legacy file-WAL limit retained for rollback compatibility.",
+    )
+    obs_redis_stream_key: str = Field(
+        default="unibot:obs:records:v1",
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_STREAM_KEY", "obs_redis_stream_key"),
+    )
+    obs_redis_group_name: str = Field(
+        default="unibot-obs-mysql-v1",
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_GROUP", "obs_redis_group_name"),
+    )
+    obs_redis_dlq_key: str = Field(
+        default="unibot:obs:records:dlq:v1",
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_DLQ_KEY", "obs_redis_dlq_key"),
+    )
+    obs_redis_producers_key: str = Field(
+        default="unibot:obs:producers:v1",
+        validation_alias=AliasChoices(
+            "UNIBOT_OBS_REDIS_PRODUCERS_KEY",
+            "obs_redis_producers_key",
+        ),
+    )
+    obs_redis_wait_replicas: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_WAIT_REPLICAS", "obs_redis_wait_replicas"),
+    )
+    obs_redis_durability_timeout_ms: int = Field(
+        default=10_000,
+        gt=0,
+        validation_alias=AliasChoices(
+            "UNIBOT_OBS_REDIS_DURABILITY_TIMEOUT_MS",
+            "obs_redis_durability_timeout_ms",
+        ),
+    )
+    obs_redis_claim_idle_ms: int = Field(
+        default=60_000,
+        gt=0,
+        validation_alias=AliasChoices("UNIBOT_OBS_REDIS_CLAIM_IDLE_MS", "obs_redis_claim_idle_ms"),
+    )
+    obs_redis_producer_stale_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "UNIBOT_OBS_REDIS_PRODUCER_STALE_SECONDS",
+            "obs_redis_producer_stale_seconds",
+        ),
+    )
+    obs_raw_root: Path = Field(
+        default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "raw",
+        validation_alias=AliasChoices("UNIBOT_OBS_RAW_ROOT", "obs_raw_root"),
+    )
+    obs_retention_days: int = Field(
+        default=90,
+        ge=1,
+        validation_alias=AliasChoices("UNIBOT_OBS_RETENTION_DAYS", "obs_retention_days"),
+        description="Retention for OBS detail rows and raw IO files (data governance decides).",
     )
     system_prompt: str = Field(
         default=(
@@ -227,15 +325,14 @@ class AgentSettings(BaseSettings):
         self,
         *,
         user_id: str,
-        email: str,
+        email: str = "",
         github_login: str | None = None,
     ) -> bool:
         allowed = {
-            identity.strip().casefold()
+            identity.strip()
             for identity in self.admin_identities.split(",")
             if identity.strip()
         }
-        identities = {user_id.casefold(), email.casefold()}
-        if github_login:
-            identities.add(github_login.casefold())
-        return bool(allowed & identities)
+        # Registration does not verify claimed email ownership, and external
+        # login names may change. Only the platform's immutable user ID is trusted.
+        return user_id in allowed
