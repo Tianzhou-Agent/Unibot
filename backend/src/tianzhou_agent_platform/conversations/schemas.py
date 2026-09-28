@@ -53,8 +53,10 @@ class ApprovalRecord(StrictModel):
     resolved_at: datetime | None = None
     # Opaque native execution reference (runtime version / thread / interrupt id).
     # LangChain objects are never embedded in domain models.
-    runtime_ref: dict[str, Any] | None = None
-    run_generation: int = 0
+    # Both fields are additive: they are left out of serialized records while they hold their defaults, so
+    # approvals stay readable by the previous release (whose strict model forbids unknown keys) on rollback.
+    runtime_ref: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
+    run_generation: int = Field(default=0, exclude_if=lambda value: value == 0)
 
 
 class ChatResponse(StrictModel):

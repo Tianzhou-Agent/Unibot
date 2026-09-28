@@ -1,5 +1,7 @@
 """Host-owned tools for application discovery, navigation, and clarification."""
 
+import hashlib
+import re
 from typing import Any
 from urllib.parse import urlencode
 
@@ -209,7 +211,7 @@ async def invoke_platform_tool(
         widget = await list_app_widget(repository, user_id=user_id, tenant_id=tenant_id)
         return {"count": len(widget.apps), "aina_ids": [item.aina_id for item in widget.apps]}, [widget]
     if tool_id == DESCRIBE_AINA_TOOL_ID:
-        aina_id = str(arguments.get("aina_id") or "").strip()
+        aina_id = _aina_id_argument(arguments)
         if not aina_id:
             raise PlatformError("INVALID_REQUEST", "describe_aina requires aina_id")
         return await describe_aina(
@@ -219,7 +221,7 @@ async def invoke_platform_tool(
             tenant_id=tenant_id,
         ), []
     if tool_id == OPEN_AINA_TOOL_ID:
-        aina_id = str(arguments.get("aina_id") or "").strip()
+        aina_id = _aina_id_argument(arguments)
         if not aina_id:
             raise PlatformError("INVALID_REQUEST", "open_aina requires aina_id")
         canvas = await open_aina(
@@ -293,3 +295,19 @@ def _default_main_widget(record: AinaRecord) -> WidgetDefinition:
         title=manifest.aina.name,
         description=manifest.aina.description,
     )
+
+
+_ENTRY_FUNCTION_NAME = re.compile(r"^aina_(?P<aina_id>.+)_(?P<digest>[0-9a-f]{8})$")
+
+
+def _aina_id_argument(arguments: dict[str, Any]) -> str:
+    """The aina_id argument, also accepting the AINA's advertised entry function name.
+
+    Models sometimes pass the entry function they were shown (``aina_<id>_<digest>``) instead of the id; it is
+    mapped back only when the digest proves it is that AINA's entry function.
+    """
+    value = str(arguments.get("aina_id") or "").strip()
+    match = _ENTRY_FUNCTION_NAME.match(value)
+    if match and hashlib.sha1(f"aina:{match['aina_id']}".encode()).hexdigest()[:8] == match["digest"]:
+        return match["aina_id"]
+    return value

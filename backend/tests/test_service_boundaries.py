@@ -173,3 +173,25 @@ def test_native_messages_are_execution_representation() -> None:
     assert type(msg) is not type(native)
     assert issubclass(type(native), object)
     assert not isinstance(msg, (HumanMessage, AIMessage, ToolMessage))
+
+
+def test_default_approval_record_serializes_like_the_previous_release() -> None:
+    # Rollback safety: the previous release's strict ApprovalRecord rejects unknown keys at startup.
+    import json
+
+    from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
+
+    approval = ApprovalRecord(
+        id="approval_1",
+        conversation_id="conv_1",
+        user_id="u",
+        tenant_id="t",
+        trace_id="trace_1",
+        tool_calls=[],
+        capability_names=[],
+    )
+    for dumped in (approval.model_dump(), approval.model_dump(mode="json"), json.loads(approval.model_dump_json())):
+        assert "runtime_ref" not in dumped and "run_generation" not in dumped
+    native = approval.model_copy(update={"runtime_ref": {"thread_id": "lc-v2:conv_1"}, "run_generation": 2})
+    assert native.model_dump()["runtime_ref"] == {"thread_id": "lc-v2:conv_1"}
+    assert ApprovalRecord.model_validate(native.model_dump(mode="json")).run_generation == 2

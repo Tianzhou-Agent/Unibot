@@ -577,3 +577,22 @@ def test_aina_widget_output_is_returned_and_persisted() -> None:
     assert response.json()["widgets"][0]["id"] == "report-result"
     assert response.json()["widgets"][0]["kind"] == "markdown"
     assert conversation.json()["messages"][-1]["widgets"][0]["markdown"].startswith("## On track")
+
+
+def test_open_aina_accepts_the_advertised_entry_function_name() -> None:
+    # Live models sometimes pass the entry function they were shown instead of the AINA id.
+    from tianzhou_agent_platform.core.agent import _function_name
+
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_open_aina_",
+                arguments=json.dumps({"aina_id": _function_name("aina", "unibot-memory")}),
+            ),
+            assistant("Opened."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post("/chat", json={"message": "open memory", "capability": "builtin:open_aina"})
+
+    assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-memory"
