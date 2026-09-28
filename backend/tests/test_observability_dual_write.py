@@ -16,11 +16,12 @@ from typing import Any
 
 import pytest
 
-from tianzhou_agent_platform.core.observability import ObservabilityAspect
-from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
-from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor, setup_tracer_provider
-from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord
+from tianzhou_agent_platform.observability.service import ObservabilityAspect
+from tianzhou_agent_platform.observability.writer import ObsIngestWorker
+from tianzhou_agent_platform.observability.telemetry import DurableWalSpanProcessor, setup_tracer_provider
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
+from tianzhou_agent_platform.observability.models import LLMCallRecord
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_wal import (
     ObsRecord,
@@ -101,7 +102,7 @@ async def pipeline(tmp_path: Path):
 async def _fresh_resume_aspect(
     pipeline: dict[str, Any], producer_instance_id: str
 ) -> tuple[Any, WalWriter, ObservabilityAspect]:
-    from tianzhou_agent_platform.core.conversation import ConversationCreate
+    from tianzhou_agent_platform.conversations.models import ConversationCreate
 
     fresh_repo = InMemoryRepository()
     conversation = await fresh_repo.create_conversation(
@@ -615,9 +616,9 @@ async def test_cross_instance_approval_resume_rebuilds_trace_context(pipeline) -
     """A new ObservabilityAspect (other instance / after restart) recovers the
     trace context from the OBS pipeline and keeps the same trace id for
     resumed spans (review round 3, P1)."""
-    from tianzhou_agent_platform.core.observability import ObservabilityAspect as Aspect
-    from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor as Processor
-    from tianzhou_agent_platform.core.telemetry import setup_tracer_provider as setup
+    from tianzhou_agent_platform.observability.service import ObservabilityAspect as Aspect
+    from tianzhou_agent_platform.observability.telemetry import DurableWalSpanProcessor as Processor
+    from tianzhou_agent_platform.observability.telemetry import setup_tracer_provider as setup
 
     aspect = pipeline["aspect"]
     wal = pipeline["wal"]
@@ -680,7 +681,7 @@ async def test_fallback_records_use_real_otel_span_ids(pipeline) -> None:
     """The direct-write fallback must use 16-hex OTel span ids (mapped at span
     creation), not 37-char legacy ids that overflow VARCHAR(32)
     (review round 3, P1)."""
-    from tianzhou_agent_platform.core.chat import TraceRecord, TraceSpan
+    from tianzhou_agent_platform.observability.models import TraceRecord, TraceSpan
     aspect = pipeline["aspect"]
     aspect._otel_trace_ids["trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] = "a" * 32  # noqa: SLF001
     aspect._otel_span_ids["span_cccccccccccccccccccc"] = "b" * 16  # noqa: SLF001
@@ -725,9 +726,9 @@ async def test_concurrent_resume_builds_single_continuation_root(pipeline) -> No
     continuation root span (review round 3 should-fix)."""
     import asyncio as asyncio_mod
 
-    from tianzhou_agent_platform.core.observability import ObservabilityAspect as Aspect
-    from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor as Processor
-    from tianzhou_agent_platform.core.telemetry import setup_tracer_provider as setup
+    from tianzhou_agent_platform.observability.service import ObservabilityAspect as Aspect
+    from tianzhou_agent_platform.observability.telemetry import DurableWalSpanProcessor as Processor
+    from tianzhou_agent_platform.observability.telemetry import setup_tracer_provider as setup
 
     aspect = pipeline["aspect"]
     wal = pipeline["wal"]
@@ -788,11 +789,11 @@ async def test_fresh_instance_resume_without_obs_row(pipeline) -> None:
     """A truly fresh instance (empty repository, no OBS row yet) must still
     recover the trace context from the business conversation record and the
     legacy id (review round 4, P1)."""
-    from tianzhou_agent_platform.core.conversation import ConversationCreate
-    from tianzhou_agent_platform.core.observability import ObservabilityAspect as Aspect
-    from tianzhou_agent_platform.core.repository import InMemoryRepository as Repo
-    from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor as Processor
-    from tianzhou_agent_platform.core.telemetry import setup_tracer_provider as setup
+    from tianzhou_agent_platform.conversations.models import ConversationCreate
+    from tianzhou_agent_platform.observability.service import ObservabilityAspect as Aspect
+    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository as Repo
+    from tianzhou_agent_platform.observability.telemetry import DurableWalSpanProcessor as Processor
+    from tianzhou_agent_platform.observability.telemetry import setup_tracer_provider as setup
 
     fresh_repo = Repo()
     conversation = await fresh_repo.create_conversation(
@@ -924,11 +925,11 @@ async def test_fresh_instance_full_pipeline(pipeline) -> None:
     """Complete cold-start resume flow on a truly fresh instance:
     event -> span start -> span finish -> trace finish -> WAL replay
     (review round 5: approval events must not be lost, spans must finish)."""
-    from tianzhou_agent_platform.core.conversation import ConversationCreate
-    from tianzhou_agent_platform.core.observability import ObservabilityAspect as Aspect
-    from tianzhou_agent_platform.core.repository import InMemoryRepository as Repo
-    from tianzhou_agent_platform.core.telemetry import DurableWalSpanProcessor as Processor
-    from tianzhou_agent_platform.core.telemetry import setup_tracer_provider as setup
+    from tianzhou_agent_platform.conversations.models import ConversationCreate
+    from tianzhou_agent_platform.observability.service import ObservabilityAspect as Aspect
+    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository as Repo
+    from tianzhou_agent_platform.observability.telemetry import DurableWalSpanProcessor as Processor
+    from tianzhou_agent_platform.observability.telemetry import setup_tracer_provider as setup
 
     fresh_repo = Repo()
     conversation = await fresh_repo.create_conversation(
@@ -1288,7 +1289,7 @@ def test_span_to_record_mapping() -> None:
 def test_span_suppression_is_captured_when_span_starts() -> None:
     from opentelemetry.sdk.trace import TracerProvider
 
-    from tianzhou_agent_platform.core.observation_context import suppress_observation
+    from tianzhou_agent_platform.observability.context import suppress_observation
 
     class FakeWal:
         producer_instance_id = "node-1-abc"

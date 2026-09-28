@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
-from tianzhou_agent_platform.core.conversation import Conversation
+from tianzhou_agent_platform.conversations.models import Conversation
 
 if TYPE_CHECKING:
-    from tianzhou_agent_platform.core.agent import Capability
+    from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
 
 
 async def aina_graph(

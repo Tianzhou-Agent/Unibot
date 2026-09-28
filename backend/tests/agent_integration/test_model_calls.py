@@ -8,7 +8,7 @@ import pytest
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
-from tianzhou_agent_platform.core.agent import _native_to_wire
+from tianzhou_agent_platform.services.agent_integration.history import native_to_wire as _native_to_wire
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.run_events import RunEventPublisher
 from tianzhou_agent_platform.services.agent_integration.model_calls import (

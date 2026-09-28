@@ -9,8 +9,7 @@ from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskS
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.core.base import StrictModel
-from tianzhou_agent_platform.core.agent import AgentRuntime
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.vision.client import VisionClient
@@ -86,10 +85,6 @@ def repository(request: Request) -> InMemoryRepository:
 
 def settings(request: Request) -> AgentSettings:
     return cast(AgentSettings, request.app.state.settings)
-
-
-def runtime(request: Request) -> AgentRuntime:
-    return cast(AgentRuntime, request.app.state.agent_runtime)
 
 
 def conversation_service(request: Request):

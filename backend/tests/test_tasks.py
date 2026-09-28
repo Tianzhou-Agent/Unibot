@@ -11,9 +11,9 @@ from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.base import utc_now
-from tianzhou_agent_platform.core.conversation import ConversationCreate
+from tianzhou_agent_platform.conversations.models import ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.tasks.models import (
     GateResult,

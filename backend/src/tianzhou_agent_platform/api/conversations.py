@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Request, Response, status
 
-from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, repository, require_actor_ownership
-from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate
+from tianzhou_agent_platform.api.dependencies import (
+    actor_scope,
+    bind_actor,
+    chat_service,
+    repository,
+    require_actor_ownership,
+)
+from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate, ConversationUpdate
 
 
 def create_conversation_router() -> APIRouter:
@@ -54,7 +60,7 @@ def create_conversation_router() -> APIRouter:
     async def delete_conversation(conversation_id: str, request: Request) -> Response:
         existing = await repository(request).get_conversation(conversation_id)
         require_actor_ownership(request, user_id=existing.user_id, tenant_id=existing.tenant_id)
-        await repository(request).set_conversation_status(conversation_id, "deleted")
+        await chat_service(request).delete_conversation(conversation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/conversations/{conversation_id}/restore", response_model=Conversation)

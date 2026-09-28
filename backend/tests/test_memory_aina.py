@@ -6,7 +6,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.llm import LLMResult
+from tests.support.fake_llm import LLMResult
 from tianzhou_agent_platform.main import create_app
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 

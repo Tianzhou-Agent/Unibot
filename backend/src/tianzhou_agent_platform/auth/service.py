@@ -15,7 +15,7 @@ from pwdlib import PasswordHash
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 _SESSION_TOKEN_TYPE = "session"
 _OAUTH_TOKEN_TYPE = "github-oauth"

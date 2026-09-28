@@ -19,7 +19,7 @@ from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import conflict
 
 if TYPE_CHECKING:
-    from tianzhou_agent_platform.core.repository import InMemoryRepository
+    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 ScheduleType = Literal["interval", "cron"]
 

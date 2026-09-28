@@ -3,11 +3,7 @@ from pydantic import SecretStr
 
 from tests.support.fake_llm import ScriptedLLM, assistant
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.trace_details import (
-    REDACTED,
-    redact_trace_data,
-    sanitize_trace_data,
-)
+from tianzhou_agent_platform.observability.trace_details import REDACTED, redact_trace_data, sanitize_trace_data
 from tianzhou_agent_platform.main import create_app
 
 

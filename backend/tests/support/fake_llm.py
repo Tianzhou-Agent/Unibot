@@ -48,26 +48,25 @@ def _to_ai_message(result: LLMResult | AIMessage | Any) -> AIMessage:
         content = message.get("content") or ""
         tool_calls = message.get("tool_calls") or []
         normalized = []
+        invalid = []
         for call in tool_calls:
             function = call.get("function") or {}
+            name = function.get("name") or call.get("name")
             args = function.get("arguments") or call.get("args") or "{}"
             if isinstance(args, str):
                 try:
                     args = json.loads(args) if args.strip() else {}
-                except json.JSONDecodeError:
-                    args = {"_raw": args}
-            normalized.append(
-                {
-                    "name": function.get("name") or call.get("name"),
-                    "args": args,
-                    "id": call.get("id") or "call_1",
-                }
-            )
+                except json.JSONDecodeError as exc:
+                    # Like ChatOpenAI: unparseable arguments become an invalid tool call.
+                    invalid.append({"name": name, "args": args, "id": call.get("id") or "call_1", "error": str(exc)})
+                    continue
+            normalized.append({"name": name, "args": args, "id": call.get("id") or "call_1"})
         finish = getattr(result, "finish_reason", None) or message.get("finish_reason")
         return AIMessage(
             content=content,
             tool_calls=normalized or [],
-            response_metadata={"finish_reason": finish or ("tool_calls" if normalized else "stop")},
+            invalid_tool_calls=invalid,
+            response_metadata={"finish_reason": finish or ("tool_calls" if normalized or invalid else "stop")},
             usage_metadata=(
                 {
                     "input_tokens": getattr(result, "input_tokens", 5),
@@ -158,6 +157,15 @@ class ScriptedLLM(BaseChatModel):
                         }
                         for c in raw_calls
                     ]
+                invalid_calls = getattr(message, "invalid_tool_calls", None) or []
+                if invalid_calls:
+                    item["tool_calls"] = [
+                        *item.get("tool_calls", []),
+                        *(
+                            {"id": c.get("id"), "type": "function", "function": {"name": c.get("name"), "arguments": c.get("args")}}
+                            for c in invalid_calls
+                        ),
+                    ]
                 wire_messages.append(item)
             else:
                 wire_messages.append(dict(message))  # type: ignore[arg-type]
@@ -230,63 +238,6 @@ class ScriptedLLM(BaseChatModel):
     ) -> Any:
         for chunk in self._stream(messages, stop=stop, run_manager=run_manager, **kwargs):
             yield chunk
-
-    async def complete(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        tool_choice: dict[str, Any] | str | None = None,
-        event_sink: Any | None = None,
-        **_: Any,
-    ) -> LLMResult:
-        """Legacy-shaped entry point used by remaining dual-path callers."""
-        native_messages: list[BaseMessage] = []
-        for item in messages:
-            role = item.get("role")
-            content = item.get("content") or ""
-            if role == "user":
-                from langchain_core.messages import HumanMessage
-
-                native_messages.append(HumanMessage(content=content))
-            elif role == "system":
-                from langchain_core.messages import SystemMessage
-
-                native_messages.append(SystemMessage(content=content))
-            elif role == "tool":
-                from langchain_core.messages import ToolMessage
-
-                native_messages.append(
-                    ToolMessage(content=content, tool_call_id=item.get("tool_call_id") or "c1", name=item.get("name") or "")
-                )
-            else:
-                native_messages.append(AIMessage(content=content, tool_calls=[]))
-        self._bound = {**self._bound, "tools": tools, "tool_choice": tool_choice}
-        message = self._next(native_messages, {"tools": tools, "tool_choice": tool_choice})
-        if event_sink is not None and message.content:
-            await event_sink({"type": "message.delta", "delta": str(message.content)})
-        tool_calls = []
-        for call in message.tool_calls or []:
-            tool_calls.append(
-                {
-                    "id": call.get("id"),
-                    "type": "function",
-                    "function": {
-                        "name": call.get("name"),
-                        "arguments": json.dumps(call.get("args") or {}, ensure_ascii=False),
-                    },
-                }
-            )
-        return LLMResult(
-            message={
-                "role": "assistant",
-                "content": message.content if isinstance(message.content, str) else "",
-                "tool_calls": tool_calls or None,
-            },
-            input_tokens=5,
-            output_tokens=3,
-            finish_reason="tool_calls" if tool_calls else "stop",
-        )
 
 
 def assistant(content: str, *, input_tokens: int = 5, output_tokens: int = 3) -> LLMResult:

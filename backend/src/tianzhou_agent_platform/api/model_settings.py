@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, repository, settings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.model_settings import (
+from tianzhou_agent_platform.model_providers.models import (
     ActiveModel,
     DiscoveredModel,
     ModelActor,

@@ -73,6 +73,10 @@ class ModelProviderService:
             return ActiveModel(source="environment", model=default_model)
         return ActiveModel(source="unconfigured")
 
+    async def default_runtime(self, *, user_id: str, tenant_id: str) -> ModelRuntimeConfig | None:
+        """The model the actor selected as default, or None to use the configured model."""
+        return await self._repo.get_default_model_runtime(user_id=user_id, tenant_id=tenant_id)
+
     async def resolve_runtime(
         self,
         *,

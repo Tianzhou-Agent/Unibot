@@ -1,113 +1,105 @@
-"""Phase 2: native summarization policy and archive-before-compaction."""
+"""Archive-before-compaction: the transcript hook and turn-retaining summarization of the runtime."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from tianzhou_agent_platform.services.agent_integration.context import (
-    UNIBOT_SUMMARY_PROMPT,
-    build_summarization_middleware,
-    projection_messages,
-)
-from tianzhou_agent_platform.services.agent_integration.history import (
-    archive_before_compaction,
-    native_to_archive,
-)
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.core.agent_runtime import build_agent
+from tianzhou_agent_platform.core.agent_runtime.middleware.summarization import TurnSummarizationMiddleware
+from tianzhou_agent_platform.core.agent_runtime.middleware.transcript import TranscriptHookMiddleware
+from tianzhou_agent_platform.services.agent_integration.context import count_message_tokens
+from tianzhou_agent_platform.services.agent_integration.history import TranscriptArchiver
 from tests.support.fake_chat_model import ScriptedChatModel, assistant
 
 
-def test_summarization_middleware_uses_unibot_prompt_and_keep() -> None:
-    model = ScriptedChatModel(responses=[assistant("SUMMARY")])
-    mw = build_summarization_middleware(
-        model=model,
-        trigger=("messages", 12),
-        keep=("messages", 4),
-    )
-    assert mw.summary_prompt == UNIBOT_SUMMARY_PROMPT
-    assert mw.keep == ("messages", 4)
-    assert mw.trigger == ("messages", 12)
+OLD_QUESTION = "old question " * 40
+OLD_ANSWER = "old answer " * 40
 
 
-def test_projection_messages_are_transient_annotations() -> None:
-    text = projection_messages(
-        ui_context="user is on the dashboard",
-        memory_context=["likes dark mode"],
-        current_tasks=["write report"],
-    )
-    assert "UI context" in text
-    assert "Memory" in text
-    assert "Current tasks" in text
-    # Projection is a prompt fragment, not a Message archive record.
-    assert not isinstance(text, HumanMessage)
+class RecordingConversations:
+    def __init__(self) -> None:
+        self.archived: list[Any] = []
+
+    async def append_messages_idempotent(self, conversation_id: str, messages: list[Any]) -> None:
+        self.archived.extend(messages)
 
 
-async def test_archive_before_compaction_preserves_originals() -> None:
+class RecordingObserver:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
 
-    from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate
-    from tianzhou_agent_platform.conversations.service import ConversationService
+    async def started(self, **details: Any) -> None:
+        self.events.append(("started", details))
 
-    archived: list = []
+    async def completed(self, **details: Any) -> None:
+        self.events.append(("completed", details))
 
-    class FakeRepo:
-        async def create_conversation(self, payload: ConversationCreate) -> Conversation:
-            return Conversation(
-                id="conv1",
-                user_id=payload.user_id,
-                tenant_id=payload.tenant_id,
-                title=payload.title,
-            )
+    async def failed(self, error: Exception, **details: Any) -> None:
+        self.events.append(("failed", {"error": str(error), **details}))
 
-        async def get_conversation(self, conversation_id: str):
-            return Conversation(
-                id=conversation_id, user_id="u", tenant_id="t", title="x"
-            )
 
-        async def update_conversation(self, conversation_id: str, payload):
-            return None
+def _archiver(conversations: RecordingConversations, archived_ids: list[str] = []) -> TranscriptArchiver:  # noqa: B006
+    return TranscriptArchiver(conversations, conversation_id="conv1", trace_id="trace_1", archived_ids=archived_ids)
 
-        async def delete_conversation(self, conversation_id: str) -> bool:
-            return True
 
-        async def list_conversations(self, *, user_id: str, tenant_id: str, workspace_id=None):
-            return []
-
-        async def append_messages(self, conversation_id: str, messages):
-            archived.extend(messages)
-            return Conversation(id=conversation_id, user_id="u", tenant_id="t", title="x")
-
-        async def create_approval(self, approval):
-            return approval
-
-        async def get_approval(self, approval_id: str):
-            return None
-
-        async def update_approval(self, approval_id: str, **fields):
-            return None
-
-        async def list_approvals(self, *, conversation_id: str, status: str | None = None):
-            return []
-
-    service = ConversationService(FakeRepo())
+async def test_archiver_appends_each_message_once_in_the_archive_format() -> None:
+    conversations = RecordingConversations()
+    archiver = _archiver(conversations, archived_ids=["seeded"])
+    widget = WidgetDefinition(id="w1", kind="markdown", title="Done", markdown="# Done")
     messages = [
-        HumanMessage(content="q", id="m1"),
-        AIMessage(content="a", id="m2"),
-        ToolMessage(content="r", tool_call_id="c1", name="t", id="m3"),
+        HumanMessage(content="seeded", id="seeded"),
+        HumanMessage(content="summary", id="s", additional_kwargs={"lc_source": "summarization"}),
+        AIMessage(content="", id="a1", tool_calls=[{"id": "c1", "name": "demo", "args": {"x": 1}}]),
+        ToolMessage(content='{"ok": true}', tool_call_id="c1", name="demo", id="t1"),
+        AIMessage(content="done", id="a2"),
     ]
-    await archive_before_compaction(service, conversation_id="conv1", messages=messages)
-    assert len(archived) == 3
-    assert archived[0].role == "user"
-    assert archived[1].role == "assistant"
-    assert archived[2].role == "tool"
-    assert archived[2].tool_call_id == "c1"
+
+    await archiver.archive(messages, widgets={"a2": [widget]})
+    await archiver.archive(messages)
+
+    assert [record.id for record in conversations.archived] == ["a1", "t1", "a2"]
+    call, result, answer = conversations.archived
+    assert call.tool_calls == [
+        {"id": "c1", "type": "function", "function": {"name": "demo", "arguments": '{"x": 1}'}}
+    ]
+    assert result.role == "tool" and result.content_type == "tool" and result.tool_call_id == "c1"
+    assert answer.widgets == [widget] and answer.content_type == "widget"
+    assert all(record.trace_id == "trace_1" for record in conversations.archived)
 
 
-def test_native_to_archive_preserves_finish_and_usage_in_content() -> None:
-    msg = AIMessage(
-        content="ok",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+async def test_originals_are_archived_before_summarization_replaces_them() -> None:
+    conversations = RecordingConversations()
+    archiver = _archiver(conversations)
+    model = ScriptedChatModel(responses=[assistant("summary of the old turn"), assistant("answer")])
+    observer = RecordingObserver()
+    summarization = TurnSummarizationMiddleware(
+        model,
+        threshold_tokens=1,
+        min_messages=2,
+        keep_turns=1,
+        max_summary_input_tokens=3_072,
+        token_counter=count_message_tokens,
+        observer=observer,
     )
-    record = native_to_archive(msg)
-    assert record.role == "assistant"
-    assert record.content == "ok"
-    assert record.id  # stable id assigned
+    agent = build_agent(model=model, middleware=[TranscriptHookMiddleware(archiver.archive), summarization])
+
+    result = await agent.ainvoke(
+        {
+            "messages": [
+                HumanMessage(content=OLD_QUESTION, id="h1"),
+                AIMessage(content=OLD_ANSWER, id="a1"),
+                HumanMessage(content="new question", id="h2"),
+            ]
+        }
+    )
+
+    working = [message.content for message in result["messages"]]
+    assert OLD_QUESTION not in working and "new question" in working
+    assert any("summary of the old turn" in str(content) for content in working)
+    assert [record.content for record in conversations.archived] == [OLD_QUESTION, OLD_ANSWER, "new question"]
+    assert [kind for kind, _ in observer.events] == ["started", "completed"]
+    assert observer.events[1][1]["summarized_message_count"] == 2
+    assert observer.events[1][1]["before_tokens"] > observer.events[1][1]["after_tokens"]

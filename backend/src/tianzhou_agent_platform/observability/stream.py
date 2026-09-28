@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from redis import asyncio as redis_async
 from redis.exceptions import ResponseError
 
-from tianzhou_agent_platform.core.observation_context import suppress_observation
+from tianzhou_agent_platform.observability.context import suppress_observation
 from tianzhou_agent_platform.store.observability_buffer import ObsBufferError, ObsRecord
 from tianzhou_agent_platform.store.observability_redis import (
     DEFAULT_DURABILITY_TIMEOUT_MS,

@@ -1,370 +1,273 @@
+"""Native provider behavior of the agent: requests the app's ChatOpenAI models send to an OpenAI-compatible API."""
+
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage
+from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.chat import LLMCallRecord
-from tianzhou_agent_platform.core.llm import OpenAICompatibleClient, _response_from_result, _result_from_message
-from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.model_settings import ModelRuntimeConfig, use_model_runtime
+from tianzhou_agent_platform.main import create_app
 
 
-@pytest.mark.asyncio
-async def test_model_output_reserve_is_sent_and_oversized_requests_are_rejected_before_network():
-    requests = []
-
-    def provider(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json={"choices": [{"finish_reason": "stop",
-            "message": {"role": "assistant", "content": "ok"}}]})
-
-    settings = AgentSettings(_env_file=None, llm_base_url="https://provider.invalid/v1",
-                             llm_api_key="test", llm_model="test", context_window_tokens=4096)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
-        client = OpenAICompatibleClient(settings, http_client)
-        await client.complete(messages=[{"role": "user", "content": "Hello"}], tools=[])
-        assert requests[0]["max_completion_tokens"] == 1024
-        with pytest.raises(PlatformError, match="context budget"):
-            await client.complete(messages=[{"role": "user", "content": "x" * 16_000}], tools=[])
-        assert len(requests) == 1
+def _completion(message: dict[str, Any], *, finish_reason: str = "stop") -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "team-model",
+            "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+        },
+    )
 
 
-@pytest.mark.asyncio
-async def test_named_tool_choice_falls_back_for_incompatible_provider() -> None:
+def _stream(*deltas: str) -> httpx.Response:
+    chunks = [
+        {
+            "id": "chat-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "team-model",
+            "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
+        }
+        for delta in deltas
+    ]
+    chunks.append(
+        {
+            "id": "chat-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "team-model",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+    )
+    body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, text=body)
+
+
+@contextmanager
+def _client(
+    monkeypatch: Any,
+    provider: Callable[[httpx.Request], httpx.Response],
+    *,
+    context_window_tokens: int = 64_000,
+) -> Iterator[TestClient]:
+    """App whose actor selected a provider model served by ``provider``."""
+    import tianzhou_agent_platform.main as main_module
+    from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    monkeypatch.setattr(
+        main_module,
+        "create_model_from_runtime",
+        lambda runtime, **options: create_model_from_runtime(runtime, http_client=http_client, **options),
+    )
+    settings = AgentSettings(_env_file=None)  # type: ignore[call-arg]
+    with TestClient(create_app(settings=settings)) as client:
+        created = client.post(
+            "/model-settings/providers",
+            json={
+                "provider_type": "openai",
+                "name": "Team provider",
+                "base_url": "https://provider.invalid/v1",
+                "api_key": "provider-key",
+                "models": [
+                    {"name": "Team model", "model": "team-model", "context_window_tokens": context_window_tokens}
+                ],
+            },
+        ).json()
+        client.post(
+            f"/model-settings/providers/{created['id']}/models/{created['models'][0]['id']}/default",
+            json={},
+        )
+        yield client
+    asyncio.run(http_client.aclose())
+
+
+def test_model_output_reserve_is_sent_with_every_request(monkeypatch: Any) -> None:
     requests: list[dict[str, Any]] = []
-    recorded_calls: dict[str, LLMCallRecord] = {}
 
-    async def record_call(call: LLMCallRecord) -> None:
-        recorded_calls[call.call_id] = call
+    def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return _completion({"role": "assistant", "content": "ok"})
 
-    async def provider(request: httpx.Request) -> httpx.Response:
+    with _client(monkeypatch, provider, context_window_tokens=4_096) as client:
+        response = client.post("/chat", json={"message": "Hello"})
+
+    assert response.json()["content"] == "ok"
+    assert requests[0]["max_completion_tokens"] == 1_024
+
+
+def test_named_tool_choice_falls_back_for_incompatible_provider(monkeypatch: Any) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         requests.append(payload)
         if len(requests) == 1:
-            return httpx.Response(
-                400,
-                json={"error": {"message": "Thinking mode does not support this tool_choice"}},
-            )
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call_1",
-                                    "type": "function",
-                                    "function": {"name": "demo_add", "arguments": '{"a":17,"b":25}'},
-                                }
-                            ],
-                        },
-                    }
-                ]
-            },
-        )
-
-    settings = AgentSettings(
-        _env_file=None,
-        llm_base_url="https://provider.invalid/v1",
-        llm_api_key="test-key",
-        llm_model="thinking-model",
-    )
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
-    runtime = ModelRuntimeConfig(
-        provider_id="provider-test",
-        provider_name="Test Provider",
-        base_url="https://provider.invalid/v1",
-        api_key="test-key",
-        model_id="model-test",
-        model_name="Thinking model",
-        model="thinking-model",
-        context_window_tokens=64_000,
-        timeout_seconds=60,
-    )
-    with use_model_runtime(runtime):
-        result = await client.complete(
-            messages=[
-                {"role": "system", "content": "You are helpful."},
-                {"role": "user", "content": "Add 17 and 25."},
-            ],
-            tools=[
+            return httpx.Response(400, json={"error": {"message": "Thinking mode does not support this tool_choice"}})
+        if len(requests) == 2:
+            name = payload["tools"][0]["function"]["name"]
+            return _completion(
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "demo_add",
-                        "description": "Add numbers.",
-                        "parameters": {"type": "object"},
-                    },
-                }
-            ],
-            tool_choice={"type": "function", "function": {"name": "demo_add"}},
-        )
-    await http_client.aclose()
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_list", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                    ],
+                },
+                finish_reason="tool_calls",
+            )
+        return _completion({"role": "assistant", "content": "Here are the applications."})
 
-    assert len(requests) == 2
-    assert requests[0]["tool_choice"]["function"]["name"] == "demo_add"
+    with _client(monkeypatch, provider) as client:
+        response = client.post("/chat", json={"message": "List applications", "capability": "builtin:list_app"})
+        llm_calls = client.get("/llm-calls").json()
+
+    assert response.json()["content"] == "Here are the applications."
+    forced = requests[0]["tool_choice"]["function"]["name"]
+    assert forced.startswith("builtin_list_app_")
     assert "tool_choice" not in requests[1]
-    assert "explicitly selected function demo_add" in requests[1]["messages"][0]["content"]
-    assert result.message["tool_calls"][0]["function"]["name"] == "demo_add"
-    assert [call.status for call in recorded_calls.values()] == ["failed", "completed"]
-    failed, completed = recorded_calls.values()
-    assert failed.endpoint == "https://provider.invalid/v1/chat/completions"
-    assert failed.response == {
-        "status_code": 400,
-        "body": {"error": {"message": "Thinking mode does not support this tool_choice"}},
-    }
-    assert completed.request["messages"][0]["content"].endswith(
-        "Call that function before answering the user."
+    assert requests[1]["messages"][0]["content"].endswith(
+        f"The caller explicitly selected function {forced}. Call that function before answering the user."
     )
-    assert completed.request["context_window"] == 64_000
-    assert completed.request["estimated_prompt_tokens"] > 0
-    assert completed.response is not None
-    assert completed.response["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "demo_add"
+    # Both requests of the forced turn are recorded separately.
+    statuses = [call["status"] for call in sorted(llm_calls, key=lambda call: call["created_at"])]
+    assert statuses == ["failed", "completed", "completed"]
 
 
-@pytest.mark.asyncio
-async def test_named_tool_choice_uses_non_streaming_request_with_event_sink() -> None:
+def test_forced_tool_turn_is_not_streamed(monkeypatch: Any) -> None:
     requests: list[dict[str, Any]] = []
 
-    async def provider(request: httpx.Request) -> httpx.Response:
+    def provider(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         requests.append(payload)
-        if payload["stream"]:
-            return httpx.Response(400, json={"error": {"message": "tool_choice is unsupported with stream"}})
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call_list",
-                                    "type": "function",
-                                    "function": {"name": "list_app", "arguments": "{}"},
-                                }
-                            ],
-                        },
-                    }
-                ]
-            },
-        )
-
-    settings = AgentSettings(
-        _env_file=None,
-        llm_base_url="https://provider.invalid/v1",
-        llm_api_key="test-key",
-        llm_model="stream-incompatible-model",
-    )
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client)
-    events: list[dict[str, Any]] = []
-
-    async def sink(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    result = await client.complete(
-        messages=[{"role": "user", "content": "List applications"}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_app",
-                    "description": "List applications.",
-                    "parameters": {"type": "object"},
-                },
-            }
-        ],
-        tool_choice={"type": "function", "function": {"name": "list_app"}},
-        event_sink=sink,
-    )
-    await http_client.aclose()
-
-    assert len(requests) == 1
-    assert requests[0]["stream"] is False
-    assert result.message["tool_calls"][0]["function"]["name"] == "list_app"
-    assert events == []
-
-
-@pytest.mark.asyncio
-async def test_langchain_streaming_emits_message_deltas(caplog: pytest.LogCaptureFixture) -> None:
-    recorded_calls: dict[str, LLMCallRecord] = {}
-
-    async def record_call(call: LLMCallRecord) -> None:
-        recorded_calls[call.call_id] = call
-
-    async def provider(request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        assert payload["stream"] is True
-        return httpx.Response(
-            200,
-            headers={"Content-Type": "text/event-stream"},
-            text=(
-                'data: {"id":"chat-1","object":"chat.completion.chunk","created":1,'
-                '"model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},'
-                '"finish_reason":null}]}\n\n'
-                'data: {"id":"chat-1","object":"chat.completion.chunk","created":1,'
-                '"model":"test-model","choices":[{"index":0,"delta":{"content":" world"},'
-                '"finish_reason":"stop"}]}\n\n'
-                "data: [DONE]\n\n"
-            ),
-        )
-
-    settings = AgentSettings(
-        _env_file=None,
-        llm_base_url="https://provider.invalid/v1",
-        llm_api_key="test-key",
-        llm_model="test-model",
-    )
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
-    events: list[dict[str, Any]] = []
-
-    async def sink(event: dict[str, Any]) -> None:
-        events.append(event)
-
-    result = await client.complete(
-        messages=[{"role": "user", "content": "Say hello"}],
-        tools=[],
-        event_sink=sink,
-    )
-    await http_client.aclose()
-
-    assert result.message["content"] == "Hello world"
-    assert result.usage_estimated is True
-    assert result.input_tokens > 0
-    assert result.output_tokens > 0
-    assert events == [
-        {"type": "message.delta", "delta": "Hello"},
-        {"type": "message.delta", "delta": " world"},
-    ]
-    recorded = next(iter(recorded_calls.values()))
-    assert recorded.status == "completed"
-    assert recorded.request["stream"] is True
-    assert recorded.first_token_at is not None
-    assert recorded.ttft_ms is not None
-    assert recorded.ttft_ms >= 0
-    assert result.first_token_at == recorded.first_token_at
-    assert result.ttft_ms == recorded.ttft_ms
-    assert recorded.response is not None
-    assert recorded.response["choices"][0]["message"]["content"] == "Hello world"
-    assert recorded.response["usage"]["estimated"] is True
-    assert recorded.response["usage"]["source"] == "estimated"
-    assert "completed without usage metadata" in caplog.text
-    result.message["widgets"] = [{"id": "document-outline", "kind": "document_outline"}]
-    assert "widgets" not in recorded.response["choices"][0]["message"]
-
-
-@pytest.mark.asyncio
-async def test_call_sink_keeps_complete_redacted_model_io() -> None:
-    long_text = "x" * 5_000
-    recorded_calls: dict[str, LLMCallRecord] = {}
-
-    async def record_call(call: LLMCallRecord) -> None:
-        recorded_calls[call.call_id] = call
-
-    async def provider(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": long_text},
-                    }
-                ]
-            },
-        )
-
-    settings = AgentSettings(
-        _env_file=None,
-        llm_base_url="https://provider.invalid/v1",
-        llm_api_key="test-key",
-        llm_model="test-model",
-    )
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
-    try:
-        await client.complete(
-            messages=[
+        if payload.get("tool_choice"):
+            if payload.get("stream"):
+                return httpx.Response(400, json={"error": {"message": "tool_choice is unsupported with stream"}})
+            name = payload["tools"][0]["function"]["name"]
+            return _completion(
                 {
-                    "role": "user",
-                    "content": f"Bearer secret-token {long_text}",
-                }
-            ],
-            tools=[],
-        )
-    finally:
-        await http_client.aclose()
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_list", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                    ],
+                },
+                finish_reason="tool_calls",
+            )
+        return _stream("Hello", " world")
 
-    recorded = next(iter(recorded_calls.values()))
-    request_content = recorded.request["messages"][0]["content"]
-    response_content = recorded.response["choices"][0]["message"]["content"]
+    with _client(monkeypatch, provider) as client:
+        with client.stream(
+            "POST", "/chat/stream", json={"message": "List applications", "capability": "builtin:list_app"}
+        ) as response:
+            events = [json.loads(line[5:]) for line in response.iter_lines() if line.startswith("data:")]
+
+    assert [request.get("stream", False) for request in requests] == [False, True]
+    assert [event["delta"] for event in events if event["type"] == "message.delta"] == ["Hello", " world"]
+    completed = next(event for event in events if event["type"] == "message.completed")
+    assert completed["response"]["content"] == "Hello world"
+
+
+def test_model_calls_keep_complete_redacted_io(monkeypatch: Any) -> None:
+    from tianzhou_agent_platform.observability.service import ObservabilityAspect
+
+    long_text = "x" * 5_000
+    recorded: list[Any] = []
+    record_llm_call = ObservabilityAspect.record_llm_call
+
+    async def capture(self: Any, call: Any) -> None:
+        recorded.append(call)
+        await record_llm_call(self, call)
+
+    monkeypatch.setattr(ObservabilityAspect, "record_llm_call", capture)
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        return _completion({"role": "assistant", "content": long_text})
+
+    with _client(monkeypatch, provider) as client:
+        client.post("/chat", json={"message": f"Bearer secret-token {long_text}"})
+
+    completed = next(call for call in recorded if call.status == "completed")
+    request_content = completed.request["messages"][-1]["content"]
     assert request_content.startswith("Bearer [REDACTED] ")
     assert request_content.endswith(long_text)
-    assert "TRUNCATED" not in request_content
-    assert response_content == long_text
+    assert completed.response["choices"][0]["message"]["content"] == long_text
+    assert completed.response["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
 
 
-def test_reported_usage_remains_exact() -> None:
-    result = _result_from_message(
-        AIMessage(
-            content="Hello",
-            usage_metadata={"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
-            response_metadata={"finish_reason": "stop"},
-        )
-    )
-
-    response = _response_from_result("test-model", result)
-
-    assert result.usage_estimated is False
-    assert response["usage"] == {
-        "prompt_tokens": 12,
-        "completion_tokens": 3,
-        "total_tokens": 15,
-    }
-
-
-@pytest.mark.asyncio
-async def test_connection_error_records_underlying_cause() -> None:
-    recorded_calls: dict[str, LLMCallRecord] = {}
-
-    async def record_call(call: LLMCallRecord) -> None:
-        recorded_calls[call.call_id] = call
-
+def test_connection_error_records_underlying_cause(monkeypatch: Any) -> None:
     def provider(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("proxy refused", request=request)
 
-    settings = AgentSettings(
-        _env_file=None,
-        llm_base_url="https://provider.invalid/v1",
-        llm_api_key="test-key",
-        llm_model="test-model",
-    )
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
-    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
-    with pytest.raises(PlatformError, match="could not be reached"):
-        await client.complete(messages=[{"role": "user", "content": "Hello"}], tools=[])
-    await http_client.aclose()
+    with _client(monkeypatch, provider) as client:
+        response = client.post("/chat", json={"message": "Hello"})
+        [failed] = client.get("/llm-calls").json()
 
-    failed = next(call for call in recorded_calls.values() if call.status == "failed")
-    assert "proxy refused" in (failed.error or "")
-    assert failed.response == {
-        "error": {
-            "type": "APIConnectionError",
-            "message": failed.error,
-        }
-    }
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "DEPENDENCY_FAILED"
+    assert "could not be reached" in response.json()["error"]["message"]
+    assert failed["status"] == "failed"
+    assert "proxy refused" in (failed["error"] or "")
+
+
+@pytest.mark.parametrize("finish_reason", ["length"])
+def test_truncated_provider_answer_fails_the_run(monkeypatch: Any, finish_reason: str) -> None:
+    def provider(request: httpx.Request) -> httpx.Response:
+        return _completion({"role": "assistant", "content": "Partial"}, finish_reason=finish_reason)
+
+    with _client(monkeypatch, provider) as client:
+        response = client.post("/chat", json={"message": "Hello"}).json()
+
+    assert response["status"] == "failed"
+    assert response["content"].startswith("Partial")
+
+
+def test_malformed_tool_arguments_are_returned_to_the_model(monkeypatch: Any) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if len(requests) == 1:
+            name = next(tool["function"]["name"] for tool in payload["tools"] if "list_app" in tool["function"]["name"])
+            return _completion(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_bad", "type": "function", "function": {"name": name, "arguments": '{"x": '}}
+                    ],
+                },
+                finish_reason="tool_calls",
+            )
+        return _completion({"role": "assistant", "content": f"answer {len(requests)}"})
+
+    with _client(monkeypatch, provider) as client:
+        first = client.post("/chat", json={"message": "List applications"}).json()
+        second = client.post("/chat", json={"message": "Again", "conversation_id": first["conversation_id"]}).json()
+        conversation = client.get(f"/conversations/{first['conversation_id']}").json()
+        trace = client.get(f"/traces/{first['trace_id']}").json()
+
+    assert first["status"] == "completed" and first["content"] == "answer 2"
+    # The provider received the malformed call together with its error result, in both later requests.
+    for request in requests[1:]:
+        call = next(message for message in request["messages"] if message.get("tool_calls"))
+        assert call["tool_calls"][0]["function"]["arguments"] == '{"x": '
+        result = next(message for message in request["messages"] if message.get("tool_call_id") == "call_bad")
+        assert json.loads(result["content"])["error"]["code"] == "INVALID_REQUEST"
+    assert second["content"] == "answer 3"
+    assert [message["role"] for message in conversation["messages"]] == [
+        "user", "assistant", "tool", "assistant", "user", "assistant",
+    ]
+    assert any(event["kind"] == "builtin.failed" and event["details"]["code"] == "INVALID_REQUEST" for event in trace["events"])

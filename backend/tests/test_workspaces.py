@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.repository import WORKSPACES_RESOURCE
+from tianzhou_agent_platform.store.memory_repository import WORKSPACES_RESOURCE
 from tianzhou_agent_platform.core.workspace import WorkspaceCreate, WorkspaceUpdate
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.lifecycle import StorageStores

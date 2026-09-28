@@ -13,7 +13,7 @@ from typing import Any
 from redis import asyncio as redis_async
 from redis.exceptions import RedisError
 
-from tianzhou_agent_platform.core.observation_context import suppress_observation
+from tianzhou_agent_platform.observability.context import suppress_observation
 from tianzhou_agent_platform.store.observability_buffer import (
     ObsBufferError,
     ObsBufferFlushTimeoutError,

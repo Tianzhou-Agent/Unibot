@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tianzhou_agent_platform.core.observability_query import MAX_RAW_LOG_BYTES, ObsQueryService, range_bounds
+from tianzhou_agent_platform.observability.query import MAX_RAW_LOG_BYTES, ObsQueryService, range_bounds
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import (
     EVENTS_TABLE,
@@ -236,7 +236,7 @@ async def test_feedback_context_excludes_later_traces(obs_ctx) -> None:
 async def test_feedback_context_entries_validate_as_trace_record(obs_ctx) -> None:
     """Feedback context entries must pass TraceRecord strict validation so the
     admin feedback page (FeedbackDetail.context_traces) never 500s."""
-    from tianzhou_agent_platform.core.chat import TraceEvent, TraceRecord, TraceSpan
+    from tianzhou_agent_platform.observability.models import TraceEvent, TraceRecord, TraceSpan
 
     await _seed(obs_ctx["store"])
     now = datetime.now(timezone.utc)
@@ -262,7 +262,7 @@ async def test_raw_log_zip_bomb_rejected(obs_ctx) -> None:
     must be rejected instead of exhausting memory."""
     import gzip as gzip_mod
 
-    from tianzhou_agent_platform.core.observability_query import _bounded_gzip_decompress
+    from tianzhou_agent_platform.observability.query import _bounded_gzip_decompress
 
     bomb = gzip_mod.compress(b"x" * (MAX_RAW_LOG_BYTES + 1024))
     with pytest.raises(ValueError):

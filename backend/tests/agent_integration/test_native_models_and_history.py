@@ -1,26 +1,24 @@
-"""Phase 1B: native models, history conversion and one-tool ChatService path."""
+"""Native model construction and archive ↔ native message conversion."""
 
 from __future__ import annotations
-
-from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from tianzhou_agent_platform.conversations.models import Message
 from tianzhou_agent_platform.model_providers.factory import (
+    _openai_base_url,
     create_model_from_settings,
     create_native_chat_model,
 )
 from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig, use_model_runtime
-from tianzhou_agent_platform.services.agent_integration.builder import build_chat_agent
 from tianzhou_agent_platform.services.agent_integration.history import (
     archive_to_native,
-    legacy_history_to_native,
-    native_to_archive,
-    new_turn_inputs,
+    dangling_tool_closures,
+    native_to_wire,
+    project_scope_history,
 )
-from tests.support.fake_chat_model import ScriptedChatModel, assistant, tool_calling
+from tianzhou_agent_platform.services.agent_integration.runner import thread_id_for
 
 
 def test_native_model_factory_rejects_unconfigured_provider() -> None:
@@ -52,134 +50,65 @@ def test_native_model_from_settings() -> None:
     assert model is not None
 
 
-def test_archive_to_native_roundtrip_preserves_ids_and_tool_pairs() -> None:
-    user = Message(id="m1", role="user", content="hello")
-    ai = Message(
-        id="m2",
-        role="assistant",
-        content="",
-        tool_calls=[{"name": "echo_tool", "args": {"text": "hi"}, "id": "c1"}],
+def test_native_factory_preserves_provider_quirks() -> None:
+    model = create_native_chat_model(
+        model="gpt-test",
+        api_key="sk",
+        base_url="https://api.example.com/v1/chat/completions",
+        max_retries=0,
     )
+    assert model.max_retries == 0
+    assert "chat/completions" not in str(model.openai_api_base)
+    assert _openai_base_url("https://api.example.com/v1") == "https://api.example.com/v1"
+
+
+def test_thread_id_is_conversation_scoped() -> None:
+    assert thread_id_for("c1") == "lc-v2:c1"
+
+
+def test_archive_to_native_roundtrip_preserves_ids_and_tool_pairs() -> None:
+    wire_call = {"id": "c1", "type": "function", "function": {"name": "echo_tool", "arguments": '{"text": "hi"}'}}
+    user = Message(id="m1", role="user", content="hello")
+    ai = Message(id="m2", role="assistant", content="", tool_calls=[wire_call])
     tool = Message(id="m3", role="tool", content="echo:hi", tool_call_id="c1", name="echo_tool")
 
-    n_user = archive_to_native(user)
-    n_ai = archive_to_native(ai)
-    n_tool = archive_to_native(tool)
+    n_user, n_ai, n_tool = (archive_to_native(item) for item in (user, ai, tool))
 
     assert isinstance(n_user, HumanMessage) and n_user.id == "m1"
-    assert isinstance(n_ai, AIMessage) and n_ai.tool_calls[0]["id"] == "c1"
-    assert isinstance(n_tool, ToolMessage) and n_tool.tool_call_id == "c1"
-
-    back_user = native_to_archive(n_user)
-    assert back_user.id == "m1" and back_user.role == "user"
-    back_tool = native_to_archive(n_tool)
-    assert back_tool.tool_call_id == "c1" and back_tool.name == "echo_tool"
+    assert isinstance(n_ai, AIMessage) and n_ai.id == "m2"
+    assert n_ai.tool_calls[0]["id"] == "c1" and n_ai.tool_calls[0]["args"] == {"text": "hi"}
+    assert isinstance(n_tool, ToolMessage) and n_tool.tool_call_id == "c1" and n_tool.id == "m3"
+    assert native_to_wire(n_ai) == {"role": "assistant", "content": "", "tool_calls": [wire_call]}
+    assert native_to_wire(n_tool) == tool.provider_message()
 
 
-def test_legacy_history_import_converts_all_roles() -> None:
+def test_unanswered_calls_are_closed_before_new_input() -> None:
     messages = [
-        Message(id="a", role="user", content="q"),
-        Message(id="b", role="assistant", content="a"),
+        HumanMessage(content="send it"),
+        AIMessage(content="", tool_calls=[{"id": "c1", "name": "send", "args": {}}, {"id": "c2", "name": "log", "args": {}}]),
+        ToolMessage(content="logged", tool_call_id="c2", name="log"),
     ]
-    native = legacy_history_to_native(messages)
-    assert len(native) == 2
-    assert isinstance(native[0], HumanMessage)
-    assert isinstance(native[1], AIMessage)
+
+    [closure] = dangling_tool_closures(messages, "cancelled")
+
+    assert (closure.tool_call_id, closure.name, closure.content) == ("c1", "send", "cancelled")
+    assert dangling_tool_closures([*messages, closure], "cancelled") == []
 
 
-def test_new_turn_inputs_only_submits_new_user_text() -> None:
-    inputs = new_turn_inputs("next question")
-    assert len(inputs) == 1
-    assert isinstance(inputs[0], HumanMessage)
-    assert inputs[0].content == "next question"
+def test_out_of_scope_history_becomes_non_executable_context() -> None:
+    messages = [
+        AIMessage(content="", tool_calls=[{"id": "c1", "name": "hidden", "args": {}}]),
+        ToolMessage(content="secret result", tool_call_id="c1", name="hidden"),
+        AIMessage(content="", tool_calls=[{"id": "c2", "name": "visible", "args": {}}]),
+        ToolMessage(content="ok", tool_call_id="c2", name="visible"),
+    ]
 
+    projected = project_scope_history(messages, {"visible"})
 
-async def test_builder_one_tool_native_path() -> None:
-    from tianzhou_agent_platform.services.agent_integration.tools import bind_echo_tool
-
-    model = ScriptedChatModel(
-        responses=[
-            tool_calling("echo_tool", {"text": "hi"}, call_id="c1"),
-            assistant("done"),
-        ]
-    )
-    agent = build_chat_agent(model=model, tools=[bind_echo_tool()], system_prompt="test")
-    result = await agent.ainvoke({"messages": [HumanMessage(content="echo hi")]})
-    tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
-    assert tool_msgs and tool_msgs[0].content == "echo:hi"
-    assert result["messages"][-1].content == "done"
-
-
-async def test_chat_service_native_runner_path() -> None:
-    from uuid import uuid4
-
-    from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate
-    from tianzhou_agent_platform.conversations.schemas import ChatRequest, ChatResponse
-    from tianzhou_agent_platform.conversations.service import ConversationService
-    from tianzhou_agent_platform.services.chat import ChatService
-
-    class FakeRepo:
-        def __init__(self) -> None:
-            self.store: dict[str, Conversation] = {}
-
-        async def create_conversation(self, payload: ConversationCreate) -> Conversation:
-            conv = Conversation(
-                id=f"conv_{uuid4().hex}",
-                user_id=payload.user_id,
-                tenant_id=payload.tenant_id,
-                title=payload.title,
-            )
-            self.store[conv.id] = conv
-            return conv
-
-        async def get_conversation(self, conversation_id: str):
-            return self.store.get(conversation_id)
-
-        async def update_conversation(self, conversation_id: str, payload):
-            return self.store.get(conversation_id)
-
-        async def delete_conversation(self, conversation_id: str) -> bool:
-            return self.store.pop(conversation_id, None) is not None
-
-        async def list_conversations(self, *, user_id: str, tenant_id: str, workspace_id=None):
-            return list(self.store.values())
-
-        async def append_messages(self, conversation_id: str, messages):
-            return self.store.get(conversation_id)
-
-        async def create_approval(self, approval):
-            return approval
-
-        async def get_approval(self, approval_id: str):
-            return None
-
-        async def update_approval(self, approval_id: str, **fields):
-            return None
-
-        async def list_approvals(self, *, conversation_id: str, status: str | None = None):
-            return []
-
-    class NativeRunner:
-        async def run_turn(self, request: ChatRequest, conversation: Conversation, **_: Any) -> ChatResponse:
-            return ChatResponse(
-                conversation_id=conversation.id,
-                message_id="m1",
-                content="native ok",
-                status="completed",
-                trace_id="tr1",
-                iterations=1,
-            )
-
-        async def confirm(self, conversation_id: str, approval_id: str, action: Any) -> ChatResponse:
-            raise NotImplementedError
-
-        async def deny(self, conversation_id: str, approval_id: str, action: Any) -> ChatResponse:
-            raise NotImplementedError
-
-    service = ChatService(ConversationService(FakeRepo()), native_runner=NativeRunner())
-    response = await service.run_turn(ChatRequest(message="hi", user_id="u1", tenant_id="t1"))
-    assert response.status == "completed"
-    assert response.content == "native ok"
+    assert not projected[0].tool_calls and "non-executable" in projected[0].content
+    assert isinstance(projected[1], AIMessage) and "<historical-capability-result>" in projected[1].content
+    assert projected[2].tool_calls[0]["name"] == "visible"
+    assert isinstance(projected[3], ToolMessage)
 
 
 def test_model_runtime_context_is_actor_scoped() -> None:

@@ -4,11 +4,13 @@ This matrix tracks implemented coverage and remaining evaluation gaps. Determini
 failure invariants; DeepEval owns real-model decisions and answer quality; Playwright owns browser rendering and
 navigation. A row is complete only when every applicable layer is automated.
 
-> **LangChain cutover note (2026-09-24):** production agent loop is `langchain.agents.create_agent`
-> (`core/agent.py` `_run`). Custom StateGraph model/tool nodes are not compiled. Residual deterministic
-> failures live in `test_agent_resilience.py` (error envelopes, empty/truncated status, dedup/retry bounds)
-> plus tool-span / builtin-AINA discovery details in `test_chat_api.py` tool traces. See
-> `docs/langchain-migration-status.md` for removal triggers.
+> **LangChain runtime (2026-09-29):** the only agent loop is `langchain.agents.create_agent`, assembled by
+> `services/agent_integration/runner.py`. Working memory is the conversation's LangGraph checkpoint, approvals use
+> `HumanInTheLoopMiddleware`, compaction uses `SummarizationMiddleware` and automatic retries use
+> `ToolRetryMiddleware`. Reusable policies live in `core/agent_runtime/middleware` and are tested without the app in
+> `tests/agent_runtime/`; the Unibot integration is tested in `tests/agent_integration/` and through the HTTP suites;
+> `tests/store/test_agent_runtime_e2e.py` covers approval restore on the production saver. See
+> `docs/langchain-migration-status.md`.
 
 | Area | Deterministic contract coverage | Real-model DeepEval | Browser E2E | Required invariant |
 | --- | --- | --- | --- | --- |

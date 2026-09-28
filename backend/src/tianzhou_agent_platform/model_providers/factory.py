@@ -29,7 +29,7 @@ def create_native_chat_model(
     use_responses_api: bool = False,
     **kwargs: Any,
 ) -> ChatOpenAI:
-    """Build a native ChatOpenAI. max_retries defaults to 0 to match legacy factory.
+    """Build a native ChatOpenAI. ``max_retries`` defaults to 0: retries belong to the caller (no nested attempts).
 
     Provider quirks preserved from the proven compatibility path: strip
     ``/chat/completions`` suffix from base_url and disable the Responses API.
@@ -105,3 +105,10 @@ def create_model_from_settings(
         max_retries=max_retries,
         http_client=http_client,
     )
+
+
+def describe_model(model: BaseChatModel) -> tuple[str, str]:
+    """(model name, chat completions endpoint) of a chat model, for model-call records."""
+    name = getattr(model, "model_name", None) or getattr(model, "model", None) or type(model).__name__
+    base_url = getattr(model, "openai_api_base", None) or ""
+    return str(name), f"{str(base_url).rstrip('/')}/chat/completions"

@@ -10,6 +10,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
@@ -30,48 +31,23 @@ from tianzhou_agent_platform.api.dependencies import RequestActor
 from tianzhou_agent_platform.api.router import create_router
 
 
-class _LegacyAgentAdapter:
-    """ChatService execution port over AgentRuntime (create_agent loop)."""
-
-    def __init__(self, agent_runtime: Any) -> None:
-        self._runtime = agent_runtime
-
-    async def run(self, request: Any, *, event_sink: Any | None = None, trace_id: str | None = None) -> Any:
-        return await self._runtime.chat(request, event_sink=event_sink, trace_id=trace_id)
-
-    async def chat(self, request: Any, *, event_sink: Any | None = None, trace_id: str | None = None) -> Any:
-        return await self._runtime.chat(request, event_sink=event_sink, trace_id=trace_id)
-
-    async def confirm(self, conversation_id: str, approval_id: str, action: Any) -> Any:
-        return await self._runtime.confirm(
-            approval_id, user_id=action.user_id, tenant_id=action.tenant_id
-        )
-
-    async def deny(self, conversation_id: str, approval_id: str, action: Any) -> Any:
-        await self._runtime.deny(
-            approval_id, user_id=action.user_id, tenant_id=action.tenant_id
-        )
-        from tianzhou_agent_platform.conversations.schemas import ChatResponse
-
-        return ChatResponse(
-            conversation_id=conversation_id,
-            content="",
-            status="completed",
-            trace_id="",
-            iterations=0,
-        )
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
-from tianzhou_agent_platform.core.llm import LLMClient, OpenAICompatibleClient
-from tianzhou_agent_platform.core.agent import AgentRuntime
-from tianzhou_agent_platform.core.observability import ObservabilityAspect
-from tianzhou_agent_platform.core.observability_query import ObsQueryService
-from tianzhou_agent_platform.core.observability_stream import RedisObsIngestWorker
-from tianzhou_agent_platform.core.observability_writer import ObsIngestWorker
-from tianzhou_agent_platform.core.operations_analytics import OperationsAnalyticsService
-from tianzhou_agent_platform.core.observation_logging import ObservationLogHandler
-from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.telemetry import DurableBufferSpanProcessor, setup_tracer_provider, shutdown_tracer_provider
+from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime, describe_model
+from tianzhou_agent_platform.services.agent_integration.history import native_to_wire
+from tianzhou_agent_platform.services.agent_integration.model_calls import StandaloneCallRecorder
+from tianzhou_agent_platform.model_providers.tokens import output_token_reserve
+from tianzhou_agent_platform.observability.service import ObservabilityAspect
+from tianzhou_agent_platform.observability.query import ObsQueryService
+from tianzhou_agent_platform.observability.stream import RedisObsIngestWorker
+from tianzhou_agent_platform.observability.writer import ObsIngestWorker
+from tianzhou_agent_platform.observability.analytics import OperationsAnalyticsService
+from tianzhou_agent_platform.observability.logging import ObservationLogHandler
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.observability.telemetry import (
+    DurableBufferSpanProcessor,
+    setup_tracer_provider,
+    shutdown_tracer_provider,
+)
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
 from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
@@ -98,7 +74,7 @@ def create_app(
     settings: AgentSettings | None = None,
     repository: InMemoryRepository | None = None,
     storage_settings: StorageSettings | None = None,
-    llm: LLMClient | None = None,
+    llm: BaseChatModel | None = None,
     capability_http_client: httpx.AsyncClient | None = None,
     model_health_http_client: httpx.AsyncClient | None = None,
     document_service: DocumentService | None = None,
@@ -230,10 +206,9 @@ def create_app(
         aina_project_service,
         resolved_sandbox_service,
     )
-    # Default production model is a native BaseChatModel (no completion-port wrap).
-    if llm is not None:
-        resolved_llm = llm
-    elif resolved_settings.llm_model and resolved_settings.llm_base_url:
+    # Configured model; an actor's selected provider model replaces it per request (see AgentRunner).
+    resolved_llm: BaseChatModel | None = llm
+    if resolved_llm is None and resolved_settings.llm_model and resolved_settings.llm_base_url:
         from tianzhou_agent_platform.model_providers.factory import create_native_chat_model
 
         resolved_llm = create_native_chat_model(
@@ -243,15 +218,29 @@ def create_app(
             else "",
             base_url=resolved_settings.llm_base_url,
             timeout_seconds=resolved_settings.llm_timeout_seconds,
+            max_completion_tokens=output_token_reserve(resolved_settings.context_window_tokens),
             max_retries=0,
         )
-    else:
-        resolved_llm = OpenAICompatibleClient(
-            resolved_settings,
-            call_sink=observability.record_llm_call,
-        )
+    def document_model_callbacks(model: BaseChatModel, task_id: str) -> list[Any]:
+        model_name, endpoint = describe_model(model)
+        return [
+            StandaloneCallRecorder(
+                call_sink=observability.record_llm_call,
+                context_type="document_edit_task",
+                context_id=task_id,
+                model=model_name,
+                endpoint=endpoint,
+                to_wire=native_to_wire,
+            )
+        ]
+
     document_edit_task_service = (
-        DocumentEditTaskService(resolved_document_service, resolved_repository, resolved_llm)
+        DocumentEditTaskService(
+            resolved_document_service,
+            resolved_repository,
+            resolved_llm,
+            model_callbacks=document_model_callbacks,
+        )
         if resolved_document_service is not None
         else None
     )
@@ -369,7 +358,7 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.repository = resolved_repository
     app.state.llm = resolved_llm
-    # Feature services (Phase 1A). Concrete repository is injected via protocols.
+    # Feature services; the concrete repository is injected through their protocols.
     from tianzhou_agent_platform.conversations.service import ConversationService
     from tianzhou_agent_platform.model_providers.service import ModelProviderService
     from tianzhou_agent_platform.services.chat import ChatService
@@ -378,10 +367,6 @@ def create_app(
     model_provider_service = ModelProviderService(resolved_repository)
     app.state.conversation_service = conversation_service
     app.state.model_provider_service = model_provider_service
-    app.state.chat_service = ChatService(
-        conversation_service,
-        legacy_agent=None,  # wired below once agent_runtime is constructed
-    )
     app.state.capability_gateway = gateway
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
@@ -401,39 +386,49 @@ def create_app(
     app.state.agent_checkpointer = agent_checkpointer
     app.state.operations_analytics = OperationsAnalyticsService(obs_store)
     from tianzhou_agent_platform.core.run_events import RunEventPublisher
+    from tianzhou_agent_platform.services.agent_integration.capabilities import CapabilityCatalog
+    from tianzhou_agent_platform.services.agent_integration.executor import CapabilityExecutor
+    from tianzhou_agent_platform.services.agent_integration.prompts import SystemPrompts
+    from tianzhou_agent_platform.services.agent_integration.runner import AgentRunner
 
-    app.state.agent_runtime = AgentRuntime(
+    run_events = RunEventPublisher(observability)
+    catalog = CapabilityCatalog(
         settings=resolved_settings,
-        repository=resolved_repository,
-        llm=resolved_llm,
-        gateway=gateway,
+        registry=resolved_repository,
         document_service=resolved_document_service,
-        document_edit_task_service=document_edit_task_service,
         sandbox_service=resolved_sandbox_service,
-        task_service=task_service,
-        checkpointer=agent_checkpointer,
         auth_enforced=enforce_auth,
-        events=RunEventPublisher(observability),
-        llm_call_sink=observability.record_llm_call,
-        # Models the app builds itself follow the actor's model settings per request; an injected model is fixed.
-        model_factory=create_model_from_runtime if llm is None else None,
     )
-    # HTTP path goes through ChatService (acceptance A7). The AgentRuntime
-    # implements the create_agent loop and is adapted as the execution port.
-    native_runner = None
-    if resolved_settings.native_agent_enabled:
-        from tianzhou_agent_platform.services.agent_integration.runner import NativeAgentRunner
-
-        native_runner = NativeAgentRunner(
-            model=resolved_settings.llm_model or "gpt-4o-mini",
-            conversations=conversation_service,
-            checkpointer=agent_checkpointer,
-            model_run_limit=resolved_settings.max_agent_iterations,
-        )
+    prompts = SystemPrompts(settings=resolved_settings, registry=resolved_repository, auth_enforced=enforce_auth)
     app.state.chat_service = ChatService(
-        conversation_service,
-        legacy_agent=_LegacyAgentAdapter(app.state.agent_runtime),
-        native_runner=native_runner,
+        conversations=conversation_service,
+        model_providers=model_provider_service,
+        events=run_events,
+        runner=AgentRunner(
+            settings=resolved_settings,
+            conversations=conversation_service,
+            registry=resolved_repository,
+            memories=resolved_repository,
+            catalog=catalog,
+            prompts=prompts,
+            executor=CapabilityExecutor(
+                repository=resolved_repository,
+                conversations=conversation_service,
+                gateway=gateway,
+                catalog=catalog,
+                prompts=prompts,
+                document_service=resolved_document_service,
+                document_edit_task_service=document_edit_task_service,
+                sandbox_service=resolved_sandbox_service,
+                task_service=task_service,
+            ),
+            checkpointer=agent_checkpointer,
+            events=run_events,
+            llm_call_sink=observability.record_llm_call,
+            model=resolved_llm,
+            # Models the app builds itself follow the actor's model settings per request; an injected model is fixed.
+            model_factory=(lambda runtime, **options: create_model_from_runtime(runtime, **options)) if llm is None else None,
+        ),
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler

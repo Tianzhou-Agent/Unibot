@@ -1,36 +1,77 @@
-"""Phase 3: ordered batches, limits, retries, scope and output guards."""
+"""Runtime tool and model policies: ordered batches, dedup, retries, limits, output guards, malformed calls."""
 
 from __future__ import annotations
 
-
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
+from langchain.agents.middleware import ToolErrorMiddleware
+
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.core.agent_runtime import build_agent
 from tianzhou_agent_platform.core.agent_runtime.middleware.model_policy import (
+    InvalidToolCallMiddleware,
+    ModelCallBudgetMiddleware,
+    OutputGuardMiddleware,
+    RequestBudgetGuard,
     reject_truncated_call,
-    request_input_budget,
 )
 from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import (
     BatchDeduper,
+    OrderedBatchMiddleware,
     tool_signature,
 )
-from tianzhou_agent_platform.services.agent_integration.builder import build_chat_agent
+from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
+from tianzhou_agent_platform.services.agent_integration.capability_tools import format_error_envelope
 from tianzhou_agent_platform.services.agent_integration.retries import (
-    build_model_call_limit,
-    build_tool_retry_middleware,
     is_transient_error,
+    tool_retry_middleware,
 )
-from tianzhou_agent_platform.services.agent_integration.scope import (
-    claim_scope_activation,
-    ensure_execution_scope,
-    filter_advertised_tools,
-    revalidate_permissions_on_resume,
-)
+from tianzhou_agent_platform.services.agent_integration.scope import filter_advertised_tools
 from tests.support.fake_chat_model import ScriptedChatModel, assistant, multi_tool_calling, tool_calling
 
 _LOG: list[str] = []
+
+
+async def _format(exc: Exception, request: object) -> str:
+    return format_error_envelope(exc)
+
+
+def build_chat_agent(*, model, tools, middleware=()):  # type: ignore[no-untyped-def]
+    """The native agent with the runtime's batch and output policies (as the runner composes them)."""
+    return build_agent(
+        model=model,
+        tools=tools,
+        middleware=[
+            OrderedBatchMiddleware(),
+            OutputGuardMiddleware(),
+            ToolErrorMiddleware(aon_error=_format),
+            *middleware,
+        ],
+    )
+
+
+def _remote_tool(name: str, *, side_effect_level: str, retries: int) -> Capability:
+    record = ToolRecord(
+        tool_id=name,
+        name=name,
+        description="Remote test tool.",
+        input_schema={"type": "object"},
+        endpoint="https://tool.invalid/invoke",
+        side_effect_level=side_effect_level,
+        retries=retries,
+    )
+    return Capability(
+        kind="tool",
+        capability_id=name,
+        function_name=name,
+        display_name=name,
+        description="",
+        input_schema={"type": "object"},
+        requires_confirmation=side_effect_level == "high",
+        value=record,
+    )
 
 
 @tool
@@ -77,7 +118,7 @@ async def test_ordered_batch_preserves_tool_side_effect_order() -> None:
             assistant("done"),
         ]
     )
-    agent = build_chat_agent(model=model, tools=[ordered_tool], use_model_call_limit=False)
+    agent = build_chat_agent(model=model, tools=[ordered_tool])
     await agent.ainvoke({"messages": [HumanMessage(content="order")]})
     # This is the Phase 3 fix for the Phase 0 gap: strict order is required.
     assert _LOG == ["1", "2", "3", "4"]
@@ -110,8 +151,7 @@ async def test_ordered_batch_releases_on_failure() -> None:
     )
     agent = build_chat_agent(
         model=model,
-        tools=[boom, after_tool],
-        use_model_call_limit=False,
+        tools=[boom, after_tool]
     )
     result = await agent.ainvoke({"messages": [HumanMessage(content="go")]})
     # Failure of c1 must not deadlock c2.
@@ -153,7 +193,7 @@ async def test_same_batch_duplicate_tool_args_are_skipped() -> None:
             assistant("done"),
         ]
     )
-    agent = build_chat_agent(model=model, tools=[ordered_tool], use_model_call_limit=False)
+    agent = build_chat_agent(model=model, tools=[ordered_tool])
     result = await agent.ainvoke({"messages": [HumanMessage(content="dup")]})
     # Only one physical execution of the same signature.
     assert _LOG == ["same"]
@@ -185,12 +225,14 @@ async def test_retry_only_eligible_readonly_tools() -> None:
             assistant("after"),
         ]
     )
+    registry = {
+        "flaky_readonly": _remote_tool("flaky_readonly", side_effect_level="none", retries=1),
+        "side_effect_tool": _remote_tool("side_effect_tool", side_effect_level="low", retries=3),
+    }
     agent = build_chat_agent(
         model=model,
         tools=[flaky_readonly, side_effect_tool],
-        retry_eligible_tools=["flaky_readonly"],
-        retry_max_attempts=2,
-        use_model_call_limit=False,
+        middleware=tool_retry_middleware(registry),
     )
     result = await agent.ainvoke({"messages": [HumanMessage(content="go")]})
     tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
@@ -198,11 +240,16 @@ async def test_retry_only_eligible_readonly_tools() -> None:
     assert flaky_readonly._attempts.get("q") == 2
 
 
-async def test_side_effect_tool_is_not_in_retry_eligible_set() -> None:
-    mw = build_tool_retry_middleware(eligible_tools=["flaky_readonly"], max_retries=2)
-    # Side-effecting tools must not appear in the native retry list.
-    assert "side_effect_tool" not in (mw.tools or [])
-    assert "flaky_readonly" in (mw.tools or ["flaky_readonly"])
+def test_side_effect_tool_is_not_in_retry_eligible_set() -> None:
+    registry = {
+        "flaky_readonly": _remote_tool("flaky_readonly", side_effect_level="none", retries=2),
+        "side_effect_tool": _remote_tool("side_effect_tool", side_effect_level="low", retries=2),
+        "no_budget": _remote_tool("no_budget", side_effect_level="none", retries=0),
+    }
+    [mw] = tool_retry_middleware(registry)
+    # Side-effecting tools and tools without a retry budget must not appear in the native retry list.
+    assert [name for name in registry if mw._should_retry_tool(name)] == ["flaky_readonly"]
+    assert mw.max_retries == 2
 
 
 # ---------------------------------------------------------------------------
@@ -210,15 +257,35 @@ async def test_side_effect_tool_is_not_in_retry_eligible_set() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_model_call_limit_builder() -> None:
-    mw = build_model_call_limit(run_limit=3, thread_limit=10, exit_behavior="end")
-    assert mw.run_limit == 3
-    assert mw.thread_limit == 10
+async def test_model_call_budget_ends_the_run_with_the_reply() -> None:
+    model = ScriptedChatModel(
+        responses=[tool_calling("ordered_tool", {"tag": str(n)}, call_id=f"c{n}") for n in range(3)]
+    )
+    budget = ModelCallBudgetMiddleware(run_limit=2, reply="stopped")
+    result = await build_chat_agent(model=model, tools=[ordered_tool], middleware=[budget]).ainvoke(
+        {"messages": [HumanMessage(content="loop")]}
+    )
+
+    assert len(model.calls) == 2
+    assert budget.exceeded == "stopped"
+    assert result["messages"][-1].content == "stopped"
+    # Every call of the run was answered before it stopped.
+    assert len([m for m in result["messages"] if isinstance(m, ToolMessage)]) == 2
 
 
-def test_request_budget_reserves_output() -> None:
-    assert request_input_budget(1000, output_reserve=200) == 800
-    assert request_input_budget(100, output_reserve=200) == 0
+async def test_request_budget_guard_refuses_oversized_requests_locally() -> None:
+    model = ScriptedChatModel(responses=[assistant("never sent")])
+    guard = RequestBudgetGuard(
+        input_budget_tokens=50,
+        count_tokens=lambda messages, tools: sum(len(str(message["content"])) for message in messages),
+    )
+    agent = build_agent(model=model, middleware=[guard])
+
+    result = await agent.ainvoke({"messages": [HumanMessage(content="x" * 100)]})
+
+    assert "exceeds the model context budget" in result["messages"][-1].content
+    assert guard.exceeded == result["messages"][-1].content
+    assert model.calls == []
 
 
 def test_reject_truncated_call() -> None:
@@ -244,7 +311,7 @@ async def test_output_guard_blocks_partial_tool_calls() -> None:
             assistant("recovered"),
         ]
     )
-    agent = build_chat_agent(model=model, tools=[must_not_run], use_model_call_limit=False)
+    agent = build_chat_agent(model=model, tools=[must_not_run])
     result = await agent.ainvoke({"messages": [HumanMessage(content="go")]})
     tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert tool_msgs
@@ -291,33 +358,127 @@ def test_filter_advertised_tools_allowlist() -> None:
     assert [t.name for t in result] == ["a_tool"]
 
 
-def test_ensure_execution_scope_denies_hidden() -> None:
-    from tianzhou_agent_platform.core.errors import PlatformError
-
-    with pytest.raises(PlatformError):
-        ensure_execution_scope("secret", hidden_names={"secret"})
-    ensure_execution_scope("ok", hidden_names={"secret"})
+# ---------------------------------------------------------------------------
+# Output guard and malformed tool calls
+# ---------------------------------------------------------------------------
 
 
-def test_revalidate_permissions_on_resume() -> None:
-    permitted = revalidate_permissions_on_resume(
-        ["a", "secret", "b"],
-        allowed_names={"a", "b", "secret"},
-        hidden_names={"secret"},
+async def test_output_guard_reports_failures_and_closes_truncated_invalid_calls() -> None:
+    truncated = AIMessage(
+        content="partial",
+        tool_calls=[{"name": "ordered_tool", "args": {"tag": "x"}, "id": "c1"}],
+        invalid_tool_calls=[{"name": "ordered_tool", "args": '{"tag": ', "id": "c2", "error": "bad json"}],
+        response_metadata={"finish_reason": "length"},
     )
-    assert permitted == ["a", "b"]
+    guard = OutputGuardMiddleware()
+    result = await build_agent(
+        model=ScriptedChatModel(responses=[truncated]), tools=[ordered_tool], middleware=[guard]
+    ).ainvoke({"messages": [HumanMessage(content="go")]})
 
+    closed = {m.tool_call_id for m in result["messages"] if isinstance(m, ToolMessage)}
+    assert closed == {"c1", "c2"}
+    assert guard.failure == f"partial\n\n{OutputGuardMiddleware.TRUNCATION_NOTICE}"
+    assert result["messages"][-1].content == guard.failure
 
-def test_one_scope_activation_per_batch() -> None:
-    from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import (
-        BatchCoordinator,
-        _batch_var,
+    empty_guard = OutputGuardMiddleware()
+    await build_agent(model=ScriptedChatModel(responses=[assistant("")]), middleware=[empty_guard]).ainvoke(
+        {"messages": [HumanMessage(content="go")]}
     )
+    assert empty_guard.failure == OutputGuardMiddleware.EMPTY_REPLY
 
-    coord = BatchCoordinator.from_tool_calls("run1", [])
-    token = _batch_var.set(coord)
-    try:
-        assert claim_scope_activation("open_aina") is True
-        assert claim_scope_activation("open_aina") is False
-    finally:
-        _batch_var.reset(token)
+
+async def test_malformed_tool_calls_are_answered_and_the_model_asked_again() -> None:
+    _LOG.clear()
+    answered: list[str] = []
+
+    async def respond(call: dict) -> str:
+        answered.append(call["id"])
+        return f'{{"error": {{"code": "INVALID_REQUEST", "message": "{call["error"]}"}}}}'
+
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "ordered_tool", "args": {"tag": "ok"}, "id": "c1"}],
+                invalid_tool_calls=[{"name": "ordered_tool", "args": "{oops", "id": "c2", "error": "bad json"}],
+            ),
+            AIMessage(
+                content="",
+                invalid_tool_calls=[{"name": "ordered_tool", "args": "{oops", "id": "c3", "error": "bad json"}],
+            ),
+            assistant("fixed"),
+        ]
+    )
+    guard = OutputGuardMiddleware()
+    result = await build_agent(
+        model=model,
+        tools=[ordered_tool],
+        middleware=[InvalidToolCallMiddleware(respond), OrderedBatchMiddleware(), guard],
+    ).ainvoke({"messages": [HumanMessage(content="go")]})
+
+    assert _LOG == ["ok"]
+    assert answered == ["c2", "c3"]
+    assert result["messages"][-1].content == "fixed"
+    assert guard.failure is None
+    # The model saw every answer: no call is left without a result.
+    results = {m.tool_call_id for m in result["messages"] if isinstance(m, ToolMessage)}
+    assert results == {"c1", "c2", "c3"}
+
+
+async def test_malformed_tool_calls_cannot_loop_past_the_model_call_limit() -> None:
+    async def respond(call: dict) -> str:
+        return '{"error": {"code": "INVALID_REQUEST"}}'
+
+    def malformed(**_: object) -> AIMessage:
+        return AIMessage(content="", invalid_tool_calls=[{"name": "x", "args": "{", "id": "c", "error": "bad"}])
+
+    model = ScriptedChatModel(responses=[malformed] * 5)
+    budget = ModelCallBudgetMiddleware(run_limit=3, reply="stopped")
+    agent = build_agent(model=model, middleware=[InvalidToolCallMiddleware(respond), budget])
+    result = await agent.ainvoke({"messages": [HumanMessage(content="go")]})
+    assert len(model.calls) == 3
+    assert result["messages"][-1].content == "stopped"
+
+
+# ---------------------------------------------------------------------------
+# Run isolation
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrent_runs_never_share_batches_or_attempt_budgets() -> None:
+    import asyncio
+
+    _LOG.clear()
+    gate = asyncio.Event()
+
+    @tool
+    async def slow_tool(tag: str) -> str:
+        """Wait until both runs are inside their batch."""
+        _LOG.append(tag)
+        await gate.wait()
+        return tag
+
+    def batch(tag: str) -> AIMessage:
+        # Both runs use the same call ids and arguments.
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "slow_tool", "args": {"tag": "same"}, "id": "c1"},
+                {"name": "ordered_tool", "args": {"tag": tag}, "id": "c2"},
+            ],
+        )
+
+    agents = [
+        build_chat_agent(model=ScriptedChatModel(responses=[batch(tag), assistant(tag)]), tools=[slow_tool, ordered_tool])
+        for tag in ("a", "b")
+    ]
+    runs = [asyncio.create_task(agent.ainvoke({"messages": [HumanMessage(content="go")]})) for agent in agents]
+    while _LOG.count("same") < 2:
+        await asyncio.sleep(0.01)
+    gate.set()
+    results = await asyncio.gather(*runs)
+
+    # Each run executed its own identical call once and released its own successor.
+    assert sorted(_LOG) == ["a", "b", "same", "same"]
+    for result in results:
+        assert all("error" not in m.content for m in result["messages"] if isinstance(m, ToolMessage))

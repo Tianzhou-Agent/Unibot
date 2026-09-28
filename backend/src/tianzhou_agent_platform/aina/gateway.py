@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -101,7 +100,6 @@ class RemoteCapabilityGateway:
                     str(manifest.health_check),
                     authentication=manifest.authentication,
                     timeout=self.settings.capability_timeout_seconds,
-                    retries=0,
                     source="aina",
                 )
             return result
@@ -110,7 +108,6 @@ class RemoteCapabilityGateway:
             f"{endpoint}/describe",
             authentication=manifest.authentication,
             timeout=self.settings.capability_timeout_seconds,
-            retries=0,
             source="aina",
         )
         protocol_version = describe.get("protocol_version")
@@ -127,7 +124,6 @@ class RemoteCapabilityGateway:
             health_url,
             authentication=manifest.authentication,
             timeout=self.settings.capability_timeout_seconds,
-            retries=0,
             source="aina",
         )
         if str(health.get("status", "ok")).lower() not in {"ok", "healthy", "ready"}:
@@ -169,7 +165,6 @@ class RemoteCapabilityGateway:
             str(tool.endpoint),
             authentication=tool.authentication,
             timeout=tool.timeout_seconds,
-            retries=tool.retries if tool.side_effect_level == "none" else 0,
             source="tool",
             json=payload,
             extra_headers={"Idempotency-Key": call_id},
@@ -253,7 +248,6 @@ class RemoteCapabilityGateway:
             f"{str(manifest.runtime.endpoint).rstrip('/')}/invoke",
             authentication=manifest.authentication,
             timeout=self.settings.capability_timeout_seconds,
-            retries=0,
             source="aina",
             json=request.model_dump(mode="json"),
             extra_headers={"Idempotency-Key": request.request_id},
@@ -409,68 +403,59 @@ class RemoteCapabilityGateway:
         *,
         authentication: Authentication,
         timeout: float,
-        retries: int,
         source: str,
         json: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        """One request; automatic retries of eligible tool calls belong to the agent's ToolRetryMiddleware."""
         headers = self._headers(authentication)
         headers.update(extra_headers or {})
-        for attempt in range(retries + 1):
-            try:
-                response = await self._client.request(
-                    method,
-                    url,
-                    headers=headers,
-                    json=json,
-                    timeout=timeout,
+        try:
+            response = await self._client.request(
+                method,
+                url,
+                headers=headers,
+                json=json,
+                timeout=timeout,
+            )
+            if response.is_error:
+                raise PlatformError(
+                    "DEPENDENCY_FAILED",
+                    f"Remote {source} returned HTTP {response.status_code}",
+                    status_code=502,
+                    retryable=response.status_code >= 500 or response.status_code == 429,
+                    source=source,
+                    debug={"remote_status": response.status_code},
                 )
-                if response.status_code >= 500 and attempt < retries:
-                    await asyncio.sleep(0.1 * (2**attempt))
-                    continue
-                if response.is_error:
-                    raise PlatformError(
-                        "DEPENDENCY_FAILED",
-                        f"Remote {source} returned HTTP {response.status_code}",
-                        status_code=502,
-                        retryable=response.status_code >= 500 or response.status_code == 429,
-                        source=source,
-                        debug={"remote_status": response.status_code},
-                    )
-                data = response.json()
-                if not isinstance(data, dict):
-                    raise ValueError("response root is not an object")
-                return data
-            except PlatformError:
-                raise
-            except httpx.TimeoutException as exc:
-                if attempt < retries:
-                    continue
-                raise PlatformError(
-                    "TIMEOUT",
-                    f"Remote {source} timed out",
-                    status_code=504,
-                    retryable=True,
-                    source=source,
-                ) from exc
-            except httpx.RequestError as exc:
-                if attempt < retries:
-                    continue
-                raise PlatformError(
-                    "DEPENDENCY_FAILED",
-                    f"Remote {source} could not be reached",
-                    status_code=502,
-                    retryable=True,
-                    source=source,
-                ) from exc
-            except ValueError as exc:
-                raise PlatformError(
-                    "DEPENDENCY_FAILED",
-                    f"Remote {source} returned invalid JSON",
-                    status_code=502,
-                    source=source,
-                ) from exc
-        raise AssertionError("unreachable")
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("response root is not an object")
+            return data
+        except PlatformError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise PlatformError(
+                "TIMEOUT",
+                f"Remote {source} timed out",
+                status_code=504,
+                retryable=True,
+                source=source,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                f"Remote {source} could not be reached",
+                status_code=502,
+                retryable=True,
+                source=source,
+            ) from exc
+        except ValueError as exc:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                f"Remote {source} returned invalid JSON",
+                status_code=502,
+                source=source,
+            ) from exc
 
 
 def _a2a_message_outputs(message: a2a_types.Message) -> list[AinaOutput]:

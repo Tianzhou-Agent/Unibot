@@ -8,6 +8,7 @@ from tianzhou_agent_platform.model_providers.models import (
     ModelProviderCreate,
     ModelProviderRecord,
     ModelProviderUpdate,
+    ModelRuntimeConfig,
 )
 
 
@@ -26,3 +27,5 @@ class ModelProviderRepository(Protocol):
     async def list_model_providers(
         self, *, user_id: str, tenant_id: str
     ) -> list[ModelProviderRecord]: ...
+
+    async def get_default_model_runtime(self, *, user_id: str, tenant_id: str) -> ModelRuntimeConfig | None: ...

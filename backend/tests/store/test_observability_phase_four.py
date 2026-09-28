@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tianzhou_agent_platform.core.chat import LLMCallRecord, TraceRecord, TraceSpan
-from tianzhou_agent_platform.core.repository import TRACES_RESOURCE
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord, TraceSpan
+from tianzhou_agent_platform.store.memory_repository import TRACES_RESOURCE
 from tianzhou_agent_platform.store import MySqlStore, RedisStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.models import StoreQuery
@@ -112,7 +112,7 @@ async def test_persist_observability_switch_restores_legacy(repo: PersistentRepo
 
 
 async def test_reconcile_falls_back_to_obs_resolver(repo: PersistentRepository) -> None:
-    from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, Message
+    from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate, Message
 
     async def resolver(trace_id: str) -> str | None:
         return "completed" if trace_id == "trace_aaa" else None

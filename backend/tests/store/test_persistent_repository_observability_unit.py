@@ -7,10 +7,10 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from tianzhou_agent_platform.core.chat import LLMCallRecord, TraceRecord, TraceSpan
-from tianzhou_agent_platform.core.conversation import ConversationCreate
-from tianzhou_agent_platform.core.repository import LLM_CALLS_RESOURCE, TRACES_RESOURCE
-from tianzhou_agent_platform.core.repository import CONVERSATIONS_RESOURCE
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord, TraceSpan
+from tianzhou_agent_platform.conversations.models import ConversationCreate
+from tianzhou_agent_platform.store.memory_repository import LLM_CALLS_RESOURCE, TRACES_RESOURCE
+from tianzhou_agent_platform.store.memory_repository import CONVERSATIONS_RESOURCE
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.models import (
     DeleteResult,

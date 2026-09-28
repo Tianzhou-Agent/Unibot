@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
+from tianzhou_agent_platform.model_providers.tokens import estimate_request_tokens
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
 
 logger = logging.getLogger(__name__)

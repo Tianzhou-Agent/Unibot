@@ -12,7 +12,7 @@ from tianzhou_agent_platform.aina.project import (
     validate_project_archive,
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageNotFoundError, StorageValidationError
 from tianzhou_agent_platform.store.models import StoragePath
 from tianzhou_agent_platform.store.nas.filesystem import NasStore

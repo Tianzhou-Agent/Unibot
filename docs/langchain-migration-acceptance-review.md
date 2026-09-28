@@ -1,3 +1,5 @@
+> **2026-09-29：** 本报告中的阻断项 A1–A8 已全部解决，当前状态见 [迁移状态](langchain-migration-status.md)。
+
 # LangChain 迁移验收报告
 
 日期：2026-09-24

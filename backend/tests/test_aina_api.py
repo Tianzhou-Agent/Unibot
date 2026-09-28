@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas, unibot_memory_record
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 

@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate
-from tianzhou_agent_platform.core.conversation import ConversationCreate
-from tianzhou_agent_platform.core.repository import CONVERSATIONS_RESOURCE, MEMORIES_RESOURCE, USERS_RESOURCE
+from tianzhou_agent_platform.conversations.models import ConversationCreate
+from tianzhou_agent_platform.store.memory_repository import CONVERSATIONS_RESOURCE, MEMORIES_RESOURCE, USERS_RESOURCE
 from tianzhou_agent_platform.store import (
     MySqlStore,
     NasStore,

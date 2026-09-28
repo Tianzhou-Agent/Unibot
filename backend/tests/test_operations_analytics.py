@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.feedback import FeedbackRecord
-from tianzhou_agent_platform.core.operations_analytics import OperationsAnalyticsService, operations_bounds
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.observability.analytics import OperationsAnalyticsService, operations_bounds
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.observability_store import (
     _agent_first_use_values,

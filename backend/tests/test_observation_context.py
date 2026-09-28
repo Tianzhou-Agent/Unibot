@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tianzhou_agent_platform.core.observation_context import (
+from tianzhou_agent_platform.observability.context import (
     ObservationContext,
     bind_observation_context,
     current_observation_context,

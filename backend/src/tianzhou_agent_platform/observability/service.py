@@ -33,9 +33,10 @@ from typing import Any, Literal, ParamSpec, TypeVar, cast
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Span
 
-from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceEvent, TraceRecord, TraceSpan
-from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.telemetry import (
+from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceEvent, TraceRecord, TraceSpan
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.observability.telemetry import (
     ATTR_CONVERSATION_ID,
     ATTR_ERROR_JSON,
     ATTR_FIRST_OUTPUT_AT,
@@ -64,7 +65,7 @@ from tianzhou_agent_platform.core.telemetry import (
     STATUS_RUNNING,
     UNIBOT_STATUS_ATTR,
 )
-from tianzhou_agent_platform.core.trace_details import summarize_trace_data
+from tianzhou_agent_platform.observability.trace_details import summarize_trace_data
 from tianzhou_agent_platform.store.observability_raw import RawIoRef, RawIoWriter
 from tianzhou_agent_platform.store.observability_buffer import (
     DurableObsBuffer,

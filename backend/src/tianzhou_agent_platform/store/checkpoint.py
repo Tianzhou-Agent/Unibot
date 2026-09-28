@@ -232,6 +232,33 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
             for record in records:
                 await self.database.delete(resource, record.id)
 
+    def prune(self, thread_ids: Sequence[str], *, strategy: str = "keep_latest") -> None:
+        raise NotImplementedError("MySqlCheckpointSaver only supports async graph execution")
+
+    async def aprune(self, thread_ids: Sequence[str], *, strategy: str = "keep_latest") -> None:
+        """Drop the checkpoint history of threads.
+
+        ``keep_latest`` keeps the most recent checkpoint of each namespace together with its pending writes (e.g. a
+        paused interrupt); ``delete`` removes everything. Every checkpoint stores complete channel values (the
+        agent graphs use no ``DeltaChannel``), so the latest one restores the thread on its own.
+        """
+        if strategy not in {"keep_latest", "delete"}:
+            raise ValueError(f"Unsupported checkpoint prune strategy {strategy!r}")
+        for thread_id in thread_ids:
+            if strategy == "delete":
+                await self.adelete_thread(thread_id)
+                continue
+            checkpoints = await self._query_all(GRAPH_CHECKPOINTS_RESOURCE, {"thread_id": thread_id})
+            latest: dict[str, str] = {}
+            for record in checkpoints:
+                namespace = str(record.values["checkpoint_ns"])
+                latest[namespace] = max(latest.get(namespace, ""), str(record.values["checkpoint_id"]))
+            writes = await self._query_all(GRAPH_CHECKPOINT_WRITES_RESOURCE, {"thread_id": thread_id})
+            for resource, records in ((GRAPH_CHECKPOINT_WRITES_RESOURCE, writes), (GRAPH_CHECKPOINTS_RESOURCE, checkpoints)):
+                for record in records:
+                    if str(record.values["checkpoint_id"]) != latest.get(str(record.values["checkpoint_ns"])):
+                        await self.database.delete(resource, record.id)
+
     async def _tuple_from_record(self, record: StoreRecord) -> CheckpointTuple:
         thread_id = str(record.values["thread_id"])
         checkpoint_ns = str(record.values["checkpoint_ns"])

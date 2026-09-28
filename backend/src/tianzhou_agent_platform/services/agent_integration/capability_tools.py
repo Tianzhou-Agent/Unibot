@@ -1,16 +1,10 @@
-"""Convert Unibot capabilities into native BaseTool adapters.
-
-Domain operations stay in their feature services; this module only binds
-capability metadata + invoke callbacks to LangChain tools for create_agent.
-"""
+"""Capability tool-call helpers: argument validation, handled failures and model-visible error envelopes."""
 
 from __future__ import annotations
 
 import json
 from contextvars import ContextVar
-from typing import Any, Awaitable, Callable
-
-from langchain_core.tools import StructuredTool
+from typing import Any
 
 # The model's id for the tool call being executed; set by CapabilityScopeMiddleware around each tool call so
 # executors can record the same logical call id the model and the transcript use.
@@ -85,59 +79,4 @@ def format_error_envelope(exc: Exception) -> str:
             }
         },
         ensure_ascii=False,
-    )
-
-
-def capability_to_tool(
-    *,
-    function_name: str,
-    description: str,
-    input_schema: dict[str, Any],
-    invoke: Callable[..., Awaitable[Any]],
-    validate: bool = True,
-) -> StructuredTool:
-    """Bind one capability to a native tool that calls ``invoke``.
-
-    ``validate=False`` leaves argument validation to ``invoke`` so the caller can record the failure.
-    """
-
-    async def _arun(**kwargs: Any) -> str:
-        try:
-            if validate:
-                validate_capability_args(
-                    input_schema=input_schema,
-                    args=kwargs,
-                    function_name=function_name,
-                )
-            outcome = await invoke(**kwargs)
-        except Exception as exc:  # noqa: BLE001
-            return format_error_envelope(exc)
-        result = getattr(outcome, "result", outcome)
-        if isinstance(result, str):
-            return result
-        return json.dumps(result, ensure_ascii=False, default=str)
-
-    def _run(**kwargs: Any) -> str:
-        # Sync fallback: schedule the coroutine on the running loop when possible.
-        import asyncio
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return json.dumps({"error": "async tool invoked without a running loop"}, ensure_ascii=False)
-        return loop.run_until_complete(_arun(**kwargs)) if not loop.is_running() else ""
-
-    _arun.__name__ = function_name
-    _arun.__doc__ = description
-    _run.__name__ = function_name
-    _run.__doc__ = description
-    # The capability's own JSON Schema is advertised verbatim and arguments reach ``invoke`` exactly as the
-    # model sent them; a generated pydantic model would inject None for omitted optional fields, which the
-    # capability schema then rejects.
-    return StructuredTool.from_function(
-        _arun,
-        coroutine=_arun,
-        name=function_name,
-        description=description,
-        args_schema=input_schema or {"type": "object", "properties": {}},
     )

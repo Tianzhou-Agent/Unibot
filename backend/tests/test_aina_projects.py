@@ -25,7 +25,7 @@ from tianzhou_agent_platform.aina.project_service import (
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.api.dependencies import RequestActor, request_actor
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import AINA_PROJECTS_RESOURCE, InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import AINA_PROJECTS_RESOURCE, InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.errors import StorageNotFoundError, StorageValidationError
 from tianzhou_agent_platform.store.lifecycle import StorageStores

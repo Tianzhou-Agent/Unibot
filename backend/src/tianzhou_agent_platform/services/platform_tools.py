@@ -13,7 +13,7 @@ from tianzhou_agent_platform.aina.protocol.widgets import (
     WidgetField,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, invoke_task_operation
 from tianzhou_agent_platform.tasks.service import TaskService
 

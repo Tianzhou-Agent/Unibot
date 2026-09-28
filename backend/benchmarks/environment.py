@@ -10,7 +10,7 @@ from benchmarks.cases import ACTOR, DOCUMENT, LEDGER, NEW_MEMORY, OLD_MEMORY, OT
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 
 class BenchmarkWorld:

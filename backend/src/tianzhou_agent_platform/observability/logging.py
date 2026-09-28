@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from tianzhou_agent_platform.core.observation_context import (
+from tianzhou_agent_platform.observability.context import (
     current_observation_context,
     is_observation_suppressed,
     suppress_observation,
 )
-from tianzhou_agent_platform.core.trace_details import summarize_trace_data
+from tianzhou_agent_platform.observability.trace_details import summarize_trace_data
 from tianzhou_agent_platform.store.observability_buffer import DurableObsBuffer, ObsRecord
 
 

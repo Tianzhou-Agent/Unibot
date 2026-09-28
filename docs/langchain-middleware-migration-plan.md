@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Proposed implementation plan. Application code and dependencies have not been changed or tested by this planning task.
+Status: Implemented (2026-09-29). See [the migration status](langchain-migration-status.md) for the final architecture, deviations and verification evidence.
 
 ## 1. Direction and scope
 
