@@ -1,0 +1,31 @@
+# Latency / TTFT / token budgets. The numbers are starting points: set them from a baseline run of your own
+# deployment (see report.md "Performance") and tighten over time. Run with k>=5 for stable percentiles.
+
+cases:
+  - id: perf.simple_chat
+    description: A greeting stays within the interactive latency and token budget.
+    tags: [performance]
+    repeats: 5
+    turns:
+      - user: "你好，简单介绍一下你自己，一句话即可。"
+        expect:
+          tools: {none: true}
+          budget:
+            max_iterations: 1
+            max_ttft_ms: 5000
+            max_latency_ms: 15000
+            max_total_tokens: 20000
+
+  - id: perf.single_tool_turn
+    description: A one-capability request completes within budget.
+    tags: [performance, tool_use]
+    repeats: 5
+    turns:
+      - user: "列出应用"
+        expect:
+          tools: {expected: [list_app], mode: strict}
+          budget:
+            max_iterations: 3
+            max_tool_calls: 1
+            max_latency_ms: 30000
+            max_total_tokens: 40000

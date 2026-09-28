@@ -18,7 +18,7 @@ const PROVIDERS: Array<{
   baseUrl: string;
 }> = [
   { type: "openai", label: "OpenAI", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
-  { type: "deepseek", label: "DeepSeek", name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1" },
+  { type: "deepseek", label: "DeepSeek", name: "DeepSeek", baseUrl: "https://api.deepseek.com" },
   { type: "openrouter", label: "OpenRouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
   { type: "ollama", label: "Ollama", name: "本地 Ollama", baseUrl: "http://127.0.0.1:11434/v1" },
   { type: "custom", label: "自定义", name: "自定义 Provider", baseUrl: "" },

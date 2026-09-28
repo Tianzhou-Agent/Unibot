@@ -336,3 +336,35 @@ def test_reported_usage_remains_exact() -> None:
         "completion_tokens": 3,
         "total_tokens": 15,
     }
+
+
+@pytest.mark.asyncio
+async def test_connection_error_records_underlying_cause() -> None:
+    recorded_calls: dict[str, LLMCallRecord] = {}
+
+    async def record_call(call: LLMCallRecord) -> None:
+        recorded_calls[call.call_id] = call
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("proxy refused", request=request)
+
+    settings = AgentSettings(
+        _env_file=None,
+        llm_base_url="https://provider.invalid/v1",
+        llm_api_key="test-key",
+        llm_model="test-model",
+    )
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    client = OpenAICompatibleClient(settings, http_client, call_sink=record_call)
+    with pytest.raises(PlatformError, match="could not be reached"):
+        await client.complete(messages=[{"role": "user", "content": "Hello"}], tools=[])
+    await http_client.aclose()
+
+    failed = next(call for call in recorded_calls.values() if call.status == "failed")
+    assert "proxy refused" in (failed.error or "")
+    assert failed.response == {
+        "error": {
+            "type": "APIConnectionError",
+            "message": failed.error,
+        }
+    }

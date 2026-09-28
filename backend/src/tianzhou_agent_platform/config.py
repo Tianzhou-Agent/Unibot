@@ -59,6 +59,12 @@ class AgentSettings(BaseSettings):
         le=32,
         validation_alias=AliasChoices("UNIBOT_MAX_AGENT_ITERATIONS", "max_agent_iterations"),
     )
+    # Server-owned rollout switch for the native create_agent path (plan §10.2).
+    # Never expose an untrusted client engine selector.
+    native_agent_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_NATIVE_AGENT_ENABLED", "native_agent_enabled"),
+    )
     context_compression_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("UNIBOT_CONTEXT_COMPRESSION_ENABLED", "context_compression_enabled"),

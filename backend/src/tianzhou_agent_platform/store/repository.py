@@ -15,14 +15,15 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.chat import ApprovalRecord, LLMCallRecord, TraceRecord
-from tianzhou_agent_platform.core.feedback import FeedbackRecord
-from tianzhou_agent_platform.core.conversation import Conversation
+from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
-from tianzhou_agent_platform.core.model_settings import ModelProviderRecord
+from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceUpdate
+from tianzhou_agent_platform.model_providers.models import ModelProviderRecord
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
-from tianzhou_agent_platform.core.repository import (
+from tianzhou_agent_platform.store.memory_repository import (
     AINA_PROJECTS_RESOURCE,
     AINAS_RESOURCE,
     APPROVALS_RESOURCE,

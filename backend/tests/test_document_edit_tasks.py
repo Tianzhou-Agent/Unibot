@@ -210,8 +210,9 @@ def test_edit_task_sections_can_be_merged_or_abandoned_independently(tmp_path: P
 
 
 def test_failed_task_can_retry_unfinished_sections_and_delete_abandoned_result(tmp_path: Path) -> None:
+    # The worker asks up to three times before failing the section; the user retry then recovers it.
     llm = ScriptedLLM([
-        assistant("The model did not call the draft tool."),
+        *[assistant("The model did not call the draft tool.") for _ in range(3)],
         _draft("## One\n\nRecovered draft."),
     ])
     with TestClient(_app(tmp_path, llm)) as client:
@@ -384,3 +385,70 @@ async def test_worker_recovers_a_task_interrupted_after_drafts_finished(tmp_path
     )
 
     assert recovered.status == "reviewing"
+
+
+def test_edit_task_drafts_with_the_configured_native_model_without_a_provider(tmp_path: Path) -> None:
+    # Production builds a native model from the llm_* settings; it has no legacy complete() and no model-settings
+    # provider exists, which used to fail every edit task with "No model provider is configured".
+    from langchain_core.messages import AIMessage
+
+    from tests.support.fake_chat_model import ScriptedChatModel
+
+    llm = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "submit_document_section_draft",
+                        "args": {"section_content": "## One\n\nAI one."},
+                        "id": "call_draft",
+                    }
+                ],
+            )
+        ]
+    )
+    assert not hasattr(llm, "complete")
+    with TestClient(_app(tmp_path, llm)) as client:  # type: ignore[arg-type]
+        client.post("/documents", json={"name": "guide", "content": "# Guide\n\n## One\n\nOld one.\n"})
+        created = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={"description": "Improve chapter one", "sections": [{"heading": "One", "occurrence": 1}]},
+        )
+        task = _wait_for_review(client, created.json()["id"])
+
+    assert task["status"] == "reviewing"
+    assert task["sections"][0]["draft_content"] == "## One\n\nAI one."
+
+
+def test_edit_task_asks_again_when_the_model_skips_the_draft_function(tmp_path: Path) -> None:
+    # Live providers sometimes ignore the forced submit function; drafting is side-effect free, so the worker
+    # retries instead of failing the job on the first reply.
+    llm = ScriptedLLM([assistant("Here is a nicer version of the section."), _draft("## One\n\nAI one.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": "# Guide\n\n## One\n\nOld one.\n"})
+        created = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={"description": "Improve chapter one", "sections": [{"heading": "One", "occurrence": 1}]},
+        )
+        task = _wait_for_review(client, created.json()["id"])
+
+    assert task["status"] == "reviewing"
+    assert task["sections"][0]["draft_content"] == "## One\n\nAI one."
+    assert len(llm.calls) == 2
+
+
+def test_edit_task_accepts_a_section_returned_as_plain_markdown(tmp_path: Path) -> None:
+    # Live providers (e.g. MiMo) often ignore the forced submit function and reply with the revised section as
+    # text; it is validated like a submitted draft instead of failing the job.
+    llm = ScriptedLLM([assistant("## One\n\nFormal one.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": "# Guide\n\n## One\n\nOld one.\n"})
+        created = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={"description": "Improve chapter one", "sections": [{"heading": "One", "occurrence": 1}]},
+        )
+        task = _wait_for_review(client, created.json()["id"])
+
+    assert task["status"] == "reviewing"
+    assert task["sections"][0]["draft_content"] == "## One\n\nFormal one."

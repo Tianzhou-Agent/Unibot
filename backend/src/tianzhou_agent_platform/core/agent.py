@@ -7,13 +7,15 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from time import perf_counter
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Awaitable, Callable, Literal, NoReturn, TypedDict, cast
 from uuid import uuid4
 
+from pydantic import Field
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.runtime import Runtime
 
 from tianzhou_agent_platform.aina.builtin import (
     FORGET_TOOL_ID,
@@ -68,12 +70,16 @@ from tianzhou_agent_platform.core.context_compression import (
     summary_message,
     summary_request,
 )
+from tianzhou_agent_platform.core.capability_discovery import aina_graph, model_scope_details
 from tianzhou_agent_platform.core.conversation import Conversation, ConversationCreate, ConversationUpdate
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
-from tianzhou_agent_platform.core.llm import EventSink, LLMClient
-from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, use_model_runtime
+from tianzhou_agent_platform.core.llm import EventSink
+from tianzhou_agent_platform.core.model_settings import (
+    current_context_window_tokens,
+    current_model_runtime,
+    use_model_runtime,
+)
 from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.schema import validate_value
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, task_tool_specs
 from tianzhou_agent_platform.tasks.service import TaskService
@@ -91,6 +97,191 @@ _HIGH_RISK_MARKERS = (
 )
 
 logger = logging.getLogger(__name__)
+
+from tianzhou_agent_platform.core.run_events import NULL_RUN_EVENTS  # noqa: E402
+
+
+def _native_to_wire(message: Any) -> dict[str, Any] | None:
+    if isinstance(message, SystemMessage):
+        return {"role": "system", "content": message.content if isinstance(message.content, str) else str(message.content or "")}
+    if isinstance(message, HumanMessage):
+        return {"role": "user", "content": message.content if isinstance(message.content, str) else str(message.content or "")}
+    if isinstance(message, ToolMessage):
+        return {
+            "role": "tool",
+            "content": message.content if isinstance(message.content, str) else str(message.content or ""),
+            "tool_call_id": message.tool_call_id,
+            "name": message.name,
+        }
+    if isinstance(message, AIMessage):
+        content = message.content if isinstance(message.content, str) else str(message.content or "")
+        tool_calls = []
+        for call in message.tool_calls or []:
+            tool_calls.append(
+                {
+                    "id": call.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": call.get("name"),
+                        "arguments": json.dumps(call.get("args") or {}, ensure_ascii=False),
+                    },
+                }
+            )
+        item: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            item["tool_calls"] = tool_calls
+        return item
+    return None
+
+
+def _wire_to_native(messages: list[dict[str, Any]], *, skip_leading_system: bool = True) -> list[Any]:
+    """Provider wire messages -> native messages.
+
+    The leading system prompt travels separately (the scope policy sets it per request); later system messages,
+    such as the context-compression summary, are part of the transcript and are kept.
+    """
+    native: list[Any] = []
+    for index, item in enumerate(messages):
+        role = item.get("role")
+        content = item.get("content") or ""
+        if role == "system":
+            if index > 0 or not skip_leading_system:
+                native.append(SystemMessage(content=content))
+            continue
+        if role == "user":
+            native.append(HumanMessage(content=content))
+        elif role == "tool":
+            native.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=str(item.get("tool_call_id") or ""),
+                    name=str(item.get("name") or ""),
+                )
+            )
+        else:
+            tool_calls = []
+            for call in item.get("tool_calls") or []:
+                function = call.get("function") or {}
+                args = function.get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw": args}
+                tool_calls.append(
+                    {"name": function.get("name") or call.get("name"), "args": args, "id": call.get("id")}
+                )
+            native.append(AIMessage(content=content, tool_calls=tool_calls))
+    return native
+
+
+def _project_scope_history(messages: list[Any], visible_names: set[str]) -> list[Any]:
+    """Model-request view of the transcript: calls outside the visible scope become non-executable history."""
+    wire = [record for message in messages if (record := _native_to_wire(message)) is not None]
+    projected = _provider_messages_for_scope(wire, active_function_names=visible_names)
+    return _wire_to_native(projected, skip_leading_system=False)
+
+
+def _is_chat_model(value: Any) -> bool:
+    return isinstance(value, BaseChatModel)
+
+
+async def _format_capability_error_async(exc: Exception, request: Any) -> str | None:
+    from tianzhou_agent_platform.services.agent_integration.capability_tools import (
+        format_error_envelope,
+    )
+
+    return format_error_envelope(exc)
+
+
+class _ChatModelAdapter(BaseChatModel):
+    """Wrap a legacy complete()-style client as a native BaseChatModel."""
+
+    model_name: str = "legacy-adapter"
+    client: Any = Field(default=None, exclude=True)
+
+    @property
+    def _llm_type(self) -> str:
+        return "legacy-adapter"
+
+    def bind_tools(self, tools: Any, *, tool_choice: Any = None, **kwargs: Any) -> BaseChatModel:
+        return self.bind(tools=tools, tool_choice=tool_choice, **kwargs)
+
+    def bind(self, **kwargs: Any) -> BaseChatModel:
+        object.__setattr__(self, "_bound_kwargs", {**getattr(self, "_bound_kwargs", {}), **kwargs})
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        raise RuntimeError("sync generate is not supported for the legacy adapter")
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+
+        from tianzhou_agent_platform.services.agent_integration.history import native_to_archive
+
+        payload: list[dict[str, Any]] = []
+        for message in messages:
+            record = native_to_archive(message)
+            item: dict[str, Any] = {"role": record.role, "content": record.content}
+            if record.tool_calls:
+                item["tool_calls"] = record.tool_calls
+            if record.tool_call_id:
+                item["tool_call_id"] = record.tool_call_id
+            if record.name:
+                item["name"] = record.name
+            payload.append(item)
+        bound = getattr(self, "_bound_kwargs", {})
+        tools = kwargs.get("tools", bound.get("tools")) or []
+        tool_choice = kwargs.get("tool_choice", bound.get("tool_choice"))
+        # Normalize BaseTool objects to OpenAI dicts for the legacy port.
+        tool_dicts: list[dict[str, Any]] = []
+        for item in tools:
+            if isinstance(item, dict):
+                tool_dicts.append(item)
+            else:
+                tool_dicts.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": getattr(item, "name", ""),
+                            "description": getattr(item, "description", ""),
+                            "parameters": getattr(item, "args_schema", None)
+                            and getattr(item.args_schema, "model_json_schema", lambda: {})()
+                            or {},
+                        },
+                    }
+                )
+        result = await self.client.complete(
+            messages=payload,
+            tools=tool_dicts,
+            tool_choice=tool_choice,
+            event_sink=None,
+        )
+        message = result.message
+        content = message.get("content") or ""
+        raw_calls = message.get("tool_calls") or []
+        tool_calls = []
+        for call in raw_calls:
+            function = call.get("function") or {}
+            args = function.get("arguments") or "{}"
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args) if args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {"_raw": args}
+            tool_calls.append({"name": function.get("name"), "args": args, "id": call.get("id")})
+        from langchain_core.outputs import ChatGeneration, ChatResult
+
+        ai = AIMessage(
+            content=content,
+            tool_calls=tool_calls or [],
+            response_metadata={"finish_reason": result.finish_reason or ("tool_calls" if tool_calls else "stop")},
+            usage_metadata={
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "total_tokens": result.input_tokens + result.output_tokens,
+            },
+        )
+        return ChatResult(generations=[ChatGeneration(message=ai)])
 
 
 @dataclass(slots=True)
@@ -153,20 +344,12 @@ class AgentState(TypedDict, total=False):
     base_system_prompt: str
 
 
-class AgentContext(TypedDict):
-    capabilities: dict[str, Capability]
-    recovery_capabilities: dict[str, Capability]
-    event_sink: EventSink | None
-
-
 class AgentRuntime:
-    """Bounded LangChain tool-calling loop orchestrated by a LangGraph state graph.
+    """create_agent-backed tool-calling workflow with Unibot product invariants.
 
-    LangChain supplies the provider/tool-call abstraction, while LangGraph
-    supplies the model -> tools -> model state machine. The platform keeps its
-    product invariants: persistable wire messages, a hard iteration budget, a
-    tool result for every call, approval recovery, Trace events, and capability
-    failure isolation.
+    The model→tools loop is owned by langchain.agents.create_agent. This class
+    keeps application responsibilities: capability resolution, repository
+    bookkeeping, approval recovery, widgets, and public response schemas.
     """
 
     def __init__(
@@ -174,7 +357,7 @@ class AgentRuntime:
         *,
         settings: AgentSettings,
         repository: InMemoryRepository,
-        llm: LLMClient,
+        llm: Any,
         gateway: RemoteCapabilityGateway,
         document_service: DocumentService | None = None,
         document_edit_task_service: DocumentEditTaskService | None = None,
@@ -182,10 +365,17 @@ class AgentRuntime:
         task_service: TaskService | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
         auth_enforced: bool = False,
+        events: Any | None = None,
+        llm_call_sink: Callable[[Any], Awaitable[None]] | None = None,
+        model_factory: Callable[[Any], BaseChatModel] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.llm = llm
+        if _is_chat_model(llm):
+            self._model = llm
+        else:
+            self._model = _ChatModelAdapter(client=llm)
         self.gateway = gateway
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
@@ -193,423 +383,50 @@ class AgentRuntime:
         self.task_service = task_service
         self.checkpointer = checkpointer
         self.auth_enforced = auth_enforced
-        graph = StateGraph(AgentState, context_schema=AgentContext)
-        graph.add_node("model", self._model_node)
-        graph.add_node("tools", self._tool_node)
-        graph.add_conditional_edges(START, self._entry_route, {"model": "model", "tools": "tools"})
-        graph.add_conditional_edges("model", self._after_model, {"tools": "tools", "end": END})
-        graph.add_conditional_edges("tools", self._after_tools, {"model": "model", "end": END})
-        self._graph = graph.compile(checkpointer=checkpointer)
+        self.events = events or NULL_RUN_EVENTS
+        # Persists /llm-calls records of the agent's model requests (the sink is injected by the app).
+        self.llm_call_sink = llm_call_sink
+        # Builds the native model for the actor's selected provider model (model settings). Without it the
+        # configured model serves every request (e.g. an explicitly injected model).
+        self.model_factory = model_factory
+        self._runtime_models: dict[tuple[Any, ...], BaseChatModel] = {}
 
-    @staticmethod
-    def _entry_route(state: AgentState) -> str:
-        return "tools" if state.get("resume") else "model"
+    async def _record_user_request(
+        self,
+        trace_id: str,
+        *,
+        conversation_id: str,
+        content: str,
+        saved: Any,
+        requested_capability: str | None,
+    ) -> None:
+        import hashlib
+        import re
 
-    @staticmethod
-    def _after_model(state: AgentState) -> str:
-        if state.get("final_status") is not None:
-            return "end"
-        last = state["messages"][-1]
-        return "tools" if last.get("tool_calls") else "end"
-
-    @staticmethod
-    def _after_tools(state: AgentState) -> str:
-        if state.get("approval") is not None or state.get("final_status") is not None:
-            return "end"
-        return "model"
+        redacted = re.sub(
+            r"(password|api_key|token|secret)=[^\s&]+",
+            r"\1=[REDACTED]",
+            content,
+            flags=re.IGNORECASE,
+        )
+        await self.events.push(
+            trace_id,
+            kind="user.request",
+            status="completed",
+            conversation_id=conversation_id,
+            details={
+                "message_id": getattr(saved, "id", "") or "",
+                "content": redacted,
+                "content_length": len(content),
+                "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "requested_capability": requested_capability,
+            },
+        )
 
     @staticmethod
     async def _emit(sink: EventSink | None, event: dict[str, Any]) -> None:
         if sink is not None:
             await sink(event)
-
-    async def _model_node(self, state: AgentState, runtime: Runtime[AgentContext]) -> AgentState:
-        capabilities = runtime.context["capabilities"]
-        event_sink = runtime.context.get("event_sink")
-        iterations = state.get("iterations", 0) + 1
-        messages_with_tasks = await self._messages_with_task_projection(state)
-        provider_messages = _provider_messages_for_scope(
-            messages_with_tasks,
-            active_function_names=set(capabilities),
-        )
-        input_budget = request_input_budget(current_context_window_tokens(self.settings.context_window_tokens))
-        input_tokens = estimate_request_tokens(provider_messages, state["tool_definitions"])
-        if input_tokens > input_budget:
-            content = (
-                f"The conversation exceeds the model context budget ({input_tokens} estimated input tokens; "
-                f"{input_budget} available after reserving space for the answer). "
-                "The original messages and tool results were preserved. Narrow the request or use a model "
-                "with a larger context window to continue."
-            )
-            await self._emit(event_sink, {"type": "error", "code": "CONTEXT_BUDGET_EXCEEDED", "source": "model"})
-            return {
-                **state,
-                "messages": [*state["messages"], {"role": "assistant", "content": content}],
-                "final_content": content,
-                "final_status": "failed",
-            }
-        tool_choice: dict[str, Any] | str | None = None
-        if iterations == 1 and state.get("forced_function"):
-            tool_choice = {
-                "type": "function",
-                "function": {"name": state["forced_function"]},
-            }
-        result = await self.llm.complete(
-            messages=provider_messages,
-            tools=state["tool_definitions"],
-            tool_choice=tool_choice,
-            event_sink=event_sink,
-            trace_id=state["trace_id"],
-            context_type="conversation",
-            context_id=state["conversation_id"],
-        )
-
-        message = result.message
-        if result.finish_reason in {"length", "max_tokens"}:
-            notice = "[Incomplete response: the model reached its output limit. Please ask it to continue.]"
-            partial = message.get("content") or ""
-            messages = [*state["messages"], message]
-            if message.get("tool_calls"):
-                for call in message["tool_calls"]:
-                    await self._append_tool_error(
-                        state, event_sink, messages,
-                        call_id=str(call.get("id") or ""),
-                        name=str((call.get("function") or {}).get("name") or ""),
-                        code="MODEL_OUTPUT_TRUNCATED",
-                        message="The model response was incomplete; this tool call was not executed.",
-                    )
-                messages.append({"role": "assistant", "content": notice})
-            else:
-                messages[-1] = {**message, "content": f"{partial}\n\n{notice}" if partial else notice}
-            await self._emit(event_sink, {"type": "message.delta", "delta": f"\n\n{notice}"})
-            await self._emit(event_sink, {"type": "error", "code": "MODEL_OUTPUT_TRUNCATED", "source": "model"})
-            return {
-                **state,
-                "messages": messages,
-                "iterations": iterations,
-                "usage_input": state.get("usage_input", 0) + result.input_tokens,
-                "usage_output": state.get("usage_output", 0) + result.output_tokens,
-                "usage_estimated": state.get("usage_estimated", False) or result.usage_estimated,
-                "final_content": f"{partial}\n\n{notice}" if partial else notice,
-                "final_status": "failed",
-            }
-        if not message.get("content") and not message.get("tool_calls"):
-            message = {"role": "assistant", "content": "The model returned an empty response."}
-            final_status: Literal["completed", "approval_required", "failed"] = "failed"
-        else:
-            final_status = "completed"
-        messages = [*state["messages"], message]
-        update: AgentState = {
-            **state,
-            "messages": messages,
-            "iterations": iterations,
-            "usage_input": state.get("usage_input", 0) + result.input_tokens,
-            "usage_output": state.get("usage_output", 0) + result.output_tokens,
-            "usage_estimated": state.get("usage_estimated", False) or result.usage_estimated,
-        }
-        if not message.get("tool_calls"):
-            update["final_content"] = message.get("content") or ""
-            update["final_status"] = final_status
-        return update
-
-    async def _tool_node(self, state: AgentState, runtime: Runtime[AgentContext]) -> AgentState:
-        messages = list(state["messages"])
-        assistant = next(
-            (item for item in reversed(messages) if item.get("role") == "assistant" and item.get("tool_calls")),
-            None,
-        )
-        if assistant is None:
-            raise PlatformError("INTERNAL_ERROR", "No assistant tool-call message is available", status_code=500)
-        tool_calls = assistant.get("tool_calls") or []
-        capabilities = runtime.context["capabilities"]
-        event_sink = runtime.context.get("event_sink")
-        approved = state.get("approved_call_ids", set())
-        risky_calls = []
-        risky_names = []
-        for call in tool_calls:
-            capability = capabilities.get((call.get("function") or {}).get("name", ""))
-            if capability and capability.requires_confirmation and call.get("id") not in approved:
-                function = call.get("function") or {}
-                arguments_text = function.get("arguments") or "{}"
-                try:
-                    arguments = (
-                        json.loads(arguments_text)
-                        if isinstance(arguments_text, str)
-                        else arguments_text
-                    )
-                    if not isinstance(arguments, dict):
-                        continue
-                    validate_value(
-                        arguments,
-                        capability.input_schema,
-                        label=f"Capability {capability.capability_id} arguments",
-                    )
-                except (TypeError, ValueError, json.JSONDecodeError, PlatformError):
-                    continue
-                risky_calls.append(call)
-                risky_names.append(capability.display_name)
-        if risky_calls:
-            approval = ApprovalRecord(
-                id=f"approval_{uuid4().hex}",
-                conversation_id=state["conversation_id"],
-                user_id=state["user_id"],
-                tenant_id=state["tenant_id"],
-                trace_id=state["trace_id"],
-                tool_calls=tool_calls,
-                capability_names=risky_names,
-            )
-            await self.repository.create_approval(approval)
-            await self._emit(
-                event_sink,
-                {
-                    "type": "approval.required",
-                    "approval_id": approval.id,
-                    "capabilities": risky_names,
-                },
-            )
-            return {
-                **state,
-                "approval": approval,
-                "final_content": f"Approval is required before running: {', '.join(risky_names)}.",
-                "final_status": "approval_required",
-            }
-
-        call_counts = dict(state.get("call_counts", {}))
-        retryable_calls = set(state.get("retryable_calls", set()))
-        widgets = list(state.get("widgets", []))
-        async_task_message: str | None = None
-        tool_failed = False
-        next_capabilities = capabilities
-        scope_activated = False
-        available_tool_ids = [
-            capability.capability_id for capability in capabilities.values() if capability.kind == "tool"
-        ]
-        for call in tool_calls:
-            function = call.get("function") or {}
-            name = str(function.get("name") or "")
-            call_id = str(call.get("id") or f"call_{uuid4().hex}")
-            arguments_text = function.get("arguments") or "{}"
-            capability = capabilities.get(name)
-            if capability is None:
-                tool_failed = True
-                recovery = _capability_scope_recovery(
-                    name,
-                    runtime.context["recovery_capabilities"],
-                )
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="CAPABILITY_SCOPE_REQUIRED" if recovery else "RESOURCE_NOT_FOUND",
-                    message=(
-                        f"Capability {name!r} belongs to AINA {recovery['owner_aina_id']!r}, which is not "
-                        "active in the current scope."
-                        if recovery
-                        else f"Capability {name!r} is unavailable."
-                    ),
-                    capability=recovery["capability"] if recovery else None,
-                    recovery=recovery,
-                )
-                continue
-            try:
-                arguments = json.loads(arguments_text) if isinstance(arguments_text, str) else arguments_text
-                if not isinstance(arguments, dict):
-                    raise ValueError("arguments must decode to an object")
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="INVALID_REQUEST",
-                    message=f"Invalid JSON arguments: {exc}",
-                )
-                continue
-
-            normalized_arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-            signature = hashlib.sha256(f"{name}:{normalized_arguments}".encode()).hexdigest()
-            attempts = call_counts.get(signature, 0)
-            if attempts and (signature not in retryable_calls or attempts >= 3):
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="CONFLICT",
-                    message="The same capability call was already attempted in this run.",
-                )
-                continue
-            call_counts[signature] = attempts + 1
-            retryable_calls.discard(signature)
-
-            try:
-                validate_value(
-                    arguments,
-                    capability.input_schema,
-                    label=f"Capability {capability.capability_id} arguments",
-                )
-            except PlatformError as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code=exc.code,
-                    message=exc.message,
-                    capability=capability,
-                )
-                continue
-            except (TypeError, ValueError) as exc:
-                tool_failed = True
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="INVALID_REQUEST",
-                    message=f"Capability arguments failed validation: {exc}",
-                    capability=capability,
-                )
-                continue
-
-            if capability.kind == "aina":
-                aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-                if scope_activated:
-                    tool_failed = True
-                    await self._append_tool_error(
-                        state,
-                        event_sink,
-                        messages,
-                        call_id=call_id,
-                        name=name,
-                        code="CONFLICT",
-                        message="Only one AINA scope can be activated per model response.",
-                        capability=capability,
-                    )
-                    continue
-                if aina.manifest.runtime.type == "builtin":
-                    next_capabilities = await self._activate_builtin_aina_scope(
-                        state,
-                        event_sink=event_sink,
-                        capability=capability,
-                        call_id=call_id,
-                        function_name=name,
-                        arguments=arguments,
-                        messages=messages,
-                    )
-                    scope_activated = True
-                    continue
-
-            await self._emit(
-                event_sink,
-                {"type": "tool.requested", "kind": capability.kind, "id": capability.capability_id},
-            )
-
-            try:
-                outcome = await self._invoke_resolved_capability(
-                    state=state,
-                    event_sink=event_sink,
-                    capability=capability,
-                    call_id=call_id,
-                    function_name=name,
-                    arguments=arguments,
-                    available_tool_ids=available_tool_ids,
-                    messages=messages,
-                    widgets=widgets,
-                )
-                widgets = outcome.widget_state
-                if outcome.next_capabilities is not None:
-                    next_capabilities = outcome.next_capabilities
-                scope_activated = scope_activated or outcome.activated_scope
-                result_payload = outcome.result
-                await self._emit(
-                    event_sink,
-                    {"type": "tool.completed", "kind": capability.kind, "id": capability.capability_id},
-                )
-                if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
-                    task = result_payload.get("task") if isinstance(result_payload, dict) else None
-                    if isinstance(task, dict):
-                        title = str(task.get("title") or "文档修改任务")
-                        sections = task.get("sections")
-                        section_count = len(sections) if isinstance(sections, list) else 0
-                        async_task_message = (
-                            f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
-                            "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
-                            "正式文档会在您确认合并后才更新。"
-                        )
-            except PlatformError as exc:
-                tool_failed = True
-                retryable = (
-                    exc.retryable
-                    and capability.kind == "tool"
-                    and cast(ToolRecord, capability.value).side_effect_level == "none"
-                    and call_counts[signature] < 3
-                )
-                if retryable:
-                    retryable_calls.add(signature)
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code=exc.code,
-                    message=exc.message,
-                    capability=capability,
-                    retryable=retryable,
-                )
-            except (TypeError, ValueError) as exc:
-                tool_failed = True
-                dependency_failure = capability.kind == "aina"
-                await self._append_tool_error(
-                    state,
-                    event_sink,
-                    messages,
-                    call_id=call_id,
-                    name=name,
-                    code="DEPENDENCY_FAILED" if dependency_failure else "INVALID_REQUEST",
-                    message=(
-                        f"The AINA returned invalid data: {exc}"
-                        if dependency_failure
-                        else f"Capability arguments produced invalid data: {exc}"
-                    ),
-                    capability=capability,
-                )
-
-        runtime.context["capabilities"] = next_capabilities
-        update: AgentState = {
-            **state,
-            "messages": messages,
-            "call_counts": call_counts,
-            "retryable_calls": retryable_calls,
-            "approval": None,
-            "widgets": widgets,
-            "tool_definitions": [item.llm_definition() for item in next_capabilities.values()],
-        }
-        if async_task_message is not None and not tool_failed:
-            messages.append({"role": "assistant", "content": async_task_message})
-            update["messages"] = messages
-            update["final_content"] = async_task_message
-            update["final_status"] = "completed"
-        elif state.get("iterations", 0) >= state["max_iterations"]:
-            limit_message = (
-                f"I stopped after {state['max_iterations']} model iterations because the capability loop "
-                "did not produce a final answer."
-            )
-            messages.append({"role": "assistant", "content": limit_message})
-            update["messages"] = messages
-            update["final_content"] = limit_message
-            update["final_status"] = "failed"
-        return update
 
     async def _invoke_resolved_capability(
         self,
@@ -724,43 +541,6 @@ class AgentRuntime:
             activated_scope=activated_scope,
         )
 
-    async def _activate_builtin_aina_scope(
-        self,
-        state: AgentState,
-        *,
-        event_sink: EventSink | None,
-        capability: Capability,
-        call_id: str,
-        function_name: str,
-        arguments: dict[str, Any],
-        messages: list[dict[str, Any]],
-    ) -> dict[str, Capability]:
-        scoped_capabilities = await self._activate_aina_model_scope(
-            state,
-            event_sink=event_sink,
-            capability=capability,
-            call_id=call_id,
-            function_name=function_name,
-            arguments=arguments,
-            messages=messages,
-        )
-        payload = {
-            "activated": True,
-            "aina_id": capability.capability_id,
-            "available_capability_ids": sorted(
-                item.capability_id for item in scoped_capabilities.values()
-            ),
-        }
-        messages.append(
-            {
-                "role": "tool",
-                "name": function_name,
-                "tool_call_id": call_id,
-                "content": json.dumps(payload, ensure_ascii=False),
-            }
-        )
-        return scoped_capabilities
-
     async def _activate_aina_model_scope(
         self,
         state: AgentState,
@@ -799,6 +579,32 @@ class AgentRuntime:
                 "id": capability.capability_id,
             },
         )
+        await self.events.push(
+            state["trace_id"],
+            kind="routing.scope.activated",
+            status="completed",
+            conversation_id=conversation.id,
+            target_type="aina",
+            target_id=capability.capability_id,
+            details={
+                "call_id": call_id,
+                "function_name": function_name,
+                "arguments": arguments,
+                "model_scope": model_scope_details(
+                    scoped_capabilities,
+                    forced_capability=None,
+                    forced_function=None,
+                ),
+            },
+        )
+        await self._record_scope_resolution(
+            state["trace_id"],
+            conversation,
+            selected=capability,
+            source="model_selection",
+            requested_capability=None,
+            preferred_aina_id=None,
+        )
         return scoped_capabilities
 
     async def _append_tool_error(
@@ -815,28 +621,7 @@ class AgentRuntime:
         recovery: dict[str, Any] | None = None,
         retryable: bool = False,
     ) -> None:
-        instruction = "The capability did not complete. Do not claim success; report the failure."
-        if retryable:
-            instruction = "The read-only capability failed transiently. You may retry the same call; do not claim success."
-        if recovery is not None:
-            instruction = (
-                f"Activate AINA {recovery['owner_aina_id']} by calling "
-                f"{recovery['entry_function_name']} with an empty object, then retry with the advertised tool. "
-                "Do not claim that the capability completed before its tool succeeds."
-            )
-        payload = {
-            "error": {
-                "code": code,
-                "message": message,
-                "retryable": retryable,
-            },
-            "instruction": instruction,
-        }
-        if recovery is not None:
-            payload["recovery"] = {
-                "owner_aina_id": recovery["owner_aina_id"],
-                "entry_function_name": recovery["entry_function_name"],
-            }
+        payload = _tool_error_payload(code, message, retryable=retryable, recovery=recovery)
         messages.append(
             {
                 "role": "tool",
@@ -874,16 +659,43 @@ class AgentRuntime:
             if request.workspace_id is not None and request.workspace_id != conversation.workspace_id:
                 raise conflict("Requested workspace does not match the conversation")
         trace_id = trace_id or f"trace_{uuid4().hex}"
+        await self.events.start(
+            trace_id=trace_id,
+            conversation_id=conversation.id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            input_data={
+                "message": request.message,
+                "requested_capability": request.capability,
+                "preferred_aina_id": request.preferred_aina_id,
+            },
+        )
         try:
             await self.repository.start_conversation_run(conversation.id, trace_id)
-            await self.repository.close_dangling_tool_calls(
+            cancelled = await self.repository.close_dangling_tool_calls(
                 conversation.id,
                 trace_id=trace_id,
             )
-            await self.repository.append_provider_messages(
+            for item in cancelled or []:
+                await self.events.push(
+                    getattr(item, "trace_id", trace_id),
+                    kind="approval.cancelled",
+                    status="completed",
+                    conversation_id=conversation.id,
+                    details={"approval_id": getattr(item, "id", None)},
+                )
+                await self.events.finish(getattr(item, "trace_id", trace_id), "completed")
+            appended_user = await self.repository.append_provider_messages(
                 conversation.id,
                 [{"role": "user", "content": request.message}],
                 trace_id=trace_id,
+            )
+            await self._record_user_request(
+                trace_id,
+                conversation_id=conversation.id,
+                content=request.message,
+                saved=appended_user[-1] if appended_user else None,
+                requested_capability=request.capability,
             )
             conversation = await self.repository.get_conversation(conversation.id)
             requested_capability = request.capability
@@ -933,6 +745,11 @@ class AgentRuntime:
             error=response.content if response.status == "failed" else None,
             expected_trace_id=trace_id,
         )
+        await self._finish_root_span(trace_id, response)
+        await self.events.finish(
+            trace_id,
+            "completed" if response.status == "completed" else ("approval_required" if response.status == "approval_required" else "failed"),
+        )
         return response
 
     async def _cleanup_failed_run(
@@ -972,6 +789,26 @@ class AgentRuntime:
         latest_user_message = conversation.messages[-1].content
         memory_context = await self._memory_context(conversation, latest_user_message)
         all_capabilities = await self._available_capabilities(conversation)
+        resolved: Capability | None = None
+        source = "unified_entry"
+        if requested_capability is not None:
+            resolved = all_capabilities.get(
+                self._resolve_forced_capability(requested_capability, all_capabilities) or ""
+            )
+            source = requested_source or "explicit_capability"
+        elif preferred_aina_id is not None:
+            resolved = all_capabilities.get(
+                self._resolve_forced_capability(f"aina:{preferred_aina_id}", all_capabilities) or ""
+            )
+            source = "preferred_aina"
+        await self._record_scope_resolution(
+            trace_id,
+            conversation,
+            selected=resolved,
+            source=source,
+            requested_capability=requested_capability,
+            preferred_aina_id=preferred_aina_id,
+        )
         if requested_capability is not None:
             forced_function = self._resolve_forced_capability(requested_capability, all_capabilities)
             if forced_function is None:
@@ -1037,6 +874,33 @@ class AgentRuntime:
             memory_context=memory_context,
         )
 
+    async def _record_scope_resolution(
+        self,
+        trace_id: str,
+        conversation: Conversation,
+        *,
+        selected: Capability | None,
+        source: str,
+        requested_capability: str | None,
+        preferred_aina_id: str | None,
+    ) -> None:
+        await self.events.push(
+            trace_id,
+            kind="routing.scope.resolved",
+            status="completed",
+            conversation_id=conversation.id,
+            target_type=selected.kind if selected is not None else "system",
+            target_id=selected.capability_id if selected is not None else None,
+            details={
+                "source": source,
+                "requested_capability": requested_capability,
+                "preferred_aina_id": preferred_aina_id,
+                "active_aina_ids": conversation.active_aina_ids,
+                "primary_aina_id": conversation.primary_aina_id,
+                "last_aina_id": conversation.last_aina_id,
+            },
+        )
+
     async def _run_selected_aina(
         self,
         *,
@@ -1059,6 +923,29 @@ class AgentRuntime:
             memory_context=memory_context,
         )
 
+    async def _finish_root_span(self, trace_id: str, response: ChatResponse) -> None:
+        """Close the run's root span with the public response (a paused run keeps it open for the resume)."""
+        root_span_id = self.events.root_span_id(trace_id)
+        if response.status == "approval_required" or root_span_id is None:
+            return
+        await self.events.finish_span(
+            trace_id,
+            root_span_id,
+            "completed" if response.status == "completed" else "failed",
+            output_data={
+                "content": response.content,
+                "status": response.status,
+                "message_id": response.message_id,
+                "widgets": [widget.model_dump(mode="json") for widget in response.widgets],
+            },
+            attributes={
+                "iterations": response.iterations,
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "usage_estimated": response.usage.estimated,
+            },
+        )
+
     async def confirm(self, approval_id: str, *, user_id: str, tenant_id: str) -> ChatResponse:
         approval = await self.repository.get_approval(approval_id)
         if approval.user_id != user_id or approval.tenant_id != tenant_id:
@@ -1073,7 +960,16 @@ class AgentRuntime:
         if not conversation.messages or not conversation.messages[-1].tool_calls:
             raise PlatformError("CONFLICT", "The approval no longer has a pending tool call", status_code=409)
         await self.repository.set_approval_status(approval_id, "approved")
+        await self.events.push(
+            approval.trace_id,
+            kind="approval.confirmed",
+            status="completed",
+            conversation_id=approval.conversation_id,
+            details={"approval_id": approval_id},
+        )
         await self.repository.start_conversation_run(conversation.id, approval.trace_id)
+        # The resumed tool calls and model requests are recorded as children of the run's root span.
+        await self.events.resume(approval.trace_id, conversation_id=conversation.id)
         try:
             runtime_model = await self.repository.get_default_model_runtime(
                 user_id=user_id,
@@ -1101,6 +997,11 @@ class AgentRuntime:
             error=response.content if response.status == "failed" else None,
             expected_trace_id=approval.trace_id,
         )
+        await self._finish_root_span(approval.trace_id, response)
+        await self.events.finish(
+            approval.trace_id,
+            "completed" if response.status == "completed" else "failed",
+        )
         return response
 
     async def deny(self, approval_id: str, *, user_id: str, tenant_id: str) -> ApprovalRecord:
@@ -1110,6 +1011,13 @@ class AgentRuntime:
         if approval.status != "pending":
             raise PlatformError("CONFLICT", f"Approval is already {approval.status}", status_code=409)
         denied = await self.repository.set_approval_status(approval_id, "denied")
+        await self.events.push(
+            approval.trace_id,
+            kind="approval.denied",
+            status="completed",
+            conversation_id=approval.conversation_id,
+            details={"approval_id": approval_id},
+        )
         closing = [
             {
                 "role": "tool",
@@ -1122,6 +1030,7 @@ class AgentRuntime:
         closing.append({"role": "assistant", "content": "The requested operation was cancelled."})
         await self.repository.append_provider_messages(approval.conversation_id, closing, trace_id=approval.trace_id)
         await self.repository.finish_conversation_run(approval.conversation_id)
+        await self.events.finish(approval.trace_id, "completed")
         return denied
 
     async def _prepare_context(
@@ -1156,25 +1065,91 @@ class AgentRuntime:
         if plan is None:
             return active_messages, 0, 0
 
+        span_id = f"span_{uuid4().hex}"
+        context_window_tokens = current_context_window_tokens(self.settings.context_window_tokens)
+        next_count = (plan.previous_state.count if plan.previous_state is not None else 0) + 1
+        model_name, endpoint = self._model_target()
+        await self.events.start_span(
+            trace_id,
+            span_id=span_id,
+            kind="internal",
+            name="context.compress",
+            target_id=model_name,
+            input_data={
+                "through_message_id": plan.through_message_id,
+                "summarized_message_count": len(plan.messages_to_summarize),
+            },
+            attributes={
+                "before_tokens": before_tokens,
+                "threshold_tokens": threshold_tokens,
+                "context_window_tokens": context_window_tokens,
+                "compression_count": next_count,
+            },
+        )
+        await self.events.push(
+            trace_id,
+            kind="context.compression.started",
+            status="started",
+            conversation_id=conversation.id,
+            details={
+                "before_tokens": before_tokens,
+                "threshold_tokens": threshold_tokens,
+                "summarized_message_count": len(plan.messages_to_summarize),
+                "retained_message_count": len(plan.retained_messages),
+                "compression_count": next_count,
+            },
+        )
         usage = [0, 0]
 
         async def compress() -> tuple[list[dict[str, Any]], int, int]:
+            from tianzhou_agent_platform.services.agent_integration.model_calls import record_standalone_call
+
             compression_messages = summary_request(plan)
-            input_budget = request_input_budget(current_context_window_tokens(self.settings.context_window_tokens))
-            if estimate_request_tokens(compression_messages) > input_budget:
+            if estimate_request_tokens(compression_messages) > request_input_budget(context_window_tokens):
                 raise ValueError("The complete transcript exceeds the compression model input budget")
-            result = await self.llm.complete(
-                messages=compression_messages,
-                tools=[],
+            native_request = [
+                SystemMessage(content=item["content"])
+                if item["role"] == "system"
+                else HumanMessage(content=item["content"])
+                for item in compression_messages
+            ]
+            started = perf_counter()
+            try:
+                result = await self._request_model().ainvoke(
+                    native_request,
+                    config={"metadata": {"context_type": "compression", "trace_id": trace_id}},
+                )
+            except Exception as exc:
+                await record_standalone_call(
+                    self.llm_call_sink,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    context_type="compression",
+                    context_id=conversation.id,
+                    model=model_name,
+                    endpoint=endpoint,
+                    messages=compression_messages,
+                    response=None,
+                    duration_ms=(perf_counter() - started) * 1000,
+                    error=exc,
+                )
+                raise
+            usage[:] = await record_standalone_call(
+                self.llm_call_sink,
                 trace_id=trace_id,
+                span_id=span_id,
                 context_type="compression",
                 context_id=conversation.id,
+                model=model_name,
+                endpoint=endpoint,
+                messages=compression_messages,
+                response=result,
+                duration_ms=(perf_counter() - started) * 1000,
             )
-            usage[:] = [result.input_tokens, result.output_tokens]
-            if result.finish_reason in {"length", "max_tokens"} or result.message.get("tool_calls"):
+            finish_reason = (result.response_metadata or {}).get("finish_reason")
+            if finish_reason in {"length", "max_tokens"} or result.tool_calls:
                 raise ValueError("The context compression model returned an incomplete summary")
-            raw_summary = result.message.get("content")
-            summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+            summary = result.content.strip() if isinstance(result.content, str) else ""
             if not summary:
                 raise ValueError("The context compression model returned an empty summary")
 
@@ -1197,17 +1172,81 @@ class AgentRuntime:
                     }
                 ),
             )
-            return compressed_messages, result.input_tokens, result.output_tokens
+            attributes = {
+                "before_tokens": before_tokens,
+                "after_tokens": after_tokens,
+                "threshold_tokens": threshold_tokens,
+                "context_window_tokens": context_window_tokens,
+                "summarized_message_count": len(plan.messages_to_summarize),
+                "retained_message_count": len(plan.retained_messages),
+                "compression_count": next_count,
+                "input_tokens": usage[0],
+                "output_tokens": usage[1],
+            }
+            await self.events.finish_span(
+                trace_id,
+                span_id,
+                "completed",
+                output_data={"through_message_id": plan.through_message_id, "summary_length": len(summary)},
+                attributes=attributes,
+            )
+            await self.events.push(
+                trace_id,
+                kind="context.compacted",
+                status="completed",
+                conversation_id=conversation.id,
+                details=attributes,
+            )
+            return compressed_messages, usage[0], usage[1]
 
         try:
             return await compress()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Context compression failed; preserving the original context",
                 exc_info=True,
                 extra={"trace_id": trace_id, "conversation_id": conversation.id},
             )
+            error = {"type": type(exc).__name__, "message": str(exc)}
+            await self.events.finish_span(trace_id, span_id, "failed", error=error)
+            await self.events.push(
+                trace_id,
+                kind="context.compression.failed",
+                status="failed",
+                conversation_id=conversation.id,
+                details={
+                    "before_tokens": before_tokens,
+                    "threshold_tokens": threshold_tokens,
+                    "compression_count": next_count,
+                    "error": error,
+                },
+            )
             return active_messages, usage[0], usage[1]
+
+    def _request_model(self) -> Any:
+        """Chat model serving this request: the actor's selected provider model, else the configured model."""
+        runtime = current_model_runtime()
+        if runtime is None or self.model_factory is None:
+            return self._model
+        key = (
+            runtime.provider_id,
+            runtime.model_id,
+            runtime.model,
+            runtime.base_url,
+            runtime.api_key,
+            runtime.timeout_seconds,
+        )
+        model = self._runtime_models.get(key)
+        if model is None:
+            model = self._runtime_models[key] = self.model_factory(runtime)
+        return model
+
+    def _model_target(self) -> tuple[str, str]:
+        """(model name, chat completions endpoint) of the model serving this request."""
+        runtime_model = current_model_runtime()
+        model_name = runtime_model.model if runtime_model else (self.settings.llm_model or "unknown")
+        base_url = (runtime_model.base_url if runtime_model else self.settings.llm_base_url) or ""
+        return model_name, f"{base_url.rstrip('/')}/chat/completions"
 
     async def _run(
         self,
@@ -1222,10 +1261,58 @@ class AgentRuntime:
         system_prompt: str | None = None,
         memory_context: list[MemoryRecord] | None = None,
     ) -> ChatResponse:
+        from tianzhou_agent_platform.core.agent_runtime import build_agent
+        from langchain.agents.middleware import (
+            ModelCallLimitMiddleware,
+            ToolErrorMiddleware,
+        )
+
+        from tianzhou_agent_platform.core.agent_runtime.middleware.model_policy import (
+            OutputGuardMiddleware,
+            RequestBudgetGuard,
+        )
+        from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import (
+            OrderedBatchMiddleware,
+            begin_run_ledger,
+            end_run_ledger,
+        )
+        from tianzhou_agent_platform.services.agent_integration.approval_gate import (
+            ApprovalGateMiddleware,
+            ApprovalRequired,
+        )
+        from tianzhou_agent_platform.services.agent_integration.capability_tools import (
+            CapabilityToolError,
+            capability_to_tool,
+            current_tool_call_id,
+            validate_capability_args,
+        )
+        from tianzhou_agent_platform.services.agent_integration.scope import (
+            CapabilityScopeMiddleware,
+            RunScope,
+        )
+        from tianzhou_agent_platform.services.agent_integration.model_calls import (
+            ModelCallRecorder,
+            ProviderErrorMiddleware,
+        )
+
         if capabilities is None:
             capabilities = await self._available_capabilities(conversation)
         recovery_capabilities = await self._available_capabilities(conversation)
         forced_function = self._resolve_forced_capability(forced_capability, capabilities)
+        await self.events.push(
+            trace_id,
+            kind="capability.discovery",
+            status="completed",
+            conversation_id=conversation.id,
+            details={
+                "aina_graph": await aina_graph(self.repository, conversation, capabilities),
+                "model_scope": model_scope_details(
+                    capabilities,
+                    forced_capability=forced_capability,
+                    forced_function=forced_function,
+                ),
+            },
+        )
         resolved_system_prompt = system_prompt or await self._system_prompt(conversation=conversation)
         tool_definitions = [item.llm_definition() for item in capabilities.values()]
         messages, compression_input_tokens, compression_output_tokens = await self._prepare_context(
@@ -1234,91 +1321,613 @@ class AgentRuntime:
             system_prompt=resolved_system_prompt,
             tool_definitions=tool_definitions,
         )
-        persist_from = len(messages)
-        state: AgentState = {
-            "messages": messages,
-            "tool_definitions": tool_definitions,
+        user_id = conversation.user_id
+        tenant_id = conversation.tenant_id
+        conversation_id = conversation.id
+        workspace_id = conversation.workspace_id
+        # Every capability reachable in this run is registered with the agent; RunScope decides which ones the
+        # next model request advertises, so activating an AINA scope switches tools and system prompt mid-run.
+        registry: dict[str, Capability] = {**recovery_capabilities, **capabilities}
+        run_scope = RunScope(
+            visible=dict(capabilities),
+            system_prompt=resolved_system_prompt,
+            forced_function=forced_function,
+            project_messages=_project_scope_history,
+        )
+        run_state: dict[str, Any] = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "conversation_id": conversation_id,
+            "workspace_id": workspace_id,
             "trace_id": trace_id,
-            "conversation_id": conversation.id,
-            "user_id": conversation.user_id,
-            "tenant_id": conversation.tenant_id,
-            "workspace_id": conversation.workspace_id,
-            "iterations": 0,
-            "max_iterations": self.settings.max_agent_iterations,
-            "forced_function": forced_function,
-            "approved_call_ids": approved_call_ids or set(),
-            "resume": resume,
-            "usage_input": compression_input_tokens,
-            "usage_output": compression_output_tokens,
-            "usage_estimated": False,
-            "call_counts": {},
-            "retryable_calls": set(),
-            "approval": None,
-            "final_content": "",
-            "final_status": None,
-            "widgets": [],
             "memory_context": memory_context or [],
-            "base_system_prompt": resolved_system_prompt,
+        }
+
+        async def _record_failure(
+            cap: Capability | None,
+            *,
+            call_id: str,
+            function_name: str,
+            payload: dict[str, Any],
+        ) -> None:
+            kind = cap.kind if cap is not None else "tool"
+            error = payload["error"]
+            run_scope.recorded_failures.add(call_id)
+            await self.events.push(
+                trace_id,
+                kind=f"{kind}.failed",
+                status="failed",
+                conversation_id=conversation_id,
+                target_type=kind if cap is not None else "capability",
+                target_id=cap.capability_id if cap is not None else function_name,
+                details={
+                    "call_id": call_id,
+                    "function_name": function_name,
+                    "code": error["code"],
+                    "message": error["message"],
+                    "retryable": error.get("retryable", False),
+                    "recovery": payload.get("recovery"),
+                },
+            )
+            await self._emit(event_sink, {"type": "error", "code": error["code"], "source": "capability"})
+
+        async def _fail(
+            cap: Capability | None,
+            *,
+            call_id: str,
+            function_name: str,
+            code: str,
+            message: str,
+            recovery: dict[str, Any] | None = None,
+            retryable: bool = False,
+        ) -> NoReturn:
+            payload = _tool_error_payload(code, message, retryable=retryable, recovery=recovery)
+            await _record_failure(cap, call_id=call_id, function_name=function_name, payload=payload)
+            raise CapabilityToolError(payload)
+
+        async def _scope_miss(name: str, call_id: str) -> dict[str, Any]:
+            """Error payload for a call outside the visible scope, pointing at the owning AINA when there is one."""
+            recovery = _capability_scope_recovery(name, recovery_capabilities)
+            payload = _tool_error_payload(
+                "CAPABILITY_SCOPE_REQUIRED" if recovery else "RESOURCE_NOT_FOUND",
+                (
+                    f"Capability {name!r} belongs to AINA {recovery['owner_aina_id']!r}, which is not "
+                    "active in the current scope."
+                    if recovery
+                    else f"Capability {name!r} is unavailable."
+                ),
+                recovery=recovery,
+            )
+            await _record_failure(
+                recovery["capability"] if recovery else None,
+                call_id=call_id,
+                function_name=name,
+                payload=payload,
+            )
+            return payload
+
+        async def _unknown_tool(name: str, call_id: str) -> str:
+            return json.dumps(await _scope_miss(name, call_id), ensure_ascii=False)
+
+        async def _unrecorded_tool_error(name: str, call_id: str, payload: dict[str, Any]) -> None:
+            await _record_failure(registry.get(name), call_id=call_id, function_name=name, payload=payload)
+
+        async def _task_projection() -> str:
+            if self.task_service is None:
+                return ""
+            return await self.task_service.context_projection(conversation_id, user_id=user_id, tenant_id=tenant_id)
+
+        run_scope.on_unknown_tool = _unknown_tool
+        run_scope.prompt_suffix = _task_projection
+        run_scope.on_tool_error = _unrecorded_tool_error
+
+        async def _activate_scope(cap: Capability, call_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
+            scoped = await self._activate_aina_model_scope(
+                run_state,  # type: ignore[arg-type]
+                event_sink=event_sink,
+                capability=cap,
+                call_id=call_id,
+                function_name=cap.function_name,
+                arguments=arguments,
+                messages=prompt_holder,
+            )
+            run_scope.visible = dict(scoped)
+            run_scope.system_prompt = str(prompt_holder[0]["content"])
+            registry.update(scoped)
+            run_scope.activated_entries.add(cap.function_name)
+            return {
+                "activated": True,
+                "aina_id": cap.capability_id,
+                "available_capability_ids": sorted(item.capability_id for item in scoped.values()),
+            }
+
+        def _make_invoke(cap: Capability) -> Callable[..., Awaitable[Any]]:
+            async def _invoke_cap(**arguments: Any) -> Any:
+                call_id = current_tool_call_id.get() or f"call_{uuid4().hex}"
+                name = cap.function_name
+                if name not in run_scope.visible:
+                    raise CapabilityToolError(await _scope_miss(name, call_id))
+                try:
+                    validate_capability_args(input_schema=cap.input_schema, args=arguments, function_name=name)
+                except PlatformError as exc:
+                    await _fail(cap, call_id=call_id, function_name=name, code=exc.code, message=exc.message)
+                if cap.kind == "aina":
+                    if run_scope.activated_in_batch:
+                        await _fail(
+                            cap,
+                            call_id=call_id,
+                            function_name=name,
+                            code="CONFLICT",
+                            message="Only one AINA scope can be activated per model response.",
+                        )
+                    run_scope.activated_in_batch = True
+                    aina, _installation = cast(tuple[AinaRecord, AinaInstallation], cap.value)
+                    if aina.manifest.runtime.type == "builtin":
+                        return await _activate_scope(cap, call_id, arguments)
+
+                span_id = f"span_{uuid4().hex}"
+                await self.events.push(
+                    trace_id,
+                    kind=f"{cap.kind}.requested",
+                    status="started",
+                    conversation_id=conversation_id,
+                    target_type=cap.kind,
+                    target_id=cap.capability_id,
+                    details={
+                        "call_id": call_id,
+                        "function_name": name,
+                        "argument_fields": sorted(arguments),
+                        "arguments": arguments,
+                    },
+                )
+                await self.events.start_span(
+                    trace_id,
+                    span_id=span_id,
+                    kind="aina" if cap.kind == "aina" else "tool",
+                    name=name,
+                    target_id=cap.capability_id,
+                    target_version=_capability_version(cap),
+                    logical_call_id=call_id,
+                    input_data=arguments,
+                )
+                await self._emit(event_sink, {"type": "tool.requested", "kind": cap.kind, "id": cap.capability_id})
+                prompt_holder = [{"role": "system", "content": run_scope.system_prompt}]
+                try:
+                    outcome = await self._invoke_resolved_capability(
+                        state=run_state,  # type: ignore[arg-type]
+                        event_sink=event_sink,
+                        capability=cap,
+                        call_id=call_id,
+                        function_name=name,
+                        arguments=arguments,
+                        available_tool_ids=[item.capability_id for item in registry.values() if item.kind == "tool"],
+                        messages=prompt_holder,
+                        widgets=run_scope.widgets,
+                    )
+                except (PlatformError, TypeError, ValueError) as exc:
+                    if isinstance(exc, PlatformError):
+                        code, message = exc.code, exc.message
+                    elif cap.kind == "aina":
+                        code, message = "DEPENDENCY_FAILED", f"The AINA returned invalid data: {exc}"
+                    else:
+                        code, message = "INVALID_REQUEST", f"Capability arguments produced invalid data: {exc}"
+                    # Only transient failures of side-effect-free remote tools may be retried by the model.
+                    retryable = (
+                        isinstance(exc, PlatformError)
+                        and exc.retryable
+                        and cap.kind == "tool"
+                        and cast(ToolRecord, cap.value).side_effect_level == "none"
+                    )
+                    await self.events.finish_span(
+                        trace_id,
+                        span_id,
+                        "failed",
+                        error={"code": code, "message": message, "retryable": getattr(exc, "retryable", False)},
+                    )
+                    await _fail(
+                        cap, call_id=call_id, function_name=name, code=code, message=message, retryable=retryable
+                    )
+                run_scope.widgets = outcome.widget_state
+                if outcome.next_capabilities is not None:
+                    run_scope.visible = dict(outcome.next_capabilities)
+                    run_scope.activated_entries.add(name)
+                    run_scope.system_prompt = str(prompt_holder[0]["content"])
+                    registry.update(outcome.next_capabilities)
+                await self.events.finish_span(
+                    trace_id,
+                    span_id,
+                    "completed",
+                    input_data=arguments,
+                    output_data=outcome.result,
+                    attributes={
+                        "arguments": arguments,
+                        "result": outcome.result,
+                        "duration_ms": outcome.duration_ms,
+                        "result_size_bytes": outcome.result_size_bytes,
+                        "widgets": outcome.widgets,
+                    },
+                )
+                await self.events.push(
+                    trace_id,
+                    kind=f"{cap.kind}.completed",
+                    status="completed",
+                    conversation_id=conversation_id,
+                    target_type=cap.kind,
+                    target_id=cap.capability_id,
+                    duration_ms=outcome.duration_ms,
+                    details={
+                        "call_id": call_id,
+                        "function_name": name,
+                        "result": outcome.result,
+                        "result_size_bytes": outcome.result_size_bytes,
+                        "widgets": outcome.widgets,
+                    },
+                )
+                await self._emit(event_sink, {"type": "tool.completed", "kind": cap.kind, "id": cap.capability_id})
+                if cap.capability_id == CREATE_EDIT_TASK_TOOL_ID:
+                    run_scope.direct_reply = _edit_task_reply(outcome.result)
+                return outcome
+
+            return _invoke_cap
+
+        native_tools = [
+            capability_to_tool(
+                function_name=cap.function_name,
+                description=cap.description,
+                input_schema=cap.input_schema,
+                invoke=_make_invoke(cap),
+                validate=False,
+            )
+            for cap in registry.values()
+        ]
+        risky_names = {
+            cap.function_name for cap in registry.values() if cap.requires_confirmation
+        }
+        approval_gate = ApprovalGateMiddleware(risky_names)
+        model_call_limit = ModelCallLimitMiddleware(
+            run_limit=self.settings.max_agent_iterations,
+            exit_behavior="error",
+        )
+        # Run-scoped ledger lives across model iterations and approval resume.
+        begin_run_ledger(trace_id if not resume else f"{trace_id}:resume")
+        arg_validators = {
+            cap.function_name: (
+                lambda args, _schema=cap.input_schema, _name=cap.function_name: validate_capability_args(
+                    input_schema=_schema, args=args, function_name=_name
+                )
+            )
+            for cap in registry.values()
+        }
+        model_name, endpoint = self._model_target()
+        model_calls = ModelCallRecorder(
+            events=self.events,
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            model=model_name,
+            endpoint=endpoint,
+            to_wire=_native_to_wire,
+            visible_capabilities=lambda: run_scope.visible,
+            call_sink=self.llm_call_sink,
+            streaming=event_sink is not None,
+        )
+        budget_guard = RequestBudgetGuard(
+            context_window_tokens=current_context_window_tokens(self.settings.context_window_tokens)
+        )
+        # Order matters: the scope policy builds the final request, the budget guard measures it (and refuses
+        # oversized ones locally), and only requests that reach the provider are recorded as model calls.
+        middleware: list[Any] = [
+            CapabilityScopeMiddleware(run_scope),
+            budget_guard,
+            model_calls,
+            ProviderErrorMiddleware(),
+            OrderedBatchMiddleware(),
+            OutputGuardMiddleware(),
+            model_call_limit,
+            approval_gate,
+            ToolErrorMiddleware(
+                aon_error=_format_capability_error_async
+            ),
+        ]
+
+        # Convert wire messages to native messages for create_agent (system_prompt travels separately).
+        native_messages: list[Any] = _wire_to_native(messages)
+
+        if resume and native_messages:
+            # Resume path: execute pending tool calls without a new model turn first.
+            last_ai = next((m for m in reversed(native_messages) if isinstance(m, AIMessage) and m.tool_calls), None)
+            if last_ai is not None:
+                executed = {m.tool_call_id for m in native_messages if isinstance(m, ToolMessage)}
+                pending = [c for c in last_ai.tool_calls if c.get("id") not in executed]
+                if pending:
+                    for call in pending:
+                        cap = registry.get(str(call.get("name")))
+                        if cap is None:
+                            continue
+                        call_token = current_tool_call_id.set(str(call.get("id") or "") or None)
+                        try:
+                            outcome = await _make_invoke(cap)(**(call.get("args") or {}))
+                            native_messages.append(
+                                ToolMessage(
+                                    content=str(outcome.result),
+                                    tool_call_id=str(call.get("id") or ""),
+                                    name=str(call.get("name") or ""),
+                                )
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            native_messages.append(
+                                ToolMessage(
+                                    content=f"{getattr(exc, 'code', 'ERROR')}: {exc}",
+                                    tool_call_id=str(call.get("id") or ""),
+                                    name=str(call.get("name") or ""),
+                                    status="error",
+                                )
+                            )
+                        finally:
+                            current_tool_call_id.reset(call_token)
+                    native_messages.append(AIMessage(content="The requested operation was completed."))
+
+        agent = build_agent(
+            model=self._request_model(),
+            tools=native_tools,
+            system_prompt=resolved_system_prompt,
+            middleware=middleware,
+            checkpointer=self.checkpointer,
+        )
+        context: dict[str, Any] = {
+            "approved_call_ids": set(approved_call_ids or ()),
+            "event_sink": event_sink,
+            "system_prompt": resolved_system_prompt,
+            "arg_validators": arg_validators,
         }
         graph_config: RunnableConfig = {
-            "configurable": {
-                "thread_id": trace_id,
-            },
+            "configurable": {"thread_id": trace_id},
             "metadata": {
                 "conversation_id": conversation.id,
                 "trace_id": trace_id,
-                "user_id": conversation.user_id,
-                "tenant_id": conversation.tenant_id,
-                "workspace_id": conversation.workspace_id,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "workspace_id": workspace_id,
             },
         }
-        context: AgentContext = {
-            "capabilities": capabilities,
-            "recovery_capabilities": recovery_capabilities,
-            "event_sink": event_sink,
-        }
-        result = await self._graph.ainvoke(
-            state,
-            config=graph_config,
-            context=context,
-            durability="sync",
-        )
-        new_messages = result["messages"][persist_from:]
-        widgets = result.get("widgets", [])
+        # Text of the latest model call already sent to the client, so the final answer is not sent twice.
+        stream_state = {"message_id": None, "text": ""}
+
+        async def _run_agent() -> dict[str, Any]:
+            agent_input = {"messages": native_messages}
+            if event_sink is None:
+                return await agent.ainvoke(agent_input, config=graph_config, context=context)
+            final_state: dict[str, Any] | None = None
+            async for mode, payload in agent.astream(
+                agent_input,
+                config=graph_config,
+                context=context,
+                stream_mode=["messages", "values"],
+            ):
+                if mode == "values":
+                    final_state = payload
+                    continue
+                chunk, metadata = payload
+                # Only the answering model's text is public; tool output and internal calls are not streamed.
+                if metadata.get("langgraph_node") != "model" or not isinstance(chunk, AIMessageChunk):
+                    continue
+                if chunk.id != stream_state["message_id"]:
+                    stream_state["message_id"], stream_state["text"] = chunk.id, ""
+                text = chunk.content if isinstance(chunk.content, str) else ""
+                if text:
+                    stream_state["text"] += text
+                    await event_sink({"type": "message.delta", "delta": text})
+            return final_state or {"messages": list(native_messages)}
+
+        try:
+            result = await _run_agent()
+        except ApprovalRequired:
+            result = {"messages": list(native_messages)}
+        except Exception as exc:  # noqa: BLE001
+            if type(exc).__name__ == "ModelCallLimitExceededError":
+                limit_n = self.settings.max_agent_iterations
+                content = (
+                    f"I stopped after {limit_n} model iterations because the capability loop "
+                    "did not produce a final answer."
+                )
+                new_limit_messages = [{"role": "assistant", "content": content}]
+                appended_limit = await self.repository.append_provider_messages(
+                    conversation_id,
+                    new_limit_messages,
+                    trace_id=trace_id,
+                )
+                await self.events.finish(trace_id, "failed")
+                last_assistant = next(
+                    (item for item in reversed(appended_limit) if item.role == "assistant"), None
+                )
+                end_run_ledger()
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    message_id=last_assistant.id if last_assistant else None,
+                    content=content,
+                    status="failed",
+                    trace_id=trace_id,
+                    iterations=limit_n,
+                    usage=Usage(
+                        input_tokens=compression_input_tokens + model_calls.usage.input_tokens,
+                        output_tokens=compression_output_tokens + model_calls.usage.output_tokens,
+                        estimated=model_calls.usage.estimated,
+                    ),
+                )
+            raise
+
+        new_native = list(result.get("messages") or [])
+        if not resume:
+            new_native = new_native[len(native_messages) :]
+        else:
+            new_native = new_native[-6:]
+        new_messages: list[dict[str, Any]] = []
+        for message in new_native:
+            record = _native_to_wire(message)
+            if record is not None:
+                new_messages.append(record)
+        status: Literal["completed", "approval_required", "failed"] = "completed"
+        approval: ApprovalRecord | None = None
+        pending_calls = [c for c in approval_gate.last_rejected]
+        if pending_calls:
+            status = "approval_required"
+            capability_names = [
+                registry[str(c.get("name"))].display_name
+                for c in approval_gate.pending_batch or pending_calls
+                if str(c.get("name")) in registry
+            ]
+            batch_calls = approval_gate.pending_batch or (
+                next(
+                    (m.get("tool_calls") for m in reversed(messages + new_messages) if m.get("tool_calls")),
+                    None,
+                )
+                or pending_calls
+            )
+            approval = ApprovalRecord(
+                id=f"approval_{uuid4().hex}",
+                conversation_id=conversation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                trace_id=trace_id,
+                tool_calls=batch_calls,
+                capability_names=capability_names
+                or [
+                    registry[str(c.get("name"))].display_name
+                    for c in batch_calls
+                    if str(c.get("name")) in registry
+                ]
+                or [str(c.get("name")) for c in pending_calls],
+            )
+            # Jump-to-end means no tool results and no extra model turn.
+            # Keep only assistant tool_calls so confirm can resume the batch.
+            new_messages = [
+                item
+                for item in new_messages
+                if item.get("role") == "assistant" and item.get("tool_calls")
+            ]
+            if not new_messages:
+                # Model tool_calls live in the native result; copy from batch.
+                new_messages = [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": batch_calls,
+                    }
+                ]
+            final_content = (
+                f"Approval is required before running: {', '.join(approval.capability_names)}."
+            )
+        elif resume:
+            status = "completed"
+            if not any(m.get("role") == "assistant" and not m.get("tool_calls") for m in new_messages):
+                new_messages.append({"role": "assistant", "content": "The requested operation was completed."})
+
+        # Truncation / empty guards (OutputGuardMiddleware also patches messages).
+        if status != "approval_required":
+            final_content = ""
+            for item in reversed(new_messages):
+                if item.get("role") == "assistant" and not item.get("tool_calls"):
+                    final_content = item.get("content") or ""
+                    break
+            if "The model returned an empty response." in final_content:
+                status = "failed"
+            elif "Incomplete response" in final_content:
+                status = "failed"
+            elif status == "completed" and not final_content and not pending_calls:
+                last = new_messages[-1] if new_messages else None
+                if last and last.get("tool_calls"):
+                    status = "completed"
+                    final_content = ""
+                else:
+                    final_content = "The model returned an empty response."
+                    new_messages.append({"role": "assistant", "content": final_content})
+                    status = "failed"
+        if "Incomplete response" in final_content:
+            status = "failed"
+        if budget_guard.exceeded is not None and status != "approval_required":
+            status = "failed"
+            final_content = budget_guard.exceeded
+
+        # Widget attach to last assistant text message.
         persistent_widgets = [
-            widget for widget in widgets if widget.id != f"clarification-{conversation.id}"
+            widget for widget in run_scope.widgets if widget.id != f"clarification-{conversation_id}"
         ]
         if persistent_widgets:
             for message in reversed(new_messages):
                 if message.get("role") == "assistant" and not message.get("tool_calls"):
                     message["widgets"] = [widget.model_dump(mode="json") for widget in persistent_widgets]
                     break
+
         appended = await self.repository.append_provider_messages(
-            conversation.id,
+            conversation_id,
             new_messages,
             trace_id=trace_id,
         )
-        status = cast(
-            Literal["completed", "approval_required", "failed"],
-            result.get("final_status") or "failed",
-        )
+        if approval is not None:
+            await self.repository.create_approval(approval)
+            await self.events.push(
+                trace_id,
+                kind="approval.required",
+                status="pending",
+                conversation_id=conversation_id,
+                details={
+                    "approval_id": approval.id,
+                    "capabilities": approval.capability_names,
+                },
+            )
+            if event_sink is not None:
+                await event_sink(
+                    {
+                        "type": "approval.required",
+                        "approval_id": approval.id,
+                        "capabilities": approval.capability_names,
+                    }
+                )
         last_assistant = next((item for item in reversed(appended) if item.role == "assistant"), None)
-        final_content = result.get("final_content", "The agent stopped without a final response.")
-        return ChatResponse(
-            conversation_id=conversation.id,
+        if not final_content:
+            final_content = "The agent stopped without a final response."
+        if event_sink is not None and final_content and status != "approval_required":
+            # One public text sequence: send what the model stream did not already deliver (direct replies,
+            # budget refusals, or a notice a guard appended to streamed text).
+            streamed = stream_state["text"]
+            if not streamed:
+                await event_sink({"type": "message.delta", "delta": final_content})
+            elif final_content.startswith(streamed) and len(final_content) > len(streamed):
+                await event_sink({"type": "message.delta", "delta": final_content[len(streamed):]})
+        iterations = max(1, sum(1 for m in new_messages if m.get("role") == "assistant"))
+        end_run_ledger()
+        response = ChatResponse(
+            conversation_id=conversation_id,
             message_id=last_assistant.id if last_assistant else None,
             content=final_content,
             status=status,
             trace_id=trace_id,
-            iterations=result.get("iterations", 0),
+            iterations=iterations,
             usage=Usage(
-                input_tokens=result.get("usage_input", 0),
-                output_tokens=result.get("usage_output", 0),
-                estimated=result.get("usage_estimated", False),
+                input_tokens=compression_input_tokens + model_calls.usage.input_tokens,
+                output_tokens=compression_output_tokens + model_calls.usage.output_tokens,
+                estimated=model_calls.usage.estimated,
             ),
-            approval=result.get("approval"),
-            widgets=widgets,
+            approval=approval,
+            widgets=run_scope.widgets,
         )
+        await self.events.push(
+            trace_id,
+            kind="final.response",
+            status=status,
+            conversation_id=conversation_id,
+            details={
+                "iterations": response.iterations,
+                "message_id": response.message_id,
+                "content": response.content,
+                "content_length": len(response.content),
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "usage_estimated": response.usage.estimated,
+                "widgets": [{"id": widget.id, "kind": widget.kind} for widget in response.widgets],
+            },
+        )
+        return response
 
     async def _system_prompt(
         self,
@@ -1392,24 +2001,6 @@ class AgentRuntime:
         if memory_context:
             sections.append(_memory_context_block(memory_context))
         return "\n\n".join(sections)
-
-    async def _messages_with_task_projection(self, state: AgentState) -> list[dict[str, Any]]:
-        messages = [dict(message) for message in state["messages"]]
-        if not messages or messages[0].get("role") != "system":
-            return messages
-        base_prompt = state.get("base_system_prompt") or str(messages[0].get("content") or "")
-        projection = ""
-        if self.task_service is not None:
-            projection = await self.task_service.context_projection(
-                state["conversation_id"],
-                user_id=state["user_id"],
-                tenant_id=state["tenant_id"],
-            )
-        messages[0] = {
-            **messages[0],
-            "content": f"{base_prompt}\n\n{projection}" if projection else base_prompt,
-        }
-        return messages
 
     async def _memory_context(self, conversation: Conversation, query: str) -> list[MemoryRecord]:
         return await self.repository.search_memories(
@@ -1614,10 +2205,11 @@ class AgentRuntime:
         return capabilities
 
     async def _available_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
-        return {
+        capabilities = {
             **await self._fallback_capabilities(conversation),
             **await self._available_aina_capabilities(conversation),
         }
+        return capabilities
 
     async def _entry_capabilities(self, conversation: Conversation) -> dict[str, Capability]:
         """Expose direct host tools and only conversational AINA entrypoints on the first model turn."""
@@ -1947,6 +2539,62 @@ def _provider_messages_for_scope(
             pending_stale_call_ids = set()
         scoped_messages.append(copied)
     return scoped_messages
+
+
+def _capability_version(capability: Capability) -> str | None:
+    if capability.kind == "tool":
+        return cast(ToolRecord, capability.value).version
+    if capability.kind == "aina":
+        aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+        return aina.manifest.aina.version
+    return None
+
+
+def _edit_task_reply(result: Any) -> str | None:
+    """Direct completion text after a document edit task was created (no further model call)."""
+    task = result.get("task") if isinstance(result, dict) else None
+    if not isinstance(task, dict):
+        return None
+    title = str(task.get("title") or "文档修改任务")
+    sections = task.get("sections")
+    section_count = len(sections) if isinstance(sections, list) else 0
+    return (
+        f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
+        "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
+        "正式文档会在您确认合并后才更新。"
+    )
+
+
+def _tool_error_payload(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    recovery: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    instruction = "The capability did not complete. Do not claim success; report the failure."
+    if retryable:
+        instruction = "The read-only capability failed transiently. You may retry the same call; do not claim success."
+    if recovery is not None:
+        instruction = (
+            f"Activate AINA {recovery['owner_aina_id']} by calling "
+            f"{recovery['entry_function_name']} with an empty object, then retry with the advertised tool. "
+            "Do not claim that the capability completed before its tool succeeds."
+        )
+    payload: dict[str, Any] = {
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+        },
+        "instruction": instruction,
+    }
+    if recovery is not None:
+        payload["recovery"] = {
+            "owner_aina_id": recovery["owner_aina_id"],
+            "entry_function_name": recovery["entry_function_name"],
+        }
+    return payload
 
 
 def _capability_scope_recovery(

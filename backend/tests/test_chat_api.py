@@ -88,6 +88,34 @@ def test_stream_chat_returns_sse_deltas_and_completion() -> None:
     assert "event: message.completed" in body
 
 
+def test_stream_forwards_model_chunks_as_they_arrive_without_repeating_the_answer() -> None:
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGenerationChunk
+
+    class ChunkedLLM(ScriptedLLM):
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
+            message = self._next(messages, {**kwargs, "stop": stop})
+            for word in str(message.content).split(" "):
+                chunk = ChatGenerationChunk(message=AIMessageChunk(content=f"{word} "))
+                if run_manager is not None:
+                    run_manager.on_llm_new_token(chunk.text, chunk=chunk)
+                yield chunk
+
+    llm = ChunkedLLM([assistant("one two three")])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        with client.stream("POST", "/chat/stream", json={"message": "stream this"}) as response:
+            events = [
+                json.loads(line[5:])
+                for line in response.iter_lines()
+                if line.startswith("data:")
+            ]
+
+    deltas = [event["delta"] for event in events if event.get("type") == "message.delta"]
+    completed = next(event for event in events if event.get("type") == "message.completed")
+    assert deltas == ["one ", "two ", "three "]
+    assert "".join(deltas).strip() == completed["response"]["content"].strip()
+
+
 def test_conversations_can_be_categorized_filtered_and_deleted() -> None:
     with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
         created = client.post("/conversations", json={"title": "Roadmap"}).json()
@@ -503,6 +531,43 @@ def test_high_risk_tool_waits_for_confirmation() -> None:
     assert confirmed.status_code == 200
     assert confirmed.json()["status"] == "completed"
     assert calls == 1
+
+
+def test_approved_tool_call_is_traced_under_the_resumed_root_span(caplog: Any) -> None:
+    # Resuming after an approval used to finish tool spans that were never started (no root span on the
+    # resume path), logging "Trace span ... was not found" and dropping the executed call from the trace.
+    llm = ScriptedLLM(
+        [
+            call_first_tool(arguments='{"recipient": "user@example.com"}', call_id="call_send"),
+            assistant("Sent."),
+        ]
+    )
+    remote = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"sent": True})))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=remote)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.send",
+                "name": "Send message",
+                "description": "Send a message to an external recipient.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"recipient": {"type": "string"}},
+                    "required": ["recipient"],
+                },
+                "endpoint": "https://tool.invalid/send",
+                "side_effect_level": "high",
+            },
+        )
+        pending = client.post("/chat", json={"message": "Send the message"}).json()
+        confirmed = client.post(f"/approvals/{pending['approval']['id']}/confirm", json={}).json()
+        trace = client.get(f"/traces/{pending['trace_id']}").json()
+
+    assert confirmed["status"] == "completed"
+    tool_span = next(span for span in trace["spans"] if span["kind"] == "tool")
+    assert tool_span["logical_call_id"] == "call_send"
+    assert tool_span["status"] == "completed"
+    assert "finish_span failed" not in caplog.text
 
 
 def test_high_risk_tool_denial_closes_pending_call_without_execution() -> None:

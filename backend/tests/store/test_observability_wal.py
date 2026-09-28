@@ -421,3 +421,25 @@ def test_segment_append_and_seal(tmp_path: Path) -> None:
     sealed = segment.seal()
     assert sealed.suffix == ".sealed"
     assert not segment.is_open
+
+
+def test_segment_listing_skips_a_segment_renamed_while_listing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A rotation renames 000000000001.active -> .sealed between iterdir() and stat(); the listing must not raise
+    # (it made test_rotation_by_age_does_not_require_another_append flaky and would crash recovery scans).
+    sealed = tmp_path / "000000000001.sealed"
+    sealed.write_bytes(b"")
+    renamed = tmp_path / "000000000001.active"  # listed, then renamed before its metadata is read
+    real_stat = Path.stat
+
+    def stat(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if self == renamed:
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", lambda self: iter([renamed, sealed]))
+    monkeypatch.setattr(Path, "is_file", lambda self: True)  # it still existed when first checked
+    monkeypatch.setattr(Path, "stat", stat)
+
+    infos = iter_segment_infos(tmp_path)
+
+    assert [(info.path.name, info.state) for info in infos] == [("000000000001.sealed", "sealed")]

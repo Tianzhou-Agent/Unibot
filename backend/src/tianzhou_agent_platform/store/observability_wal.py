@@ -28,6 +28,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any, Literal, cast
 
 from tianzhou_agent_platform.store.observability_buffer import (
@@ -220,9 +221,16 @@ def iter_segment_infos(directory: Path) -> list[WalSegmentInfo]:
     infos: list[WalSegmentInfo] = []
     for path in directory.iterdir():
         match = SEGMENT_NAME_RE.match(path.name)
-        if match is None or not path.is_file():
+        if match is None:
             continue
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            # Renamed (active -> sealed by a concurrent rotation) or removed after the directory was listed;
+            # the new name is picked up by the next listing.
+            continue
+        if not S_ISREG(stat.st_mode):
+            continue
         created_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
         infos.append(
             WalSegmentInfo(

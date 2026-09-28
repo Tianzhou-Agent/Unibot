@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +25,10 @@ from tianzhou_agent_platform.core.context_compression import (
     request_input_budget,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.model_providers.errors import (
+    exception_detail as _exception_detail,
+    map_provider_error as _map_openai_error,
+)
 from tianzhou_agent_platform.core.model_settings import current_context_window_tokens, current_model_runtime
 from tianzhou_agent_platform.core.trace_details import redact_trace_data
 
@@ -69,15 +74,25 @@ class OpenAICompatibleClient:
         call_sink: LLMCallSink | None = None,
     ) -> None:
         self.settings = settings
-        self._client = client or httpx.AsyncClient()
-        self._owns_client = client is None
+        self._injected_client = client
         self._call_sink = call_sink
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        return
 
-    def _chat_model(self) -> ChatOpenAI:
+    @asynccontextmanager
+    async def _http_client(self) -> AsyncIterator[httpx.AsyncClient]:
+        if self._injected_client is not None:
+            yield self._injected_client
+            return
+        # Fresh sockets avoid reusing a dead keepalive connection through a local HTTP proxy.
+        client = httpx.AsyncClient()
+        try:
+            yield client
+        finally:
+            await client.aclose()
+
+    def _chat_model(self, http_client: httpx.AsyncClient) -> ChatOpenAI:
         runtime_model = current_model_runtime()
         base_url = runtime_model.base_url if runtime_model else self.settings.llm_base_url
         api_key = (
@@ -102,7 +117,7 @@ class OpenAICompatibleClient:
             api_key=api_key,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
-            client=self._client,
+            client=http_client,
             max_completion_tokens=output_token_reserve(
                 current_context_window_tokens(self.settings.context_window_tokens)
             ),
@@ -206,7 +221,7 @@ class OpenAICompatibleClient:
             context_id=context_id,
         )
         try:
-            message = await self._bound_model(tools, tool_choice).ainvoke(messages)
+            message = await self._ainvoke(messages, tools, tool_choice)
         except openai.OpenAIError as exc:
             await self._fail_call(call, started, exc)
             raise
@@ -216,6 +231,21 @@ class OpenAICompatibleClient:
         result = _result_from_message(message)
         await self._complete_call(call, started, result)
         return result
+
+    async def _ainvoke(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None,
+    ) -> AIMessage | AIMessageChunk:
+        try:
+            async with self._http_client() as http_client:
+                return await self._bound_model(http_client, tools, tool_choice).ainvoke(messages)
+        except openai.APIConnectionError:
+            if self._injected_client is not None:
+                raise
+            async with self._http_client() as http_client:
+                return await self._bound_model(http_client, tools, tool_choice).ainvoke(messages)
 
     async def _stream_complete(
         self,
@@ -243,7 +273,7 @@ class OpenAICompatibleClient:
         first_token_at: datetime | None = None
         ttft_ms: float | None = None
         try:
-            async for chunk in self._bound_model(tools, tool_choice).astream(messages):
+            async for chunk in self._astream(messages, tools, tool_choice):
                 aggregate = chunk if aggregate is None else aggregate + chunk
                 delta = _message_text(chunk.content)
                 if delta:
@@ -355,7 +385,7 @@ class OpenAICompatibleClient:
                 "status": "failed",
                 "response": redact_trace_data(_response_from_error(exc)),
                 "duration_ms": (perf_counter() - started) * 1000,
-                "error": redact_trace_data(str(exc)),
+                "error": redact_trace_data(_exception_detail(exc)),
                 "completed_at": completed_at,
             }
         )
@@ -385,12 +415,31 @@ class OpenAICompatibleClient:
         endpoint = normalized if normalized.endswith("/chat/completions") else f"{normalized}/chat/completions"
         return endpoint, model
 
+    async def _astream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | str | None,
+    ) -> AsyncIterator[AIMessageChunk]:
+        try:
+            async with self._http_client() as http_client:
+                async for chunk in self._bound_model(http_client, tools, tool_choice).astream(messages):
+                    yield chunk
+                return
+        except openai.APIConnectionError:
+            if self._injected_client is not None:
+                raise
+        async with self._http_client() as http_client:
+            async for chunk in self._bound_model(http_client, tools, tool_choice).astream(messages):
+                yield chunk
+
     def _bound_model(
         self,
+        http_client: httpx.AsyncClient,
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | str | None,
     ) -> Any:
-        model = self._chat_model()
+        model = self._chat_model(http_client)
         if not tools:
             return model
         return model.bind_tools(tools, tool_choice=tool_choice)
@@ -464,7 +513,7 @@ def _response_from_error(exc: Exception) -> dict[str, Any]:
                 "source": exc.source,
             }
         }
-    return {"error": {"type": type(exc).__name__, "message": str(exc)}}
+    return {"error": {"type": type(exc).__name__, "message": _exception_detail(exc)}}
 
 
 def _message_text(content: Any) -> str:
@@ -511,34 +560,6 @@ def _openai_base_url(value: str) -> str:
     normalized = value.rstrip("/")
     suffix = "/chat/completions"
     return normalized[: -len(suffix)] if normalized.endswith(suffix) else normalized
-
-
-def _map_openai_error(exc: openai.OpenAIError) -> PlatformError:
-    if isinstance(exc, openai.APITimeoutError):
-        return PlatformError(
-            "TIMEOUT",
-            "The model request timed out",
-            status_code=504,
-            retryable=True,
-            source="model",
-        )
-    if isinstance(exc, openai.APIConnectionError):
-        return PlatformError(
-            "DEPENDENCY_FAILED",
-            "The model provider could not be reached",
-            status_code=502,
-            retryable=True,
-            source="model",
-        )
-    status_code = getattr(exc, "status_code", None)
-    return PlatformError(
-        "DEPENDENCY_FAILED",
-        f"The model provider returned HTTP {status_code}" if status_code else "The model request failed",
-        status_code=502,
-        retryable=status_code is not None and (status_code >= 500 or status_code == 429),
-        source="model",
-        debug={"provider_status": status_code} if status_code is not None else {},
-    )
 
 
 def _tool_choice_name(tool_choice: dict[str, Any] | str | None) -> str | None:

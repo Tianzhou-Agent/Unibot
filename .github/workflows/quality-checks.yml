@@ -36,6 +36,20 @@ jobs:
           name: backend-test-results
           path: backend/.e2e-results/junit.xml
 
+  agent-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent-eval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+      - name: Offline harness self-tests (fake backend, no model calls)
+        run: uv run --locked --python 3.12 --extra dev python -m pytest -q tests/test_harness.py
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15

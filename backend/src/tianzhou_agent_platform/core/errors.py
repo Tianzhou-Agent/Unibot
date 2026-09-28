@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+from tianzhou_agent_platform.core.base import StrictModel
+
+
 @dataclass(slots=True)
 class PlatformError(Exception):
     code: str
@@ -16,6 +19,19 @@ class PlatformError(Exception):
 
     def __str__(self) -> str:
         return self.message
+
+
+class StandardError(StrictModel):
+    code: str
+    message: str
+    retryable: bool
+    source: str
+    user_message: str
+    trace_id: str
+
+
+class ErrorEnvelope(StrictModel):
+    error: StandardError
 
 
 def not_found(resource: str, resource_id: str) -> PlatformError:

@@ -18,7 +18,6 @@ from tianzhou_agent_platform.aina.document.task_models import (
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.llm import LLMClient
-from tianzhou_agent_platform.core.model_settings import use_model_runtime
 from tianzhou_agent_platform.core.repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageValidationError
 
@@ -594,6 +593,23 @@ class DocumentEditTaskService:
             raise conflict("Only a reviewable or failed task can be edited or merged")
 
 
+_DRAFT_ATTEMPTS = 3
+
+
+class _MissingDraft(ValueError):
+    """The model answered without a valid submit_document_section_draft call."""
+
+
+def _text_draft(content: object) -> str | None:
+    """A section returned as plain Markdown instead of through the submit function.
+
+    Some providers do not enforce forced tool calls and answer with the revised section as text. It is accepted
+    only when it starts with a Markdown heading; the caller validates it exactly like a submitted draft.
+    """
+    text = content.strip() if isinstance(content, str) else ""
+    return text if text.startswith("#") else None
+
+
 class DocumentEditWorker:
     def __init__(self, service: DocumentEditTaskService, *, poll_seconds: float = 0.25) -> None:
         self.service = service
@@ -748,53 +764,106 @@ class DocumentEditWorker:
         section: DocumentDraftSection,
         instruction: str,
     ) -> str:
+        # Drafting has no side effects until a reviewed section is merged, so a model that ignores the forced
+        # submit function (observed with live providers) is asked again a bounded number of times.
+        for _ in range(_DRAFT_ATTEMPTS - 1):
+            try:
+                return await self._request_section_draft(task, section, instruction)
+            except _MissingDraft:
+                continue
+        return await self._request_section_draft(task, section, instruction)
+
+    async def _request_section_draft(
+        self,
+        task: DocumentEditTask,
+        section: DocumentDraftSection,
+        instruction: str,
+    ) -> str:
         runtime_model = await self.service.repository.get_default_model_runtime(
             user_id=task.user_id,
             tenant_id=task.tenant_id,
         )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Revise exactly one Markdown section. Return the complete section through the provided "
-                    "function. Keep the first heading at the same Markdown level. Do not add a peer or parent "
-                    "heading. Do not discuss the change."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Document: {task.document_name}\n"
-                    f"Task: {task.description}\n"
-                    f"Current instruction: {instruction}\n\n"
-                    f"Current section:\n{section.draft_content}"
-                ),
-            },
-        ]
-        with use_model_runtime(runtime_model):
-            result = await self.service.llm.complete(
-                messages=messages,
-                tools=[_SUBMIT_DRAFT_TOOL],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "submit_document_section_draft"},
-                },
-                context_type="document_edit_task",
-                context_id=task.id,
-            )
-        calls = result.message.get("tool_calls") or []
+        system = (
+            "Revise exactly one Markdown section. Return the complete section through the provided "
+            "function. Keep the first heading at the same Markdown level. Do not add a peer or parent "
+            "heading. Do not discuss the change."
+        )
+        user = (
+            f"Document: {task.document_name}\n"
+            f"Task: {task.description}\n"
+            f"Current instruction: {instruction}\n\n"
+            f"Current section:\n{section.draft_content}"
+        )
+        # The draft function is the only bound tool, so "required" forces it; providers honor "required" more
+        # reliably than a named function choice (MiMo: 6/6 vs 4/6 calls in a live probe).
+        tool_choice = "required"
+        # Migration window: injected LLMClient (tests/legacy) keeps the old port;
+        # production uses native ainvoke via model_providers.factory. Phase 7
+        # removes the LLMClient branch after fixtures move to BaseChatModel.
+        if self.service.llm is not None and hasattr(self.service.llm, "complete"):
+            from tianzhou_agent_platform.core.model_settings import use_model_runtime
+
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+            with use_model_runtime(runtime_model):
+                result = await self.service.llm.complete(
+                    messages=messages,
+                    tools=[_SUBMIT_DRAFT_TOOL],
+                    tool_choice=tool_choice,
+                    context_type="document_edit_task",
+                    context_id=task.id,
+                )
+            calls = result.message.get("tool_calls") or []
+            if not calls and (text_draft := _text_draft(result.message.get("content"))) is not None:
+                return text_draft
+            if len(calls) != 1:
+                raise _MissingDraft("The model did not submit a document section draft")
+            function = calls[0].get("function") or {}
+            if function.get("name") != "submit_document_section_draft":
+                raise _MissingDraft("The model returned an unexpected draft function")
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError as exc:
+                raise _MissingDraft("The model returned invalid draft arguments") from exc
+            content = arguments.get("section_content")
+            if not isinstance(content, str):
+                raise _MissingDraft("The model draft did not contain section_content")
+            return content
+
+        from langchain_core.language_models.chat_models import BaseChatModel
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
+
+        # The actor's selected provider model when one is configured, else the app's configured model
+        # (e.g. the llm_* settings); only when neither exists is document editing unavailable.
+        if runtime_model is not None:
+            model = create_model_from_runtime(runtime_model, max_retries=0)
+        elif isinstance(self.service.llm, BaseChatModel):
+            model = self.service.llm
+        else:
+            raise ValueError("No model provider is configured for document editing")
+        bound = model.bind_tools([_SUBMIT_DRAFT_TOOL], tool_choice=tool_choice)
+        response = await bound.ainvoke(
+            [SystemMessage(content=system), HumanMessage(content=user)]
+        )
+        calls = getattr(response, "tool_calls", None) or []
+        if not calls and (text_draft := _text_draft(response.content)) is not None:
+            return text_draft
         if len(calls) != 1:
-            raise ValueError("The model did not submit a document section draft")
-        function = calls[0].get("function") or {}
-        if function.get("name") != "submit_document_section_draft":
-            raise ValueError("The model returned an unexpected draft function")
-        try:
-            arguments = json.loads(function.get("arguments") or "{}")
-        except json.JSONDecodeError as exc:
-            raise ValueError("The model returned invalid draft arguments") from exc
-        content = arguments.get("section_content")
+            raise _MissingDraft("The model did not submit a document section draft")
+        function = calls[0]
+        name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+        if name != "submit_document_section_draft":
+            raise _MissingDraft("The model returned an unexpected draft function")
+        args = function.get("args") if isinstance(function, dict) else getattr(function, "args", {})
+        if not isinstance(args, dict):
+            raise _MissingDraft("The model returned invalid draft arguments")
+        content = args.get("section_content")
         if not isinstance(content, str):
-            raise ValueError("The model draft did not contain section_content")
+            raise _MissingDraft("The model draft did not contain section_content")
         return content
 
     async def _claim(self, task_id: str) -> bool:
