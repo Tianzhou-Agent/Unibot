@@ -88,6 +88,34 @@ def test_stream_chat_returns_sse_deltas_and_completion() -> None:
     assert "event: message.completed" in body
 
 
+def test_stream_forwards_model_chunks_as_they_arrive_without_repeating_the_answer() -> None:
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGenerationChunk
+
+    class ChunkedLLM(ScriptedLLM):
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
+            message = self._next(messages, {**kwargs, "stop": stop})
+            for word in str(message.content).split(" "):
+                chunk = ChatGenerationChunk(message=AIMessageChunk(content=f"{word} "))
+                if run_manager is not None:
+                    run_manager.on_llm_new_token(chunk.text, chunk=chunk)
+                yield chunk
+
+    llm = ChunkedLLM([assistant("one two three")])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        with client.stream("POST", "/chat/stream", json={"message": "stream this"}) as response:
+            events = [
+                json.loads(line[5:])
+                for line in response.iter_lines()
+                if line.startswith("data:")
+            ]
+
+    deltas = [event["delta"] for event in events if event.get("type") == "message.delta"]
+    completed = next(event for event in events if event.get("type") == "message.completed")
+    assert deltas == ["one ", "two ", "three "]
+    assert "".join(deltas).strip() == completed["response"]["content"].strip()
+
+
 def test_conversations_can_be_categorized_filtered_and_deleted() -> None:
     with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
         created = client.post("/conversations", json={"title": "Roadmap"}).json()

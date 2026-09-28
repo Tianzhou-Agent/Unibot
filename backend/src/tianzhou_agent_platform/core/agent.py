@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -1232,7 +1232,7 @@ class AgentRuntime:
         system_prompt: str | None = None,
         memory_context: list[MemoryRecord] | None = None,
     ) -> ChatResponse:
-        from langchain.agents import create_agent
+        from tianzhou_agent_platform.core.agent_runtime import build_agent
         from langchain.agents.middleware import (
             ModelCallLimitMiddleware,
             ToolErrorMiddleware,
@@ -1634,8 +1634,8 @@ class AgentRuntime:
                             )
                     native_messages.append(AIMessage(content="The requested operation was completed."))
 
-        agent = create_agent(
-            self._model,
+        agent = build_agent(
+            model=self._model,
             tools=native_tools,
             system_prompt=resolved_system_prompt,
             middleware=middleware,
@@ -1657,12 +1657,37 @@ class AgentRuntime:
                 "workspace_id": workspace_id,
             },
         }
-        try:
-            result = await agent.ainvoke(
-                {"messages": native_messages},
+        # Text of the latest model call already sent to the client, so the final answer is not sent twice.
+        stream_state = {"message_id": None, "text": ""}
+
+        async def _run_agent() -> dict[str, Any]:
+            agent_input = {"messages": native_messages}
+            if event_sink is None:
+                return await agent.ainvoke(agent_input, config=graph_config, context=context)
+            final_state: dict[str, Any] | None = None
+            async for mode, payload in agent.astream(
+                agent_input,
                 config=graph_config,
                 context=context,
-            )
+                stream_mode=["messages", "values"],
+            ):
+                if mode == "values":
+                    final_state = payload
+                    continue
+                chunk, metadata = payload
+                # Only the answering model's text is public; tool output and internal calls are not streamed.
+                if metadata.get("langgraph_node") != "model" or not isinstance(chunk, AIMessageChunk):
+                    continue
+                if chunk.id != stream_state["message_id"]:
+                    stream_state["message_id"], stream_state["text"] = chunk.id, ""
+                text = chunk.content if isinstance(chunk.content, str) else ""
+                if text:
+                    stream_state["text"] += text
+                    await event_sink({"type": "message.delta", "delta": text})
+            return final_state or {"messages": list(native_messages)}
+
+        try:
+            result = await _run_agent()
         except ApprovalRequired:
             result = {"messages": list(native_messages)}
         except Exception as exc:  # noqa: BLE001
@@ -1829,8 +1854,13 @@ class AgentRuntime:
         if not final_content:
             final_content = "The agent stopped without a final response."
         if event_sink is not None and final_content and status != "approval_required":
-            # Single public text sequence (native stream adapter emits one delta here).
-            await event_sink({"type": "message.delta", "delta": final_content})
+            # One public text sequence: send what the model stream did not already deliver (direct replies,
+            # budget refusals, or a notice a guard appended to streamed text).
+            streamed = stream_state["text"]
+            if not streamed:
+                await event_sink({"type": "message.delta", "delta": final_content})
+            elif final_content.startswith(streamed) and len(final_content) > len(streamed):
+                await event_sink({"type": "message.delta", "delta": final_content[len(streamed):]})
         iterations = max(1, sum(1 for m in new_messages if m.get("role") == "assistant"))
         end_run_ledger()
         response = ChatResponse(

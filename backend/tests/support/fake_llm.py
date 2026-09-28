@@ -212,7 +212,14 @@ class ScriptedLLM(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         message = self._next(messages, {**kwargs, "stop": stop, "context_type": _context_type(run_manager)})
         content = message.content if isinstance(message.content, str) else str(message.content or "")
-        yield ChatGenerationChunk(message=AIMessageChunk(content=content, tool_calls=message.tool_calls or []))
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(
+                content=content,
+                tool_calls=message.tool_calls or [],
+                response_metadata=message.response_metadata,
+                usage_metadata=message.usage_metadata,
+            )
+        )
 
     async def _astream(
         self,

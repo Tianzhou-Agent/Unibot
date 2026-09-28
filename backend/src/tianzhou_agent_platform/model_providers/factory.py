@@ -49,6 +49,8 @@ def create_native_chat_model(
         "timeout": timeout_seconds,
         "max_retries": max_retries,
         "use_responses_api": use_responses_api,
+        # Streamed agent turns must still report token usage.
+        "stream_usage": True,
     }
     if max_completion_tokens is not None:
         params["max_completion_tokens"] = max_completion_tokens
