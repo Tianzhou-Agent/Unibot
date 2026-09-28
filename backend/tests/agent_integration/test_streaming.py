@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from tianzhou_agent_platform.observability.callbacks import ObservationCallbackHandler
@@ -17,7 +16,7 @@ from tianzhou_agent_platform.services.agent_integration.streaming import (
     is_internal_generation,
     translate_native_stream,
 )
-from tests.support.fake_chat_model import ScriptedChatModel, assistant, tool_calling
+from tests.support.fake_chat_model import ScriptedChatModel, assistant
 
 
 class FakeSink:

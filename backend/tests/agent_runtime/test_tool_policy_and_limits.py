@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -10,13 +9,11 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
 from tianzhou_agent_platform.core.agent_runtime.middleware.model_policy import (
-    OutputGuardMiddleware,
     reject_truncated_call,
     request_input_budget,
 )
 from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import (
     BatchDeduper,
-    OrderedBatchMiddleware,
     tool_signature,
 )
 from tianzhou_agent_platform.services.agent_integration.builder import build_chat_agent

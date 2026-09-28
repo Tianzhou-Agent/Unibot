@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-import pytest
-from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import ToolRuntime
@@ -197,6 +195,7 @@ async def test_native_runner_confirm_resumes_risky_tool() -> None:
     confirm = await runner.confirm(
         conversation.id, response.approval.id, ApprovalAction(user_id="u1", tenant_id="t1")
     )
+    assert confirm.status == "completed"
     # Tool should have run after resume.
     assert any(m.role == "tool" and "done:send" in m.content for m in repo.archived)
 

@@ -7,7 +7,7 @@ batch/terminal policy. ConversationService owns approval records.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Literal, Sequence
+from typing import Any, Literal, Sequence
 from uuid import uuid4
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig

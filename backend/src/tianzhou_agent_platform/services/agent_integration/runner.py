@@ -14,7 +14,7 @@ from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
@@ -26,8 +26,8 @@ from tianzhou_agent_platform.conversations.schemas import (
     ChatResponse,
 )
 from tianzhou_agent_platform.conversations.service import ConversationService
-from tianzhou_agent_platform.core.base import Usage, utc_now
-from tianzhou_agent_platform.core.errors import PlatformError, conflict
+from tianzhou_agent_platform.core.base import Usage
+from tianzhou_agent_platform.core.errors import conflict
 from tianzhou_agent_platform.services.agent_integration.approvals import (
     approve_all,
     approval_record_from_interrupt,
@@ -36,7 +36,6 @@ from tianzhou_agent_platform.services.agent_integration.approvals import (
 )
 from tianzhou_agent_platform.services.agent_integration.builder import build_chat_agent
 from tianzhou_agent_platform.services.agent_integration.history import (
-    archive_to_native,
     native_to_archive,
     new_turn_inputs,
 )

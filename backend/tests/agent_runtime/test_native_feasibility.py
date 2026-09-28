@@ -547,7 +547,7 @@ async def test_model_call_limit_enforces_run_budget() -> None:
         tools=[echo_tool],
         middleware=[ModelCallLimitMiddleware(run_limit=2, exit_behavior="end")],
     )
-    result = await agent.ainvoke({"messages": [HumanMessage(content="loop")]})
+    await agent.ainvoke({"messages": [HumanMessage(content="loop")]})
     assert len(model.calls) <= 2
 
 

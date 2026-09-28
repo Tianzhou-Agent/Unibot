@@ -6,7 +6,7 @@ ToolRuntime context; this module does not reimplement domain operations.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt import ToolRuntime

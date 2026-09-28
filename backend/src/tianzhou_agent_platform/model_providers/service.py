@@ -9,7 +9,6 @@ from tianzhou_agent_platform.model_providers.models import (
     ModelProviderCreate,
     ModelProviderRecord,
     ModelProviderUpdate,
-    ModelProviderView,
     ModelRuntimeConfig,
     ModelSettingsResponse,
     provider_view,

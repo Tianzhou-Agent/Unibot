@@ -6,7 +6,6 @@ the agent or import ChatService.
 
 from __future__ import annotations
 
-from typing import Any
 
 from tianzhou_agent_platform.conversations.models import (
     Conversation,

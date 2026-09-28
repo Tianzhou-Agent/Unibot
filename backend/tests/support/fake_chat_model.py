@@ -6,7 +6,7 @@ interrupts and streams can be exercised against real framework components.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel

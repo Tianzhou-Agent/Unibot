@@ -42,7 +42,6 @@ def test_projection_messages_are_transient_annotations() -> None:
 
 
 async def test_archive_before_compaction_preserves_originals() -> None:
-    from uuid import uuid4
 
     from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate
     from tianzhou_agent_platform.conversations.service import ConversationService

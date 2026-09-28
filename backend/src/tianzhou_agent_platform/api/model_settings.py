@@ -1,7 +1,6 @@
 from time import perf_counter
 
 import httpx
-import openai
 from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, repository, settings

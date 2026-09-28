@@ -3,9 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import Field
 
-from tianzhou_agent_platform.core.base import StrictModel, utc_now
+from tianzhou_agent_platform.core.base import StrictModel
 
 
 @dataclass(slots=True)

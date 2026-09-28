@@ -80,7 +80,6 @@ from tianzhou_agent_platform.core.model_settings import (
     use_model_runtime,
 )
 from tianzhou_agent_platform.core.repository import InMemoryRepository
-from tianzhou_agent_platform.core.schema import validate_value
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, task_tool_specs
 from tianzhou_agent_platform.tasks.service import TaskService
@@ -216,7 +215,6 @@ class _ChatModelAdapter(BaseChatModel):
         raise RuntimeError("sync generate is not supported for the legacy adapter")
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
-        from langchain_core.messages import HumanMessage, SystemMessage
 
         from tianzhou_agent_platform.services.agent_integration.history import native_to_archive
 
@@ -1291,7 +1289,6 @@ class AgentRuntime:
             system_prompt=resolved_system_prompt,
             tool_definitions=tool_definitions,
         )
-        persist_from = len(messages)
         user_id = conversation.user_id
         tenant_id = conversation.tenant_id
         conversation_id = conversation.id

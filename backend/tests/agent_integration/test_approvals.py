@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -14,7 +13,6 @@ from tianzhou_agent_platform.services.agent_integration.approvals import (
     approve_all,
     build_hitl_middleware,
     is_interrupt_payload,
-    native_resume_payload,
     reject_all,
 )
 from tianzhou_agent_platform.services.agent_integration.builder import build_chat_agent

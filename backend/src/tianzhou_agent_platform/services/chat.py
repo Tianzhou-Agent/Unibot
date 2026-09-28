@@ -11,17 +11,15 @@ delegate to the legacy AgentRuntime through an explicit temporary branch.
 from __future__ import annotations
 
 from typing import Any, Protocol
-from uuid import uuid4
 
-from tianzhou_agent_platform.conversations.models import Conversation, Message
+from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import (
     ApprovalAction,
-    ApprovalRecord,
     ChatRequest,
     ChatResponse,
 )
 from tianzhou_agent_platform.conversations.service import ConversationService
-from tianzhou_agent_platform.core.base import Usage, utc_now
+from tianzhou_agent_platform.core.base import utc_now
 
 
 class LegacyAgentPort(Protocol):
