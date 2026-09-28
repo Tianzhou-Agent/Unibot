@@ -8,6 +8,7 @@ repeated runs never hit a cache or leak state between attempts.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from pathlib import Path
@@ -69,6 +70,36 @@ class TraceExpectation(_Strict):
     events_exclude: list[str] = Field(default_factory=list)
 
 
+class LlmCallsExpectation(_Strict):
+    """Checks on the agent's recorded model calls (``/llm-calls``)."""
+
+    # Model every agent call was served by, as reported by the provider (catches a selection being ignored).
+    served_model: str | None = None
+
+
+class HttpStep(_Strict):
+    """A setup request against the backend API (e.g. create and select a model provider)."""
+
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "POST"
+    path: str
+    body: dict[str, Any] | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+    # Save values from the JSON response for later steps: variable name -> dotted path (e.g. "models.0.id").
+    save: dict[str, str] = Field(default_factory=dict)
+
+
+class PollStep(_Strict):
+    """Poll a GET endpoint until a background job settles (e.g. a document edit task)."""
+
+    path: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    field: str  # dotted path of the watched value
+    until: list[Any]  # stop polling once the value is one of these
+    equals: Any = None  # value required to pass (default: the first ``until`` value)
+    timeout_s: float = 180.0
+    interval_s: float = 2.0
+
+
 class Budget(_Strict):
     max_iterations: int | None = None
     max_latency_ms: float | None = None
@@ -94,6 +125,10 @@ class Expectation(_Strict):
     prompt: PromptExpectation | None = None
     trace: TraceExpectation | None = None
     budget: Budget | None = None
+    llm_calls: LlmCallsExpectation | None = None
+    # The turn is expected to end with a backend error whose code/message contains this text (e.g. a provider
+    # 401 proving that a deliberately broken selected provider is actually called).
+    error: str | None = None
     judge: list[JudgeExpectation] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -106,18 +141,26 @@ class Expectation(_Strict):
 
 class Turn(_Strict):
     user: str | None = None
-    action: Literal["chat", "confirm_approval", "deny_approval"] = "chat"
+    action: Literal["chat", "confirm_approval", "deny_approval", "http", "poll"] = "chat"
     actor: str = "a"  # label; each label maps to its own isolated user id and conversation
     new_conversation: bool = False
     capability: str | None = None
     preferred_aina_id: str | None = None
     ui_context: str | None = None
+    request: HttpStep | None = None  # action: http
+    poll: PollStep | None = None  # action: poll
     expect: Expectation = Field(default_factory=Expectation)
 
     @model_validator(mode="after")
     def _message_required(self) -> "Turn":
         if self.action == "chat" and not self.user:
             raise ValueError("chat turns need a 'user' message")
+        if self.action == "http" and self.request is None:
+            raise ValueError("http turns need a 'request'")
+        if self.action == "poll" and self.poll is None:
+            raise ValueError("poll turns need a 'poll'")
+        if self.action in {"http", "poll"} and "status" not in self.expect.model_fields_set:
+            self.expect.status = None  # API steps are not agent runs
         if self.action == "deny_approval" and "status" not in self.expect.model_fields_set:
             # A denial returns the closed approval record, not an agent response.
             self.expect.status = None
@@ -199,3 +242,41 @@ def _render(value: Any, variables: dict[str, str]) -> Any:
     if isinstance(value, dict):
         return {key: _render(item, variables) for key, item in value.items()}
     return value
+
+
+_RUNTIME_PLACEHOLDER = re.compile(r"\{\{\s*([\w.|]+)\s*\}\}")
+
+
+def render_runtime(value: Any, variables: dict[str, str]) -> Any:
+    """Resolve placeholders known only while an attempt runs: ``{{user_id}}``, values saved by earlier steps,
+    and ``{{env.NAME}}`` / ``{{env.A|B}}`` (first set environment variable, e.g. provider credentials)."""
+
+    def resolve(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name.startswith("env."):
+            # {{env.A|B|C}}: the first of these environment variables that is set
+            for key in name[4:].split("|"):
+                if os.environ.get(key):
+                    return os.environ[key]
+            return match.group(0)
+        return variables.get(name, match.group(0))
+
+    if isinstance(value, str):
+        return _RUNTIME_PLACEHOLDER.sub(resolve, value)
+    if isinstance(value, list):
+        return [render_runtime(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: render_runtime(item, variables) for key, item in value.items()}
+    return value
+
+
+def dig(data: Any, path: str) -> Any:
+    """Value at a dotted path (``items.0.status``); None when absent."""
+    for part in path.split("."):
+        if isinstance(data, list) and part.isdigit() and int(part) < len(data):
+            data = data[int(part)]
+        elif isinstance(data, dict):
+            data = data.get(part)
+        else:
+            return None
+    return data

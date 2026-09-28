@@ -27,6 +27,9 @@ class FakeUnibot:
     memories: dict[str, list[str]] = field(default_factory=dict)
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
     seen_traceparents: list[str] = field(default_factory=list)
+    served_model: str = "fake"  # model the fake provider reports in /llm-calls responses
+    api_requests: list[tuple[str, str, Any]] = field(default_factory=list)  # setup/poll calls seen
+    job_polls: int = 0
     deleted: list[str] = field(default_factory=list)
 
     def transport(self) -> httpx.MockTransport:
@@ -41,7 +44,13 @@ class FakeUnibot:
         if request.method == "POST" and path == "/chat":
             return httpx.Response(200, json=self._chat(json.loads(request.content)))
         if request.method == "POST" and path == "/chat/stream":
-            response = self._chat(json.loads(request.content))
+            payload = json.loads(request.content)
+            if "FAIL_PROVIDER" in payload["message"]:  # the selected model provider rejects the request
+                error = {"type": "error", "error": {"code": "DEPENDENCY_FAILED",
+                                                    "message": "The model provider returned HTTP 401"}}
+                return httpx.Response(200, content=f"data: {json.dumps(error)}\n\n".encode(),
+                                      headers={"content-type": "text/event-stream"})
+            response = self._chat(payload)
             chunks = [{"type": "message.delta", "delta": response["content"]},
                       {"type": "message.completed", "response": response}]
             if "capability_error" in self.faults:  # non-fatal: the backend returns the error to the model
@@ -51,6 +60,14 @@ class FakeUnibot:
         if request.method == "GET" and path.startswith("/traces/"):
             trace = self.traces.get(path.rsplit("/", 1)[1])
             return httpx.Response(200, json=trace) if trace else httpx.Response(404, json={"detail": "missing"})
+        if request.method == "POST" and path == "/model-settings/providers":
+            body = json.loads(request.content)
+            self.api_requests.append((request.method, path, body))
+            return httpx.Response(201, json={"id": "prov_1", "user_id": body.get("user_id"), "models": [{"id": "m_1"}]})
+        if request.method == "GET" and path.startswith("/jobs/"):
+            self.api_requests.append((request.method, path, dict(request.url.params)))
+            self.job_polls += 1  # a background job that settles on the third poll
+            return httpx.Response(200, json={"items": [{"status": "done" if self.job_polls >= 3 else "running"}]})
         if request.method == "GET" and path == "/llm-calls":
             return httpx.Response(200, json=self.llm_calls)
         if request.method == "DELETE" and path.startswith("/conversations/"):
@@ -137,6 +154,7 @@ class FakeUnibot:
         self.llm_calls.append({"call_id": uuid.uuid4().hex, "trace_id": trace_id, "context_type": "conversation",
                                "context_id": conversation_id, "endpoint": "/chat/completions", "model": "fake",
                                "status": "completed", "request": {"model": "fake", "messages": prompt},
+                               "response": {"model": self.served_model},
                                "created_at": "2026-09-28T00:00:00Z"})
         tokens = sum(len(m["content"]) for m in prompt) // 4
         return {"conversation_id": conversation_id, "message_id": f"msg_{uuid.uuid4().hex[:8]}", "content": content,

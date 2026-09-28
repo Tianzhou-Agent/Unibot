@@ -32,7 +32,8 @@ datasets/*.yaml ──► runner ──► POST /chat/stream (or /chat)     ◄�
 | `tool_arguments` | Arguments are a subset or exact match, case-insensitive, with `re:` regex values | `details.arguments` / span `input` |
 | `context` | The prompt contains, or doesn't contain, given facts; a compaction summary is present; message count stays under a limit | `GET /llm-calls`: what the model actually saw |
 | `output` | `equals`, `contains`, `contains_any`, `not_contains`, `regex` | Response `content` |
-| `protocol` | Status (`completed`, `approval_required`), widgets (`app_list`, `navigation`, `form` ...), trace events such as `approval.denied` and `context.compacted` | Response + trace |
+| `protocol` | Status (`completed`, `approval_required`, `failed`), expected backend errors (`error`), widgets (`app_list`, `navigation`, `form` ...), trace events such as `approval.denied` and `context.compacted`, API setup steps (`http`) and background-job results (`poll`) | Response + trace + API |
+| `llm_calls` | The model that actually served each agent call (`served_model`, as reported by the provider) | `GET /llm-calls` |
 | `performance` | Iterations, latency, TTFT, total tokens, number of tool calls, duplicate identical calls | Client timing, SSE, `usage` |
 | `judge:*` | `correctness`, `groundedness` (did the answer use the tool results?), `safety` | LangChain chat model with structured output |
 
@@ -116,7 +117,7 @@ uv run python -m unibot_eval run --k 3
 
 ## Writing cases
 
-A case is a scripted conversation. `{{marker}}`, `{{marker2}}`, `{{secret}}` and `{{number}}` get fresh random
+A case is a scripted conversation. `{{env.A|B}}` resolves to the first set environment variable. `{{marker}}`, `{{marker2}}`, `{{secret}}` and `{{number}}` get fresh random
 values on every attempt.
 
 ```yaml
@@ -141,6 +142,16 @@ cases:
                    max_tool_calls: 2, max_duplicate_calls: 0}
           judge: {rubric: groundedness, criteria: "...", reference: "...", threshold: 0.7}
       - action: confirm_approval   # or deny_approval; acts on this actor's last pending approval
+      - action: http               # API setup step; {{user_id}}/{{tenant_id}} are this actor's ids
+        request: {method: POST, path: /model-settings/providers, body: {user_id: "{{user_id}}"},
+                  save: {provider_id: id}}   # saved values are available to later steps as {{provider_id}}
+      - action: poll               # wait for a background job to settle
+        poll: {path: "/documents/x.md/edit-tasks", params: {user_id: "{{user_id}}"},
+               field: items.0.status, until: [reviewing, failed], equals: reviewing, timeout_s: 180}
+      - user: "..."
+        expect:
+          llm_calls: {served_model: mimo-v2.5}   # model that actually served the agent's calls
+          # status: failed + error: "..."        # the turn must end with this backend error
 ```
 
 Capability names are the trace `target_id` values (`list_app`, `describe_aina`, `open_aina`,
@@ -159,6 +170,7 @@ every bug you fix should become a case.
 | `context.yaml` | Recall across turns, latest correction wins, facts surviving several turns, clean new conversations, cross-user isolation, compression (opt-in) |
 | `safety.yaml` | Memory write, recall, deny and confirm lifecycle through the approval gate; prompt injection in user data; system-prompt exfiltration (a policy case, adjust to taste) |
 | `robustness.yaml` | Unknown app, ambiguous request, missing document: no fabricated success |
+| `jobs.yaml` | Document edit jobs reach review with a draft; the model selected in model settings serves chat (by the provider-reported model and black-box with a deliberately broken provider). Provider credentials come from `EVAL_PROVIDER_BASE_URL/API_KEY`, falling back to `EVAL_JUDGE_*` then `llm_*` |
 | `performance.yaml` | Latency, TTFT and token budgets. **These numbers are placeholders.** Set them from a baseline run of your deployment |
 
 **Compression case:** this needs a backend with a small context window so that compaction actually triggers,

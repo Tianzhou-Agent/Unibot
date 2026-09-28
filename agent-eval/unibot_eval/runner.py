@@ -16,7 +16,7 @@ from opentelemetry.trace import Status, StatusCode
 from unibot_eval.checks import PROTOCOL, CheckResult, run_checks
 from unibot_eval.client import BackendError, ChatResult, UnibotEvalClient
 from unibot_eval.config import EvalSettings
-from unibot_eval.dataset import Case, Turn, fresh_vars
+from unibot_eval.dataset import Case, HttpStep, PollStep, Turn, dig, fresh_vars, render_runtime
 from unibot_eval.judge import LLMJudge
 from unibot_eval.telemetry import set_attributes, tracer
 from unibot_eval.trajectory import TurnObservation, extract_tool_calls
@@ -168,6 +168,7 @@ class EvalRunner:
         observations: list[TurnObservation] = []
         checks: list[CheckResult] = []
         notes: list[str] = []
+        saved: dict[str, str] = {}  # values saved by http steps, available to later steps as {{name}}
         error: str | None = None
         started = time.perf_counter()
         with tracer().start_as_current_span("eval.attempt") as span:
@@ -176,13 +177,29 @@ class EvalRunner:
                 try:
                     for index, turn in enumerate(rendered.turns):
                         user_id = actors.setdefault(turn.actor, _actor_id(case.id, turn.actor, run_tag))
-                        observation = await self._run_turn(
-                            client, index, turn, user_id, conversations, observations
-                        )
+                        step_checks: list[CheckResult] = []
+                        if turn.action in {"http", "poll"}:
+                            observation, step_checks = await self._run_step(client, index, turn, user_id, saved)
+                        else:
+                            try:
+                                observation = await self._run_turn(
+                                    client, index, turn, user_id, conversations, observations
+                                )
+                            except BackendError as exc:
+                                if turn.expect.error is None:
+                                    raise
+                                observation = TurnObservation(
+                                    index=index,
+                                    actor=turn.actor,
+                                    user_id=user_id,
+                                    action=turn.action,
+                                    input=turn.user,
+                                    response={"status": "failed", "content": "", "error": str(exc)},
+                                )
                         if observation.conversation_id:
                             created.add(observation.conversation_id)
                         observations.append(observation)
-                        turn_checks = run_checks(turn.expect, observation)
+                        turn_checks = step_checks + run_checks(turn.expect, observation)
                         turn_checks += await self._judge_turn(turn, observation, observations, notes)
                         checks.extend(turn_checks)
                         _record_checks(turn_checks)
@@ -212,6 +229,83 @@ class EvalRunner:
             error=error,
             notes=notes,
         )
+
+    async def _run_step(
+        self,
+        client: UnibotEvalClient,
+        index: int,
+        turn: Turn,
+        user_id: str,
+        saved: dict[str, str],
+    ) -> tuple[TurnObservation, list[CheckResult]]:
+        """Run an API setup (``http``) or background-job (``poll``) step and check its outcome."""
+        variables = {**saved, "user_id": user_id, "tenant_id": self.settings.tenant_id}
+        checks: list[CheckResult] = []
+        started = time.perf_counter()
+        with tracer().start_as_current_span("eval.step") as span:
+            set_attributes(span, {"eval.turn": index, "eval.actor": turn.actor, "eval.action": turn.action})
+            if turn.action == "http":
+                assert turn.request is not None
+                request = HttpStep.model_validate(render_runtime(turn.request.model_dump(), variables))
+                unresolved = re.findall(r"\{\{\s*([\w.|]+)\s*\}\}", request.model_dump_json())
+                if unresolved:
+                    raise ValueError(f"turn {index}: unresolved placeholders {sorted(set(unresolved))}")
+                status, body = await client.request(
+                    request.method, request.path, body=request.body, params=request.params
+                )
+                ok = 200 <= status < 300
+                checks.append(
+                    CheckResult(
+                        f"http:{request.method} {request.path}",
+                        PROTOCOL,
+                        ok,
+                        1.0 if ok else 0.0,
+                        f"HTTP {status}" + ("" if ok else f": {str(body)[:300]}"),
+                    )
+                )
+                for name, path in request.save.items():
+                    value = dig(body, path)
+                    if value is None:
+                        checks.append(CheckResult(f"save:{name}", PROTOCOL, False, 0.0, f"{path} not in response"))
+                    else:
+                        saved[name] = str(value)
+                summary = f"{request.method} {request.path} -> HTTP {status}"
+            else:
+                assert turn.poll is not None
+                poll = PollStep.model_validate(render_runtime(turn.poll.model_dump(), variables))
+                deadline = time.monotonic() + poll.timeout_s
+                while True:
+                    status, body = await client.request("GET", poll.path, params=poll.params)
+                    value = dig(body, poll.field) if 200 <= status < 300 else None
+                    if value in poll.until or time.monotonic() >= deadline:
+                        break
+                    await asyncio.sleep(poll.interval_s)
+                expected = poll.equals if poll.equals is not None else poll.until[0]
+                waited = time.perf_counter() - started
+                ok = value == expected
+                checks.append(
+                    CheckResult(
+                        f"poll:{poll.field}",
+                        PROTOCOL,
+                        ok,
+                        1.0 if ok else 0.0,
+                        f"{poll.field}={value!r} (HTTP {status}) after {waited:.0f}s; expected {expected!r}",
+                    )
+                )
+                summary = f"GET {poll.path}: {poll.field}={value!r}"
+        for check in checks:
+            check.turn = index
+        observation = TurnObservation(
+            index=index,
+            actor=turn.actor,
+            user_id=user_id,
+            action=turn.action,
+            input=summary,
+            response={"content": summary},
+            latency_ms=(time.perf_counter() - started) * 1000,
+            ttft_ms=None,
+        )
+        return observation, checks
 
     async def _run_turn(
         self,

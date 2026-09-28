@@ -252,3 +252,77 @@ def test_reports_are_written(tmp_path: Path) -> None:
     assert summary["by_category"]["tool_selection"]["pass_rate"] < 1
     markdown = paths["markdown"].read_text(encoding="utf-8")
     assert "## Failures" in markdown and "builtin.list_app" in markdown
+
+
+def _step_case(served_model: str) -> Case:
+    return Case.model_validate(
+        {
+            "id": "steps.setup_poll_and_served_model",
+            "turns": [
+                {
+                    "action": "http",
+                    "request": {
+                        "path": "/model-settings/providers",
+                        "body": {"user_id": "{{user_id}}", "name": "p"},
+                        "save": {"provider_id": "id", "model_id": "models.0.id"},
+                    },
+                },
+                {
+                    "action": "poll",
+                    "poll": {
+                        "path": "/jobs/{{provider_id}}",
+                        "params": {"user_id": "{{user_id}}"},
+                        "field": "items.0.status",
+                        "until": ["done", "failed"],
+                        "interval_s": 0,
+                        "timeout_s": 5,
+                    },
+                },
+                {
+                    "user": "Reply with exactly {{marker}} and nothing else.",
+                    "expect": {"llm_calls": {"served_model": served_model}},
+                },
+            ],
+        }
+    )
+
+
+def test_http_and_poll_steps_share_saved_values_and_actor_identity() -> None:
+    fake = FakeUnibot()
+    settings = EvalSettings(base_url="http://unibot.test", concurrency=1, trace_wait_s=0)
+    runner = EvalRunner(settings, use_judge=False, transport=fake.transport())
+    result = asyncio.run(runner.run([_step_case("fake")], repeats=1))
+
+    attempt = result.cases[0].attempts[0]
+    assert attempt.passed, [c.to_dict() for c in attempt.checks if not c.passed]
+    method, path, body = fake.api_requests[0]
+    assert (method, path) == ("POST", "/model-settings/providers")
+    assert body["user_id"].startswith("eval-steps-setup-poll")
+    assert fake.api_requests[-1][1] == "/jobs/prov_1"
+    assert fake.job_polls == 3
+    assert {c.name for c in attempt.checks} >= {"http:POST /model-settings/providers", "poll:items.0.status"}
+
+
+def test_served_model_check_fails_when_another_model_answered() -> None:
+    fake = FakeUnibot(served_model="environment-model")
+    settings = EvalSettings(base_url="http://unibot.test", concurrency=1, trace_wait_s=0)
+    runner = EvalRunner(settings, use_judge=False, transport=fake.transport())
+    attempt = asyncio.run(runner.run([_step_case("selected-model")], repeats=1)).cases[0].attempts[0]
+
+    failed = {c.name: c.detail for c in attempt.checks if not c.passed}
+    assert list(failed) == ["llm_calls:served_model:selected-model"]
+    assert "environment-model" in failed["llm_calls:served_model:selected-model"]
+
+
+def test_expected_backend_error_is_a_passing_check_and_unexpected_one_is_not() -> None:
+    def case(expect: dict) -> Case:  # type: ignore[type-arg]
+        return Case.model_validate({"id": "errors.provider", "turns": [{"user": "FAIL_PROVIDER please", "expect": expect}]})
+
+    settings = EvalSettings(base_url="http://unibot.test", concurrency=1, trace_wait_s=0)
+    runner = EvalRunner(settings, use_judge=False, transport=FakeUnibot().transport())
+    expected = asyncio.run(runner.run([case({"status": "failed", "error": "HTTP 401"})], repeats=1))
+    unexpected = asyncio.run(runner.run([case({})], repeats=1))
+
+    assert expected.cases[0].attempts[0].passed
+    assert not unexpected.cases[0].attempts[0].passed
+    assert "HTTP 401" in (unexpected.cases[0].attempts[0].error or "")

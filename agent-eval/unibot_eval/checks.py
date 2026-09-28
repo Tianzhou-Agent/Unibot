@@ -12,6 +12,7 @@ from unibot_eval.dataset import (
     ArgExpectation,
     Budget,
     Expectation,
+    LlmCallsExpectation,
     OutputExpectation,
     PromptExpectation,
     ToolExpectation,
@@ -58,6 +59,13 @@ def run_checks(expect: Expectation, turn: TurnObservation) -> list[CheckResult]:
         results.extend(check_trace(expect.trace, turn))
     if expect.budget is not None:
         results.extend(check_budget(expect.budget, turn))
+    if expect.llm_calls is not None:
+        results.extend(check_llm_calls(expect.llm_calls, turn))
+    if expect.error is not None:
+        error = str(turn.response.get("error") or "")
+        results.append(
+            _result(f"error:{expect.error}", PROTOCOL, expect.error in error, error or "the turn did not fail")
+        )
     for result in results:
         result.turn = turn.index
     return results
@@ -208,6 +216,16 @@ def check_prompt(spec: PromptExpectation, turn: TurnObservation) -> list[CheckRe
 
 
 # ---- performance ---------------------------------------------------------------------------------------------
+
+
+def check_llm_calls(spec: LlmCallsExpectation, turn: TurnObservation) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    if spec.served_model is not None:
+        served = [str((call.get("response") or {}).get("model") or "") for call in turn.agent_llm_calls()]
+        passed = bool(served) and all(model == spec.served_model for model in served)
+        detail = f"served by {served}" if served else "no agent LLM calls recorded for this trace"
+        results.append(_result(f"llm_calls:served_model:{spec.served_model}", CONTEXT, passed, detail))
+    return results
 
 
 def check_budget(spec: Budget, turn: TurnObservation) -> list[CheckResult]:

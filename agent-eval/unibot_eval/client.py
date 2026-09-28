@@ -129,6 +129,23 @@ class UnibotEvalClient:
         calls = [call for call in _json_or_raise(response) if call.get("trace_id") == trace_id]
         return sorted(calls, key=lambda call: str(call.get("created_at") or ""))
 
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[int, Any]:
+        """A plain API call for setup and polling steps: (status code, JSON body or text)."""
+        response = await self._client.request(
+            method, path, json=body, params=params or None, headers=inject_trace_headers({})
+        )
+        try:
+            return response.status_code, response.json()
+        except ValueError:
+            return response.status_code, response.text
+
     async def delete_conversation(self, conversation_id: str) -> None:
         response = await self._client.delete(f"/conversations/{conversation_id}")
         if response.status_code not in {200, 204, 404}:

@@ -1,0 +1,106 @@
+# Background jobs and model selection: work that happens outside the chat reply itself.
+# Both cases come from production regressions of the create_agent migration:
+#   - document edit jobs failed ("No model provider is configured") when the model came from llm_* settings
+#   - chat ignored the model the user selected in model settings and kept using the startup model
+
+cases:
+  - id: jobs.document_edit_task_produces_a_draft
+    description: >-
+      An edit task created through chat is picked up by the background worker and reaches review with a draft,
+      without changing the source document.
+    tags: [jobs, documents]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "eval-{{marker}}"
+            content: "# Eval guide\n\n## Background\n\nthis part is kinda informal and needs a proper tone.\n\n## Scope\n\nKeep this section unchanged.\n"
+      # The user is in the documents app (as in the document canvas), where "create a task / review before
+      # saving" means a document edit task rather than a to-do task.
+      - user: "用任务模式为文档 eval-{{marker}}.md 的 Background 章节生成修改草稿：改写成正式的书面语气，我审阅后再合并。"
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {expected: [document.edit_task.create], mode: superset}
+          output: {contains: ["已创建"]}
+      - action: poll
+        poll:
+          path: "/documents/eval-{{marker}}.md/edit-tasks"
+          params: {user_id: "{{user_id}}"}
+          field: items.0.status
+          until: [reviewing, failed]
+          equals: reviewing
+          timeout_s: 180
+      - action: poll
+        poll:
+          path: "/documents/eval-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          field: content
+          until: ["# Eval guide\n\n## Background\n\nthis part is kinda informal and needs a proper tone.\n\n## Scope\n\nKeep this section unchanged.\n"]
+          timeout_s: 5
+
+  - id: model_settings.selected_model_serves_chat
+    description: >-
+      After the user selects a provider model in model settings, chat requests are served by that model (not by
+      the backend's default llm_* model).
+    tags: [model_settings]
+    # Must be a model the provider serves, and differ from the backend's default model.
+    vars:
+      selected_model: mimo-v2.5
+    turns:
+      - action: http
+        request:
+          path: /model-settings/providers
+          body:
+            user_id: "{{user_id}}"
+            tenant_id: "{{tenant_id}}"
+            provider_type: openai
+            name: "Eval provider {{marker}}"
+            base_url: "{{env.EVAL_PROVIDER_BASE_URL|EVAL_JUDGE_BASE_URL|llm_base_url}}"
+            api_key: "{{env.EVAL_PROVIDER_API_KEY|EVAL_JUDGE_API_KEY|llm_api_key}}"
+            models:
+              - {name: Eval selected model, model: "{{selected_model}}", enabled: true}
+          save:
+            provider_id: id
+            model_id: models.0.id
+      - action: http
+        request:
+          path: "/model-settings/providers/{{provider_id}}/models/{{model_id}}/default"
+          body: {user_id: "{{user_id}}", tenant_id: "{{tenant_id}}"}
+      - user: "Reply with exactly {{marker}} and nothing else. Do not call any tool or application."
+        expect:
+          tools: {none: true}
+          output: {equals: "{{marker}}"}
+          llm_calls: {served_model: "{{selected_model}}"}
+
+  - id: model_settings.selected_provider_is_called
+    description: >-
+      Black-box check that does not rely on the backend's own call records: the user selects a provider whose API
+      key is deliberately invalid, so the chat must fail with the provider's 401. A backend that ignores the
+      selection would answer successfully from its default model.
+    tags: [model_settings]
+    turns:
+      - action: http
+        request:
+          path: /model-settings/providers
+          body:
+            user_id: "{{user_id}}"
+            tenant_id: "{{tenant_id}}"
+            provider_type: openai
+            name: "Eval broken provider {{marker}}"
+            base_url: "{{env.EVAL_PROVIDER_BASE_URL|EVAL_JUDGE_BASE_URL|llm_base_url}}"
+            api_key: "sk-invalid-{{marker}}"
+            models:
+              - {name: Eval broken model, model: "{{env.EVAL_JUDGE_MODEL|llm_model}}", enabled: true}
+          save:
+            provider_id: id
+            model_id: models.0.id
+      - action: http
+        request:
+          path: "/model-settings/providers/{{provider_id}}/models/{{model_id}}/default"
+          body: {user_id: "{{user_id}}", tenant_id: "{{tenant_id}}"}
+      - user: "Reply with exactly {{marker}} and nothing else."
+        expect:
+          status: failed
+          error: "The model provider returned HTTP 401"
