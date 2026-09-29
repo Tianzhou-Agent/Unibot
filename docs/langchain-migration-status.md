@@ -37,7 +37,7 @@ Composed per invocation by `AgentRunner`; first = outermost.
 | `TurnSummarizationMiddleware` | runtime, subclass of `SummarizationMiddleware` | Built-in summarization retaining complete user turns. | `keep` cannot express turns; the built-in re-raises summary failures and cannot skip an oversized summary request. |
 | `CapabilityScopeMiddleware` | Unibot | Advertised tools, system prompt, UI context, forced tool, out-of-scope history projection. | Product capability scopes (AINA activation). |
 | `RequestBudgetGuard` | runtime | Refuses a final request over the model's input budget; nothing is sent. | No built-in final-request budget (tools and system prompt included). |
-| `ForcedToolChoiceMiddleware` | runtime | Forced tool calls are not streamed; a provider rejecting named `tool_choice` gets one retry without it. | Demonstrated provider incompatibility (thinking-mode providers). |
+| `ForcedToolChoiceMiddleware` | runtime | Forced tool calls are not streamed; a provider that rejects or ignores a named `tool_choice` is asked once more, and a call still missing fails the run. | Demonstrated provider incompatibility (thinking-mode providers reject it; `mimo-v2.6-flash` ignores it in about a quarter of requests). |
 | `ProviderErrorMiddleware` | runtime | Provider exceptions → platform errors (injected mapping). | Product error protocol. |
 | `ModelCallRecorder` | Unibot | Model spans, trace events, `/llm-calls` records, run usage. | Product trace contract; records the exact provider request. |
 | `InvalidToolCallMiddleware` | runtime | Answers tool calls whose arguments are not valid JSON. | LangChain keeps them in `invalid_tool_calls`, which nothing executes or answers. |
@@ -66,7 +66,7 @@ setting, the gateway's transport retry loop and the one-off `scripts/fix_shims.p
 
 | ID | Resolution |
 | --- | --- |
-| A1 | `ConversationService` is backed by protocols the real repositories implement; all flows run on `InMemoryRepository` and, live, on `PersistentRepository`. |
+| A1 | `ConversationService` and `ModelProviderService` are backed by protocols the real repositories implement; all flows run on `InMemoryRepository` and, live, on `PersistentRepository`. `tests/test_service_boundaries.py` compares every protocol method's parameters with both repositories. |
 | A2 | `OrderedBatchMiddleware` keeps a run-scoped ledger: identical calls run again only after a retryable failure, at most three times. |
 | A3 | The legacy runtime is deleted. |
 | A4 | `RequestBudgetGuard` measures every final request. |
@@ -79,14 +79,18 @@ setting, the gateway's transport retry loop and the one-off `scripts/fix_shims.p
 
 | Check | Result |
 | --- | --- |
-| `uv run --no-sync python -m pytest -q` (backend, CI command) | 494 passed, 46 skipped (MySQL/Redis/storage suites and live-model evals skip without their environment) |
+| `uv run --no-sync python -m pytest -q` (backend, CI command) | 503 passed, 45 skipped (MySQL/Redis/storage suites and live-model evals skip without their environment) |
 | Live storage: `tests/store` with `TZ_STORAGE_E2E=1` and `OBS_TEST_*` against `docker-compose.storage.yml` (isolated database and Redis DB) | 137 passed, 1 skipped, 3 failed. The failures (`test_observability_query.py`: personal overview, raw log ownership, feedback context) fail identically on the pre-migration commit. |
 | Live agent runtime: `tests/store/test_agent_runtime_e2e.py` | Paused approval resumes after an app restart on `MySqlCheckpointSaver`; one checkpoint per thread after pruning; next turn continues; deletion removes the thread. |
 | `ruff check` on changed files | Clean except 6 pre-existing unused imports in `tests/store/test_observability_phase_four.py` and `test_observability_query.py`. |
-| Live-model evals (`tests/evals`) | Not run: need `UNIBOT_EVAL_BASE_URL` and judge credentials. Provider behavior is covered with `ChatOpenAI` against a mocked OpenAI-compatible API (`tests/test_llm_client.py`). |
+| Live-model evals (`tests/evals`), agent and DeepEval judge both `mimo-v2.6-flash`, in-memory app (`create_app()`) | 7 passed, 1 failed. `test_memory_write_recall_and_approval_lifecycle` passes its assertions but fails Tool Correctness and Step Efficiency: the model recalled twice (a query that matched nothing, then an empty one). A first run, before the forced-call guard and the judge's tool context, failed 3: the provider ignored a named `tool_choice` in 3 of 11 forced requests, and GEval, seeing no tool output, marked the real built-in apps as invented. |
 
 ## Open items
 
-- Routes outside the agent flows (conversation CRUD, approvals list, model settings) still call the aggregate
-  repository directly; moving them onto the feature services is separate work.
-- Live-model evaluation and a paired quality comparison remain to be run with credentials.
+- Conversation CRUD, the approvals list and model settings go through `ConversationService` and
+  `ModelProviderService`. Their protocols previously declared methods the repositories do not have
+  (`delete_conversation`, `delete_model_provider`, `get_model_provider` without the actor) and optional returns
+  where the repositories raise `not_found`; they now match the repositories, and the service methods built on the
+  mismatch were replaced. Capabilities, feedback, memories, schedules, documents and the remaining operations
+  routes still call the aggregate repository; they belong to features outside this migration.
+- A paired quality comparison against the pre-migration runtime has not been run.

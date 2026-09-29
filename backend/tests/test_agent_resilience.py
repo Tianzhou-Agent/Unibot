@@ -326,6 +326,23 @@ def test_truncated_model_response_is_failed_and_never_executes_partial_tool_call
         assert "Partial answer" in response["content"]
 
 
+def test_forced_tool_the_model_keeps_ignoring_fails_the_turn_without_its_answer() -> None:
+    requests = []
+    llm = ScriptedLLM([assistant("It is 42."), assistant("Still 42.")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: requests.append(request)))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post("/tools", json=_tool_definition())
+        response = client.post("/chat", json={"message": "Run it", "capability": "tool:resilience.tool"}).json()
+        conversation = client.get(f"/conversations/{response['conversation_id']}").json()
+
+    assert response["status"] == "failed"
+    assert "without using the selected capability" in response["content"]
+    assert not requests and len(llm.calls) == 2
+    assert all(call["tool_choice"] is not None for call in llm.calls)
+    assert conversation["run_status"] == "failed"
+    assert not any("42" in str(message["content"]) for message in conversation["messages"])
+
+
 @pytest.mark.parametrize("side_effect_level,expected_calls", [("none", 2), ("low", 1)])
 def test_automatic_retries_do_not_repeat_operations_with_side_effects(side_effect_level, expected_calls):
     calls = []

@@ -68,12 +68,6 @@ async def test_forced_tool_choice_is_retried_without_it_when_rejected() -> None:
         """Look something up."""
         return "found"
 
-    class ForceLookup(ForcedToolChoiceMiddleware):
-        async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-            if not any(isinstance(message, ToolMessage) for message in request.messages):
-                request = request.override(tool_choice="lookup", system_message=None)
-            return await super().awrap_model_call(request, handler)
-
     def reject(**_: Any) -> AIMessage:
         raise ToolChoiceRejection("tool_choice unsupported")
 
@@ -81,7 +75,7 @@ async def test_forced_tool_choice_is_retried_without_it_when_rejected() -> None:
     agent = build_agent(
         model=model,
         tools=[lookup],
-        middleware=[ForceLookup(lambda exc: isinstance(exc, ToolChoiceRejection))],
+        middleware=[ForceLookup(lambda exc: isinstance(exc, ToolChoiceRejection), reply="missing")],
     )
 
     result = await agent.ainvoke({"messages": [HumanMessage(content="find it")]})
@@ -91,6 +85,58 @@ async def test_forced_tool_choice_is_retried_without_it_when_rejected() -> None:
     assert first["tool_choice"] == "lookup"
     assert second["tool_choice"] is None
     assert second["messages"][0].content.endswith("Call that function before answering the user.")
+
+
+class ForceLookup(ForcedToolChoiceMiddleware):
+    """Forces ``lookup`` on the first model call of a turn."""
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        if not any(isinstance(message, ToolMessage) for message in request.messages):
+            request = request.override(tool_choice="lookup", system_message=None)
+        return await super().awrap_model_call(request, handler)
+
+
+async def test_forced_tool_choice_ignored_by_the_provider_is_requested_once_more() -> None:
+    executed: list[str] = []
+
+    @tool
+    def lookup() -> str:
+        """Look something up."""
+        executed.append("lookup")
+        return "found"
+
+    model = ScriptedChatModel(responses=[assistant("made up"), tool_calling("lookup", {}), assistant("done")])
+    guard = ForceLookup(lambda exc: False, reply="missing")
+    agent = build_agent(model=model, tools=[lookup], middleware=[guard])
+
+    result = await agent.ainvoke({"messages": [HumanMessage(content="find it")]})
+
+    assert result["messages"][-1].content == "done"
+    assert executed == ["lookup"] and guard.failure is None
+    first, second, _ = model.calls
+    assert first["tool_choice"] == second["tool_choice"] == "lookup"
+    assert second["messages"][0].content.endswith("Call that function before answering the user.")
+    assert "made up" not in [message.content for message in result["messages"]]
+
+
+async def test_forced_tool_choice_still_ignored_ends_the_run_with_the_failure_reply() -> None:
+    executed: list[str] = []
+
+    @tool
+    def lookup() -> str:
+        """Look something up."""
+        executed.append("lookup")
+        return "found"
+
+    model = ScriptedChatModel(responses=[assistant("made up"), assistant("made up again")])
+    guard = ForceLookup(lambda exc: False, reply="missing")
+    agent = build_agent(model=model, tools=[lookup], middleware=[guard])
+
+    result = await agent.ainvoke({"messages": [HumanMessage(content="find it")]})
+
+    assert result["messages"][-1].content == "missing"
+    assert guard.failure == "missing"
+    assert executed == [] and len(model.calls) == 2
 
 
 async def test_terminal_denial_closes_every_call_and_skips_the_model() -> None:

@@ -119,6 +119,10 @@ THREAD_PREFIX = "lc-v2:"
 ABANDONED_CALL_RESULT = "Cancelled because the user started a new turn before granting approval."
 COMPLETED_REPLY = "The requested operation was completed."
 EMPTY_REPLY = OutputGuardMiddleware.EMPTY_REPLY
+FORCED_CALL_MISSING_REPLY = (
+    "The model answered without using the selected capability, so no result was produced. Please retry, or "
+    "choose a model that supports forced tool calls."
+)
 
 
 def thread_id_for(conversation_id: str) -> str:
@@ -151,6 +155,7 @@ class _Invocation:
     budget_guard: RequestBudgetGuard
     output_guard: OutputGuardMiddleware
     call_budget: ModelCallBudgetMiddleware
+    forced_choice: ForcedToolChoiceMiddleware
 
 
 class ApprovalContinuation:
@@ -473,6 +478,7 @@ class AgentRunner:
             count_tokens=estimate_request_tokens,
         )
         output_guard = OutputGuardMiddleware()
+        forced_choice = ForcedToolChoiceMiddleware(rejects_tool_choice, reply=FORCED_CALL_MISSING_REPLY)
         call_budget = ModelCallBudgetMiddleware(
             run_limit=self.settings.max_agent_iterations,
             reply=(
@@ -502,7 +508,7 @@ class AgentRunner:
         middleware += [
             CapabilityScopeMiddleware(scope),
             budget_guard,
-            ForcedToolChoiceMiddleware(rejects_tool_choice),
+            forced_choice,
             ProviderErrorMiddleware(map_model_error),
             model_calls,
             InvalidToolCallMiddleware(failures.invalid_arguments),
@@ -533,6 +539,7 @@ class AgentRunner:
             budget_guard=budget_guard,
             output_guard=output_guard,
             call_budget=call_budget,
+            forced_choice=forced_choice,
         )
 
     async def _invoke(
@@ -578,6 +585,9 @@ class AgentRunner:
         elif invocation.output_guard.failure is not None:
             status = "failed"
             content = invocation.output_guard.failure
+        elif invocation.forced_choice.failure is not None:
+            status = "failed"
+            content = invocation.forced_choice.failure
         else:
             final = next(
                 (message for message in reversed(produced) if isinstance(message, AIMessage) and not message.tool_calls),

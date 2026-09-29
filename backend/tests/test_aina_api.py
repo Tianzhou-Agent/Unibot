@@ -141,7 +141,8 @@ def test_aina_protocol_version_is_rejected_with_standard_error() -> None:
 
 
 def test_builtin_aina_manifests_and_host_tool_inputs_are_exposed() -> None:
-    llm = ScriptedLLM([assistant("Done."), assistant("Done."), assistant("Done.")])
+    # Only the advertised schemas matter: each forced run answers in text, is asked once more, and fails.
+    llm = ScriptedLLM([assistant("Done.") for _ in range(6)])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         records = {
             item["manifest"]["aina"]["id"]: item["manifest"]
