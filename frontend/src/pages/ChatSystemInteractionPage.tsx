@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CHAT_THREAD_SYSTEM_INTERACTION } from "@/mocks/seed";
@@ -9,6 +10,7 @@ import { Topbar } from "@/components/layout/Topbar";
 export default function ChatSystemInteractionPage() {
   const [thread, setThread] = useState<ChatThread>(CHAT_THREAD_SYSTEM_INTERACTION);
   const navigate = useNavigate();
+  const { t } = useTranslation("common");
 
   function handleConfirm(action: "confirm" | "cancel") {
     if (action === "confirm") navigate("/canvas");
@@ -23,7 +25,7 @@ export default function ChatSystemInteractionPage() {
 
   return (
     <div className="h-full flex flex-col bg-app-bg">
-      <Topbar title="系统交互状态" badge={{ label: "已就绪", tone: "success" }} />
+      <Topbar title={t("system.title")} badge={{ label: t("system.ready"), tone: "success" }} />
       <div className="flex-1 min-h-0">
         <div className="h-full rounded-lg border border-line bg-white flex flex-col overflow-hidden">
           <div className="flex-1 min-h-0 overflow-y-auto px-1.5 py-2">

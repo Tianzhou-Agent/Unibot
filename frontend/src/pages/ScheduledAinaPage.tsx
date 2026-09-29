@@ -1,3 +1,5 @@
+import i18n, { currentLocale } from "@/i18n";
+import { Trans, useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -54,6 +56,7 @@ export function ScheduledAinaMainWidget() {
 }
 
 export default function ScheduledAinaPage({ embedded = false }: { embedded?: boolean }) {
+  const { t } = useTranslation("schedule");
   const [tasks, setTasks] = useState<ScheduledAinaTask[]>([]);
   const [ainas, setAinas] = useState<AinaRecord[]>([]);
   const [installations, setInstallations] = useState<AinaInstallation[]>([]);
@@ -145,15 +148,15 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
         prompt,
         enabled: form.enabled,
       };
-      if (!payload.name) throw new Error("请输入任务名称。");
-      if (!payload.prompt) throw new Error("请输入要交给 AINA 执行的任务内容。");
+      if (!payload.name) throw new Error(t("err.name"));
+      if (!payload.prompt) throw new Error(t("err.prompt"));
       if (form.scheduleType === "interval" && (!Number.isFinite(payload.interval_seconds) || payload.interval_seconds < 10)) {
-        throw new Error("固定间隔不能少于 10 秒。");
+        throw new Error(t("err.interval"));
       }
       if (editingId) {
         await api.patch<ScheduledAinaTask>(`/aina-schedules/${editingId}`, payload);
       } else {
-        if (!form.ainaId) throw new Error("请先选择一个已安装且可运行的 AINA。");
+        if (!form.ainaId) throw new Error(t("err.aina"));
         await api.post<ScheduledAinaTask>("/aina-schedules", {
           ...payload,
           aina_id: form.ainaId,
@@ -162,7 +165,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
         });
       }
       setEditorOpen(false);
-      setNotice({ tone: "success", text: editingId ? "定时任务已更新。" : "定时任务已创建。" });
+      setNotice({ tone: "success", text: editingId ? t("notice.updated") : t("notice.created") });
       await load();
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
@@ -177,18 +180,18 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
         enabled: !task.enabled,
       });
       replaceTask(updated);
-      setNotice({ tone: "success", text: updated.enabled ? "任务已启用。" : "任务已暂停。" });
+      setNotice({ tone: "success", text: updated.enabled ? t("notice.enabled") : t("notice.paused") });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
     }
   }
 
   async function remove(task: ScheduledAinaTask) {
-    if (!window.confirm(`确认删除定时任务“${task.name}”？`)) return;
+    if (!window.confirm(t("confirm.delete", { name: task.name }))) return;
     try {
       await api.delete(`/aina-schedules/${task.id}`);
       setTasks((current) => current.filter((item) => item.id !== task.id));
-      setNotice({ tone: "success", text: "定时任务已删除。" });
+      setNotice({ tone: "success", text: t("notice.deleted") });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
     }
@@ -231,13 +234,13 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
     setNotice(null);
     try {
       const prompt = (debugPrompts[task.id] ?? "").trim();
-      if (!prompt) throw new Error("请输入要交给 AINA 调试的任务内容。");
+      if (!prompt) throw new Error(t("err.debugPrompt"));
       const updated = await api.post<ScheduledAinaTask>(`/aina-schedules/${task.id}/run`, { prompt });
       replaceTask(updated);
       await loadExecutions(task.id);
       setNotice({
         tone: updated.last_status === "succeeded" ? "success" : "error",
-        text: updated.last_status === "succeeded" ? "AINA 调试执行成功。" : updated.last_error ?? "AINA 调试失败。",
+        text: updated.last_status === "succeeded" ? t("notice.debugOk") : updated.last_error ?? t("notice.debugFail"),
       });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
@@ -252,11 +255,11 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
 
   const actions = (
     <div className="flex items-center gap-2">
-      <button type="button" onClick={() => void load()} className="btn-outline h-8" aria-label="刷新定时任务">
-        <RefreshCw className="h-3.5 w-3.5" />刷新
+      <button type="button" onClick={() => void load()} className="btn-outline h-8" aria-label={t("refreshAria")}>
+        <RefreshCw className="h-3.5 w-3.5" />{t("refresh")}
       </button>
       <button type="button" onClick={openCreate} className="btn-primary h-8">
-        <Plus className="h-3.5 w-3.5" />新建任务
+        <Plus className="h-3.5 w-3.5" />{t("newTask")}
       </button>
     </div>
   );
@@ -270,16 +273,16 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
               <CalendarClock className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <h2 className="truncate text-[13.5px] font-extrabold text-ink">定时任务</h2>
-              <p className="truncate text-[10.5px] text-ink-muted">{tasks.length} 个任务 · Redis 分布式单次执行</p>
+              <h2 className="truncate text-[13.5px] font-extrabold text-ink">{t("header")}</h2>
+              <p className="truncate text-[10.5px] text-ink-muted">{t("headerMeta", { count: tasks.length })}</p>
             </div>
           </div>
           {actions}
         </header>
       ) : (
         <Topbar
-        title="定时任务 AINA"
-        badge={{ label: `${tasks.length} 个任务`, tone: "neutral" }}
+        title={t("topTitle")}
+        badge={{ label: t("badge", { count: tasks.length }), tone: "neutral" }}
         actions={actions}
         />
       )}
@@ -291,9 +294,9 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
                 <CalendarClock className="h-5 w-5" />
               </div>
               <div>
-                <h1 className="text-[15px] font-extrabold text-ink">分布式 AINA 调度</h1>
+                <h1 className="text-[15px] font-extrabold text-ink">{t("heroTitle")}</h1>
                 <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">
-                  支持固定间隔和五段 Cron 表达式。多个后端节点通过 Redis 租约竞争，同一计划时间只会执行一次。
+                  {t("heroBody")}
                 </p>
               </div>
             </div>
@@ -315,7 +318,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
 
           {!loading && runnableAinas.length === 0 ? (
             <div className="rounded-lg border border-warning/30 bg-warning-soft p-3 text-[11.5px] text-warning-deep">
-              还没有可定时运行的 AINA。请先到 <Link to="/plugin" className="font-bold underline">插件</Link> 安装一个支持独立运行的 AINA。
+              <Trans t={t} i18nKey="noRunnable" components={{ link: <Link to="/plugin" className="font-bold underline" /> }} />
             </div>
           ) : null}
 
@@ -323,8 +326,8 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
           {!loading && tasks.length === 0 ? (
             <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed border-line-strong bg-white px-4 text-center">
               <Clock3 className="h-7 w-7 text-ink-subtle" />
-              <h2 className="mt-2 text-[12px] font-bold text-ink">暂无定时任务</h2>
-              <p className="mt-1 text-[12px] text-ink-muted">选择一个 AINA 并设置任务输入后，可立即运行并查看本次输入和输出。</p>
+              <h2 className="mt-2 text-[12px] font-bold text-ink">{t("emptyTitle")}</h2>
+              <p className="mt-1 text-[12px] text-ink-muted">{t("emptyBody")}</p>
             </div>
           ) : null}
           {!loading && tasks.length > 0 ? (
@@ -374,70 +377,71 @@ function ScheduleEditor({
   onClose: () => void;
   onSave: () => void;
 }) {
+  const { t } = useTranslation("schedule");
   const change = <K extends keyof ScheduleForm>(key: K, value: ScheduleForm[K]) =>
     onChange({ ...form, [key]: value });
   return (
     <section className="overflow-hidden rounded-lg border border-accent-ring bg-white">
       <div className="flex min-h-11 items-center gap-2 border-b border-line bg-accent-soft px-3 py-1.5">
         <CalendarClock className="h-4 w-4 text-accent" />
-        <h2 className="text-[13px] font-extrabold text-ink">{editing ? "编辑定时任务" : "新建定时任务"}</h2>
+        <h2 className="text-[13px] font-extrabold text-ink">{editing ? t("editor.edit") : t("editor.new")}</h2>
         <span className="flex-1" />
-        <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label="关闭任务编辑器"><X className="h-4 w-4" /></button>
+        <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label={t("editor.close")}><X className="h-4 w-4" /></button>
       </div>
       <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-2">
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-          任务 AINA
+          {t("editor.aina")}
           <select value={form.ainaId} disabled={editing} onChange={(event) => change("ainaId", event.target.value)} className="input-soft w-full text-[11.5px] disabled:opacity-60">
-            <option value="">请选择要定时运行的 AINA</option>
+            <option value="">{t("editor.ainaPlaceholder")}</option>
             {ainas.map((item) => <option key={item.manifest.aina.id} value={item.manifest.aina.id}>{item.manifest.aina.name}</option>)}
           </select>
         </label>
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-          任务名称
-          <input value={form.name} onChange={(event) => change("name", event.target.value)} className="input-soft w-full text-[11.5px]" placeholder="例如：每日经营日报" />
+          {t("editor.name")}
+          <input value={form.name} onChange={(event) => change("name", event.target.value)} className="input-soft w-full text-[11.5px]" placeholder={t("editor.namePlaceholder")} />
         </label>
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-          调度方式
+          {t("editor.scheduleType")}
           <select value={form.scheduleType} onChange={(event) => change("scheduleType", event.target.value as ScheduleType)} className="input-soft w-full text-[11.5px]">
-            <option value="interval">固定间隔</option>
-            <option value="cron">Cron 表达式</option>
+            <option value="interval">{t("editor.interval")}</option>
+            <option value="cron">{t("editor.cron")}</option>
           </select>
         </label>
         {form.scheduleType === "interval" ? (
           <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-            间隔秒数（最少 10 秒）
+            {t("editor.intervalSeconds")}
             <input type="number" min={10} value={form.intervalSeconds} onChange={(event) => change("intervalSeconds", event.target.value)} className="input-soft w-full text-[11.5px]" />
           </label>
         ) : (
           <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-            五段 Cron
+            {t("editor.cron5")}
             <input value={form.cronExpression} onChange={(event) => change("cronExpression", event.target.value)} className="input-soft w-full font-mono text-[11.5px]" placeholder="0 9 * * 1-5" />
           </label>
         )}
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-          时区
+          {t("editor.timezone")}
           <input value={form.timezone} onChange={(event) => change("timezone", event.target.value)} className="input-soft w-full font-mono text-[11.5px]" placeholder="Asia/Shanghai" />
         </label>
         <label className="flex items-end gap-2 pb-2 text-[12px] font-bold text-ink-muted">
           <input type="checkbox" checked={form.enabled} onChange={(event) => change("enabled", event.target.checked)} className="h-4 w-4 accent-accent" />
-          创建后立即启用
+          {t("editor.enableNow")}
         </label>
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted lg:col-span-2">
-          交给 AINA 执行的任务内容
+          {t("editor.prompt")}
           <textarea
             value={form.prompt}
             onChange={(event) => change("prompt", event.target.value)}
             rows={5}
-            placeholder="例如：整理今天的经营数据，生成一份简明日报并标出异常项"
+            placeholder={t("editor.promptPlaceholder")}
             className="input-soft resize-y bg-white text-[12px] leading-relaxed"
           />
-          <span className="block text-[10px] font-normal text-ink-subtle">使用自然语言描述任务，系统会在定时触发时将这段内容交给所选 AINA。</span>
+          <span className="block text-[10px] font-normal text-ink-subtle">{t("editor.promptHint")}</span>
         </label>
       </div>
       <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2.5">
-        <button type="button" onClick={onClose} className="btn-outline h-8 text-[11px]">取消</button>
+        <button type="button" onClick={onClose} className="btn-outline h-8 text-[11px]">{t("editor.cancel")}</button>
         <button type="button" disabled={saving} onClick={onSave} className="btn-primary h-8 text-[11px]">
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{saving ? "保存中…" : "保存任务"}
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{saving ? t("editor.saving") : t("editor.save")}
         </button>
       </div>
     </section>
@@ -477,6 +481,7 @@ function TaskCard({
   onToggle: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation("schedule");
   return (
     <article className="overflow-hidden rounded-lg border border-line bg-white">
       <div className="p-3">
@@ -489,23 +494,23 @@ function TaskCard({
               <h2 className="text-[13px] font-extrabold text-ink">{task.name}</h2>
               <Status status={task.last_status} />
               <span className={classNames("rounded-md px-1.5 py-0.5 text-[9.5px] font-bold", task.enabled ? "bg-success-soft text-success-deep" : "bg-app-soft text-ink-muted")}>
-                {task.enabled ? "已启用" : "已暂停"}
+                {task.enabled ? t("task.enabled") : t("task.paused")}
               </span>
             </div>
             <p className="mt-1 font-mono text-[10.5px] text-ink-subtle">{ainaName} · {scheduleLabel(task)}</p>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            <button type="button" onClick={onOpenHistory} className="btn-outline h-8 px-2.5 text-[11px]"><History className="h-3.5 w-3.5" />执行历史</button>
-            <button type="button" onClick={onOpenDebug} className="btn-primary h-8 px-2.5 text-[11px]"><Play className="h-3.5 w-3.5" />调试 AINA</button>
-            <button type="button" onClick={onEdit} className="btn-outline h-8 px-2.5 text-[11px]"><Pencil className="h-3.5 w-3.5" />编辑</button>
-            <button type="button" onClick={onToggle} className="btn-outline h-8 px-2.5 text-[11px]">{task.enabled ? "暂停" : "启用"}</button>
-            <button type="button" onClick={onDelete} className="btn-danger-outline h-8 w-8 p-0" aria-label={`删除 ${task.name}`}><Trash2 className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={onOpenHistory} className="btn-outline h-8 px-2.5 text-[11px]"><History className="h-3.5 w-3.5" />{t("task.history")}</button>
+            <button type="button" onClick={onOpenDebug} className="btn-primary h-8 px-2.5 text-[11px]"><Play className="h-3.5 w-3.5" />{t("task.debug")}</button>
+            <button type="button" onClick={onEdit} className="btn-outline h-8 px-2.5 text-[11px]"><Pencil className="h-3.5 w-3.5" />{t("task.edit")}</button>
+            <button type="button" onClick={onToggle} className="btn-outline h-8 px-2.5 text-[11px]">{task.enabled ? t("task.pause") : t("task.enable")}</button>
+            <button type="button" onClick={onDelete} className="btn-danger-outline h-8 w-8 p-0" aria-label={t("task.deleteAria", { name: task.name })}><Trash2 className="h-3.5 w-3.5" /></button>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-          <Info label="下次运行" value={task.enabled ? formatTime(task.next_run_at) : "已暂停"} />
-          <Info label="上次运行" value={task.last_run_at ? formatTime(task.last_run_at) : "尚未运行"} />
-          <Info label="执行节点" value={task.last_node_id ?? "—"} mono />
+          <Info label={t("task.nextRun")} value={task.enabled ? formatTime(task.next_run_at) : t("task.paused")} />
+          <Info label={t("task.lastRun")} value={task.last_run_at ? formatTime(task.last_run_at) : t("task.neverRun")} />
+          <Info label={t("task.node")} value={task.last_node_id ?? "—"} mono />
         </div>
         {task.last_error ? <div className="mt-3 rounded-lg border border-danger-ring bg-danger-soft p-2.5 text-[11.5px] text-danger-deep">{task.last_error}</div> : null}
       </div>
@@ -514,31 +519,31 @@ function TaskCard({
           <div className="flex items-center gap-2">
             {detailMode === "history" ? <History className="h-4 w-4 text-accent" /> : <Activity className="h-4 w-4 text-accent" />}
             <h3 className="text-[12.5px] font-extrabold text-ink">
-              {detailMode === "history" ? "最近 50 次执行历史" : `调试 ${ainaName}`}
+              {detailMode === "history" ? t("detail.history") : t("detail.debug", { name: ainaName })}
             </h3>
-            {detailMode === "debug" ? <span className="text-[10.5px] text-ink-muted">使用当前输入运行此 AINA，不改变下次定时运行时间</span> : null}
+            {detailMode === "debug" ? <span className="text-[10.5px] text-ink-muted">{t("detail.debugHint")}</span> : null}
             <span className="flex-1" />
-            <button type="button" onClick={onCloseDetail} className="btn-ghost h-7" aria-label="关闭任务详情"><X className="h-4 w-4" /></button>
+            <button type="button" onClick={onCloseDetail} className="btn-ghost h-7" aria-label={t("detail.closeAria")}><X className="h-4 w-4" /></button>
           </div>
           {detailMode === "history" ? (
             <ExecutionHistory executions={executions} loading={historyLoading} />
           ) : (
             <>
               <label className="mt-3 block text-[10.5px] font-bold text-ink-muted">
-                发送给 {ainaName} 的任务内容
+                {t("detail.promptFor", { name: ainaName })}
                 <textarea
                   value={debugPrompt}
                   onChange={(event) => onDebugPrompt(event.target.value)}
                   rows={5}
-                  aria-label={`${ainaName} 调试任务内容`}
-                  placeholder="用自然语言描述本次要 AINA 执行的任务"
+                  aria-label={t("detail.debugAria", { name: ainaName })}
+                  placeholder={t("detail.debugPlaceholder")}
                   className="input-soft mt-1.5 resize-y bg-white text-[12px] leading-relaxed"
                 />
               </label>
               <div className="mt-3 flex items-center justify-end">
                 <button type="button" disabled={running} onClick={onRunDebug} className="btn-primary h-8 text-[11px]">
                   {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                  {running ? "AINA 运行中…" : "运行此 AINA"}
+                  {running ? t("detail.running") : t("detail.run")}
                 </button>
               </div>
               <AinaDebugResult
@@ -563,17 +568,18 @@ function AinaDebugResult({
   execution: ScheduledAinaExecution | null;
   loading: boolean;
 }) {
+  const { t } = useTranslation("schedule");
   if (loading) {
     return (
       <div className="mt-3 flex items-center justify-center gap-2 rounded-lg border border-line bg-white py-8 text-[11.5px] text-ink-muted">
-        <Loader2 className="h-4 w-4 animate-spin" />正在读取 AINA 调试结果…
+        <Loader2 className="h-4 w-4 animate-spin" />{t("debug.loading")}
       </div>
     );
   }
   if (!execution) {
     return (
       <div className="mt-3 rounded-lg border border-dashed border-line-strong bg-white py-8 text-center text-[11.5px] text-ink-muted">
-        还没有手动调试记录。输入任务内容后运行此 AINA，即可在这里查看本次输入和输出。
+        {t("debug.empty")}
       </div>
     );
   }
@@ -583,15 +589,15 @@ function AinaDebugResult({
     <section className="mt-3 overflow-hidden rounded-lg border border-line bg-white">
       <header className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
         <Status status={execution.status} />
-        <span className="text-[11.5px] font-bold text-ink">最近一次 AINA 调试</span>
+        <span className="text-[11.5px] font-bold text-ink">{t("debug.latest")}</span>
         <span className="text-[10.5px] text-ink-muted">{formatTime(execution.started_at)} · {formatDuration(execution.duration_ms)}</span>
         <span className="flex-1" />
         <span className="font-mono text-[10px] text-ink-subtle">{execution.node_id}</span>
       </header>
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-2">
-        <TextBlock label="本次实际输入" value={ainaInputText(execution.input)} />
+        <TextBlock label={t("debug.input")} value={ainaInputText(execution.input)} />
         <div>
-          <p className="mb-1.5 text-[10.5px] font-bold text-ink-muted">{ainaName} 输出</p>
+          <p className="mb-1.5 text-[10.5px] font-bold text-ink-muted">{t("debug.output", { name: ainaName })}</p>
           {execution.error ? (
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-danger-soft p-3 font-mono text-[10.5px] leading-relaxed text-danger-deep">{execution.error}</pre>
           ) : outputs.length ? (
@@ -638,11 +644,12 @@ function ExecutionHistory({
   executions: ScheduledAinaExecution[];
   loading: boolean;
 }) {
+  const { t } = useTranslation("schedule");
   if (loading) {
-    return <div className="mt-4 flex items-center justify-center gap-2 py-8 text-[12px] text-ink-muted"><Loader2 className="h-4 w-4 animate-spin" />正在读取执行历史…</div>;
+    return <div className="mt-4 flex items-center justify-center gap-2 py-8 text-[12px] text-ink-muted"><Loader2 className="h-4 w-4 animate-spin" />{t("hist.loading")}</div>;
   }
   if (executions.length === 0) {
-    return <div className="mt-4 rounded-lg border border-dashed border-line-strong bg-white py-8 text-center text-[12px] text-ink-muted">该任务尚无执行记录。</div>;
+    return <div className="mt-4 rounded-lg border border-dashed border-line-strong bg-white py-8 text-center text-[12px] text-ink-muted">{t("hist.empty")}</div>;
   }
   return (
     <div className="mt-3 space-y-2">
@@ -651,7 +658,7 @@ function ExecutionHistory({
           <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-2.5">
             <Status status={execution.status} />
             <span className={classNames("rounded-md px-1.5 py-0.5 text-[9.5px] font-bold", execution.trigger === "manual" ? "bg-accent-soft text-accent" : "bg-app-soft text-ink-muted")}>
-              {execution.trigger === "manual" ? "AINA 调试" : "定时触发"}
+              {execution.trigger === "manual" ? t("hist.manual") : t("hist.scheduled")}
             </span>
             <span className="text-[11.5px] font-semibold text-ink">{formatTime(execution.started_at)}</span>
             <span className="text-[10.5px] text-ink-muted">{formatDuration(execution.duration_ms)}</span>
@@ -659,11 +666,11 @@ function ExecutionHistory({
             <span className="font-mono text-[10px] text-ink-subtle">{execution.node_id}</span>
           </summary>
           <div className="grid grid-cols-1 gap-3 border-t border-line p-3 lg:grid-cols-2">
-            <TextBlock label="AINA 输入" value={ainaInputText(execution.input)} />
-            <JsonBlock label={execution.error ? "错误" : "AINA 完整输出"} value={execution.error ?? execution.result ?? {}} error={Boolean(execution.error)} />
+            <TextBlock label={t("hist.input")} value={ainaInputText(execution.input)} />
+            <JsonBlock label={execution.error ? t("hist.error") : t("hist.fullOutput")} value={execution.error ?? execution.result ?? {}} error={Boolean(execution.error)} />
             <div className="text-[10px] text-ink-subtle lg:col-span-2">
-              调用 ID：<span className="font-mono">{execution.call_id}</span>
-              {execution.scheduled_for ? <> · 计划时间：{formatTime(execution.scheduled_for)}</> : null}
+              {t("hist.callId")}<span className="font-mono">{execution.call_id}</span>
+              {execution.scheduled_for ? <>{t("hist.plannedAt", { time: formatTime(execution.scheduled_for) })}</> : null}
             </div>
           </div>
         </details>
@@ -684,29 +691,31 @@ function JsonBlock({ label, value, error = false }: { label: string; value: unkn
 }
 
 function TextBlock({ label, value }: { label: string; value: string }) {
+  const { t } = useTranslation("schedule");
   return (
     <div>
       <p className="mb-1.5 text-[10.5px] font-bold text-ink-muted">{label}</p>
       <div className="min-h-24 whitespace-pre-wrap rounded-lg border border-line bg-app-soft p-3 text-[11.5px] leading-relaxed text-ink">
-        {value || "（无文本输入）"}
+        {value || t("noText")}
       </div>
     </div>
   );
 }
 
 function Status({ status }: { status: ScheduledAinaStatus }) {
+  const { t } = useTranslation("schedule");
   const styles: Record<ScheduledAinaStatus, string> = {
     never: "bg-app-soft text-ink-muted",
     running: "bg-warning-soft text-warning-deep",
     succeeded: "bg-success-soft text-success-deep",
     failed: "bg-danger-soft text-danger-deep",
   };
-  const labels: Record<ScheduledAinaStatus, string> = { never: "未运行", running: "运行中", succeeded: "成功", failed: "失败" };
+  const labels: Record<ScheduledAinaStatus, string> = { never: t("status.never"), running: t("status.running"), succeeded: t("status.succeeded"), failed: t("status.failed") };
   return <span className={classNames("rounded-md px-1.5 py-0.5 text-[9.5px] font-bold", styles[status])}>{labels[status]}</span>;
 }
 
 function formatDuration(value?: number | null): string {
-  if (value == null) return "执行中";
+  if (value == null) return i18n.t("schedule:inProgress");
   return value < 1000 ? `${Math.round(value)} ms` : `${(value / 1000).toFixed(2)} s`;
 }
 
@@ -715,11 +724,12 @@ function Info({ label, value, mono = false }: { label: string; value: string; mo
 }
 
 function Notice({ tone, text, onClose }: { tone: "success" | "error"; text: string; onClose: () => void }) {
+  const { t } = useTranslation("schedule");
   return (
     <div className={classNames("flex items-center gap-2.5 rounded-lg border p-3", tone === "success" ? "border-success/20 bg-success-soft text-success-deep" : "border-danger-ring bg-danger-soft text-danger-deep")}>
       {tone === "success" ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
       <span className="flex-1 text-[12.5px] font-semibold">{text}</span>
-      <button type="button" onClick={onClose} aria-label="关闭提示"><X className="h-4 w-4" /></button>
+      <button type="button" onClick={onClose} aria-label={t("dismiss")}><X className="h-4 w-4" /></button>
     </div>
   );
 }
@@ -740,11 +750,11 @@ function ainaInputText(input: Record<string, unknown>): string {
 function scheduleLabel(task: ScheduledAinaTask): string {
   return task.schedule_type === "cron"
     ? `${task.cron_expression} (${task.timezone})`
-    : `每 ${task.interval_seconds} 秒`;
+    : i18n.t("schedule:everySeconds", { count: task.interval_seconds });
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(currentLocale(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

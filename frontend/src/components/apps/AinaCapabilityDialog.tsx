@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { useEffect } from "react";
 import {
   AppWindow,
@@ -21,6 +23,7 @@ export function AinaCapabilityDialog({
   record: AinaRecord;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("aina");
   const { manifest } = record;
   const { skills, tools, ui, events } = manifest.capabilities;
   const titleId = `${manifest.aina.id}-capability-title`;
@@ -52,13 +55,13 @@ export function AinaCapabilityDialog({
           </span>
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-[15px] font-extrabold text-ink">
-              {manifest.aina.name} 能力详情
+              {t("details", { name: manifest.aina.name })}
             </h2>
             <p className="truncate font-mono text-[10.5px] text-ink-muted">
               {manifest.aina.id} · v{manifest.aina.version}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="btn-ghost h-8 w-8 p-0" aria-label="关闭能力详情">
+          <button type="button" onClick={onClose} className="btn-ghost h-8 w-8 p-0" aria-label={t("close")}>
             <X className="h-4 w-4" />
           </button>
         </header>
@@ -68,16 +71,16 @@ export function AinaCapabilityDialog({
             <p className="text-[12px] leading-relaxed text-ink-muted">{manifest.aina.description}</p>
             <dl className="mt-4 space-y-2 text-[11px]">
               <MetadataRow
-                label="运行方式"
+                label={t("runtimeLabel")}
                 value={
                   manifest.runtime.type === "builtin"
-                    ? "系统内置"
+                    ? t("runtime.builtin")
                     : manifest.runtime.type === "managed"
-                      ? "本地托管"
-                      : "远程服务"
+                      ? t("runtime.managed")
+                      : t("runtime.remote")
                 }
               />
-              <MetadataRow label="发布者" value={manifest.aina.publisher.name} />
+              <MetadataRow label={t("publisher")} value={manifest.aina.publisher.name} />
               <MetadataRow label="Skill" value={String(skills.length)} />
               <MetadataRow label="Tool" value={String(tools.length)} />
               <MetadataRow label="UI" value={String(ui.length)} />
@@ -85,7 +88,7 @@ export function AinaCapabilityDialog({
             </dl>
             {manifest.permissions.length ? (
               <div className="mt-5 border-t border-line pt-4">
-                <h3 className="text-[10.5px] font-bold text-ink">所需权限</h3>
+                <h3 className="text-[10.5px] font-bold text-ink">{t("permissions")}</h3>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {manifest.permissions.map((permission) => (
                     <span key={permission} className="rounded bg-warning-soft px-1.5 py-1 font-mono text-[9.5px] text-warning-deep">
@@ -103,7 +106,7 @@ export function AinaCapabilityDialog({
                 title="Skills"
                 count={skills.length}
                 icon={<BookOpenText className="h-4 w-4" />}
-                emptyText="该 AINA 没有声明 Skill。"
+                emptyText={t("skillsEmpty")}
               >
                 {skills.map((skill, index) => (
                   <SkillDetails key={skill.id} skill={skill} defaultOpen={index === 0} />
@@ -114,7 +117,7 @@ export function AinaCapabilityDialog({
                 title="Tools"
                 count={tools.length}
                 icon={<Wrench className="h-4 w-4" />}
-                emptyText="该 AINA 没有声明 Tool。"
+                emptyText={t("toolsEmpty")}
               >
                 {tools.map((tool, index) => (
                   <ToolDetails key={tool.id} tool={tool} defaultOpen={index === 0} />
@@ -122,10 +125,10 @@ export function AinaCapabilityDialog({
               </CapabilitySection>
 
               <CapabilitySection
-                title="UI 能力"
+                title={t("uiTitle")}
                 count={ui.length}
                 icon={<Monitor className="h-4 w-4" />}
-                emptyText="该 AINA 没有声明 UI 能力。"
+                emptyText={t("uiEmpty")}
               >
                 {ui.map((capability, index) => (
                   <UiDetails key={capability.id} capability={capability} defaultOpen={index === 0} />
@@ -184,16 +187,17 @@ function CapabilitySection({
 }
 
 function SkillDetails({ skill, defaultOpen }: { skill: AinaCapabilityDefinition; defaultOpen: boolean }) {
+  const { t } = useTranslation("aina");
   return (
     <CapabilityDisclosure capability={skill} defaultOpen={defaultOpen}>
-      <Definition label="Skill 描述">{skill.description}</Definition>
-      <Definition label="Skill 提示词">
+      <Definition label={t("skillDesc")}>{skill.description}</Definition>
+      <Definition label={t("skillPrompt")}>
         {skill.instructions ? (
           <pre className="whitespace-pre-wrap break-words bg-slate-950 p-3 font-mono text-[10.5px] leading-relaxed text-slate-100">
             {skill.instructions}
           </pre>
         ) : (
-          <p className="text-[11.5px] text-ink-muted">未提供提示词。</p>
+          <p className="text-[11.5px] text-ink-muted">{t("noPrompt")}</p>
         )}
       </Definition>
       <Definition label="Skill Input">
@@ -204,11 +208,12 @@ function SkillDetails({ skill, defaultOpen }: { skill: AinaCapabilityDefinition;
 }
 
 function ToolDetails({ tool, defaultOpen }: { tool: AinaCapabilityDefinition; defaultOpen: boolean }) {
+  const { t } = useTranslation("aina");
   return (
     <CapabilityDisclosure capability={tool} defaultOpen={defaultOpen}>
-      <Definition label="Tool 描述">{tool.description}</Definition>
-      {tool.instructions ? <Definition label="调用说明">{tool.instructions}</Definition> : null}
-      <Definition label="Input 参数">
+      <Definition label={t("toolDesc")}>{tool.description}</Definition>
+      {tool.instructions ? <Definition label={t("callNotes")}>{tool.instructions}</Definition> : null}
+      <Definition label={t("inputParams")}>
         <SchemaDetails schema={tool.input_schema} />
       </Definition>
     </CapabilityDisclosure>
@@ -222,10 +227,11 @@ function UiDetails({
   capability: AinaUiCapabilityDefinition;
   defaultOpen: boolean;
 }) {
+  const { t } = useTranslation("aina");
   return (
     <CapabilityDisclosure capability={capability} defaultOpen={defaultOpen} badge={capability.kind}>
-      <Definition label="UI 描述">{capability.description}</Definition>
-      {capability.instructions ? <Definition label="渲染说明">{capability.instructions}</Definition> : null}
+      <Definition label={t("uiDesc")}>{capability.description}</Definition>
+      {capability.instructions ? <Definition label={t("renderNotes")}>{capability.instructions}</Definition> : null}
     </CapabilityDisclosure>
   );
 }
@@ -266,6 +272,7 @@ function Definition({ label, children }: { label: string; children: React.ReactN
 }
 
 function SchemaDetails({ schema }: { schema: Record<string, unknown> }) {
+  const { t } = useTranslation("aina");
   const properties = isRecord(schema.properties) ? Object.entries(schema.properties) : [];
   const required = new Set(Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : []);
 
@@ -276,10 +283,10 @@ function SchemaDetails({ schema }: { schema: Record<string, unknown> }) {
           <table className="w-full min-w-[520px] border-collapse text-left text-[10.5px]">
             <thead className="bg-app-soft text-ink-muted">
               <tr>
-                <th className="border-b border-line px-2.5 py-2 font-bold">参数</th>
-                <th className="border-b border-line px-2.5 py-2 font-bold">类型</th>
-                <th className="border-b border-line px-2.5 py-2 font-bold">要求</th>
-                <th className="border-b border-line px-2.5 py-2 font-bold">说明</th>
+                <th className="border-b border-line px-2.5 py-2 font-bold">{t("param")}</th>
+                <th className="border-b border-line px-2.5 py-2 font-bold">{t("type")}</th>
+                <th className="border-b border-line px-2.5 py-2 font-bold">{t("requirement")}</th>
+                <th className="border-b border-line px-2.5 py-2 font-bold">{t("description")}</th>
               </tr>
             </thead>
             <tbody className="[&>tr:last-child>td]:border-b-0">
@@ -289,7 +296,7 @@ function SchemaDetails({ schema }: { schema: Record<string, unknown> }) {
                   <tr key={name}>
                     <td className="border-b border-line px-2.5 py-2 font-mono font-semibold text-ink">{name}</td>
                     <td className="border-b border-line px-2.5 py-2 font-mono text-accent">{schemaType(definition)}</td>
-                    <td className="border-b border-line px-2.5 py-2 text-ink-muted">{required.has(name) ? "必填" : "可选"}</td>
+                    <td className="border-b border-line px-2.5 py-2 text-ink-muted">{required.has(name) ? t("required") : t("optional")}</td>
                     <td className="border-b border-line px-2.5 py-2 text-ink-muted">{schemaDescription(definition)}</td>
                   </tr>
                 );
@@ -298,10 +305,10 @@ function SchemaDetails({ schema }: { schema: Record<string, unknown> }) {
           </table>
         </div>
       ) : (
-        <p className="text-[11px] text-ink-muted">没有声明输入字段。</p>
+        <p className="text-[11px] text-ink-muted">{t("noFields")}</p>
       )}
       <details className="rounded border border-line bg-white">
-        <summary className="cursor-pointer px-2.5 py-2 font-mono text-[9.5px] text-ink-muted">查看 JSON Schema</summary>
+        <summary className="cursor-pointer px-2.5 py-2 font-mono text-[9.5px] text-ink-muted">{t("viewSchema")}</summary>
         <pre className="overflow-x-auto border-t border-line bg-slate-950 p-3 font-mono text-[10px] leading-relaxed text-slate-100">
           {JSON.stringify(schema, null, 2)}
         </pre>
@@ -318,7 +325,7 @@ function schemaType(definition: Record<string, unknown>): string {
 
 function schemaDescription(definition: Record<string, unknown>): string {
   const description = typeof definition.description === "string" ? definition.description : "";
-  const choices = Array.isArray(definition.enum) ? `可选值：${definition.enum.join("、")}` : "";
+  const choices = Array.isArray(definition.enum) ? i18n.t("aina:choices", { values: definition.enum.join(i18n.t("aina:choicesJoiner")) }) : "";
   return [description, choices].filter(Boolean).join(" ") || "—";
 }
 

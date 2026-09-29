@@ -1,8 +1,10 @@
+import i18n from "@/i18n";
+
 export const CONVERSATION_CATEGORIES = [
-  { value: "general", label: "未分类" },
-  { value: "work", label: "工作" },
-  { value: "personal", label: "个人" },
-  { value: "project", label: "项目" },
+  { value: "general", get label() { return i18n.t("common:category.general"); } },
+  { value: "work", get label() { return i18n.t("common:category.work"); } },
+  { value: "personal", get label() { return i18n.t("common:category.personal"); } },
+  { value: "project", get label() { return i18n.t("common:category.project"); } },
 ] as const;
 
 export function conversationCategoryLabel(value: string): string {

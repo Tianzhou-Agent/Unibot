@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useState } from "react";
 import { AppWindow, ArrowRight, Boxes, Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
@@ -105,6 +106,7 @@ function SessionAppList({
   disabled: boolean;
   onOpenAina?: (ainaId: string) => void;
 }) {
+  const { t } = useTranslation("common");
   return (
     <div className="grid grid-cols-1 gap-2">
       {widget.apps.map((app) => (
@@ -114,7 +116,7 @@ function SessionAppList({
           disabled={disabled}
           onClick={() => onOpenAina?.(app.aina_id)}
           className="group flex min-h-[82px] w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-lg border border-line bg-app-soft p-2.5 text-left transition hover:border-accent-ring hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label={`打开 ${app.name}`}
+          aria-label={t("widget.openApp", { name: app.name })}
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-accent shadow-sm">
             <AppWindow className="h-4.5 w-4.5" />
@@ -127,7 +129,7 @@ function SessionAppList({
           <ArrowRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
         </button>
       ))}
-      {!widget.apps.length ? <p className="col-span-full rounded-lg border border-dashed border-line py-8 text-center text-[12px] text-ink-muted">当前没有可用的 AINA 应用。</p> : null}
+      {!widget.apps.length ? <p className="col-span-full rounded-lg border border-dashed border-line py-8 text-center text-[12px] text-ink-muted">{t("widget.noApps")}</p> : null}
     </div>
   );
 }

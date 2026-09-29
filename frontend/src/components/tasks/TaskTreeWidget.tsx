@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -15,6 +17,7 @@ import { classNames } from "@/lib/utils";
 import type { SessionTaskNode, TaskStatus, TaskTreeSnapshot } from "@/types";
 
 export function TaskTreeWidget({ sessionId }: { sessionId: string | null }) {
+  const { t } = useTranslation("tasks");
   const [snapshot, setSnapshot] = useState<TaskTreeSnapshot | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -46,7 +49,7 @@ export function TaskTreeWidget({ sessionId }: { sessionId: string | null }) {
   if (!snapshot?.tasks.length) return null;
 
   return (
-    <section className="overflow-hidden rounded-xl border border-line-strong bg-app-soft shadow-soft" aria-label="任务进度">
+    <section className="overflow-hidden rounded-xl border border-line-strong bg-app-soft shadow-soft" aria-label={t("aria")}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -57,19 +60,19 @@ export function TaskTreeWidget({ sessionId }: { sessionId: string | null }) {
           <ListTodo className="h-4 w-4" />
         </span>
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-          <strong className="mr-1 text-[13px] text-ink">任务</strong>
-          <TaskCount value={progress.completed} label="已完成" />
+          <strong className="mr-1 text-[13px] text-ink">{t("title")}</strong>
+          <TaskCount value={progress.completed} label={t("completed")} />
           <span className="text-ink-subtle">·</span>
-          <TaskCount value={progress.inProgress} label="进行中" />
+          <TaskCount value={progress.inProgress} label={t("inProgress")} />
           <span className="text-ink-subtle">·</span>
-          <TaskCount value={progress.pending} label="待处理" />
+          <TaskCount value={progress.pending} label={t("pending")} />
           {progress.failed ? (
             <>
               <span className="text-ink-subtle">·</span>
-              <TaskCount value={progress.failed} label="失败" danger />
+              <TaskCount value={progress.failed} label={t("failed")} danger />
             </>
           ) : null}
-          <span className="sr-only">修订版本 {snapshot.revision}</span>
+          <span className="sr-only">{t("revision", { revision: snapshot.revision })}</span>
         </span>
         {open ? <ChevronDown className="h-4 w-4 text-ink-muted" /> : <ChevronUp className="h-4 w-4 text-ink-muted" />}
       </button>
@@ -157,14 +160,7 @@ function statusIcon(status: TaskStatus) {
 }
 
 function statusLabel(status: TaskStatus): string {
-  return {
-    pending: "待处理",
-    in_progress: "进行中",
-    verifying: "验证中",
-    completed: "已完成",
-    skipped: "已跳过",
-    failed: "失败",
-  }[status];
+  return i18n.t(`tasks:status.${status}`);
 }
 
 function statusTone(status: TaskStatus): string {

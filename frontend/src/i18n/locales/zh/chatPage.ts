@@ -1,0 +1,63 @@
+export default {
+  err: {
+    llmFailed: "模型调用失败",
+    capabilityFailed: "能力调用失败",
+    wrongWorkspace: "该对话不属于当前工作区，请从左侧选择正确的工作区。",
+    streamFailed: "流式调用失败",
+    noCompletion: "智能体流程结束前没有返回完成事件。",
+  },
+  activity: {
+    awaitingApproval: "等待你的授权确认",
+    stopping: "正在停止…",
+    runningApproved: "正在执行已授权的调用…",
+    cancelling: "正在取消调用…",
+  },
+  newConversation: "新对话",
+  badge: {
+    deleted: "已删除",
+    running: "运行中",
+    ready: "已就绪",
+  },
+  viewObsAria: "查看当前对话观测数据",
+  titleAria: "对话标题",
+  save: "保存",
+  cancel: "取消",
+  deleteNote: "删除后会从列表隐藏，你可以立即恢复。",
+  confirmDelete: "确认删除",
+  failure: {
+    capability: "能力调用失败：{{name}} · {{error}}",
+    call: "调用失败：{{error}}",
+  },
+  viewRawLogs: "查看原始日志",
+  iterations: "{{count}} 次模型迭代",
+  viewCalls: "查看调用记录",
+  stopped: "已停止生成。可以继续生成，或直接发送新消息。",
+  resume: "继续生成",
+  dismissError: "关闭错误",
+  sendFailed: "发送未完成，草稿已保留，可重试。",
+  composerPlaceholder: "补充约束，或继续安排下一步…",
+  messageAria: "消息",
+  stopAria: "停止生成",
+  sendAria: "发送消息",
+  welcome: {
+    title: "开始新对话",
+    body: "Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",
+    f1: {
+      title: "多轮上下文",
+      body: "会话历史自动恢复",
+    },
+    f2: {
+      title: "能力调度",
+      body: "按任务自动组合",
+    },
+    f3: {
+      title: "安全确认",
+      body: "高风险操作可控",
+    },
+  },
+  deleted: {
+    title: "“{{title}}”已删除",
+    body: "恢复后会重新出现在对话列表中。",
+    restore: "恢复对话",
+  },
+};

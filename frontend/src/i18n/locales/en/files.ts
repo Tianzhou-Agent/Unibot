@@ -1,0 +1,15 @@
+export default {
+  userFiles: "User files",
+  title: "Files",
+  searchPlaceholder: "Search files at all levels",
+  searchAria: "Search all files",
+  userLevel: "User level",
+  workspaceLevel: "Workspace level",
+  noMatch: "No matching files",
+  noWorkspaces: "No workspaces yet.",
+  scopeAria: "{{label}} file level",
+  openAria: "Open {{label}} files",
+  summary: "{{kind}} · {{files}} file(s) · {{folders}} folder(s)",
+  open: "Open",
+  empty: "No files",
+};

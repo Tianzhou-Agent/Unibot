@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { useEffect, useMemo, useState } from "react";
 import { Search, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
@@ -9,13 +11,14 @@ import { classNames } from "@/lib/utils";
 type Category = "all" | "fact" | "goal" | "pending";
 
 const FILTERS: Array<{ id: Category; label: string }> = [
-  { id: "all", label: "全部" },
-  { id: "fact", label: "事实" },
-  { id: "goal", label: "目标" },
-  { id: "pending", label: "待确认" },
+  { id: "all", get label() { return i18n.t("memory:filter.all"); } },
+  { id: "fact", get label() { return i18n.t("memory:filter.fact"); } },
+  { id: "goal", get label() { return i18n.t("memory:filter.goal"); } },
+  { id: "pending", get label() { return i18n.t("memory:filter.pending"); } },
 ];
 
 export default function MemoryAppPage() {
+  const { t } = useTranslation("memory");
   const [items, setItems] = useState<MemoryItem[]>(MEMORY_ITEMS);
   const [stats, setStats] = useState<MemoryStats>(MEMORY_STATS);
   const [category, setCategory] = useState<Category>("all");
@@ -44,7 +47,7 @@ export default function MemoryAppPage() {
 
   return (
     <div className="h-full flex flex-col bg-app-bg">
-      <Topbar title="记忆应用" badge={{ label: "应用模块", tone: "info" }} />
+      <Topbar title={t("app.title")} badge={{ label: t("app.badge"), tone: "info" }} />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto max-w-[1640px] space-y-3">
           <div className="flex items-center gap-4">
@@ -55,21 +58,21 @@ export default function MemoryAppPage() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 type="text"
-                placeholder="搜索记忆"
+                placeholder={t("app.search")}
                 className="flex-1 bg-transparent text-[13px] placeholder:text-ink-subtle outline-none"
               />
               {q ? (
-                <button type="button" onClick={() => setQ("")} aria-label="清空">
+                <button type="button" onClick={() => setQ("")} aria-label={t("app.clear")}>
                   <X className="w-3.5 h-3.5 text-ink-muted" />
                 </button>
               ) : null}
             </label>
           </div>
           <div className="grid grid-cols-4 gap-3">
-            <StatCard label="全部记忆" value={stats.total} tone="accent" />
-            <StatCard label="事实" value={stats.fact} />
-            <StatCard label="目标" value={stats.goal} />
-            <StatCard label="待确认" value={stats.pending} />
+            <StatCard label={t("app.statAll")} value={stats.total} tone="accent" />
+            <StatCard label={t("filter.fact")} value={stats.fact} />
+            <StatCard label={t("filter.goal")} value={stats.goal} />
+            <StatCard label={t("filter.pending")} value={stats.pending} />
           </div>
           <div className="flex items-center gap-2">
             {FILTERS.map((f) => (
@@ -83,7 +86,7 @@ export default function MemoryAppPage() {
             ))}
           </div>
           <div className="rounded-md border border-line bg-app-soft p-3.5 space-y-2.5">
-            <div className="text-ink-muted text-[13px] font-extrabold">记忆列表</div>
+            <div className="text-ink-muted text-[13px] font-extrabold">{t("app.list")}</div>
             {filtered.length === 0 ? (
               <EmptyState />
             ) : (
@@ -144,6 +147,7 @@ function MemoryRow({
   item: MemoryItem;
   onAction: (id: string, action: "keep" | "delete") => void;
 }) {
+  const { t } = useTranslation("memory");
   return (
     <div
       className={classNames(
@@ -174,13 +178,13 @@ function MemoryRow({
           {item.source}
         </span>
         <span className="flex-1" />
-        <span className="text-[12px] text-danger font-extrabold">操作：</span>
+        <span className="text-[12px] text-danger font-extrabold">{t("app.actions")}</span>
         <button
           type="button"
           onClick={() => onAction(item.id, "keep")}
           className="text-success-deep text-[12px] font-extrabold hover:underline"
         >
-          保留
+          {t("app.keep")}
         </button>
         <span className="text-ink-subtle text-[12px]">·</span>
         <button
@@ -189,7 +193,7 @@ function MemoryRow({
           className="inline-flex items-center gap-1 text-danger text-[12px] font-extrabold hover:underline"
         >
           <Trash2 className="w-3 h-3" />
-          删除
+          {t("app.delete")}
         </button>
       </div>
     </div>
@@ -197,9 +201,10 @@ function MemoryRow({
 }
 
 function EmptyState() {
+  const { t } = useTranslation("memory");
   return (
     <div className="py-10 text-center text-ink-muted text-[13px]">
-      没有匹配的记忆。试试切换筛选或清空搜索词。
+      {t("app.empty")}
     </div>
   );
 }

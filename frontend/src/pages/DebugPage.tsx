@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n, { currentLocale } from "@/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -51,14 +53,15 @@ import type {
   TraceSpan,
 } from "@/types";
 
-export default function DebugPage() {
+export default function DebugPage({ embedded = false }: { embedded?: boolean }) {
+  const { t } = useTranslation("obs");
   const { user, config } = useAuth();
   const { isAdmin: mockIsAdmin, profile } = useMockSession();
   const isAdmin = config.auth_required ? Boolean(user?.is_admin) : mockIsAdmin;
   const location = useLocation();
-  const showAdminView = isAdmin && location.pathname.startsWith("/admin/");
+  const showAdminView = !embedded && isAdmin && location.pathname.startsWith("/admin/");
   const [searchParams] = useSearchParams();
-  const requestedSessionId = searchParams.get("sessionId");
+  const requestedSessionId = embedded ? null : searchParams.get("sessionId");
   const [health, setHealth] = useState<"checking" | "ok" | "error">("checking");
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
@@ -161,6 +164,7 @@ function AdminObservabilityView({
 }: {
   initialHealth: "checking" | "ok" | "error";
 }) {
+  const { t } = useTranslation("obs");
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [users, setUsers] = useState<AdminUserSummary[]>([]);
@@ -235,12 +239,12 @@ function AdminObservabilityView({
       <Topbar
         title="OBS"
         badge={initialHealth === "ok" ? undefined : {
-          label: initialHealth === "checking" ? "检查中" : "后端异常",
+          label: initialHealth === "checking" ? t("health.checking") : t("health.error"),
           tone: initialHealth === "checking" ? "thinking" : "warning",
         }}
         actions={(
           <button type="button" onClick={() => void loadUsers(query)} disabled={loading} className="btn-outline h-8">
-            <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} />刷新
+            <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} />{t("refresh")}
           </button>
         )}
       />
@@ -250,36 +254,36 @@ function AdminObservabilityView({
             <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[12.5px] text-danger-deep">{error}</div>
           ) : null}
 
-          <section className="rounded-xl border border-line bg-white p-3 shadow-card" aria-label="搜索用户">
+          <section className="rounded-xl border border-line bg-white p-3 shadow-card" aria-label={t("users.search")}>
             <div className="flex items-center gap-2">
               <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-app-soft px-3 focus-within:border-accent">
                 <Search className="h-4 w-4 shrink-0 text-ink-subtle" />
                 <input
-                  aria-label="搜索用户"
+                  aria-label={t("users.search")}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   maxLength={160}
-                  placeholder="搜索用户 ID、姓名、邮箱或租户"
+                  placeholder={t("users.searchPlaceholder")}
                   className="min-w-0 flex-1 bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-subtle"
                 />
               </label>
               <span className="hidden shrink-0 text-[11px] text-ink-subtle sm:block">
-                {loading ? "正在加载…" : `当前 ${users.length}${hasMore ? "+" : ""} 位用户`}
+                {loading ? t("users.loading") : t("users.count", { count: `${users.length}${hasMore ? "+" : ""}` })}
               </span>
             </div>
           </section>
 
-          <section className="overflow-hidden rounded-xl border border-line bg-white shadow-card" aria-label="用户列表">
+          <section className="overflow-hidden rounded-xl border border-line bg-white shadow-card" aria-label={t("users.listAria")}>
             <div className="flex items-center gap-2 border-b border-line px-4 py-3">
               <Users className="h-4 w-4 text-accent" />
-              <h2 className="text-[13px] font-extrabold text-ink">所有用户</h2>
-              <span className="text-[11px] text-ink-subtle">点击用户查看观测数据</span>
+              <h2 className="text-[13px] font-extrabold text-ink">{t("users.all")}</h2>
+              <span className="text-[11px] text-ink-subtle">{t("users.clickHint")}</span>
             </div>
             {loading ? (
-              <div className="py-20 text-center text-[12px] text-ink-muted">正在加载用户列表…</div>
+              <div className="py-20 text-center text-[12px] text-ink-muted">{t("users.loadingList")}</div>
             ) : users.length === 0 ? (
               <div className="py-20 text-center text-[12px] text-ink-muted">
-                {query.trim() ? "没有匹配的用户。" : "还没有已注册用户。"}
+                {query.trim() ? t("users.noMatch") : t("users.none")}
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-px bg-line">
@@ -310,7 +314,7 @@ function AdminObservabilityView({
                 disabled={loadingMore}
                 className="w-full border-t border-line px-4 py-2.5 text-[11px] font-semibold text-accent hover:bg-app-soft disabled:text-ink-subtle"
               >
-                {loadingMore ? "加载中…" : "加载更多用户"}
+                {loadingMore ? t("loading") : t("users.loadMore")}
               </button>
             ) : null}
           </section>
@@ -346,6 +350,7 @@ function AdminUserObservabilityDrawer({
   user: AdminUserSummary;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("obs");
   const [searchParams, setSearchParams] = useSearchParams();
   const initialRange = searchParams.get("range");
   const [period, setPeriod] = useState<ObsRange>(
@@ -381,7 +386,7 @@ function AdminUserObservabilityDrawer({
       const data = await getAdminObsTrace(traceId, lookupUserId);
       if (requestId !== detailRequestRef.current) return;
       setDetail(data);
-      if (!data) setError("该调用记录不存在，或已不属于当前查询用户。");
+      if (!data) setError(t("err.callGone"));
     } catch (loadError) {
       if (requestId !== detailRequestRef.current) return;
       setError(apiErrorMessage(loadError));
@@ -496,7 +501,7 @@ function AdminUserObservabilityDrawer({
       />
       <div
         role="dialog"
-        aria-label={`${user.name} 的观测数据`}
+        aria-label={t("drawer.dataOf", { name: user.name })}
         className={classNames(
           "absolute inset-y-0 right-0 flex w-full max-w-[1180px] flex-col bg-app-bg shadow-2xl transition-transform duration-300",
           mounted ? "translate-x-0" : "translate-x-full",
@@ -508,21 +513,21 @@ function AdminUserObservabilityDrawer({
             <div className="truncate text-[13px] font-extrabold text-ink">{user.name}</div>
             <div className="truncate text-[10.5px] text-ink-muted">{user.email} · <span className="font-mono">{user.id}</span></div>
           </div>
-          <span className="hidden rounded-md bg-app-soft px-2 py-1 font-mono text-[10.5px] text-ink-muted md:block">租户 {user.tenant_id}</span>
+          <span className="hidden rounded-md bg-app-soft px-2 py-1 font-mono text-[10.5px] text-ink-muted md:block">{t("tenant", { id: user.tenant_id })}</span>
           <select
-            aria-label="查询时间范围"
+            aria-label={t("drawer.rangeAria")}
             value={period}
             onChange={(event) => changePeriod(event.target.value as ObsRange)}
             className="ml-auto h-8 max-w-[104px] rounded-lg border border-line bg-white px-2 text-[11px] text-ink sm:max-w-none sm:px-2.5"
           >
-            <option value="day">最近 1 天</option>
-            <option value="week">最近 7 天</option>
-            <option value="month">最近 30 天</option>
+            <option value="day">{t("range.day")}</option>
+            <option value="week">{t("range.week")}</option>
+            <option value="month">{t("range.month")}</option>
           </select>
           <button type="button" onClick={() => void runSearch(period, selectedTraceId)} disabled={loading} className="btn-outline h-8 px-2 sm:px-3">
-            <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} /><span className="hidden sm:inline">刷新</span>
+            <RefreshCw className={classNames("h-3.5 w-3.5", loading && "animate-spin")} /><span className="hidden sm:inline">{t("refresh")}</span>
           </button>
-          <button type="button" onClick={onClose} aria-label="关闭用户观测抽屉" className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-app-soft hover:text-ink">
+          <button type="button" onClick={onClose} aria-label={t("drawer.close")} className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted hover:bg-app-soft hover:text-ink">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -532,29 +537,29 @@ function AdminUserObservabilityDrawer({
               {error}
             </div>
           ) : null}
-          <section className="grid shrink-0 grid-flow-col auto-cols-[minmax(128px,1fr)] gap-2 overflow-x-auto xl:grid-flow-row xl:grid-cols-6" aria-label="用户调用统计">
-            <SummaryCard icon={<Route />} label="调用记录" value={overview?.trace_count} tone="blue" />
-            <SummaryCard icon={<MessageSquareText />} label="关联会话" value={overview?.conversation_count} tone="green" />
-            <SummaryCard icon={<Braces />} label="总 Token" value={overview?.total_tokens} tone="indigo" />
-            <SummaryCard icon={<Activity />} label="输入 Token" value={overview?.input_tokens} tone="slate" />
-            <SummaryCard icon={<Activity />} label="输出 Token" value={overview?.output_tokens} tone="slate" />
-            <SummaryCard icon={<XCircle />} label="错误" value={overview?.error_count} tone="amber" />
+          <section className="grid shrink-0 grid-flow-col auto-cols-[minmax(128px,1fr)] gap-2 overflow-x-auto xl:grid-flow-row xl:grid-cols-6" aria-label={t("drawer.statsAria")}>
+            <SummaryCard icon={<Route />} label={t("stat.traces")} value={overview?.trace_count} tone="blue" />
+            <SummaryCard icon={<MessageSquareText />} label={t("stat.conversations")} value={overview?.conversation_count} tone="green" />
+            <SummaryCard icon={<Braces />} label={t("stat.totalTokens")} value={overview?.total_tokens} tone="indigo" />
+            <SummaryCard icon={<Activity />} label={t("stat.inputTokens")} value={overview?.input_tokens} tone="slate" />
+            <SummaryCard icon={<Activity />} label={t("stat.outputTokens")} value={overview?.output_tokens} tone="slate" />
+            <SummaryCard icon={<XCircle />} label={t("stat.errors")} value={overview?.error_count} tone="amber" />
           </section>
 
           <section className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)] overflow-hidden rounded-xl border border-line bg-white lg:grid-cols-[minmax(260px,1fr)_minmax(0,4fr)] lg:grid-rows-1">
             <div className="flex min-h-0 flex-col overflow-hidden lg:border-r lg:border-line">
               <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
                 <Activity className="h-3.5 w-3.5 text-accent" />
-                <span className="text-[12px] font-bold text-ink">调用记录</span>
+                <span className="text-[12px] font-bold text-ink">{t("stat.traces")}</span>
                 <span className="ml-auto text-[11.5px] text-ink-muted">
-                  {`${records.length}${hasMore ? "+" : ""} 条 Trace`}
+                  {t("traceCount", { count: `${records.length}${hasMore ? "+" : ""}` })}
                 </span>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Trace 列表">
+              <div className="min-h-0 flex-1 overflow-y-auto" aria-label={t("traceListAria")}>
                 {loading ? (
-                  <div className="px-4 py-20 text-center text-[12px] text-ink-muted">正在查询 OBS 数据…</div>
+                  <div className="px-4 py-20 text-center text-[12px] text-ink-muted">{t("loadingObs")}</div>
                 ) : records.length === 0 ? (
-                  <div className="px-4 py-20 text-center text-[12px] text-ink-muted">当前时间范围内没有调用记录。</div>
+                  <div className="px-4 py-20 text-center text-[12px] text-ink-muted">{t("noRecords")}</div>
                 ) : (
                   <>
                     {records.map((record) => (
@@ -572,7 +577,7 @@ function AdminUserObservabilityDrawer({
                         disabled={loadingMore}
                         className="w-full border-t border-line px-3 py-2 text-[11px] font-semibold text-accent hover:bg-app-soft disabled:text-ink-subtle"
                       >
-                        {loadingMore ? "加载中…" : "加载更多"}
+                        {loadingMore ? t("loading") : t("loadMore")}
                       </button>
                     ) : null}
                   </>
@@ -582,11 +587,11 @@ function AdminUserObservabilityDrawer({
 
             <div className="min-h-0 overflow-hidden">
               {detailLoading ? (
-                <div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载调用详情…</div>
+                <div className="flex h-full items-center justify-center text-[12px] text-ink-muted">{t("loadingDetail")}</div>
               ) : selected ? (
                 <TraceDetail
                   trace={selected}
-                  conversationTitle={selected.conversation_id ?? "未关联会话"}
+                  conversationTitle={selected.conversation_id ?? t("noConversation")}
                   calls={selectedTraceCalls}
                   selectedCall={selectedCall}
                   view={traceDetailView}
@@ -603,6 +608,7 @@ function AdminUserObservabilityDrawer({
 }
 
 function AdminTraceRow({ trace, active, onClick }: { trace: ObsTrace; active: boolean; onClick: () => void }) {
+  const { t } = useTranslation("obs");
   return (
     <div className="relative border-b border-line last:border-b-0">
       <button
@@ -617,18 +623,18 @@ function AdminTraceRow({ trace, active, onClick }: { trace: ObsTrace; active: bo
           <TraceStatus status={trace.status as TraceRecord["status"]} />
           <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink">{trace.trace_id}</span>
         </div>
-        <div className="mt-1 truncate font-mono text-[10.5px] text-ink-muted">租户 {trace.tenant_id} · 会话 {trace.session_id ?? "—"}</div>
+        <div className="mt-1 truncate font-mono text-[10.5px] text-ink-muted">{t("traceMeta", { tenant: trace.tenant_id, session: trace.session_id ?? "—" })}</div>
         <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-ink-subtle">
           <span>{formatTokenCount(trace.input_tokens + trace.output_tokens)} Token</span>
           <span>·</span>
-          <span>{trace.duration_ms != null ? formatDuration(trace.duration_ms) : "进行中"}</span>
+          <span>{trace.duration_ms != null ? formatDuration(trace.duration_ms) : t("inProgress")}</span>
           <span>·</span>
-          <span>{trace.started_at ? timeAgo(trace.started_at) : "时间未知"}</span>
+          <span>{trace.started_at ? timeAgo(trace.started_at) : t("timeUnknown")}</span>
         </div>
       </button>
       <CopyIdButton
         value={trace.trace_id}
-        label={`复制 Trace ID ${trace.trace_id}`}
+        label={t("copyTraceId", { id: trace.trace_id })}
         compact
         className="absolute right-2 top-2.5"
       />
@@ -678,6 +684,7 @@ function LLMCallRow({
   active: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation("obs");
   const performance = llmCallPerformance(call);
   return (
     <button
@@ -689,12 +696,12 @@ function LLMCallRow({
       )}
     >
       <div className="flex items-center justify-between gap-1.5">
-        <strong className="truncate text-[12px] text-ink">请求 {sequence}</strong>
+        <strong className="truncate text-[12px] text-ink">{t("requestN", { n: sequence })}</strong>
         <LLMCallStatus status={call.status} compact />
       </div>
       <div className="mt-1 truncate font-mono text-[11px] text-ink-muted">{call.model}</div>
       <div className="mt-1 flex items-center justify-between gap-1 text-[10.5px] text-ink-subtle">
-        <span className="truncate font-mono">{call.duration_ms != null ? formatDuration(call.duration_ms) : "请求中"}</span>
+        <span className="truncate font-mono">{call.duration_ms != null ? formatDuration(call.duration_ms) : t("requesting")}</span>
         <span className="shrink-0 font-mono">{formatTokenCount(performance.totalTokens)} Token</span>
       </div>
     </button>
@@ -712,6 +719,7 @@ function CopyIdButton({
   compact?: boolean;
   className?: string;
 }) {
+  const { t } = useTranslation("obs");
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -729,7 +737,7 @@ function CopyIdButton({
       type="button"
       onClick={() => void copy()}
       aria-label={label}
-      title={copied ? "已复制" : label}
+      title={copied ? t("copied") : label}
       className={classNames(
         "shrink-0 items-center justify-center rounded-md border bg-white transition-colors",
         compact ? "flex h-6 w-6" : "flex h-7 w-7",
@@ -743,6 +751,7 @@ function CopyIdButton({
 }
 
 function LLMCallDetail({ call }: { call: LLMCallRecord }) {
+  const { t } = useTranslation("obs");
   const [payloadView, setPayloadView] = useState<"request" | "response">("request");
 
   useEffect(() => {
@@ -757,20 +766,20 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
         <div className="flex items-center gap-2">
           <LLMCallStatus status={call.status} />
           <h2 className="min-w-0 flex-1 truncate font-mono text-[12px] font-bold text-ink">{call.call_id}</h2>
-          <CopyIdButton value={call.call_id} label="复制模型调用 ID" />
+          <CopyIdButton value={call.call_id} label={t("copyCallId")} />
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-muted">
-          <span className="min-w-0 basis-full truncate" title={call.endpoint}>接口：<span className="font-mono">{call.endpoint}</span></span>
-          <span>模型：<span className="font-mono text-ink">{call.model}</span></span>
-          <span>时间：{new Date(call.created_at).toLocaleString("zh-CN")}</span>
-          <span>耗时：{call.duration_ms != null ? formatDuration(call.duration_ms) : "请求中"}</span>
+          <span className="min-w-0 basis-full truncate" title={call.endpoint}>{t("call.endpoint")}<span className="font-mono">{call.endpoint}</span></span>
+          <span>{t("call.model")}<span className="font-mono text-ink">{call.model}</span></span>
+          <span>{t("call.time")}{new Date(call.created_at).toLocaleString(currentLocale())}</span>
+          <span>{t("call.duration")}{call.duration_ms != null ? formatDuration(call.duration_ms) : t("requesting")}</span>
           <span>
-            Token：{formatTokenCount(performance.totalTokens)}
+            {t("call.tokens")}{formatTokenCount(performance.totalTokens)}
             {performance.inputTokens != null || performance.outputTokens != null
-              ? `（输入 ${formatTokenCount(performance.inputTokens)} / 输出 ${formatTokenCount(performance.outputTokens)}）`
+              ? t("tokenSplit", { input: formatTokenCount(performance.inputTokens), output: formatTokenCount(performance.outputTokens) })
               : ""}
           </span>
-          <span>输出速率：{formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
+          <span>{t("call.rate")}{formatOutputTokenRate(performance.outputTokensPerSecond)}</span>
         </div>
       </div>
 
@@ -784,7 +793,7 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
               payloadView === "request" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
             )}
           >
-            请求
+            {t("payload.request")}
           </button>
           <button
             type="button"
@@ -794,20 +803,20 @@ function LLMCallDetail({ call }: { call: LLMCallRecord }) {
               payloadView === "response" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
             )}
           >
-            响应
+            {t("payload.response")}
           </button>
         </div>
         <span className="ml-auto text-[11px] text-ink-subtle">
-          {payloadView === "request" ? "POST 请求体" : call.status === "running" ? "等待模型响应" : "模型原始响应体"}
+          {payloadView === "request" ? t("payload.postBody") : call.status === "running" ? t("payload.waiting") : t("payload.rawResponse")}
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-[#0f172a] p-3" aria-label={payloadView === "request" ? "模型请求 JSON" : "模型响应 JSON"}>
+      <div className="min-h-0 flex-1 overflow-auto bg-[#0f172a] p-3" aria-label={payloadView === "request" ? t("payload.requestJson") : t("payload.responseJson")}>
         {payload ? (
           <HighlightedJson key={`${call.call_id}-${payloadView}`} value={payload} />
         ) : (
           <div className="flex h-full min-h-48 items-center justify-center text-[12.5px] text-slate-400">
-            {call.status === "running" ? "请求仍在处理中，刷新后查看返回值。" : "没有可用的响应体。"}
+            {call.status === "running" ? t("payload.running") : t("payload.none")}
           </div>
         )}
       </div>
@@ -867,6 +876,7 @@ function JsonTreeNode({
   collapsedPaths: Set<string>;
   onToggle: (path: string) => void;
 }) {
+  const { t } = useTranslation("obs");
   const prefix = propertyKey !== undefined ? (
     <>
       <span className="text-sky-300">{JSON.stringify(propertyKey)}</span>
@@ -892,8 +902,8 @@ function JsonTreeNode({
   const opening = Array.isArray(value) ? "[" : "{";
   const closing = Array.isArray(value) ? "]" : "}";
   const collapsed = collapsedPaths.has(path);
-  const nodeName = propertyKey ?? (itemIndex !== undefined ? `第 ${itemIndex + 1} 项` : "根节点");
-  const countLabel = Array.isArray(value) ? `${entries.length} 项` : `${entries.length} 个字段`;
+  const nodeName = propertyKey ?? (itemIndex !== undefined ? t("json.item", { n: itemIndex + 1 }) : t("json.root"));
+  const countLabel = Array.isArray(value) ? t("json.items", { count: entries.length }) : t("json.fields", { count: entries.length });
 
   if (entries.length === 0) {
     return (
@@ -912,8 +922,8 @@ function JsonTreeNode({
         <button
           type="button"
           onClick={() => onToggle(path)}
-          aria-label={`${collapsed ? "展开" : "折叠"} ${nodeName}`}
-          title={`${collapsed ? "展开" : "折叠"} ${nodeName}`}
+          aria-label={t(collapsed ? "json.expand" : "json.collapse", { name: nodeName })}
+          title={t(collapsed ? "json.expand" : "json.collapse", { name: nodeName })}
           className="mr-1 inline-flex h-5 w-5 align-middle items-center justify-center rounded text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
         >
           {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -986,6 +996,7 @@ function TraceDetail({
   onViewChange: (view: "trace" | "llm") => void;
   onSelectCall: (callId: string) => void;
 }) {
+  const { t } = useTranslation("obs");
   const performance = summarizeLlmCalls(calls);
   const spans = trace.spans ?? [];
   const callsBySpanId = new Map(
@@ -998,23 +1009,23 @@ function TraceDetail({
       {view === "trace" ? <div className="shrink-0 border-b border-line bg-app-soft px-3 py-2.5">
         <div className="grid gap-x-4 gap-y-1 text-[12px] text-ink-muted sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">会话：</span>
+            <span className="shrink-0">{t("trace.conversation")}</span>
             <span className="truncate font-medium text-ink">{conversationTitle}</span>
           </div>
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">会话 ID：</span>
+            <span className="shrink-0">{t("trace.conversationId")}</span>
             <span className="truncate font-mono">{trace.conversation_id ?? "—"}</span>
             {trace.conversation_id ? (
-              <CopyIdButton value={trace.conversation_id} label="复制 Conversation ID" compact />
+              <CopyIdButton value={trace.conversation_id} label={t("trace.copyConversationId")} compact />
             ) : null}
           </div>
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">主体：</span>
+            <span className="shrink-0">{t("trace.principal")}</span>
             <span className="truncate font-mono">{trace.tenant_id}/{trace.user_id}</span>
           </div>
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">开始：</span>
-            <span className="truncate">{new Date(trace.created_at).toLocaleString("zh-CN")}</span>
+            <span className="shrink-0">{t("trace.started")}</span>
+            <span className="truncate">{new Date(trace.created_at).toLocaleString(currentLocale())}</span>
           </div>
         </div>
       </div> : null}
@@ -1028,7 +1039,7 @@ function TraceDetail({
               view === "trace" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
             )}
           >
-            调用链
+            {t("trace.chain")}
           </button>
           <button
             type="button"
@@ -1038,12 +1049,12 @@ function TraceDetail({
               view === "llm" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
             )}
           >
-            模型请求 {calls.length}
+            {t("modelRequests", { count: calls.length })}
           </button>
         </div>
         {view === "llm" ? (
           <span className="ml-auto hidden text-[11px] text-ink-subtle xl:block">
-            总耗时 {formatDuration(performance.totalDurationMs)}
+            {t("totalDuration", { value: formatDuration(performance.totalDurationMs) })}
             {" · "}
             {formatTokenCount(performance.totalTokens)} Token
             {" · "}
@@ -1051,16 +1062,16 @@ function TraceDetail({
           </span>
         ) : (
           <span className="ml-auto text-[11px] text-ink-subtle">
-            {spans.length} 个 Span · {trace.events.length} 个事件
+            {t("spanEventCount", { spans: spans.length, events: trace.events.length })}
           </span>
         )}
       </div>
       {view === "trace" ? (
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          <section aria-label="Span 调用树">
+          <section aria-label={t("trace.spanTree")}>
             <div className="mb-3 flex items-center gap-2">
               <Route className="h-4 w-4 text-accent" />
-              <h3 className="text-[13px] font-bold text-ink">Span 调用树</h3>
+              <h3 className="text-[13px] font-bold text-ink">{t("trace.spanTree")}</h3>
               <span className="text-[11px] text-ink-subtle">{spans.length}</span>
             </div>
             {spans.length > 0 ? (
@@ -1081,14 +1092,14 @@ function TraceDetail({
               </div>
             ) : (
               <div className="rounded-lg border border-dashed border-line px-3 py-4 text-center text-[12px] text-ink-muted">
-                此 Trace 没有 Span 数据，可能由旧版本产生。
+                {t("trace.noSpans")}
               </div>
             )}
           </section>
-          <section className="mt-6 border-t border-line pt-4" aria-label="Trace 原始事件">
+          <section className="mt-6 border-t border-line pt-4" aria-label={t("trace.rawEventsAria")}>
             <div className="mb-3 flex items-center gap-2">
               <Activity className="h-4 w-4 text-ink-muted" />
-              <h3 className="text-[13px] font-bold text-ink">原始事件</h3>
+              <h3 className="text-[13px] font-bold text-ink">{t("trace.rawEvents")}</h3>
               <span className="text-[11px] text-ink-subtle">{trace.events.length}</span>
             </div>
             <div className="space-y-0">
@@ -1100,7 +1111,7 @@ function TraceDetail({
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(150px,0.55fr)_minmax(0,1.45fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,4fr)] lg:grid-rows-1">
-          <div className="min-h-0 overflow-y-auto border-b border-line lg:border-b-0 lg:border-r" aria-label="当前 Trace 的模型请求">
+          <div className="min-h-0 overflow-y-auto border-b border-line lg:border-b-0 lg:border-r" aria-label={t("trace.modelRequestsAria")}>
             {calls.map((call, index) => (
               <LLMCallRow
                 key={call.call_id}
@@ -1131,6 +1142,7 @@ function SpanRow({
   fallbackInput?: unknown;
   fallbackOutput?: unknown;
 }) {
+  const { t } = useTranslation("obs");
   const [collapsed, setCollapsed] = useState(true);
   const failed = span.status === "failed";
   const ttftMs = numberMetric(span.attributes.ttft_ms);
@@ -1194,36 +1206,36 @@ function SpanRow({
           </span>
         ) : null}
         <span className="ml-auto shrink-0 font-mono text-[11px] text-ink-subtle">
-          {span.duration_ms != null ? formatDuration(span.duration_ms) : "进行中"}
+          {span.duration_ms != null ? formatDuration(span.duration_ms) : t("inProgress")}
         </span>
       </button>
       {!collapsed && hasDetails ? (
         <div className="border-t border-line px-3 py-3 text-[11px] text-ink-muted">
           <div className="grid gap-x-4 gap-y-1 md:grid-cols-2 xl:grid-cols-4">
             <div><span className="text-ink-subtle">Span ID：</span><span className="font-mono break-all">{span.span_id}</span></div>
-            <div><span className="text-ink-subtle">父 Span：</span><span className="font-mono break-all">{span.parent_span_id ?? "—"}</span></div>
-            <div><span className="text-ink-subtle">目标：</span><span className="font-mono break-all">{span.target_id ?? "—"}</span></div>
-            <div><span className="text-ink-subtle">版本：</span><span className="font-mono break-all">{span.target_version ?? "—"}</span></div>
-            <div><span className="text-ink-subtle">逻辑调用：</span><span className="font-mono break-all">{span.logical_call_id ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">{t("span.parent")}</span><span className="font-mono break-all">{span.parent_span_id ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">{t("span.target")}</span><span className="font-mono break-all">{span.target_id ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">{t("span.version")}</span><span className="font-mono break-all">{span.target_version ?? "—"}</span></div>
+            <div><span className="text-ink-subtle">{t("span.logicalCall")}</span><span className="font-mono break-all">{span.logical_call_id ?? "—"}</span></div>
             <div><span className="text-ink-subtle">Attempt：</span>{span.attempt_no}</div>
-            <div><span className="text-ink-subtle">开始：</span>{new Date(span.started_at).toLocaleString("zh-CN")}</div>
-            <div><span className="text-ink-subtle">首输出：</span>{span.first_output_at ? new Date(span.first_output_at).toLocaleString("zh-CN") : "—"}</div>
+            <div><span className="text-ink-subtle">{t("trace.started")}</span>{new Date(span.started_at).toLocaleString(currentLocale())}</div>
+            <div><span className="text-ink-subtle">{t("span.firstOutput")}</span>{span.first_output_at ? new Date(span.first_output_at).toLocaleString(currentLocale()) : "—"}</div>
           </div>
           {input != null || output != null ? (
             <div className="mt-3 grid gap-3 xl:grid-cols-2">
-              {input != null ? <SpanPayload label="输入" value={input} spanName={span.name} /> : null}
-              {output != null ? <SpanPayload label="输出" value={output} spanName={span.name} /> : null}
+              {input != null ? <SpanPayload label={t("io.input")} value={input} spanName={span.name} /> : null}
+              {output != null ? <SpanPayload label={t("io.output")} value={output} spanName={span.name} /> : null}
             </div>
           ) : null}
           {Object.keys(attributes).length > 0 ? (
             <div className="mt-3">
-              <div className="mb-1 font-bold text-ink">属性</div>
+              <div className="mb-1 font-bold text-ink">{t("span.attributes")}</div>
               <pre className="max-h-80 overflow-auto rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all leading-relaxed">{JSON.stringify(attributes, null, 2)}</pre>
             </div>
           ) : null}
           {span.error ? (
             <div className="mt-3">
-              <div className="mb-1 font-bold text-danger">错误</div>
+              <div className="mb-1 font-bold text-danger">{t("stat.errors")}</div>
               <pre className="rounded-md bg-danger-soft p-2 whitespace-pre-wrap break-all leading-relaxed text-danger">{JSON.stringify(span.error, null, 2)}</pre>
             </div>
           ) : null}
@@ -1233,7 +1245,8 @@ function SpanRow({
   );
 }
 
-function SpanPayload({ label, value, spanName }: { label: "输入" | "输出"; value: unknown; spanName: string }) {
+function SpanPayload({ label, value, spanName }: { label: string; value: unknown; spanName: string }) {
+  const { t } = useTranslation("obs");
   return (
     <section aria-label={`${spanName} ${label}`}>
       <div className="mb-1 font-bold text-ink">{label}</div>
@@ -1395,6 +1408,7 @@ function parseCapabilityDiscovery(details: Record<string, unknown>): CapabilityD
 }
 
 function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDetails }) {
+  const { t } = useTranslation("obs");
   const { aina_graph: graph, model_scope: scope } = details;
   const builtinAinaCount = graph.counts?.builtin_aina ?? graph.available.filter((item) => item.runtime === "builtin").length;
   const remoteAinaCount = graph.counts?.remote_aina ?? graph.available.filter((item) => item.runtime === "remote").length;
@@ -1405,9 +1419,9 @@ function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDeta
     <div className="mt-2 space-y-2 text-[11.5px] text-ink-muted">
       <div className="flex items-center gap-2">
         <AppWindow className="h-3.5 w-3.5 text-accent" />
-        <span className="font-bold text-ink">可用 AINA</span>
-        <span className="rounded bg-app-soft px-1.5 py-0.5 font-bold text-ink-muted">内置 AINA {builtinAinaCount}</span>
-        <span className="rounded bg-accent-soft px-1.5 py-0.5 font-bold text-accent">远程 AINA {remoteAinaCount}</span>
+        <span className="font-bold text-ink">{t("cap.available")}</span>
+        <span className="rounded bg-app-soft px-1.5 py-0.5 font-bold text-ink-muted">{t("cap.builtinAina", { count: builtinAinaCount })}</span>
+        <span className="rounded bg-accent-soft px-1.5 py-0.5 font-bold text-accent">{t("cap.remoteAina", { count: remoteAinaCount })}</span>
       </div>
 
       <div className="space-y-2">
@@ -1424,14 +1438,14 @@ function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDeta
                   <span>{runtimeLabel(aina.runtime)}</span>
                   <span>v{aina.version}</span>
                   <span>{availabilityLabel(aina.availability)}</span>
-                  {aina.routing_candidate ? <span>可参与路由</span> : null}
+                  {aina.routing_candidate ? <span>{t("cap.routable")}</span> : null}
                 </div>
               </div>
             </div>
             <div className="divide-y divide-line px-2.5">
-              <CapabilityGroup icon={<Wrench />} label="工具" items={aina.capabilities.tools} />
-              <CapabilityGroup icon={<Code2 />} label="技能" items={aina.capabilities.skills} />
-              <CapabilityGroup icon={<AppWindow />} label="界面" items={aina.capabilities.ui} />
+              <CapabilityGroup icon={<Wrench />} label={t("cap.tools")} items={aina.capabilities.tools} />
+              <CapabilityGroup icon={<Code2 />} label={t("cap.skills")} items={aina.capabilities.skills} />
+              <CapabilityGroup icon={<AppWindow />} label={t("cap.ui")} items={aina.capabilities.ui} />
             </div>
           </section>
         ))}
@@ -1440,22 +1454,22 @@ function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDeta
       <section className="rounded-md border border-line bg-app-soft px-2.5 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <Bot className="h-3.5 w-3.5 text-ink-muted" />
-          <span className="font-bold text-ink">模型可用范围</span>
-          <span>远程工具 {remoteToolCount}</span>
-          <span>远程 AINA {remoteScopeAinaCount}</span>
-          <span>内置能力 {builtinCapabilityCount}</span>
-          {scope.forced ? <span className="font-mono text-warning-deep">强制指定：{scope.forced}</span> : null}
+          <span className="font-bold text-ink">{t("cap.scope")}</span>
+          <span>{t("cap.remoteTools", { count: remoteToolCount })}</span>
+          <span>{t("cap.remoteAina", { count: remoteScopeAinaCount })}</span>
+          <span>{t("cap.builtinCaps", { count: builtinCapabilityCount })}</span>
+          {scope.forced ? <span className="font-mono text-warning-deep">{t("cap.forced", { value: scope.forced })}</span> : null}
         </div>
         <div className="mt-1.5 space-y-1">
           {scope.by_aina.map((group) => (
             <div key={group.aina_id} className="grid grid-cols-[minmax(110px,0.8fr)_minmax(0,1.2fr)] gap-2">
               <span className="truncate font-mono text-ink">{group.aina_id}</span>
-              <span className="break-words">{group.capabilities.map((item) => item.id).join(", ") || "无"}</span>
+              <span className="break-words">{group.capabilities.map((item) => item.id).join(", ") || t("cap.none")}</span>
             </div>
           ))}
           {scope.standalone.length ? (
             <div className="grid grid-cols-[minmax(110px,0.8fr)_minmax(0,1.2fr)] gap-2">
-              <span className="font-mono text-ink">独立能力</span>
+              <span className="font-mono text-ink">{t("cap.standalone")}</span>
               <span className="break-words">{scope.standalone.map((item) => item.id).join(", ")}</span>
             </div>
           ) : null}
@@ -1464,7 +1478,7 @@ function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDeta
 
       {graph.excluded.length ? (
         <section className="rounded-md border border-warning-ring bg-warning-soft px-2.5 py-2">
-          <div className="font-bold text-warning-deep">不可用 AINA</div>
+          <div className="font-bold text-warning-deep">{t("cap.unavailable")}</div>
           {graph.excluded.map((aina) => (
             <div key={aina.id} className="mt-1 flex flex-wrap gap-x-2">
               <span className="font-mono text-ink">{aina.id}</span>
@@ -1476,7 +1490,7 @@ function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDeta
       ) : null}
 
       <details>
-        <summary className="cursor-pointer font-semibold text-ink-muted">原始 JSON</summary>
+        <summary className="cursor-pointer font-semibold text-ink-muted">{t("cap.rawJson")}</summary>
         <pre className="mt-1.5 rounded-md bg-app-soft p-2 whitespace-pre-wrap break-all text-[11px] leading-relaxed text-ink-muted">{JSON.stringify(details, null, 2)}</pre>
       </details>
     </div>
@@ -1484,6 +1498,7 @@ function CapabilityDiscoveryView({ details }: { details: CapabilityDiscoveryDeta
 }
 
 function CapabilityGroup({ icon, label, items }: { icon: React.ReactNode; label: string; items: DiscoveryCapability[] }) {
+  const { t } = useTranslation("obs");
   if (!items.length) return null;
   return (
     <div className="grid grid-cols-[72px_1fr] gap-2 py-2">
@@ -1495,8 +1510,8 @@ function CapabilityGroup({ icon, label, items }: { icon: React.ReactNode; label:
         {items.map((item) => (
           <div key={`${item.kind}-${item.id}`} className="flex min-w-0 items-start gap-1.5">
             <span className="min-w-0 flex-1 break-all font-mono text-ink">{item.id}</span>
-            {item.model_exposed ? <span className="shrink-0 rounded bg-success-soft px-1 py-0.5 text-[10px] font-bold text-success-deep">模型可见</span> : null}
-            {item.requires_confirmation ? <span className="shrink-0 rounded bg-warning-soft px-1 py-0.5 text-[10px] font-bold text-warning-deep">需确认</span> : null}
+            {item.model_exposed ? <span className="shrink-0 rounded bg-success-soft px-1 py-0.5 text-[10px] font-bold text-success-deep">{t("cap.modelVisible")}</span> : null}
+            {item.requires_confirmation ? <span className="shrink-0 rounded bg-warning-soft px-1 py-0.5 text-[10px] font-bold text-warning-deep">{t("cap.needsApproval")}</span> : null}
           </div>
         ))}
       </div>
@@ -1505,6 +1520,7 @@ function CapabilityGroup({ icon, label, items }: { icon: React.ReactNode; label:
 }
 
 function TraceStatus({ status }: { status: TraceRecord["status"] }) {
+  const { t } = useTranslation("obs");
   const success = status === "completed";
   const failed = status === "failed";
   return (
@@ -1516,6 +1532,7 @@ function TraceStatus({ status }: { status: TraceRecord["status"] }) {
 }
 
 function LLMCallStatus({ status, compact = false }: { status: LLMCallRecord["status"]; compact?: boolean }) {
+  const { t } = useTranslation("obs");
   const completed = status === "completed";
   const failed = status === "failed";
   return (
@@ -1525,7 +1542,7 @@ function LLMCallStatus({ status, compact = false }: { status: LLMCallRecord["sta
       completed ? "bg-success-soft text-success-deep" : failed ? "bg-danger-soft text-danger" : "bg-warning-soft text-warning-deep",
     )}>
       {completed ? <CheckCircle2 className="h-3 w-3" /> : failed ? <XCircle className="h-3 w-3" /> : <Clock3 className="h-3 w-3" />}
-      {completed ? "成功" : failed ? "失败" : "请求中"}
+      {completed ? t("callStatus.ok") : failed ? t("callStatus.failed") : t("requesting")}
     </span>
   );
 }
@@ -1612,7 +1629,7 @@ function formatDuration(value: number | null): string {
 }
 
 function formatTokenCount(value: number | null): string {
-  return value == null ? "—" : Math.round(value).toLocaleString("zh-CN");
+  return value == null ? "—" : Math.round(value).toLocaleString(currentLocale());
 }
 
 function formatOutputTokenRate(value: number | null): string {
@@ -1622,60 +1639,45 @@ function formatOutputTokenRate(value: number | null): string {
 
 
 function NoTraceSelected() {
+  const { t } = useTranslation("obs");
   return (
     <div className="h-full min-h-[520px] flex items-center justify-center text-center">
       <div>
         <ShieldCheck className="mx-auto w-10 h-10 text-ink-subtle" />
-        <h2 className="mt-3 text-[15px] font-bold text-ink">选择一条调用记录</h2>
-        <p className="mt-1 text-[13px] text-ink-muted">查看模型、工具、AINA、授权和最终响应的完整链路。</p>
+        <h2 className="mt-3 text-[15px] font-bold text-ink">{t("empty.pickTrace")}</h2>
+        <p className="mt-1 text-[13px] text-ink-muted">{t("empty.pickTraceHint")}</p>
       </div>
     </div>
   );
 }
 
 function NoLLMCallSelected() {
+  const { t } = useTranslation("obs");
   return (
     <div className="flex h-full min-h-[520px] items-center justify-center text-center">
       <div>
         <Server className="mx-auto h-10 w-10 text-ink-subtle" />
-        <h2 className="mt-3 text-[15px] font-bold text-ink">选择一次模型请求</h2>
-        <p className="mt-1 text-[13px] text-ink-muted">查看发送到 Chat Completions 接口的入参与模型原始返回值。</p>
+        <h2 className="mt-3 text-[15px] font-bold text-ink">{t("empty.pickCall")}</h2>
+        <p className="mt-1 text-[13px] text-ink-muted">{t("empty.pickCallHint")}</p>
       </div>
     </div>
   );
 }
 
 function runtimeLabel(value: string): string {
-  return value === "builtin" ? "内置" : value === "remote" ? "远程" : value;
+  return value === "builtin" ? i18n.t("obs:runtime.builtin") : value === "remote" ? i18n.t("obs:runtime.remote") : value;
 }
 
 function availabilityLabel(value: string): string {
-  const labels: Record<string, string> = {
-    builtin: "系统内置",
-    available: "可用",
-    installed: "已安装",
-    unavailable: "不可用",
-    disabled: "已停用",
-    not_installed: "未安装",
-    installation_disabled: "安装已停用",
-    disabled_for_conversation: "当前对话未启用",
-    missing_permissions: "缺少权限",
-  };
-  return labels[value] ?? value;
+  return i18n.t(`obs:avail.${value}`, { defaultValue: value });
 }
 
 function traceStatusLabel(value: TraceRecord["status"]): string {
-  if (value === "completed") return "已完成";
-  if (value === "failed") return "失败";
-  if (value === "approval_required") return "等待确认";
-  return "运行中";
+  return i18n.t(`obs:status.${value === "completed" || value === "failed" || value === "approval_required" ? value : "running"}`);
 }
 
 function eventStatusLabel(value: TraceEvent["status"]): string {
-  if (value === "completed") return "已完成";
-  if (value === "failed") return "失败";
-  if (value === "pending") return "等待中";
-  return value === "started" ? "已开始" : value;
+  return value === "completed" || value === "failed" || value === "pending" || value === "started" ? i18n.t(`obs:status.${value}`) : value;
 }
 
 function spanKindLabel(value: TraceSpan["kind"]): string {
@@ -1687,11 +1689,7 @@ function spanKindLabel(value: TraceSpan["kind"]): string {
 }
 
 function spanStatusLabel(value: TraceSpan["status"]): string {
-  if (value === "completed") return "已完成";
-  if (value === "failed") return "失败";
-  if (value === "cancelled") return "已取消";
-  if (value === "approval_required") return "等待确认";
-  return "运行中";
+  return i18n.t(`obs:status.${value === "completed" || value === "failed" || value === "cancelled" || value === "approval_required" ? value : "running"}`);
 }
 
 function spanStatusTone(value: TraceSpan["status"]): string {

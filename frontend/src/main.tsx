@@ -1,6 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
+import "@/i18n";
+import { LanguageBoundary } from "@/i18n/LanguageBoundary";
 import App from "./App";
 import { AuthProvider } from "@/lib/auth";
 import "./index.css";
@@ -21,7 +23,9 @@ enableMocking().then(() => {
     <StrictMode>
       <BrowserRouter>
         <AuthProvider>
-          <App />
+          <LanguageBoundary>
+            <App />
+          </LanguageBoundary>
         </AuthProvider>
       </BrowserRouter>
     </StrictMode>,

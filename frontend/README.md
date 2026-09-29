@@ -40,3 +40,13 @@ Debug 模式默认关闭。关闭时不会展示 Tool 调用、原始参数、�
 ```bash
 npm run build
 ```
+
+## 多语言 (i18n)
+
+界面默认使用英语 (US)，简体中文可通过侧边栏账户菜单、设置页或登录页的语言选择器切换；选择保存在 `localStorage` 的 `unibot.language`。
+
+- 文案位于 `src/i18n/locales/<en|zh>/<namespace>.ts`，两种语言的 namespace 与 key 必须一一对应；新增 namespace 会被自动加载。
+- 组件内使用 `useTranslation("<namespace>")`；模块级（非 React）代码使用 `i18n.t("<namespace>:<key>")`。
+- 切换语言会重新挂载整个应用（`LanguageBoundary`），因此模块级的翻译无需订阅语言变化。
+- 日期、数字格式使用 `currentLocale()`，不要硬编码 `zh-CN`。
+- Playwright 用例断言中文文案，`playwright.config.ts` 将存储的语言固定为 `zh`。

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Cpu, Loader2 } from "lucide-react";
 import type { ModelProvider, ModelSettingsResponse } from "@/features/model-settings/types";
@@ -7,6 +8,7 @@ import { classNames } from "@/lib/utils";
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 
 export function ModelSelector({ disabled }: { disabled?: boolean }) {
+  const { t } = useTranslation("chat");
   const [settings, setSettings] = useState<ModelSettingsResponse | null>(null);
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
@@ -67,10 +69,10 @@ export function ModelSelector({ disabled }: { disabled?: boolean }) {
 
   const active = settings?.active_model;
   const activeLabel = !settings
-    ? "加载模型…"
+    ? t("model.loading")
     : active?.source === "unconfigured"
-      ? "未配置模型"
-      : (active?.model_name ?? active?.model ?? "选择模型");
+      ? t("model.none")
+      : (active?.model_name ?? active?.model ?? t("model.select"));
 
   const visibleProviders = (settings?.providers ?? [])
     .map((provider) => ({
@@ -87,7 +89,7 @@ export function ModelSelector({ disabled }: { disabled?: boolean }) {
         onClick={() => setOpen((current) => !current)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`当前模型：${activeLabel}`}
+        aria-label={t("model.current", { label: activeLabel })}
         title={active?.provider_name ? `${active.provider_name} · ${activeLabel}` : activeLabel}
         className={classNames(
           "flex h-8 max-w-[200px] items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 text-[11.5px] font-semibold text-ink transition-colors",
@@ -102,7 +104,7 @@ export function ModelSelector({ disabled }: { disabled?: boolean }) {
       {open ? (
         <div
           role="listbox"
-          aria-label="选择模型"
+          aria-label={t("model.choose")}
           className="absolute bottom-full left-0 z-40 mb-1.5 w-64 overflow-hidden rounded-lg border border-line bg-white shadow-card"
         >
           <div className="max-h-80 overflow-y-auto py-1">
@@ -111,7 +113,7 @@ export function ModelSelector({ disabled }: { disabled?: boolean }) {
             ) : null}
             {visibleProviders.length === 0 ? (
               <p className="px-3 py-2 text-[11.5px] text-ink-muted">
-                暂无可用模型，请先在「设置」中添加 Provider。
+                {t("model.empty")}
               </p>
             ) : (
               visibleProviders.map((provider) => (

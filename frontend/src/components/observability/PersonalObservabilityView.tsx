@@ -1,3 +1,8 @@
+import i18n, { currentLocale } from "@/i18n";
+
+// Module-level translator: this file's helpers (log/metric builders) run outside React, so a hook is not an option.
+const t = (key: string, options?: Record<string, unknown>): string => i18n.t(key, { ns: "personalObs", ...options }) as string;
+
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -146,7 +151,7 @@ export function PersonalObservabilityView({
   );
   const conversation = conversations.find((item) => item.id === sessionId);
   const conversationTitle = conversation?.title
-    ?? (sessionId ? "已删除或不可用的对话" : "暂无对话");
+    ?? (sessionId ? t("deletedConversation") : t("noConversation"));
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-bg">
@@ -158,21 +163,21 @@ export function PersonalObservabilityView({
             </div>
           ) : null}
 
-          <div className="flex min-h-10 flex-wrap items-center justify-end gap-3 px-1" aria-label="OBS 视图选择">
+          <div className="flex min-h-10 flex-wrap items-center justify-end gap-3 px-1" aria-label={t("viewSelectAria")}>
             {view === "overview" ? (
-              <h1 className="text-[16px] font-extrabold leading-tight text-ink">个人总览</h1>
+              <h1 className="text-[16px] font-extrabold leading-tight text-ink">{t("personalOverview")}</h1>
             ) : sessionId ? (
               <div className="min-w-0 max-w-[520px] text-left">
                 <strong className="block truncate text-[16px] font-extrabold leading-tight text-ink">{conversationTitle}</strong>
-                <span className="mt-0.5 hidden truncate font-mono text-[10px] text-ink-subtle sm:block">Session ID：{sessionId}</span>
+                <span className="mt-0.5 hidden truncate font-mono text-[10px] text-ink-subtle sm:block">{t("sessionId")}{sessionId}</span>
               </div>
             ) : null}
             {sessionId ? (
               <Link
-                to="/obs"
+                to="/settings?tab=overview"
                 className="ml-auto inline-flex items-center rounded-md px-3 py-1.5 text-[12px] font-bold text-ink-muted transition-colors hover:bg-app-soft hover:text-ink"
               >
-                个人总览
+                {t("personalOverview")}
               </Link>
             ) : null}
           </div>
@@ -246,25 +251,25 @@ function ConversationView({
           <ConversationOverview conversation={conversation} traces={traces} calls={calls} />
 
           <div>
-            <div className="overflow-x-auto bg-app-bg px-1 pt-1 pb-px" role="tablist" aria-label="当前对话分析维度">
+            <div className="overflow-x-auto bg-app-bg px-1 pt-1 pb-px" role="tablist" aria-label={t("dimensionsAria")}>
             <div className="flex min-w-max gap-1">
-              <DimensionTab active={dimension === "models"} onClick={() => setDimension("models")}>模型性能</DimensionTab>
-              <DimensionTab active={dimension === "capabilities"} onClick={() => setDimension("capabilities")}>能力调用</DimensionTab>
-              <DimensionTab active={dimension === "errors"} onClick={() => setDimension("errors")} count={errors.length}>错误诊断</DimensionTab>
-              <DimensionTab active={dimension === "spans"} onClick={() => setDimension("spans")}>Span 调用树</DimensionTab>
-              <DimensionTab active={dimension === "logs"} onClick={() => setDimension("logs")}>原始日志</DimensionTab>
+              <DimensionTab active={dimension === "models"} onClick={() => setDimension("models")}>{t("tab.models")}</DimensionTab>
+              <DimensionTab active={dimension === "capabilities"} onClick={() => setDimension("capabilities")}>{t("tab.capabilities")}</DimensionTab>
+              <DimensionTab active={dimension === "errors"} onClick={() => setDimension("errors")} count={errors.length}>{t("tab.errors")}</DimensionTab>
+              <DimensionTab active={dimension === "spans"} onClick={() => setDimension("spans")}>{t("tab.spans")}</DimensionTab>
+              <DimensionTab active={dimension === "logs"} onClick={() => setDimension("logs")}>{t("tab.logs")}</DimensionTab>
             </div>
           </div>
 
-          {dimension === "models" ? <section className="rounded-xl border border-line bg-white" aria-label="模型性能分析">
-            <SectionHeader icon={<Brain />} title="AINA 与模型性能" note={`${modelMetrics.length} 个模型`} />
+          {dimension === "models" ? <section className="rounded-xl border border-line bg-white" aria-label={t("models.aria")}>
+            <SectionHeader icon={<Brain />} title={t("models.title")} note={t("modelCount", { count: modelMetrics.length })} />
             <div className="overflow-x-auto">
               <table className="min-w-[820px] w-full text-left text-[11.5px]">
                 <thead className="bg-app-soft text-ink-muted">
                   <tr>
-                    <th className="px-3 py-2">模型</th><th className="px-2.5 py-2">调用</th><th className="px-2.5 py-2">输入 Token</th>
-                    <th className="px-2.5 py-2">输出 Token</th><th className="px-2.5 py-2">工具调用</th><th className="px-2.5 py-2">平均 TTFT</th><th className="px-2.5 py-2">平均耗时</th>
-                    <th className="px-2.5 py-2">输出速率</th><th className="px-2.5 py-2">成功率</th>
+                    <th className="px-3 py-2">{t("th.model")}</th><th className="px-2.5 py-2">{t("th.calls")}</th><th className="px-2.5 py-2">{t("th.inputTokens")}</th>
+                    <th className="px-2.5 py-2">{t("th.outputTokens")}</th><th className="px-2.5 py-2">{t("th.toolCalls")}</th><th className="px-2.5 py-2">{t("th.avgTtft")}</th><th className="px-2.5 py-2">{t("th.avgDuration")}</th>
+                    <th className="px-2.5 py-2">{t("th.outputRate")}</th><th className="px-2.5 py-2">{t("th.successRate")}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -277,14 +282,14 @@ function ConversationView({
                       <td className="px-2.5 py-2">{Math.round(item.successRate * 100)}%</td>
                     </tr>
                   ))}
-                  {modelMetrics.length === 0 ? <tr><td colSpan={9} className="px-3 py-8 text-center text-ink-muted">当前对话没有模型调用记录。</td></tr> : null}
+                  {modelMetrics.length === 0 ? <tr><td colSpan={9} className="px-3 py-8 text-center text-ink-muted">{t("models.empty")}</td></tr> : null}
                 </tbody>
               </table>
             </div>
           </section> : null}
 
-          {dimension === "capabilities" ? <section className="rounded-xl border border-line bg-white" aria-label="能力调用分析">
-            <SectionHeader icon={<Wrench />} title="工具 / Skill / MCP 调用分析" note={`${capabilities.reduce((sum, item) => sum + item.calls, 0)} 次逻辑调用`} />
+          {dimension === "capabilities" ? <section className="rounded-xl border border-line bg-white" aria-label={t("caps.aria")}>
+            <SectionHeader icon={<Wrench />} title={t("caps.title")} note={t("logicalCalls", { count: capabilities.reduce((sum, item) => sum + item.calls, 0) })} />
             <div className="grid gap-2 p-2.5 sm:grid-cols-4">
               {(["AINA", "Tool", "Skill", "MCP"] as const).map((type) => (
                 <div key={type} className="rounded-lg bg-app-soft px-3 py-2">
@@ -295,7 +300,7 @@ function ConversationView({
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-[650px] w-full text-left text-[11.5px]">
-                <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">类型</th><th className="px-2.5 py-2">能力</th><th className="px-2.5 py-2">调用</th><th className="px-2.5 py-2">尝试</th><th className="px-2.5 py-2">成功率</th><th className="px-2.5 py-2">总耗时</th></tr></thead>
+                <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">{t("th.type")}</th><th className="px-2.5 py-2">{t("th.capability")}</th><th className="px-2.5 py-2">{t("th.calls")}</th><th className="px-2.5 py-2">{t("th.attempts")}</th><th className="px-2.5 py-2">{t("th.successRate")}</th><th className="px-2.5 py-2">{t("th.totalDuration")}</th></tr></thead>
                 <tbody className="divide-y divide-line">
                   {capabilities.map((item) => (
                     <tr key={`${item.type}-${item.name}`}>
@@ -304,17 +309,17 @@ function ConversationView({
                       <td className="px-2.5 py-2">{item.attempts}</td><td className="px-2.5 py-2">{Math.round(item.successRate * 100)}%</td><td className="px-2.5 py-2">{formatDuration(item.duration)}</td>
                     </tr>
                   ))}
-                  {capabilities.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">当前对话没有能力调用。</td></tr> : null}
+                  {capabilities.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">{t("caps.empty")}</td></tr> : null}
                 </tbody>
               </table>
             </div>
             {capabilityTotals.Skill === 0 && capabilityTotals.MCP === 0 ? (
-              <p className="px-3 py-2 text-[10.5px] text-ink-subtle">当前 Trace 协议没有独立的 Skill/MCP 类型；只有 Span 明确携带类型标记时才会计数。</p>
+              <p className="px-3 py-2 text-[10.5px] text-ink-subtle">{t("caps.note")}</p>
             ) : null}
           </section> : null}
 
-          {dimension === "errors" ? <section className="rounded-xl border border-line bg-white" aria-label="错误诊断">
-            <SectionHeader icon={<AlertTriangle />} title="错误诊断" note={errors.length ? `${errors.length} 个异常` : "当前对话正常"} />
+          {dimension === "errors" ? <section className="rounded-xl border border-line bg-white" aria-label={t("tab.errors")}>
+            <SectionHeader icon={<AlertTriangle />} title={t("tab.errors")} note={errors.length ? t("errorCount", { count: errors.length }) : t("conversationHealthy")} />
             <div className="p-3">
               {errors.length ? <div className="space-y-2">{errors.map((item) => (
                 <div key={item.id} className="rounded-lg border border-danger-ring bg-danger-soft p-2.5">
@@ -328,17 +333,17 @@ function ConversationView({
                     }}
                     className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-danger-deep hover:underline"
                   >
-                    查看原始日志<ChevronRight className="h-3.5 w-3.5" />
+                    {t("viewRawLog")}<ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ))}</div> : (
-                <div className="flex items-center gap-2 rounded-lg bg-success-soft p-3 text-[12px] font-semibold text-success-deep"><CheckCircle2 className="h-4 w-4" />模型和能力调用均未发现错误。</div>
+                <div className="flex items-center gap-2 rounded-lg bg-success-soft p-3 text-[12px] font-semibold text-success-deep"><CheckCircle2 className="h-4 w-4" />{t("errors.none")}</div>
               )}
             </div>
           </section> : null}
 
-          {dimension === "spans" ? <section className="rounded-xl border border-line bg-white" aria-label="Span 调用树">
-            <SectionHeader icon={<Route />} title="Span 调用树" note={`${traces.length} 轮交互 · ${spanCount} 个 Span`} />
+          {dimension === "spans" ? <section className="rounded-xl border border-line bg-white" aria-label={t("tab.spans")}>
+            <SectionHeader icon={<Route />} title={t("tab.spans")} note={t("roundsAndSpans", { rounds: traces.length, spans: spanCount })} />
             <div className="divide-y divide-line">
               {traces.map((trace, index) => (
                 <InteractionSpanTree
@@ -355,7 +360,7 @@ function ConversationView({
           </div>
         </>
       ) : (
-        <div className="rounded-xl bg-white py-14 text-center text-[13px] text-ink-muted">暂无可展示的调用数据。</div>
+        <div className="rounded-xl bg-white py-14 text-center text-[13px] text-ink-muted">{t("noCallData")}</div>
       )}
     </div>
   );
@@ -375,42 +380,42 @@ function ConversationOverview({
     ? Math.min(100, (metrics.contextUsed / metrics.contextCapacity) * 100)
     : null;
   return (
-    <section className="grid gap-px overflow-hidden rounded-xl bg-line/70 sm:grid-cols-2 lg:grid-cols-4" aria-label="对话数据总览">
+    <section className="grid gap-px overflow-hidden rounded-xl bg-line/70 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("overviewAria")}>
       <ConversationMetricGroup
         icon={<Activity />}
-        title="Token 使用"
-        primary={{ label: "Token 总量", value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.total, metrics.usage.estimated) : "—" }}
+        title={t("usage.title")}
+        primary={{ label: t("usage.total"), value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.total, metrics.usage.estimated) : "—" }}
         details={[
-          { label: "输入 Token", value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.input, metrics.usage.estimated) : "—" },
-          { label: "输出 Token", value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.output, metrics.usage.estimated) : "—" },
-          { label: "缓存读取", value: metrics.cacheRead.measured ? formatNumber(metrics.cacheRead.value) : "—", hint: metrics.cacheRead.measured ? "已复用的输入 Token" : "模型 Usage 未上报" },
+          { label: t("th.inputTokens"), value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.input, metrics.usage.estimated) : "—" },
+          { label: t("th.outputTokens"), value: metrics.usage.measured ? formatEstimatedNumber(metrics.usage.output, metrics.usage.estimated) : "—" },
+          { label: t("usage.cacheRead"), value: metrics.cacheRead.measured ? formatNumber(metrics.cacheRead.value) : "—", hint: metrics.cacheRead.measured ? t("usage.cacheReadHint") : t("usage.notReported") },
         ]}
       />
       <ConversationMetricGroup
         icon={<Gauge />}
-        title="Token 生成速率"
-        primary={{ label: "输出 Token/s", value: formatEstimatedRate(metrics.outputRate, metrics.rateEstimated) }}
+        title={t("rate.title")}
+        primary={{ label: t("rate.output"), value: formatEstimatedRate(metrics.outputRate, metrics.rateEstimated) }}
         details={[
-          { label: "总 Token/s", value: formatEstimatedRate(metrics.totalRate, metrics.rateEstimated) },
-          { label: "首 Token", value: formatDuration(metrics.avgTtft), hint: "模型调用平均 TTFT" },
-          { label: "平均耗时", value: formatDuration(metrics.avgDuration), hint: "单次模型调用" },
+          { label: t("rate.total"), value: formatEstimatedRate(metrics.totalRate, metrics.rateEstimated) },
+          { label: t("rate.first"), value: formatDuration(metrics.avgTtft), hint: t("rate.ttftHint") },
+          { label: t("th.avgDuration"), value: formatDuration(metrics.avgDuration), hint: t("rate.perCallHint") },
         ]}
       />
       <ConversationMetricGroup
         icon={<MessageSquareText />}
-        title="交互信息"
-        primary={{ label: "交互轮次", value: String(traces.length) }}
+        title={t("interaction.title")}
+        primary={{ label: t("interaction.rounds"), value: String(traces.length) }}
         details={[
-          { label: "消息数", value: conversation ? String(conversation.messages.length) : "—", hint: conversation ? undefined : "对话消息未采集" },
+          { label: t("interaction.messages"), value: conversation ? String(conversation.messages.length) : "—", hint: conversation ? undefined : t("interaction.notCollected") },
         ]}
       />
       <ConversationMetricGroup
         icon={<Layers3 />}
-        title="上下文使用"
-        primary={{ label: "当前使用", value: formatEstimatedNumber(metrics.contextUsed, metrics.contextEstimated), hint: metrics.contextUsed == null ? "模型 Usage 未上报" : "最近一次模型请求的输入 Token" }}
+        title={t("context.title")}
+        primary={{ label: t("context.used"), value: formatEstimatedNumber(metrics.contextUsed, metrics.contextEstimated), hint: metrics.contextUsed == null ? t("usage.notReported") : t("context.usedHint") }}
         details={[
-          { label: "总容量", value: formatNumber(metrics.contextCapacity), hint: "默认模型上下文窗口" },
-          { label: "压缩次数", value: String(metrics.compressionCount), hint: "已完成的上下文压缩事件" },
+          { label: t("context.capacity"), value: formatNumber(metrics.contextCapacity), hint: t("context.capacityHint") },
+          { label: t("context.compressions"), value: String(metrics.compressionCount), hint: t("context.compressionsHint") },
         ]}
         progress={contextProgress}
       />
@@ -450,7 +455,7 @@ function ConversationMetricGroup({
         ))}
       </div>
       {progress != null ? (
-        <div className="mt-2 h-1 overflow-hidden rounded-full bg-app-soft" aria-label={`上下文已使用 ${progress.toFixed(1)}%`}>
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-app-soft" aria-label={t("contextUsedPct", { pct: progress.toFixed(1) })}>
           <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
         </div>
       ) : null}
@@ -466,19 +471,19 @@ function InteractionSpanTree({ trace, calls, round }: { trace: TraceRecord; call
   const finalResponse = traceFinalResponse(trace);
   const usage = interactionTokenUsage(trace, calls);
   return (
-    <details className="group p-2.5" aria-label={`第 ${round} 轮交互调用树`}>
+    <details className="group p-2.5" aria-label={t("roundTreeAria", { round })}>
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 rounded-lg bg-app-soft px-2.5 py-2">
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform group-open:rotate-90" />
-        <strong className="text-[12px] text-ink">第 {round} 轮交互</strong>
+        <strong className="text-[12px] text-ink">{t("roundN", { round })}</strong>
         <TraceStatusDot status={trace.status} />
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10.5px] text-ink-subtle" aria-label={`第 ${round} 轮调用树指标`}>
-          <span>输入 <strong className="text-ink-muted">{formatEstimatedNumber(usage.measured ? usage.input : null, usage.estimated)} Token</strong></span>
-          <span>输出 <strong className="text-ink-muted">{formatEstimatedNumber(usage.measured ? usage.output : null, usage.estimated)} Token</strong></span>
-          <span>时延 <strong className="text-ink-muted">{formatDuration(rootSpan?.duration_ms ?? traceDuration(trace))}</strong></span>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10.5px] text-ink-subtle" aria-label={t("roundMetricsAria", { round })}>
+          <span>{t("in")} <strong className="text-ink-muted">{formatEstimatedNumber(usage.measured ? usage.input : null, usage.estimated)} Token</strong></span>
+          <span>{t("out")} <strong className="text-ink-muted">{formatEstimatedNumber(usage.measured ? usage.output : null, usage.estimated)} Token</strong></span>
+          <span>{t("latency")} <strong className="text-ink-muted">{formatDuration(rootSpan?.duration_ms ?? traceDuration(trace))}</strong></span>
         </div>
       </summary>
       <div className="mt-2 space-y-1.5">
-        <SpanEndpoint role="user" title="用户输入" content={userInput ?? "未采集到用户输入"} />
+        <SpanEndpoint role="user" title={t("userInput")} content={userInput ?? t("noUserInput")} />
         {rows.map(({ span, depth }) => (
           <PersonalSpanRow
             key={span.span_id}
@@ -489,8 +494,8 @@ function InteractionSpanTree({ trace, calls, round }: { trace: TraceRecord; call
             depth={Math.max(0, depth - 1)}
           />
         ))}
-        {rows.length === 0 ? <div className="py-3 text-center text-[11px] text-ink-muted">该轮交互没有中间调用。</div> : null}
-        {finalResponse ? <SpanEndpoint role="assistant" title="最终回复" content={finalResponse} /> : null}
+        {rows.length === 0 ? <div className="py-3 text-center text-[11px] text-ink-muted">{t("round.noCalls")}</div> : null}
+        {finalResponse ? <SpanEndpoint role="assistant" title={t("finalReply")} content={finalResponse} /> : null}
       </div>
     </details>
   );
@@ -552,9 +557,9 @@ function SectionHeader({ icon, title, note }: { icon: React.ReactNode; title: st
 }
 
 function TraceStatusDot({ status }: { status: TraceRecord["status"] }) {
-  if (status === "completed") return <span className="rounded bg-success-soft px-1.5 py-0.5 text-[9px] font-bold text-success-deep">完成</span>;
-  if (status === "failed") return <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[9px] font-bold text-danger">失败</span>;
-  return <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning-deep">{status === "running" ? "运行中" : "待审批"}</span>;
+  if (status === "completed") return <span className="rounded bg-success-soft px-1.5 py-0.5 text-[9px] font-bold text-success-deep">{t("status.done")}</span>;
+  if (status === "failed") return <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[9px] font-bold text-danger">{t("status.failed")}</span>;
+  return <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning-deep">{status === "running" ? t("status.running") : t("status.pendingApproval")}</span>;
 }
 
 function PersonalSpanRow({
@@ -578,15 +583,15 @@ function PersonalSpanRow({
         <span className="rounded bg-app-soft px-1.5 py-0.5 text-[9.5px] font-bold text-ink-muted">{spanKindLabel(span)}</span>
         <strong className="min-w-0 flex-1 truncate text-[12px] text-ink">{spanDisplayName(span)}</strong>
         {span.kind === "tool" && span.target_version ? <span className="font-mono text-[9.5px] text-ink-subtle">v{span.target_version}</span> : null}
-        {span.attempt_no > 1 ? <span className="text-[9.5px] text-warning-deep">第 {span.attempt_no} 次尝试</span> : null}
+        {span.attempt_no > 1 ? <span className="text-[9.5px] text-warning-deep">{t("attemptN", { n: span.attempt_no })}</span> : null}
         <span className={classNames("rounded px-1.5 py-0.5 text-[9.5px] font-bold", span.status === "completed" ? "bg-success-soft text-success-deep" : span.status === "failed" ? "bg-danger-soft text-danger" : "bg-warning-soft text-warning-deep")}>{spanStatusLabel(span.status)}</span>
         <span className="font-mono text-[10.5px] text-ink-subtle">{formatDuration(span.duration_ms ?? null)}</span>
       </div>
       {span.kind === "tool" ? (
         <div className="mt-2 grid gap-2 md:grid-cols-2">
-          <ToolCallPayload label="调用参数" value={input} emptyText="无调用参数" />
+          <ToolCallPayload label={t("toolArgs")} value={input} emptyText={t("noToolArgs")} />
           <div className="min-w-0 rounded-md bg-white/60 px-2.5 py-2">
-            <div className="text-[9.5px] font-bold text-ink-subtle">返回结果</div>
+            <div className="text-[9.5px] font-bold text-ink-subtle">{t("toolResult")}</div>
             <p className={classNames("mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed", span.status === "failed" ? "text-danger-deep" : "text-ink-muted")}>{result}</p>
           </div>
         </div>
@@ -619,34 +624,34 @@ function ToolCallPayload({ label, value, emptyText }: { label: string; value: un
 }
 
 function spanStatusLabel(status: TraceSpan["status"]) {
-  if (status === "completed") return "成功";
-  if (status === "failed") return "失败";
-  if (status === "running") return "进行中";
-  if (status === "cancelled") return "已取消";
-  return "待审批";
+  if (status === "completed") return t("status.ok");
+  if (status === "failed") return t("status.failed");
+  if (status === "running") return t("status.inProgress");
+  if (status === "cancelled") return t("status.cancelled");
+  return t("status.pendingApproval");
 }
 
 function spanKindLabel(span: TraceSpan) {
-  if (span.kind === "tool") return "工具调用";
-  if (span.kind === "model") return "模型";
+  if (span.kind === "tool") return t("th.toolCalls");
+  if (span.kind === "model") return t("th.model");
   if (span.kind === "aina") return "AINA";
   return span.kind;
 }
 
 function spanDisplayName(span: TraceSpan) {
-  return span.kind === "model" ? "模型输出" : span.target_id || span.name;
+  return span.kind === "model" ? t("modelOutput") : span.target_id || span.name;
 }
 
 function spanTreeResult(span: TraceSpan, output: unknown, finalResponse: string | null) {
   if (span.kind !== "model") return readableEventResult(span, output);
-  if (span.status === "failed") return errorField(span.error, "message") || "模型调用失败，未返回结果。";
+  if (span.status === "failed") return errorField(span.error, "message") || t("err.modelNoResult");
   const response = modelResponseMessage(output);
   const content = readableText(response);
   const toolCalls = asArray(response?.tool_calls);
-  if (content && finalResponse && content.trim() === finalResponse.trim()) return "生成最终回复。";
+  if (content && finalResponse && content.trim() === finalResponse.trim()) return t("finalReplyGenerated");
   if (content) return truncateReadableText(content);
-  if (toolCalls.length) return `请求调用：${toolCallNames(toolCalls).join("、") || `${toolCalls.length} 个能力`}`;
-  return "模型调用完成，未返回文本内容。";
+  if (toolCalls.length) return t("requestedCalls", { names: toolCallNames(toolCalls).join(t("listSep")) || t("capabilitiesN", { count: toolCalls.length }) });
+  return t("modelDoneNoText");
 }
 
 function readableFacts(record: Record<string, unknown> | null, omitted: Set<string>) {
@@ -672,36 +677,36 @@ function readableText(value: unknown): string {
 }
 
 function readableValue(value: unknown): string {
-  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "boolean") return value ? t("yes") : t("no");
   if (typeof value === "number") return formatNumber(value);
   if (typeof value === "string") return truncateReadableText(value.replace(/\s+/g, " "), 120);
-  if (Array.isArray(value)) return `${value.length} 项`;
+  if (Array.isArray(value)) return t("itemsN", { count: value.length });
   const record = asRecord(value);
-  if (!record) return "无";
+  if (!record) return t("none");
   const identity = record.name ?? record.id ?? record.status;
-  return identity != null ? readableValue(identity) : `${Object.keys(record).length} 个字段`;
+  return identity != null ? readableValue(identity) : t("fieldsN", { count: Object.keys(record).length });
 }
 
 function readableLabel(key: string) {
   return ({
-    activated: "激活结果",
-    arguments: "参数",
-    code: "代码",
-    content: "内容",
-    heading: "章节",
-    iterations: "模型轮次",
-    language: "语言",
-    message_id: "消息 ID",
-    modified_at: "更新时间",
-    name: "名称",
-    path: "路径",
-    preferred_aina_id: "首选 AINA",
-    query: "查询",
-    requested_capability: "指定能力",
-    result: "结果",
-    size_bytes: "数据大小",
-    status: "状态",
-    url: "地址",
+    activated: t("label.activated"),
+    arguments: t("label.arguments"),
+    code: t("label.code"),
+    content: t("label.content"),
+    heading: t("label.heading"),
+    iterations: t("label.iterations"),
+    language: t("label.language"),
+    message_id: t("label.messageId"),
+    modified_at: t("label.modifiedAt"),
+    name: t("label.name"),
+    path: t("label.path"),
+    preferred_aina_id: t("label.preferredAina"),
+    query: t("label.query"),
+    requested_capability: t("label.requestedCapability"),
+    result: t("label.result"),
+    size_bytes: t("label.sizeBytes"),
+    status: t("label.status"),
+    url: t("label.url"),
   } as Record<string, string>)[key] ?? key.replaceAll("_", " ");
 }
 
@@ -762,12 +767,12 @@ function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedE
     return () => window.cancelAnimationFrame(frame);
   }, [focusedEntryId]);
   return (
-    <section className="rounded-xl border border-line bg-white" aria-label="原始日志">
-      <SectionHeader icon={<TerminalSquare />} title="原始日志" note={`${visible.length} 条完整 I/O`} />
-      <div className="flex flex-wrap gap-1.5 p-2.5" aria-label="原始日志角色筛选">
+    <section className="rounded-xl border border-line bg-white" aria-label={t("tab.logs")}>
+      <SectionHeader icon={<TerminalSquare />} title={t("tab.logs")} note={t("fullIo", { count: visible.length })} />
+      <div className="flex flex-wrap gap-1.5 p-2.5" aria-label={t("logs.roleFilterAria")}>
         {(["all", "user", "assistant", "tool", "system"] as const).map((item) => (
           <button key={item} type="button" onClick={() => setRole(item)} className={classNames("rounded-md px-2.5 py-1 text-[10.5px] font-bold", role === item ? "bg-accent text-white" : "bg-app-soft text-ink-muted")}>
-            {item === "all" ? "全部" : item}
+            {item === "all" ? t("all") : item}
           </button>
         ))}
       </div>
@@ -775,7 +780,7 @@ function RawLogs({ entries, focusedEntryId }: { entries: RawLogEntry[]; focusedE
         {visible.map((entry) => (
           <RawLogItem key={entry.id} entry={entry} focused={entry.id === focusedEntryId} />
         ))}
-        {visible.length === 0 ? <div className="py-8 text-center text-[12px] text-ink-muted">该角色没有原始日志。</div> : null}
+        {visible.length === 0 ? <div className="py-8 text-center text-[12px] text-ink-muted">{t("logs.emptyRole")}</div> : null}
       </div>
     </section>
   );
@@ -807,7 +812,7 @@ function RawLogItem({ entry, focused }: { entry: RawLogEntry; focused: boolean }
     <details
       id={`raw-log-${entry.id}`}
       open={focused ? true : undefined}
-      aria-label={`原始日志 ${entry.id}`}
+      aria-label={t("rawLogOf", { id: entry.id })}
       className={classNames(
         "overflow-hidden rounded-lg bg-app-soft/50",
         focused && "ring-2 ring-accent/50",
@@ -827,25 +832,25 @@ function RawLogItem({ entry, focused }: { entry: RawLogEntry; focused: boolean }
               onClick={() => setView("input")}
               className={classNames("rounded-md px-2.5 py-1 text-[10.5px] font-bold transition-colors", view === "input" ? "bg-white text-slate-900" : "text-slate-400 hover:text-white")}
             >
-              输入
+              {t("io.input")}
             </button>
             <button
               type="button"
               onClick={() => setView("output")}
               className={classNames("rounded-md px-2.5 py-1 text-[10.5px] font-bold transition-colors", view === "output" ? "bg-white text-slate-900" : "text-slate-400 hover:text-white")}
             >
-              输出
+              {t("io.output")}
             </button>
           </div>
         ) : null}
-        {view === "input" && hasInput ? <JsonPayload label="原始输入" value={entry.input} /> : null}
-        {view === "output" && hasOutput ? <JsonPayload label="原始输出" value={entry.output} /> : null}
+        {view === "input" && hasInput ? <JsonPayload label={t("io.rawInput")} value={entry.input} /> : null}
+        {view === "output" && hasOutput ? <JsonPayload label={t("io.rawOutput")} value={entry.output} /> : null}
         {entry.error != null ? (
           <div
             id={focused ? `raw-log-error-${entry.id}` : undefined}
             className={classNames("rounded-md", focused && "ring-2 ring-danger/60")}
           >
-            <JsonPayload label="错误" value={entry.error} danger />
+            <JsonPayload label={t("io.error")} value={entry.error} danger />
           </div>
         ) : null}
         {entry.rawLog ? (
@@ -856,13 +861,13 @@ function RawLogItem({ entry, focused }: { entry: RawLogEntry; focused: boolean }
               disabled={fullLogState === "loading"}
               className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1 text-[10.5px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {fullLogState === "loading" ? "加载中…" : "查看完整原始日志"}
+              {fullLogState === "loading" ? t("loading") : t("logs.viewFull")}
             </button>
-            {fullLogState === "loaded" ? <JsonPayload label="完整原始日志" value={fullLogDetail} /> : null}
-            {fullLogState === "empty" ? <span className="text-[10.5px] text-ink-subtle">暂无完整日志（未持久化或已清理）。</span> : null}
+            {fullLogState === "loaded" ? <JsonPayload label={t("logs.full")} value={fullLogDetail} /> : null}
+            {fullLogState === "empty" ? <span className="text-[10.5px] text-ink-subtle">{t("logs.fullEmpty")}</span> : null}
           </div>
         ) : null}
-        {!hasInput && !hasOutput && entry.error == null ? <div className="py-4 text-center text-[11px] text-ink-subtle">该记录没有可用的原始 I/O。</div> : null}
+        {!hasInput && !hasOutput && entry.error == null ? <div className="py-4 text-center text-[11px] text-ink-subtle">{t("logs.noIo")}</div> : null}
       </div>
     </details>
   );
@@ -971,10 +976,10 @@ function PersonalOverview({
     }));
     return (
       <div className="space-y-2.5">
-        <section className="px-1 py-1" aria-label="时间范围">
+        <section className="px-1 py-1" aria-label={t("range.aria")}>
           <div className="flex flex-wrap items-center gap-2">
             <CalendarDays className="h-4 w-4 text-accent" />
-            <strong className="mr-2 text-[12px] text-ink">统计周期</strong>
+            <strong className="mr-2 text-[12px] text-ink">{t("range.period")}</strong>
             {(["day", "week", "month"] as const).map((item) => (
               <button key={item} type="button" onClick={() => switchPeriod(item)} className={classNames("rounded-md px-2.5 py-1 text-[11px] font-bold", period === item ? "bg-accent text-white" : "bg-app-soft text-ink-muted")}>{periodLabel(item)}</button>
             ))}
@@ -984,25 +989,25 @@ function PersonalOverview({
           </div>
         </section>
 
-        <section className="grid grid-cols-2 overflow-hidden rounded-xl bg-white p-1 md:grid-cols-3 xl:grid-cols-6" aria-label="个人 Token 总览">
-          <MetricCard label="总 Token" value={formatNumber(totals.total)} icon={<Activity />} />
-          <MetricCard label="输入 Token" value={formatNumber(totals.input)} icon={<Brain />} />
-          <MetricCard label="输出 Token" value={formatNumber(totals.output)} icon={<Sparkles />} />
-          <MetricCard label="对话数" value={String(overview.conversation_count)} icon={<MessageSquareText />} />
-          <MetricCard label="交互轮次" value={String(overview.trace_count)} icon={<Route />} />
-          <MetricCard label="活跃天数" value={String(overview.active_days)} icon={<CalendarDays />} />
+        <section className="grid grid-cols-2 overflow-hidden rounded-xl bg-white p-1 md:grid-cols-3 xl:grid-cols-6" aria-label={t("personal.aria")}>
+          <MetricCard label={t("personal.total")} value={formatNumber(totals.total)} icon={<Activity />} />
+          <MetricCard label={t("th.inputTokens")} value={formatNumber(totals.input)} icon={<Brain />} />
+          <MetricCard label={t("th.outputTokens")} value={formatNumber(totals.output)} icon={<Sparkles />} />
+          <MetricCard label={t("personal.conversations")} value={String(overview.conversation_count)} icon={<MessageSquareText />} />
+          <MetricCard label={t("interaction.rounds")} value={String(overview.trace_count)} icon={<Route />} />
+          <MetricCard label={t("personal.activeDays")} value={String(overview.active_days)} icon={<CalendarDays />} />
         </section>
 
-        <section className="rounded-xl bg-white" aria-label="不同模型 Token 消耗">
-          <SectionHeader icon={<Brain />} title="不同模型 Token 消耗" note={`${byModel.length} 个模型`} />
+        <section className="rounded-xl bg-white" aria-label={t("byModel.title")}>
+          <SectionHeader icon={<Brain />} title={t("byModel.title")} note={t("modelCount", { count: byModel.length })} />
           <div className="overflow-x-auto">
             <table className="min-w-[620px] w-full text-left text-[11.5px]">
-              <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">模型</th><th className="px-2.5 py-2">调用</th><th className="px-2.5 py-2">输入</th><th className="px-2.5 py-2">输出</th><th className="px-2.5 py-2">总 Token</th><th className="px-2.5 py-2">占比</th></tr></thead>
+              <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">{t("th.model")}</th><th className="px-2.5 py-2">{t("th.calls")}</th><th className="px-2.5 py-2">{t("io.input")}</th><th className="px-2.5 py-2">{t("io.output")}</th><th className="px-2.5 py-2">{t("personal.total")}</th><th className="px-2.5 py-2">{t("th.share")}</th></tr></thead>
               <tbody className="divide-y divide-line">
                 {byModel.map((item) => (
                   <tr key={item.model}><td className="px-3 py-2 font-mono font-bold text-ink">{item.model}</td><td className="px-2.5 py-2">{item.calls}</td><td className="px-2.5 py-2">{formatNumber(item.input)}</td><td className="px-2.5 py-2">{formatNumber(item.output)}</td><td className="px-2.5 py-2 font-bold text-ink">{formatNumber(item.total)}</td><td className="px-2.5 py-2">{totals.total ? `${((item.total / totals.total) * 100).toFixed(1)}%` : "0%"}</td></tr>
                 ))}
-                {byModel.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">当前周期没有 Token 数据。</td></tr> : null}
+                {byModel.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">{t("byModel.empty")}</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -1022,10 +1027,10 @@ function PersonalOverview({
 
   return (
     <div className="space-y-2.5">
-      <section className="px-1 py-1" aria-label="时间范围">
+      <section className="px-1 py-1" aria-label={t("range.aria")}>
         <div className="flex flex-wrap items-center gap-2">
           <CalendarDays className="h-4 w-4 text-accent" />
-          <strong className="mr-2 text-[12px] text-ink">统计周期</strong>
+          <strong className="mr-2 text-[12px] text-ink">{t("range.period")}</strong>
           {(["day", "week", "month"] as const).map((item) => (
             <button key={item} type="button" onClick={() => setPeriod(item)} className={classNames("rounded-md px-2.5 py-1 text-[11px] font-bold", period === item ? "bg-accent text-white" : "bg-app-soft text-ink-muted")}>{periodLabel(item)}</button>
           ))}
@@ -1033,25 +1038,25 @@ function PersonalOverview({
         </div>
       </section>
 
-      <section className="grid grid-cols-2 overflow-hidden rounded-xl bg-white p-1 md:grid-cols-3 xl:grid-cols-6" aria-label="个人 Token 总览">
-        <MetricCard label="总 Token" value={formatNumber(totals.total)} icon={<Activity />} />
-        <MetricCard label="输入 Token" value={formatNumber(totals.input)} icon={<Brain />} />
-        <MetricCard label="输出 Token" value={formatNumber(totals.output)} icon={<Sparkles />} />
-        <MetricCard label="对话数" value={String(conversationCount)} icon={<MessageSquareText />} />
-        <MetricCard label="交互轮次" value={String(periodTraces.length)} icon={<Route />} />
-        <MetricCard label="活跃天数" value={String(activeDays)} icon={<CalendarDays />} />
+      <section className="grid grid-cols-2 overflow-hidden rounded-xl bg-white p-1 md:grid-cols-3 xl:grid-cols-6" aria-label={t("personal.aria")}>
+        <MetricCard label={t("personal.total")} value={formatNumber(totals.total)} icon={<Activity />} />
+        <MetricCard label={t("th.inputTokens")} value={formatNumber(totals.input)} icon={<Brain />} />
+        <MetricCard label={t("th.outputTokens")} value={formatNumber(totals.output)} icon={<Sparkles />} />
+        <MetricCard label={t("personal.conversations")} value={String(conversationCount)} icon={<MessageSquareText />} />
+        <MetricCard label={t("interaction.rounds")} value={String(periodTraces.length)} icon={<Route />} />
+        <MetricCard label={t("personal.activeDays")} value={String(activeDays)} icon={<CalendarDays />} />
       </section>
 
-      <section className="rounded-xl bg-white" aria-label="不同模型 Token 消耗">
-        <SectionHeader icon={<Brain />} title="不同模型 Token 消耗" note={`${byModel.length} 个模型`} />
+      <section className="rounded-xl bg-white" aria-label={t("byModel.title")}>
+        <SectionHeader icon={<Brain />} title={t("byModel.title")} note={t("modelCount", { count: byModel.length })} />
         <div className="overflow-x-auto">
           <table className="min-w-[620px] w-full text-left text-[11.5px]">
-            <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">模型</th><th className="px-2.5 py-2">调用</th><th className="px-2.5 py-2">输入</th><th className="px-2.5 py-2">输出</th><th className="px-2.5 py-2">总 Token</th><th className="px-2.5 py-2">占比</th></tr></thead>
+            <thead className="bg-app-soft text-ink-muted"><tr><th className="px-3 py-2">{t("th.model")}</th><th className="px-2.5 py-2">{t("th.calls")}</th><th className="px-2.5 py-2">{t("io.input")}</th><th className="px-2.5 py-2">{t("io.output")}</th><th className="px-2.5 py-2">{t("personal.total")}</th><th className="px-2.5 py-2">{t("th.share")}</th></tr></thead>
             <tbody className="divide-y divide-line">
               {byModel.map((item) => (
                 <tr key={item.model}><td className="px-3 py-2 font-mono font-bold text-ink">{item.model}</td><td className="px-2.5 py-2">{item.calls}</td><td className="px-2.5 py-2">{formatNumber(item.input)}</td><td className="px-2.5 py-2">{formatNumber(item.output)}</td><td className="px-2.5 py-2 font-bold text-ink">{formatNumber(item.total)}</td><td className="px-2.5 py-2">{totals.total ? `${((item.total / totals.total) * 100).toFixed(1)}%` : "0%"}</td></tr>
               ))}
-              {byModel.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">当前周期没有 Token 数据。</td></tr> : null}
+              {byModel.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-ink-muted">{t("byModel.empty")}</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -1076,20 +1081,20 @@ function TokenCalendar({ samples }: { samples: TokenSample[] }) {
   for (let date = first; date <= last; date = addDays(date, 1)) cells.push(date);
   const max = Math.max(0, ...values.values());
   return (
-    <section className="rounded-xl bg-white" aria-label="Token 消耗日历">
-      <SectionHeader icon={<CalendarDays />} title="Token 消耗日历" note="近 12 个月 · GitHub Calendar" />
+    <section className="rounded-xl bg-white" aria-label={t("calendar.title")}>
+      <SectionHeader icon={<CalendarDays />} title={t("calendar.title")} note={t("calendar.note")} />
       <div className="overflow-x-auto p-3">
         <div className="min-w-[760px]">
           <div className="mb-2 flex justify-between text-[9.5px] text-ink-subtle"><span>{formatMonth(first)}</span><span>{formatMonth(addDays(first, 91))}</span><span>{formatMonth(addDays(first, 182))}</span><span>{formatMonth(addDays(first, 273))}</span><span>{formatMonth(last)}</span></div>
-          <div className="grid grid-flow-col grid-rows-7 gap-[3px]" aria-label="每日 Token 热力图">
+          <div className="grid grid-flow-col grid-rows-7 gap-[3px]" aria-label={t("calendar.heatmapAria")}>
             {cells.map((date) => {
               const key = toDateKey(date);
               const value = values.get(key) ?? 0;
               const outside = date < start || date > end;
-              return <span key={key} title={`${key}：${formatNumber(value)} Token`} aria-label={`${key} ${value} Token`} className={classNames("aspect-square min-w-[10px] rounded-[2px]", outside ? "bg-transparent" : heatColor(value, max))} />;
+              return <span key={key} title={t("heatTitle", { key, value: formatNumber(value) })} aria-label={`${key} ${value} Token`} className={classNames("aspect-square min-w-[10px] rounded-[2px]", outside ? "bg-transparent" : heatColor(value, max))} />;
             })}
           </div>
-          <div className="mt-3 flex items-center justify-end gap-1 text-[9.5px] text-ink-subtle"><span className="mr-1">少</span>{["bg-slate-100", "bg-emerald-100", "bg-emerald-300", "bg-emerald-500", "bg-emerald-700"].map((color) => <span key={color} className={classNames("h-3 w-3 rounded-[2px]", color)} />)}<span className="ml-1">多</span></div>
+          <div className="mt-3 flex items-center justify-end gap-1 text-[9.5px] text-ink-subtle"><span className="mr-1">{t("calendar.less")}</span>{["bg-slate-100", "bg-emerald-100", "bg-emerald-300", "bg-emerald-500", "bg-emerald-700"].map((color) => <span key={color} className={classNames("h-3 w-3 rounded-[2px]", color)} />)}<span className="ml-1">{t("calendar.more")}</span></div>
         </div>
       </div>
     </section>
@@ -1208,7 +1213,7 @@ function buildModelMetrics(traces: TraceRecord[], calls: LLMCallRecord[]) {
   const records = calls.map((call) => {
     const span = call.span_id ? spansById.get(call.span_id) : undefined;
     const usage = callTokenUsage(call);
-    return { model: call.model || span?.target_id || "未知模型", input: usage.input, output: usage.output, estimated: usage.estimated, toolCalls: modelToolCallCount(call.response, span), duration: call.duration_ms ?? span?.duration_ms ?? 0, ttft: call.ttft_ms ?? numberValue(span?.attributes.ttft_ms) ?? null, success: call.status === "completed" };
+    return { model: call.model || span?.target_id || t("unknownModel"), input: usage.input, output: usage.output, estimated: usage.estimated, toolCalls: modelToolCallCount(call.response, span), duration: call.duration_ms ?? span?.duration_ms ?? 0, ttft: call.ttft_ms ?? numberValue(span?.attributes.ttft_ms) ?? null, success: call.status === "completed" };
   });
   const recordedSpanIds = new Set(calls.map((call) => call.span_id).filter(Boolean));
   for (const span of modelSpans.filter((item) => !recordedSpanIds.has(item.span_id))) {
@@ -1282,7 +1287,7 @@ function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]): DiagnosticErro
       logId: span.kind === "model" ? `${span.span_id}-model` : span.span_id,
       source: `${span.kind} · ${span.target_id || span.name}`,
       code: errorField(span.error, "code") || span.status.toUpperCase(),
-      message: errorField(span.error, "message") || stringifyError(span.error) || "调用失败，未提供详细错误信息。",
+      message: errorField(span.error, "message") || stringifyError(span.error) || t("err.callFailedNoDetail"),
     });
   }
   for (const call of calls.filter((item) => item.status === "failed" || item.error)) {
@@ -1292,7 +1297,7 @@ function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]): DiagnosticErro
       logId: call.call_id,
       source: `model · ${call.model}`,
       code: call.status.toUpperCase(),
-      message: call.error || "模型请求失败，未提供详细错误信息。",
+      message: call.error || t("err.modelFailedNoDetail"),
     });
   }
   if (!errors.length && trace.status === "failed") {
@@ -1301,28 +1306,28 @@ function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]): DiagnosticErro
       id: trace.trace_id,
       traceId: trace.trace_id,
       logId: root ? `${root.span_id}-user` : trace.trace_id,
-      source: "agent · 当前交互",
+      source: t("err.sourceAgent"),
       code: "TRACE_FAILED",
-      message: "交互失败，但 Trace 中没有更具体的 Span 错误。",
+      message: t("err.interactionFailed"),
     });
   }
   return errors;
 }
 
 function readableEventResult(span: TraceSpan, output: unknown) {
-  if (span.status === "failed") return errorField(span.error, "message") || "调用失败，未返回结果。";
+  if (span.status === "failed") return errorField(span.error, "message") || t("err.callNoResult");
   const record = asRecord(output);
   const document = asRecord(record?.document);
   if (document) {
-    const name = typeof document.name === "string" ? document.name : "文档";
+    const name = typeof document.name === "string" ? document.name : t("document");
     const size = numberValue(document.size_bytes);
-    return `返回文档：${name}${size != null ? ` · ${formatNumber(size)} 字节` : ""}`;
+    return t("returnedDoc", { name, size: size != null ? t("bytesSuffix", { value: formatNumber(size) }) : "" });
   }
-  if (span.kind === "aina" && (record?.activated === true || span.attributes.activated === true)) return "AINA 已激活。";
+  if (span.kind === "aina" && (record?.activated === true || span.attributes.activated === true)) return t("ainaActivated");
   const text = readableText(output);
   if (text) return truncateReadableText(text);
   const facts = readableFacts(record, new Set(["content", "result", "document"]));
-  return facts.length ? facts.map((fact) => `${fact.label}：${fact.value}`).join(" · ") : "调用完成。";
+  return facts.length ? facts.map((fact) => t("fact", { label: fact.label, value: fact.value })).join(" · ") : t("callDone");
 }
 
 function modelResponseMessage(output: unknown) {
@@ -1351,7 +1356,7 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
   const logs: RawLogEntry[] = [];
   if (root) {
     const rootIo = resolveSpanIo(root, trace);
-    logs.push({ id: `${root.span_id}-user`, traceId: trace.trace_id, role: "user", title: "交互输入", subtitle: root.span_id, input: rootIo.input, error: root.error ?? undefined, rawLog: spanRawLogRef(root) });
+    logs.push({ id: `${root.span_id}-user`, traceId: trace.trace_id, role: "user", title: t("log.interactionInput"), subtitle: root.span_id, input: rootIo.input, error: root.error ?? undefined, rawLog: spanRawLogRef(root) });
   }
   calls.forEach((call, index) => {
     const requestMessages = asArray(call.request.messages);
@@ -1359,9 +1364,9 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
     requestMessages.forEach((message, messageIndex) => {
       const record = asRecord(message);
       const role = normalizeRole(record?.role);
-      if (role === "system") logs.push({ id: `${call.call_id}-context-${messageIndex}`, traceId: trace.trace_id, role, title: `模型上下文 · ${role}`, subtitle: call.model, input: message, rawLog: spanRawLogRef(ownerSpan) });
+      if (role === "system") logs.push({ id: `${call.call_id}-context-${messageIndex}`, traceId: trace.trace_id, role, title: t("modelContext", { role }), subtitle: call.model, input: message, rawLog: spanRawLogRef(ownerSpan) });
     });
-    logs.push({ id: call.call_id, traceId: trace.trace_id, role: "assistant", title: `模型请求 ${index + 1} · ${call.model}`, subtitle: call.call_id, input: call.request, output: call.response ?? undefined, error: call.error ?? undefined, rawLog: spanRawLogRef(ownerSpan) });
+    logs.push({ id: call.call_id, traceId: trace.trace_id, role: "assistant", title: t("modelRequestN", { n: index + 1, model: call.model }), subtitle: call.call_id, input: call.request, output: call.response ?? undefined, error: call.error ?? undefined, rawLog: spanRawLogRef(ownerSpan) });
   });
   const callSpanIds = new Set(calls.map((call) => call.span_id).filter(Boolean));
   trace.spans.filter((span) => span.kind === "model" && !callSpanIds.has(span.span_id)).forEach((span, index) => {
@@ -1370,7 +1375,7 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
       id: `${span.span_id}-model`,
       traceId: trace.trace_id,
       role: "assistant",
-      title: `模型 Span ${index + 1} · ${span.target_id || span.name}`,
+      title: t("modelSpanN", { n: index + 1, name: span.target_id || span.name }),
       subtitle: span.span_id,
       input: io.input,
       output: io.output,
@@ -1398,7 +1403,7 @@ function buildRawLogs(trace: TraceRecord, calls: LLMCallRecord[]): RawLogEntry[]
       id: span.span_id,
       traceId: trace.trace_id,
       role: "system",
-      title: `内部调用 · ${span.target_id || span.name}`,
+      title: t("internalCall", { name: span.target_id || span.name }),
       subtitle: span.span_id,
       input: io.input,
       output: io.output,
@@ -1416,19 +1421,19 @@ function buildTokenSamples(traces: TraceRecord[], calls: LLMCallRecord[]): Token
     const usage = callTokenUsage(call);
     if (!usage.measured) continue;
     if (call.trace_id) tracesWithMeasuredCalls.add(call.trace_id);
-    samples.push({ id: call.call_id, model: call.model || "未知模型", conversationId: call.context_id ?? null, createdAt: call.created_at, ...usage });
+    samples.push({ id: call.call_id, model: call.model || t("unknownModel"), conversationId: call.context_id ?? null, createdAt: call.created_at, ...usage });
   }
   for (const trace of traces) {
     if (tracesWithMeasuredCalls.has(trace.trace_id)) continue;
     const modelSpans = trace.spans.filter((span) => span.kind === "model");
     const measured = modelSpans.map((span) => ({ span, usage: spanTokenUsage(span) })).filter((item) => item.usage.measured);
     if (measured.length) {
-      measured.forEach(({ span, usage }) => samples.push({ id: span.span_id, model: span.target_id || span.name || "未知模型", conversationId: trace.conversation_id ?? null, createdAt: span.started_at || trace.created_at, ...usage }));
+      measured.forEach(({ span, usage }) => samples.push({ id: span.span_id, model: span.target_id || span.name || t("unknownModel"), conversationId: trace.conversation_id ?? null, createdAt: span.started_at || trace.created_at, ...usage }));
       continue;
     }
     const root = findRootSpan(trace);
     const usage = root ? spanTokenUsage(root) : null;
-    if (usage?.measured) samples.push({ id: trace.trace_id, model: "未知模型", conversationId: trace.conversation_id ?? null, createdAt: trace.created_at, ...usage });
+    if (usage?.measured) samples.push({ id: trace.trace_id, model: t("unknownModel"), conversationId: trace.conversation_id ?? null, createdAt: trace.created_at, ...usage });
   }
   return samples;
 }
@@ -1554,13 +1559,13 @@ function startOfDay(date: Date) { const value = new Date(date); value.setHours(0
 function endOfDay(date: Date) { const value = new Date(date); value.setHours(23, 59, 59, 999); return value; }
 function addDays(date: Date, days: number) { const value = new Date(date); value.setDate(value.getDate() + days); return value; }
 function toDateKey(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
-function formatDate(date: Date) { return date.toLocaleDateString("zh-CN"); }
-function formatDateTime(iso: string) { return new Date(iso).toLocaleString("zh-CN"); }
+function formatDate(date: Date) { return date.toLocaleDateString(currentLocale()); }
+function formatDateTime(iso: string) { return new Date(iso).toLocaleString(currentLocale()); }
 function formatMonth(date: Date) { return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}`; }
-function formatNumber(value: number | null) { return value == null ? "—" : Math.round(value).toLocaleString("zh-CN"); }
+function formatNumber(value: number | null) { return value == null ? "—" : Math.round(value).toLocaleString(currentLocale()); }
 function formatEstimatedNumber(value: number | null, estimated: boolean) { return value == null ? "—" : `${estimated ? "≈" : ""}${formatNumber(value)}`; }
 function formatDuration(value: number | null) { return value == null ? "—" : value < 1000 ? `${value.toFixed(0)} ms` : `${(value / 1000).toFixed(2)} s`; }
 function formatRate(value: number | null) { return value == null ? "—" : `${value.toFixed(1)} Token/s`; }
 function formatEstimatedRate(value: number | null, estimated: boolean) { return value == null ? "—" : `${estimated ? "≈" : ""}${formatRate(value)}`; }
-function periodLabel(period: Period) { return period === "day" ? "日" : period === "week" ? "周" : "月"; }
+function periodLabel(period: Period) { return period === "day" ? t("period.day") : period === "week" ? t("period.week") : t("period.month"); }
 function heatColor(value: number, max: number) { if (!value || !max) return "bg-slate-100"; const ratio = value / max; return ratio <= 0.25 ? "bg-emerald-100" : ratio <= 0.5 ? "bg-emerald-300" : ratio <= 0.75 ? "bg-emerald-500" : "bg-emerald-700"; }

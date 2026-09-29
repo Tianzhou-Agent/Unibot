@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity,
@@ -50,6 +51,7 @@ interface MessageFailure {
 }
 
 export default function ChatModePage() {
+  const { t } = useTranslation("chatPage");
   const { workspaceId, conversationId } = useParams<{ workspaceId?: string; conversationId?: string }>();
   const routeWorkspaceId = workspaceId ?? null;
   const navigate = useNavigate();
@@ -136,7 +138,7 @@ export default function ChatModePage() {
     for (const call of llmCalls) {
       if (call.status !== "failed" && !call.error) continue;
       if (!call.trace_id) continue;
-      push(call.trace_id, { kind: "llm", name: call.model, error: call.error ?? "模型调用失败", callId: call.call_id });
+      push(call.trace_id, { kind: "llm", name: call.model, error: call.error ?? t("err.llmFailed"), callId: call.call_id });
     }
     for (const trace of traces) {
       for (const span of trace.spans ?? []) {
@@ -144,7 +146,7 @@ export default function ChatModePage() {
         if (span.status !== "failed" && !span.error) continue;
         const err = span.error;
         const message = typeof err === "string" ? err : (err as Record<string, unknown> | null)?.message;
-        push(trace.trace_id, { kind: "capability", name: span.target_id || span.name, error: typeof message === "string" ? message : "能力调用失败" });
+        push(trace.trace_id, { kind: "capability", name: span.target_id || span.name, error: typeof message === "string" ? message : t("err.capabilityFailed") });
       }
     }
     return map;
@@ -167,7 +169,7 @@ export default function ChatModePage() {
       ]);
       if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
       if ((record.workspace_id ?? null) !== activeWorkspaceIdRef.current) {
-        throw new Error("该对话不属于当前工作区，请从左侧选择正确的工作区。");
+        throw new Error(t("err.wrongWorkspace"));
       }
       setConversation(record);
       setApproval(pendingApprovals[0] ?? null);
@@ -319,11 +321,11 @@ export default function ChatModePage() {
       const onEvent = (event: StreamEvent) => {
         if (event.type === "message.completed") completion = event.response;
         if (event.type === "error") {
-          streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
+          streamFailure = event.error?.message ?? event.code ?? t("err.streamFailed");
         }
         if (!isActiveRun()) return;
         setLiveItems((current) => applyLiveEvent(current, event));
-        if (event.type === "approval.required") setActivity("等待你的授权确认");
+        if (event.type === "approval.required") setActivity(t("activity.awaitingApproval"));
         if (event.type === "error") {
           setError(streamFailure);
         }
@@ -342,7 +344,7 @@ export default function ChatModePage() {
           streamController.signal,
         );
       }
-      if (!completion) throw new Error(streamFailure ?? "智能体流程结束前没有返回完成事件。");
+      if (!completion) throw new Error(streamFailure ?? t("err.noCompletion"));
       if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       if (draftTitle !== null && ["New conversation", "新对话"].includes(targetConversation.title)) {
@@ -392,7 +394,7 @@ export default function ChatModePage() {
   async function stopRun() {
     const id = localRunConversationIdRef.current ?? conversation?.id;
     if (!id) return;
-    setActivity("正在停止…");
+    setActivity(t("activity.stopping"));
     try {
       await api.post(`/conversations/${id}/stop`, actor);
     } catch (stopError) {
@@ -404,7 +406,7 @@ export default function ChatModePage() {
     if (!approval) return;
     setSending(true);
     setError(null);
-    setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
+    setActivity(action === "confirm" ? t("activity.runningApproved") : t("activity.cancelling"));
     try {
       if (action === "confirm") {
         const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, actor);
@@ -502,12 +504,12 @@ export default function ChatModePage() {
     messages.flatMap((message) => message.tool_calls?.map((call) => call.id) ?? []),
   ), [messages]);
 
-  const title = conversation?.title === "New conversation" ? "新对话" : conversation?.title ?? "新对话";
+  const title = conversation?.title === "New conversation" ? t("newConversation") : conversation?.title ?? t("newConversation");
   const badge = deleted
-    ? ({ label: "已删除", tone: "warning" } as const)
+    ? ({ label: t("badge.deleted"), tone: "warning" } as const)
     : sending
-      ? ({ label: "运行中", tone: "thinking" } as const)
-      : ({ label: "已就绪", tone: "success" } as const);
+      ? ({ label: t("badge.running"), tone: "thinking" } as const)
+      : ({ label: t("badge.ready"), tone: "success" } as const);
 
   return (
     <>
@@ -527,7 +529,7 @@ export default function ChatModePage() {
               setObsOpen(true);
             }}
             className="btn-outline h-8"
-            aria-label="查看当前对话观测数据"
+            aria-label={t("viewObsAria")}
           >
             <Activity className="h-3.5 w-3.5" />OBS
           </button>
@@ -540,14 +542,14 @@ export default function ChatModePage() {
             value={titleDraft}
             onChange={(event) => setTitleDraft(event.target.value)}
             className="input-soft max-w-md h-9"
-            aria-label="对话标题"
+            aria-label={t("titleAria")}
             autoFocus
           />
           <button type="button" onClick={() => void saveTitle()} className="btn-primary h-9">
-            <Check className="w-4 h-4" />保存
+            <Check className="w-4 h-4" />{t("save")}
           </button>
           <button type="button" onClick={() => setRenaming(false)} className="btn-ghost h-9">
-            <X className="w-4 h-4" />取消
+            <X className="w-4 h-4" />{t("cancel")}
           </button>
         </div>
       ) : null}
@@ -555,13 +557,13 @@ export default function ChatModePage() {
       {confirmDelete ? (
         <div className="border-b border-danger-ring bg-danger-soft px-5 py-3 flex items-center gap-3">
           <AlertTriangle className="w-4 h-4 text-danger" />
-          <span className="text-[13px] text-danger-deep">删除后会从列表隐藏，你可以立即恢复。</span>
+          <span className="text-[13px] text-danger-deep">{t("deleteNote")}</span>
           <span className="flex-1" />
           <button type="button" onClick={() => setConfirmDelete(false)} className="btn-outline h-8">
-            取消
+            {t("cancel")}
           </button>
           <button type="button" onClick={() => void deleteConversation()} className="btn-danger-outline h-8">
-            确认删除
+            {t("confirmDelete")}
           </button>
         </div>
       ) : null}
@@ -727,6 +729,7 @@ function ConversationMessage({
 }
 
 function FailedCallNotice({ conversationId, traceId, failure }: { conversationId: string; traceId: string; failure: MessageFailure }) {
+  const { t } = useTranslation("chatPage");
   const logHref = failure.kind === "capability"
     ? `/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}`
     : `/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}&logId=${encodeURIComponent(failure.callId ?? "")}`;
@@ -734,51 +737,54 @@ function FailedCallNotice({ conversationId, traceId, failure }: { conversationId
     <div className="flex items-center gap-2 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2">
       <AlertTriangle className="h-4 w-4 shrink-0 text-danger" />
       <span className="min-w-0 flex-1 truncate text-[12px] text-danger-deep">
-        {failure.kind === "capability" ? `能力调用失败：${failure.name} · ${failure.error}` : `调用失败：${failure.error}`}
+        {failure.kind === "capability" ? t("failure.capability", { name: failure.name, error: failure.error }) : t("failure.call", { error: failure.error })}
       </span>
       <Link
         to={logHref}
         className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline"
       >
-        查看原始日志
+        {t("viewRawLogs")}
       </Link>
     </div>
   );
 }
 
 function RunSummary({ response }: { response: ChatResponse }) {
+  const { t } = useTranslation("chatPage");
   return (
     <div className="flex items-center justify-end gap-2 text-[10.5px] text-ink-muted">
-      <span>{response.iterations} 次模型迭代</span>
+      <span>{t("iterations", { count: response.iterations })}</span>
       <span>·</span>
       <span>{response.usage.estimated ? "≈" : ""}{response.usage.input_tokens + response.usage.output_tokens} Tokens</span>
       <span>·</span>
       <Link to={`/obs?sessionId=${encodeURIComponent(response.conversation_id)}`} className="text-accent hover:underline">
-        查看调用记录
+        {t("viewCalls")}
       </Link>
     </div>
   );
 }
 
 function StoppedNotice({ onResume }: { onResume: () => void }) {
+  const { t } = useTranslation("chatPage");
   return (
     <div className="flex items-center gap-2.5 rounded-lg border border-line bg-white p-3">
       <CirclePause className="h-4 w-4 text-ink-muted" />
-      <span className="flex-1 text-[12.5px] text-ink-muted">已停止生成。可以继续生成，或直接发送新消息。</span>
+      <span className="flex-1 text-[12.5px] text-ink-muted">{t("stopped")}</span>
       <button type="button" onClick={onResume} className="btn-outline h-8">
-        <Play className="h-3.5 w-3.5" />继续生成
+        <Play className="h-3.5 w-3.5" />{t("resume")}
       </button>
     </div>
   );
 }
 
 function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; detailsHref: string | null; onDismiss: () => void }) {
+  const { t } = useTranslation("chatPage");
   return (
     <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 flex items-center gap-2.5">
       <AlertTriangle className="w-4 h-4 text-danger" />
       <span className="flex-1 text-[12.5px] text-danger-deep">{message}</span>
-      {detailsHref ? <Link to={detailsHref} className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline">查看原始日志</Link> : null}
-      <button type="button" onClick={onDismiss} aria-label="关闭错误">
+      {detailsHref ? <Link to={detailsHref} className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline">{t("viewRawLogs")}</Link> : null}
+      <button type="button" onClick={onDismiss} aria-label={t("dismissError")}>
         <X className="w-4 h-4 text-danger" />
       </button>
     </div>
@@ -800,6 +806,7 @@ function ChatComposer({
   onSend: (text: string) => Promise<boolean | undefined>;
   onStop: () => void;
 }) {
+  const { t } = useTranslation("chatPage");
   const [text, setText] = useState(initialText);
   const [sendFailed, setSendFailed] = useState(false);
   const composingRef = useRef(false);
@@ -818,7 +825,7 @@ function ChatComposer({
     <div className="bg-white px-4 pb-5 pt-3 md:px-6">
       <div className="mx-auto max-w-[760px] space-y-2">
         <TaskTreeWidget sessionId={sessionId} />
-        {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">发送未完成，草稿已保留，可重试。</p> : null}
+        {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">{t("sendFailed")}</p> : null}
         <form
           onSubmit={submit}
           className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
@@ -837,8 +844,8 @@ function ChatComposer({
             }}
             disabled={disabled}
             rows={1}
-            placeholder="补充约束，或继续安排下一步…"
-            aria-label="消息"
+            placeholder={t("composerPlaceholder")}
+            aria-label={t("messageAria")}
             className="w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
           />
           <div className="mt-2 flex items-center justify-between gap-2">
@@ -848,7 +855,7 @@ function ChatComposer({
                 type="button"
                 onClick={onStop}
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-white transition-colors hover:bg-ink-muted"
-                aria-label="停止生成"
+                aria-label={t("stopAria")}
               >
                 <Square className="h-3 w-3 fill-current" />
               </button>
@@ -862,7 +869,7 @@ function ChatComposer({
                     ? "bg-accent hover:bg-accent-hover"
                     : "bg-ink cursor-not-allowed opacity-80",
                 )}
-                aria-label="发送消息"
+                aria-label={t("sendAria")}
               >
                 <ArrowUp className="w-4 h-4" />
               </button>
@@ -875,21 +882,22 @@ function ChatComposer({
 }
 
 function WelcomePanel() {
+  const { t } = useTranslation("chatPage");
   return (
     <div className="min-h-[420px] flex items-center justify-center">
       <div className="max-w-lg text-center">
         <div className="mx-auto w-14 h-14 rounded-2xl bg-accent-soft text-accent flex items-center justify-center">
           <Bot className="w-7 h-7" />
         </div>
-        <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">开始新对话</h2>
+        <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">{t("welcome.title")}</h2>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-          Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。
+          {t("welcome.body")}
         </p>
         <div className="mt-5 grid grid-cols-3 gap-2 text-left">
           {[
-            ["多轮上下文", "会话历史自动恢复"],
-            ["能力调度", "按任务自动组合"],
-            ["安全确认", "高风险操作可控"],
+            [t("welcome.f1.title"), t("welcome.f1.body")],
+            [t("welcome.f2.title"), t("welcome.f2.body")],
+            [t("welcome.f3.title"), t("welcome.f3.body")],
           ].map(([label, detail]) => (
             <div key={label} className="rounded-lg border border-line bg-white p-3">
               <div className="text-[12px] font-bold text-ink">{label}</div>
@@ -903,14 +911,15 @@ function WelcomePanel() {
 }
 
 function DeletedConversation({ title, onRestore }: { title: string; onRestore: () => void }) {
+  const { t } = useTranslation("chatPage");
   return (
     <div className="min-h-[420px] flex items-center justify-center">
       <div className="text-center">
         <Trash2 className="mx-auto w-10 h-10 text-ink-subtle" />
-        <h2 className="mt-3 text-[17px] font-bold text-ink">“{title}”已删除</h2>
-        <p className="mt-1 text-[12.5px] text-ink-muted">恢复后会重新出现在对话列表中。</p>
+        <h2 className="mt-3 text-[17px] font-bold text-ink">{t("deleted.title", { title })}</h2>
+        <p className="mt-1 text-[12.5px] text-ink-muted">{t("deleted.body")}</p>
         <button type="button" onClick={onRestore} className="btn-primary mt-4">
-          <RotateCcw className="w-4 h-4" />恢复对话
+          <RotateCcw className="w-4 h-4" />{t("deleted.restore")}
         </button>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { CheckCircle2, Info, Loader2, AlertTriangle, ClipboardList } from "lucide-react";
 import { classNames } from "@/lib/utils";
 import type { ChoiceOption, SurfaceBlock } from "@/types";
@@ -86,6 +87,7 @@ function ConfirmBlock({
   block: Extract<SurfaceBlock, { kind: "confirm" }>;
   onAction?: (id: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   const tone = block.tone ?? "warning";
   return (
     <div
@@ -131,7 +133,7 @@ function ConfirmBlock({
           onClick={() => onAction?.("cancel")}
           className="h-7 px-2.5 rounded-lg border border-warning-ring bg-white text-warning-deep text-[12px] font-bold"
         >
-          {block.cancelLabel ?? "取消"}
+          {block.cancelLabel ?? t("surface.cancel")}
         </button>
         <button
           type="button"
@@ -141,7 +143,7 @@ function ConfirmBlock({
             tone === "warning" ? "bg-warning" : "bg-accent",
           )}
         >
-          {block.confirmLabel ?? "确认"}
+          {block.confirmLabel ?? t("surface.confirm")}
         </button>
       </div>
     </div>
@@ -171,17 +173,19 @@ function ErrorBlock({ text }: { text: string }) {
 }
 
 function LoadingBlock({ text }: { text?: string }) {
+  const { t } = useTranslation("chat");
   return (
     <div className="rounded-lg border bg-accent-soft border-accent-ring h-10 px-3 flex items-center gap-2.5">
       <Loader2 className="w-4 h-4 text-accent animate-spin" />
       <span className="text-accent-hover text-[13px] font-semibold">
-        {text ?? "正在思考"}
+        {text ?? t("thinkingNow")}
       </span>
     </div>
   );
 }
 
 function FormBlock({ block }: { block: Extract<SurfaceBlock, { kind: "form" }> }) {
+  const { t } = useTranslation("chat");
   return (
     <div className="rounded-lg border border-line bg-white p-3 space-y-2.5">
       <div className="flex items-center justify-between">
@@ -207,19 +211,19 @@ function FormBlock({ block }: { block: Extract<SurfaceBlock, { kind: "form" }> }
         ))}
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-[12px] text-ink-muted">填写后智能体将继续创建该需求。</span>
+        <span className="text-[12px] text-ink-muted">{t("surface.formHint")}</span>
         <div className="flex items-center gap-2">
           <button
             type="button"
             className="h-8 px-3 rounded-lg text-danger text-[12px] font-bold"
           >
-            {block.cancelLabel ?? "取消"}
+            {block.cancelLabel ?? t("surface.cancel")}
           </button>
           <button
             type="button"
             className="h-8 px-3 rounded-lg bg-accent text-white text-[12px] font-bold flex items-center gap-1.5"
           >
-            {block.submitLabel ?? "提交"}
+            {block.submitLabel ?? t("surface.submit")}
           </button>
         </div>
       </div>
