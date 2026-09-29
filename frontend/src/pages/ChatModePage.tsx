@@ -65,6 +65,8 @@ export default function ChatModePage() {
   const [composerVersion, setComposerVersion] = useState(0);
   const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
+  // Archived message count when the optimistic message was sent; a later archived copy replaces it.
+  const optimisticBaselineRef = useRef(0);
   const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -272,6 +274,7 @@ export default function ChatModePage() {
       widgets: [],
       created_at: new Date().toISOString(),
     };
+    optimisticBaselineRef.current = conversation?.messages.length ?? 0;
     setOptimisticUser(localMessage);
     setLiveItems([]);
     setActivity(null);
@@ -482,10 +485,14 @@ export default function ChatModePage() {
     || searchParams.get("prompt")?.trim()
     || "";
 
-  const messages = useMemo(
-    () => [...(conversation?.messages ?? []), ...(optimisticUser ? [optimisticUser] : [])],
-    [conversation?.messages, optimisticUser],
-  );
+  const messages = useMemo(() => {
+    const archived = conversation?.messages ?? [];
+    // The run archives the user message when it starts, so a reload during the run already contains it.
+    const echoed = optimisticUser !== null && archived
+      .slice(optimisticBaselineRef.current)
+      .some((message) => message.role === "user" && message.content === optimisticUser.content);
+    return optimisticUser && !echoed ? [...archived, optimisticUser] : archived;
+  }, [conversation?.messages, optimisticUser]);
   const toolResultsByCallId = useMemo(() => new Map(
     messages
       .filter((message) => message.role === "tool" && message.tool_call_id)
