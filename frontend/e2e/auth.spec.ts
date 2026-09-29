@@ -83,8 +83,9 @@ test("用户可注册、退出并重新登录", async ({ page }) => {
   await expect(compactNavigation.getByText("林", { exact: true })).toHaveCount(0);
   await expect(compactNavigation.getByText("周", { exact: true })).toHaveCount(0);
   await compactNavigation.getByRole("button", { name: "展开导航", exact: true }).click();
-  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
-  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "退出登录", exact: true }).click();
+  await page.locator("aside").getByRole("link", { name: "设置", exact: true }).last().click();
+  await page.getByRole("button", { name: "账户", exact: true }).click();
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);
 
   await page.getByRole("textbox", { name: "邮箱", exact: true }).fill(USER.email);

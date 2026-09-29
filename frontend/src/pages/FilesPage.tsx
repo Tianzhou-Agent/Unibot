@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, FileText, Folder, Search, UserRound } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -16,6 +17,7 @@ interface FileScope {
 }
 
 export default function FilesPage() {
+  const { t } = useTranslation("files");
   const { profile } = useMockSession();
   const { workspaces, loading: workspacesLoading, error: workspacesError } = useWorkspace();
   const [scopes, setScopes] = useState<FileScope[]>([]);
@@ -28,7 +30,7 @@ export default function FilesPage() {
     const requestId = ++loadRequestRef.current;
     setLoading(true);
     const definitions = [
-      { key: "user", label: "用户文件", workspaceId: null },
+      { key: "user", label: t("userFiles"), workspaceId: null },
       ...workspaces.map((workspace) => ({ key: workspace.id, label: workspace.name, workspaceId: workspace.id })),
     ];
     const results = await Promise.all(definitions.map(async (scope): Promise<FileScope> => {
@@ -75,7 +77,7 @@ export default function FilesPage() {
 
   return (
     <div className="flex h-full flex-col bg-app-bg">
-      <Topbar title="文件" />
+      <Topbar title={t("title")} />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-7 md:px-6 md:py-9">
         <div className="mx-auto w-full max-w-[820px] space-y-7">
           <label className="flex h-10 items-center gap-2.5 rounded-xl border border-line-strong bg-white px-3.5 shadow-soft focus-within:border-accent">
@@ -84,8 +86,8 @@ export default function FilesPage() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索所有层级的文件"
-              aria-label="搜索所有文件"
+              placeholder={t("searchPlaceholder")}
+              aria-label={t("searchAria")}
               className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-subtle"
             />
           </label>
@@ -96,17 +98,17 @@ export default function FilesPage() {
           {!loading && !workspacesLoading ? (
             <>
               {userScope ? (
-                <ScopeGroup title="用户层级">
+                <ScopeGroup title={t("userLevel")}>
                   <FileScopeCard scope={userScope} />
                 </ScopeGroup>
               ) : null}
               {workspaceScopes.length ? (
-                <ScopeGroup title="Workspace 层级">
+                <ScopeGroup title={t("workspaceLevel")}>
                   {workspaceScopes.map((scope) => <FileScopeCard key={scope.key} scope={scope} />)}
                 </ScopeGroup>
               ) : null}
-              {!filteredScopes.length ? <p className="py-10 text-center text-[12px] text-ink-subtle">没有匹配的文件</p> : null}
-              {!query && !workspaceScopes.length && !workspacesError ? <p className="text-[11px] text-ink-subtle">还没有 Workspace。</p> : null}
+              {!filteredScopes.length ? <p className="py-10 text-center text-[12px] text-ink-subtle">{t("noMatch")}</p> : null}
+              {!query && !workspaceScopes.length && !workspacesError ? <p className="text-[11px] text-ink-subtle">{t("noWorkspaces")}</p> : null}
             </>
           ) : null}
         </div>
@@ -125,24 +127,25 @@ function ScopeGroup({ title, children }: { title: string; children: React.ReactN
 }
 
 function FileScopeCard({ scope }: { scope: FileScope }) {
+  const { t } = useTranslation("files");
   const total = scope.tree.documents.length;
   const scopePath = documentCanvasPath(scope.workspaceId);
   return (
-    <section aria-label={`${scope.label}文件层级`} className="overflow-hidden rounded-xl border border-line bg-white shadow-soft">
-      <Link to={scopePath} className="group flex items-center gap-3 border-b border-line px-4 py-3 hover:bg-app-soft" aria-label={`打开${scope.label}文件`}>
+    <section aria-label={t("scopeAria", { label: scope.label })} className="overflow-hidden rounded-xl border border-line bg-white shadow-soft">
+      <Link to={scopePath} className="group flex items-center gap-3 border-b border-line px-4 py-3 hover:bg-app-soft" aria-label={t("openAria", { label: scope.label })}>
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-app-soft text-ink-muted">
           {scope.workspaceId ? <Folder className="h-4 w-4" /> : <UserRound className="h-4 w-4" />}
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[12.5px] font-semibold text-ink">{scope.label}</h3>
-          <p className="text-[10px] text-ink-subtle">{scope.workspaceId ? "Workspace" : "User"} · {total} 个文件 · {scope.tree.folders.length} 个文件夹</p>
+          <p className="text-[10px] text-ink-subtle">{t("summary", { kind: scope.workspaceId ? "Workspace" : "User", files: total, folders: scope.tree.folders.length })}</p>
         </div>
         <span className="flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium text-ink-muted group-hover:text-ink">
-          打开<ArrowRight className="h-3.5 w-3.5" />
+          {t("open")}<ArrowRight className="h-3.5 w-3.5" />
         </span>
       </Link>
       {scope.error ? <p className="m-3 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2 text-[11px] text-danger-deep">{scope.error}</p> : null}
-      {!scope.error && !scope.tree.folders.length && !scope.tree.documents.length ? <p className="px-4 py-5 text-center text-[11px] text-ink-subtle">暂无文件</p> : null}
+      {!scope.error && !scope.tree.folders.length && !scope.tree.documents.length ? <p className="px-4 py-5 text-center text-[11px] text-ink-subtle">{t("empty")}</p> : null}
       {!scope.error ? (
         <div className="divide-y divide-line">
           {scope.tree.folders.map((folder) => (

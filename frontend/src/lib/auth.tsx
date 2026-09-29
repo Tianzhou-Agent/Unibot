@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { Navigate, useLocation } from "react-router-dom";
 import { AUTH_REQUIRED_EVENT, ApiError, api } from "@/lib/api";
 
@@ -40,7 +42,7 @@ const DEFAULT_CONFIG: AuthConfig = {
 const LEGACY_USER: AuthUser = {
   id: "anonymous",
   email: "local@unibot.invalid",
-  name: "本地用户",
+  get name() { return i18n.t("common:auth.localUser"); },
   avatar_url: null,
   tenant_id: "default",
   providers: [],
@@ -126,10 +128,11 @@ export function useAuth(): AuthContextValue {
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const location = useLocation();
+  const { t } = useTranslation("common");
   if (loading) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-app-bg text-sm text-ink-muted">
-        正在检查登录状态…
+        {t("auth.checking")}
       </div>
     );
   }

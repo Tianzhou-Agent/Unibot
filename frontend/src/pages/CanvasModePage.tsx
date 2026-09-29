@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowUp, Bot, MessageSquareText, PanelRightOpen, Play, Sparkles, Square } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -18,6 +19,7 @@ import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
 import type { AinaCanvasResponse, ApprovalRecord, BackendMessage, ChatResponse, ConversationRecord, DocumentTaskContext, WidgetDefinition } from "@/types";
 
 export default function CanvasModePage() {
+  const { t } = useTranslation("canvas");
   const { workspaceId, ainaId = "" } = useParams<{ workspaceId?: string; ainaId: string }>();
   const routeWorkspaceId = workspaceId ?? null;
   const [searchParams] = useSearchParams();
@@ -87,7 +89,7 @@ export default function CanvasModePage() {
       || activeConversationIdRef.current !== id
     ) return null;
     if ((record.workspace_id ?? null) !== expectedWorkspaceId) {
-      throw new Error("该对话不属于当前工作区，请从左侧选择正确的工作区。");
+      throw new Error(t("err.wrongWorkspace"));
     }
     const localRun = localRunRef.current;
     const isCurrentLocalRun = localRun?.workspaceId === activeWorkspaceIdRef.current && localRun?.ainaId === expectedAinaId && localRun.conversationId === id;
@@ -232,7 +234,7 @@ export default function CanvasModePage() {
         const created = await api.post<ConversationRecord>("/conversations", {
           ...actor,
           workspace_id: routeWorkspaceId,
-          title: `${canvas?.name ?? runAinaId} 对话`,
+          title: t("convTitle", { name: canvas?.name ?? runAinaId }),
           category: "general",
           active_aina_ids: [runAinaId],
           primary_aina_id: runAinaId,
@@ -252,11 +254,11 @@ export default function CanvasModePage() {
       const onEvent = (event: StreamEvent) => {
         if (event.type === "message.completed") completion = event.response;
         if (event.type === "error") {
-          streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
+          streamFailure = event.error?.message ?? event.code ?? t("err.ainaFailed");
         }
         if (!isActiveRun()) return;
         setLiveItems((current) => applyLiveEvent(current, event));
-        if (event.type === "approval.required") setActivity("等待你的授权确认");
+        if (event.type === "approval.required") setActivity(t("activity.awaitingApproval"));
         if (event.type === "error") {
           setError(streamFailure);
         }
@@ -277,7 +279,7 @@ export default function CanvasModePage() {
           streamController.signal,
         );
       }
-      if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
+      if (!completion) throw new Error(streamFailure ?? t("err.noCompletion"));
       if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
       setLastRun(completed);
@@ -318,7 +320,7 @@ export default function CanvasModePage() {
   async function stopRun() {
     const id = localRunRef.current?.conversationId ?? conversationId;
     if (!id) return;
-    setActivity("正在停止…");
+    setActivity(t("activity.stopping"));
     try {
       await api.post(`/conversations/${id}/stop`, actor);
     } catch (stopError) {
@@ -330,7 +332,7 @@ export default function CanvasModePage() {
     if (!approval) return;
     setSending(true);
     setError(null);
-    setActivity(action === "confirm" ? "正在执行已授权的调用…" : "正在取消调用…");
+    setActivity(action === "confirm" ? t("activity.runningApproved") : t("activity.cancelling"));
     try {
       if (action === "confirm") {
         const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, actor);
@@ -385,11 +387,11 @@ export default function CanvasModePage() {
   return (
     <div className="flex h-full flex-col bg-app-bg">
       <Topbar
-        title={canvas?.name ?? "AINA 画布"}
-        badge={{ label: sending ? "运行中" : "画布", tone: sending ? "thinking" : "info" }}
+        title={canvas?.name ?? t("defaultTitle")}
+        badge={{ label: sending ? t("badge.running") : t("badge.canvas"), tone: sending ? "thinking" : "info" }}
         actions={
           <div className="flex items-center gap-2">
-            <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label="画布移动端视图">
+            <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label={t("mobileView")}>
               <button
                 type="button"
                 onClick={() => setMobilePane("chat")}
@@ -397,9 +399,9 @@ export default function CanvasModePage() {
                   "flex h-6 items-center gap-1 rounded px-2 text-[10px] font-bold",
                   mobilePane === "chat" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
                 )}
-                aria-label="显示对话"
+                aria-label={t("showChat")}
               >
-                <MessageSquareText className="h-3.5 w-3.5" />对话
+                <MessageSquareText className="h-3.5 w-3.5" />{t("chat")}
               </button>
               <button
                 type="button"
@@ -408,9 +410,9 @@ export default function CanvasModePage() {
                   "flex h-6 items-center gap-1 rounded px-2 text-[10px] font-bold",
                   mobilePane === "app" ? "bg-white text-accent shadow-sm" : "text-ink-muted",
                 )}
-                aria-label="显示应用"
+                aria-label={t("showApp")}
               >
-                <PanelRightOpen className="h-3.5 w-3.5" />应用
+                <PanelRightOpen className="h-3.5 w-3.5" />{t("app")}
               </button>
             </div>
             <button
@@ -418,7 +420,7 @@ export default function CanvasModePage() {
               onClick={() => navigate(workspaceChatPath(routeWorkspaceId, conversationId))}
               className="btn-outline h-8"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />退出画布
+              <ArrowLeft className="h-3.5 w-3.5" />{t("exit")}
             </button>
           </div>
         }
@@ -440,8 +442,8 @@ export default function CanvasModePage() {
                   <Bot className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <h2 className="truncate text-[13px] font-semibold text-ink">与 {canvas.name} 对话</h2>
-                  <p className="truncate text-[10.5px] text-ink-muted">描述需求，也可在右侧应用直接操作</p>
+                  <h2 className="truncate text-[13px] font-semibold text-ink">{t("chatWith", { name: canvas.name })}</h2>
+                  <p className="truncate text-[10.5px] text-ink-muted">{t("chatHint")}</p>
                 </div>
               </header>
 
@@ -450,7 +452,7 @@ export default function CanvasModePage() {
                   <div className="flex min-h-[260px] items-center justify-center text-center">
                     <div>
                       <Bot className="mx-auto h-8 w-8 text-ink-subtle" />
-                      <p className="mt-2 text-[12px] font-semibold text-ink-muted">开始描述你要完成的任务</p>
+                      <p className="mt-2 text-[12px] font-semibold text-ink-muted">{t("startHint")}</p>
                     </div>
                   </div>
                 ) : null}
@@ -495,9 +497,9 @@ export default function CanvasModePage() {
                 ) : null}
                 {stopped && !sending ? (
                   <div className="flex items-center gap-2 rounded-lg border border-line bg-white p-2.5">
-                    <span className="flex-1 text-[11.5px] text-ink-muted">已停止生成。</span>
+                    <span className="flex-1 text-[11.5px] text-ink-muted">{t("stopped")}</span>
                     <button type="button" onClick={() => void runTurn(null)} className="btn-outline h-7 text-[11px]">
-                      <Play className="h-3 w-3" />继续生成
+                      <Play className="h-3 w-3" />{t("resume")}
                     </button>
                   </div>
                 ) : null}
@@ -535,7 +537,7 @@ export default function CanvasModePage() {
               </div>
               {debugMode && lastRun ? (
                 <p className="pointer-events-none absolute bottom-2 right-3 rounded bg-white/90 px-2 py-1 text-[10px] text-ink-subtle shadow-sm">
-                  {lastRun.iterations} 次模型迭代 · {lastRun.usage.input_tokens + lastRun.usage.output_tokens} Tokens
+                  {t("iterations", { count: lastRun.iterations, tokens: lastRun.usage.input_tokens + lastRun.usage.output_tokens })}
                 </p>
               ) : null}
             </section>
@@ -569,6 +571,7 @@ function CanvasMessage({
   showToolHeader: boolean;
   toolHeaderCount: number;
 }) {
+  const { t } = useTranslation("canvas");
   if (message.role === "user") return <UserMessage content={message.content} />;
   if (message.role === "tool") {
     if (message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
@@ -614,6 +617,7 @@ function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop 
   onSend: (text: string) => Promise<boolean | undefined>;
   onStop: () => void;
 }) {
+  const { t } = useTranslation("canvas");
   const [text, setText] = useState("");
   const [sendFailed, setSendFailed] = useState(false);
   const composingRef = useRef(false);
@@ -631,11 +635,11 @@ function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop 
   return (
     <div className="space-y-2 border-t border-line bg-white p-3">
       <TaskTreeWidget sessionId={sessionId} />
-      {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">发送未完成，草稿已保留，可重试。</p> : null}
+      {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">{t("sendFailed")}</p> : null}
       <form onSubmit={submit} className="rounded-xl border border-line-strong p-2 shadow-soft focus-within:border-accent">
         {context ? <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[9.5px] text-accent">
           <Sparkles className="h-3 w-3 shrink-0" />
-          <span className="truncate">对话上下文：{context.taskTitle} / {context.sectionHeading}</span>
+          <span className="truncate">{t("context", { task: context.taskTitle, section: context.sectionHeading })}</span>
         </div> : null}
         <textarea
           value={text}
@@ -651,8 +655,8 @@ function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop 
           }}
           disabled={disabled}
           rows={2}
-          placeholder={context ? "描述希望 AI 如何继续修改当前章节" : "向当前 AINA 描述需求"}
-          aria-label="画布消息"
+          placeholder={context ? t("placeholderEdit") : t("placeholderDefault")}
+          aria-label={t("messageAria")}
           className="w-full resize-none bg-transparent px-1 text-[12.5px] outline-none placeholder:text-ink-muted"
         />
         <div className="mt-1 flex items-center justify-between gap-2">
@@ -662,7 +666,7 @@ function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop 
               type="button"
               onClick={onStop}
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-ink text-white hover:bg-ink-muted"
-              aria-label="停止生成"
+              aria-label={t("stopAria")}
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
@@ -674,7 +678,7 @@ function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop 
                 "flex h-8 w-8 items-center justify-center rounded-lg text-white",
                 disabled || !text.trim() ? "cursor-not-allowed bg-ink-subtle" : "bg-accent hover:bg-accent-hover",
               )}
-              aria-label="发送画布消息"
+              aria-label={t("sendAria")}
             >
               <ArrowUp className="h-3.5 w-3.5" />
             </button>

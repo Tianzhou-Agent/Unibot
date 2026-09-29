@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Check, Copy, Share2, Trash2, Paperclip, ArrowUp, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { classNames } from "@/lib/utils";
@@ -58,13 +59,14 @@ export function AssistantMessage({
 }
 
 export function ThinkingBubble() {
+  const { t } = useTranslation("chat");
   return (
     <div className="rounded-lg border border-accent-ring bg-accent-soft h-10 px-3 flex items-center gap-2.5">
       <span className="relative flex w-4 h-4 items-center justify-center">
         <span className="absolute inset-0 rounded-full border-2 border-accent-ring" />
         <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
       </span>
-      <span className="text-accent-hover text-[13px] font-semibold">正在思考</span>
+      <span className="text-accent-hover text-[13px] font-semibold">{t("thinkingNow")}</span>
     </div>
   );
 }
@@ -102,6 +104,7 @@ function FileChipPill({ file }: { file: FileChip }) {
 }
 
 function AgentActions({ message, conversationId }: { message: ChatMessage; conversationId?: string }) {
+  const { t } = useTranslation("chat");
   const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const copyText = [
     message.content,
@@ -128,20 +131,20 @@ function AgentActions({ message, conversationId }: { message: ChatMessage; conve
   return (
     <div className="flex items-center justify-end gap-1 text-ink-subtle">
       <span role="status" className={classNames("text-[11px]", copyState === "error" ? "text-danger" : "text-success")}>
-        {copyState === "copied" ? "已复制" : copyState === "error" ? "复制失败，请重试或手动选择文字" : ""}
+        {copyState === "copied" ? t("message.copied") : copyState === "error" ? t("message.copyFailed") : ""}
       </span>
       {feedbackEnabled && conversationId ? <MessageFeedback messageId={message.id} conversationId={conversationId} /> : null}
       <span className="h-4 w-px bg-line" />
       <ActionIcon
         icon={copyState === "copied" ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
-        label="复制"
+        label={t("message.copy")}
         onClick={() => void copyMessage()}
         disabled={!copyText || copyState === "copying"}
       />
-      <ActionIcon icon={<Share2 className="w-3.5 h-3.5" />} label="分享" />
+      <ActionIcon icon={<Share2 className="w-3.5 h-3.5" />} label={t("message.share")} />
       <ActionIcon
         icon={<Trash2 className="w-3.5 h-3.5" />}
-        label="删除"
+        label={t("message.delete")}
         tone="danger"
       />
     </div>
@@ -184,6 +187,7 @@ export function Composer({
   onSend: (text: string) => void;
   onAttach?: () => void;
 }) {
+  const { t } = useTranslation("chat");
   const [text, setText] = useState("");
   const [attached, setAttached] = useState<FileChip | null>(null);
 
@@ -209,7 +213,7 @@ export function Composer({
             submit(e);
           }
         }}
-        placeholder="询问 World One、上传文件或打开画布…"
+        placeholder={t("message.placeholder")}
         rows={2}
         className="w-full bg-transparent text-[13px] leading-[1.45] text-ink placeholder:text-ink-muted outline-none resize-none"
       />
@@ -222,7 +226,7 @@ export function Composer({
               type="button"
               onClick={() => setAttached(null)}
               className="ml-0.5 hover:text-ink"
-              aria-label="移除附件"
+              aria-label={t("message.removeAttachment")}
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -242,7 +246,7 @@ export function Composer({
             className="inline-flex items-center gap-1.5 text-ink-muted text-[12px] font-semibold h-7 px-2 rounded-lg hover:bg-app-soft"
           >
             <Paperclip className="w-3.5 h-3.5" />
-            添加附件
+            {t("message.addAttachment")}
           </button>
         )}
         <span className="ml-auto" />
@@ -253,7 +257,7 @@ export function Composer({
             "w-9 h-9 rounded-lg flex items-center justify-center text-white transition-colors",
             text.trim() ? "bg-accent hover:bg-accent-hover" : "bg-ink-subtle cursor-not-allowed",
           )}
-          aria-label="发送"
+          aria-label={t("message.send")}
         >
           <ArrowUp className="w-4 h-4" />
         </button>

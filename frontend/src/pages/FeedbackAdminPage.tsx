@@ -1,3 +1,6 @@
+import { useTranslation } from "react-i18next";
+import i18n, { currentLocale } from "@/i18n";
+import { feedbackReasonLabel } from "@/components/feedback/MessageFeedback";
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Clock3, MessageSquareText, Search, ThumbsDown, ThumbsUp, UserRoundCheck } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -15,10 +18,10 @@ import type {
 } from "@/types";
 
 const RANGE_OPTIONS = [
-  { value: 7, label: "最近 7 天" },
-  { value: 30, label: "最近 30 天" },
-  { value: 90, label: "最近 90 天" },
-  { value: 0, label: "自定义日期" },
+  { value: 7, get label() { return i18n.t("fb:range.7"); } },
+  { value: 30, get label() { return i18n.t("fb:range.30"); } },
+  { value: 90, get label() { return i18n.t("fb:range.90"); } },
+  { value: 0, get label() { return i18n.t("fb:range.custom"); } },
 ];
 
 function toDateKey(date: Date): string {
@@ -33,6 +36,7 @@ function defaultCustomRange(): { start: string; end: string } {
 }
 
 export default function FeedbackAdminPage() {
+  const { t } = useTranslation("fb");
   const [rangeDays, setRangeDays] = useState(30);
   const [customRange, setCustomRange] = useState(defaultCustomRange);
   const [records, setRecords] = useState<FeedbackRecord[]>([]);
@@ -100,13 +104,13 @@ export default function FeedbackAdminPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-bg">
       <Topbar
-        title="用户反馈"
-        badge={{ label: "管理员视图", tone: "info" }}
+        title={t("title")}
+        badge={{ label: t("badge"), tone: "info" }}
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
         <div className="mx-auto max-w-[1500px] space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-[10.5px] text-ink-subtle">
-            <div className="flex rounded-lg bg-app-soft p-0.5" aria-label="反馈时间范围">
+            <div className="flex rounded-lg bg-app-soft p-0.5" aria-label={t("rangeAria")}>
               {RANGE_OPTIONS.map((option) => (
                 <button
                   key={option.value}
@@ -125,16 +129,16 @@ export default function FeedbackAdminPage() {
               <>
                 <input
                   type="date"
-                  aria-label="开始日期"
+                  aria-label={t("startDate")}
                   value={customRange.start}
                   max={customRange.end}
                   onChange={(event) => setCustomRange((current) => ({ ...current, start: event.target.value }))}
                   className="input h-8 text-[11px]"
                 />
-                <span>至</span>
+                <span>{t("to")}</span>
                 <input
                   type="date"
-                  aria-label="结束日期"
+                  aria-label={t("endDate")}
                   value={customRange.end}
                   min={customRange.start}
                   onChange={(event) => setCustomRange((current) => ({ ...current, end: event.target.value }))}
@@ -142,71 +146,71 @@ export default function FeedbackAdminPage() {
                 />
               </>
             ) : null}
-            <span className="ml-auto">{loading ? "正在更新…" : `更新于 ${formatDateTime(new Date().toISOString())}`}</span>
+            <span className="ml-auto">{loading ? t("updating") : t("updatedAt", { time: formatDateTime(new Date().toISOString()) })}</span>
           </div>
 
           {error ? <div className="rounded-lg bg-danger-soft px-3 py-2 text-[11.5px] text-danger-deep">{error}</div> : null}
 
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="反馈核心指标">
-            <MetricCard label="反馈率" value={formatPercent(metrics?.feedback_rate)} change={formatPointChange(metrics?.feedback_rate_change)} hint={`${metrics?.feedback_count ?? 0} / ${metrics?.answer_count ?? 0}`} icon={<MessageSquareText />} />
-            <MetricCard label="点赞率（Feedback）" value={formatPercent(metrics?.positive_feedback_rate)} change={formatPointChange(metrics?.positive_feedback_rate_change)} hint="点赞 / 有效 Feedback" icon={<ThumbsUp />} tone="green" />
-            <MetricCard label="点赞率（回答）" value={formatPercent(metrics?.positive_answer_rate)} change={formatPointChange(metrics?.positive_answer_rate_change)} hint="点赞 / 可反馈回答" icon={<CheckCircle2 />} tone="slate" />
-            <MetricCard label="待处理负评" value={String(metrics?.pending_negative_count ?? 0)} change={formatPercentChange(metrics?.pending_negative_change)} hint="待处理与处理中" icon={<ThumbsDown />} tone="red" />
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label={t("coreAria")}>
+            <MetricCard label={t("m.rate")} value={formatPercent(metrics?.feedback_rate)} change={formatPointChange(metrics?.feedback_rate_change)} hint={`${metrics?.feedback_count ?? 0} / ${metrics?.answer_count ?? 0}`} icon={<MessageSquareText />} />
+            <MetricCard label={t("m.likeFeedback")} value={formatPercent(metrics?.positive_feedback_rate)} change={formatPointChange(metrics?.positive_feedback_rate_change)} hint={t("m.likeFeedbackHint")} icon={<ThumbsUp />} tone="green" />
+            <MetricCard label={t("m.likeAnswer")} value={formatPercent(metrics?.positive_answer_rate)} change={formatPointChange(metrics?.positive_answer_rate_change)} hint={t("m.likeAnswerHint")} icon={<CheckCircle2 />} tone="slate" />
+            <MetricCard label={t("m.pending")} value={String(metrics?.pending_negative_count ?? 0)} change={formatPercentChange(metrics?.pending_negative_change)} hint={t("m.pendingHint")} icon={<ThumbsDown />} tone="red" />
           </section>
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(300px,0.8fr)]">
-            <SectionCard title="反馈与满意度趋势" description="随所选时间范围变化">
+            <SectionCard title={t("trendTitle")} description={t("trendDesc")}>
               <LineChart
                 values={(metrics?.trend ?? []).map((point) => point.feedback_rate)}
                 secondaryValues={(metrics?.trend ?? []).map((point) => point.positive_rate)}
                 labels={chartLabels(metrics, rangeDays)}
-                primaryLabel="反馈率"
-                secondaryLabel="点赞率"
+                primaryLabel={t("feedbackRate")}
+                secondaryLabel={t("likeRate")}
               />
             </SectionCard>
-            <SectionCard title="点踩原因分布" description="所选时间范围内的负面原因">
+            <SectionCard title={t("reasonsTitle")} description={t("reasonsDesc")}>
               <div className="space-y-3.5 p-4">
                 {(metrics?.reasons ?? []).map((item, index) => (
-                  <BarMeter key={item.reason} label={item.reason} value={item.percentage} displayValue={`${item.count} · ${item.percentage}%`} tone={index === 0 ? "red" : index < 3 ? "amber" : "blue"} />
+                  <BarMeter key={item.reason} label={feedbackReasonLabel(item.reason)} value={item.percentage} displayValue={`${item.count} · ${item.percentage}%`} tone={index === 0 ? "red" : index < 3 ? "amber" : "blue"} />
                 ))}
-                {!metrics?.reasons.length ? <EmptyState text="当前范围内暂无点踩反馈" /> : null}
+                {!metrics?.reasons.length ? <EmptyState text={t("noDislikes")} /> : null}
               </div>
             </SectionCard>
           </div>
 
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(360px,0.85fr)]">
             <SectionCard
-              title="Feedback 管理"
-              description={`${filtered.length} 条真实反馈`}
+              title={t("manageTitle")}
+              description={t("manageDesc", { count: filtered.length })}
               actions={(
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex h-8 items-center gap-2 rounded-lg border border-line bg-app-soft px-2.5">
                     <Search className="h-3.5 w-3.5 text-ink-subtle" />
-                    <input aria-label="按用户名筛选" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="用户名或邮箱" className="w-36 bg-transparent text-[11px] outline-none" />
+                    <input aria-label={t("userFilterAria")} value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder={t("userPlaceholder")} className="w-36 bg-transparent text-[11px] outline-none" />
                   </label>
-                  <select aria-label="评价筛选" value={rating} onChange={(event) => setRating(event.target.value as typeof rating)} className="h-8 rounded-lg border border-line bg-white px-2 text-[11px]"><option value="all">全部评价</option><option value="up">点赞</option><option value="down">点踩</option></select>
-                  <select aria-label="状态筛选" value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className="h-8 rounded-lg border border-line bg-white px-2 text-[11px]"><option value="all">全部状态</option><option value="pending">待处理</option><option value="in_progress">处理中</option><option value="resolved">已解决</option><option value="closed">已关闭</option></select>
+                  <select aria-label={t("ratingAria")} value={rating} onChange={(event) => setRating(event.target.value as typeof rating)} className="h-8 rounded-lg border border-line bg-white px-2 text-[11px]"><option value="all">{t("allRatings")}</option><option value="up">{t("up")}</option><option value="down">{t("down")}</option></select>
+                  <select aria-label={t("statusAria")} value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className="h-8 rounded-lg border border-line bg-white px-2 text-[11px]"><option value="all">{t("allStatus")}</option><option value="pending">{t("status.pending")}</option><option value="in_progress">{t("status.in_progress")}</option><option value="resolved">{t("status.resolved")}</option><option value="closed">{t("status.closed")}</option></select>
                 </div>
               )}
             >
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[820px] text-left text-[11.5px]">
-                  <thead className="bg-app-soft text-ink-muted"><tr><th className="px-4 py-2.5 font-semibold">评价</th><th className="px-3 py-2.5 font-semibold">用户 / 内容</th><th className="px-3 py-2.5 font-semibold">Agent</th><th className="px-3 py-2.5 font-semibold">原因</th><th className="px-3 py-2.5 font-semibold">处理人</th><th className="px-3 py-2.5 font-semibold">Case</th><th className="px-4 py-2.5 font-semibold">时间</th></tr></thead>
+                  <thead className="bg-app-soft text-ink-muted"><tr><th className="px-4 py-2.5 font-semibold">{t("col.rating")}</th><th className="px-3 py-2.5 font-semibold">{t("col.userContent")}</th><th className="px-3 py-2.5 font-semibold">Agent</th><th className="px-3 py-2.5 font-semibold">{t("col.reason")}</th><th className="px-3 py-2.5 font-semibold">{t("col.assignee")}</th><th className="px-3 py-2.5 font-semibold">Case</th><th className="px-4 py-2.5 font-semibold">{t("col.time")}</th></tr></thead>
                   <tbody className="divide-y divide-line">
                     {filtered.map((record) => (
                       <tr key={record.id} className={classNames("cursor-pointer hover:bg-app-soft/70", selected?.id === record.id && "bg-accent-soft/60")} onClick={() => setSelectedId(record.id)}>
                         <td className="px-4 py-3">{record.rating === "up" ? <ThumbsUp className="h-4 w-4 text-success" /> : <ThumbsDown className="h-4 w-4 text-danger" />}</td>
-                        <td className="max-w-[300px] px-3 py-3"><div className="font-semibold text-ink">{record.user_name}</div><div className="text-[10px] text-ink-subtle">{record.user_email}</div><p className="mt-0.5 max-w-full truncate text-[10.5px] text-ink-muted">{record.comment || "未填写补充说明"}</p></td>
+                        <td className="max-w-[300px] px-3 py-3"><div className="font-semibold text-ink">{record.user_name}</div><div className="text-[10px] text-ink-subtle">{record.user_email}</div><p className="mt-0.5 max-w-full truncate text-[10.5px] text-ink-muted">{record.comment || t("noComment")}</p></td>
                         <td className="px-3 py-3"><div className="font-semibold text-ink">{record.agent_name}</div><div className="text-[10.5px] text-ink-subtle">{record.agent_version || "—"}</div></td>
-                        <td className="px-3 py-3 text-ink-muted">{record.reason || "—"}</td>
-                        <td className="px-3 py-3 font-semibold text-ink">{record.assignee || <span className="text-ink-subtle">未分配</span>}</td>
+                        <td className="px-3 py-3 text-ink-muted">{record.reason ? feedbackReasonLabel(record.reason) : "—"}</td>
+                        <td className="px-3 py-3 font-semibold text-ink">{record.assignee || <span className="text-ink-subtle">{t("unassigned")}</span>}</td>
                         <td className="px-3 py-3"><StatusPill status={record.case_status} /></td>
                         <td className="px-4 py-3 text-ink-muted">{formatDateTime(record.created_at)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {!loading && !filtered.length ? <EmptyState text="没有符合筛选条件的反馈" /> : null}
+                {!loading && !filtered.length ? <EmptyState text={t("noMatches")} /> : null}
               </div>
             </SectionCard>
 
@@ -219,6 +223,7 @@ export default function FeedbackAdminPage() {
 }
 
 function FeedbackDetail({ record, onUpdate }: { record: FeedbackRecord; onUpdate: (record: FeedbackRecord) => void }) {
+  const { t } = useTranslation("fb");
   const [detail, setDetail] = useState<FeedbackDetailRecord | null>(null);
   const [status, setStatus] = useState(record.case_status);
   const [assignee, setAssignee] = useState(record.assignee);
@@ -255,42 +260,43 @@ function FeedbackDetail({ record, onUpdate }: { record: FeedbackRecord; onUpdate
 
   const current = detail?.feedback ?? record;
   return (
-    <SectionCard title="Feedback 详情" description={`反馈于 ${formatDateTime(current.created_at)}`} className="xl:sticky xl:top-0">
+    <SectionCard title={t("detailTitle")} description={t("detailDesc", { time: formatDateTime(current.created_at) })} className="xl:sticky xl:top-0">
       <div className="max-h-[calc(100vh-180px)] space-y-4 overflow-y-auto p-4">
         {error ? <p className="rounded-lg bg-danger-soft px-3 py-2 text-[11px] text-danger-deep">{error}</p> : null}
         <div className="rounded-lg bg-app-soft p-3">
           <div className="flex items-center gap-2"><span className={classNames("flex h-7 w-7 items-center justify-center rounded-lg", current.rating === "up" ? "bg-success-soft text-success" : "bg-danger-soft text-danger")}>{current.rating === "up" ? <ThumbsUp className="h-3.5 w-3.5" /> : <ThumbsDown className="h-3.5 w-3.5" />}</span><div><strong className="text-[12px] text-ink">{current.user_name}</strong><p className="text-[10.5px] text-ink-subtle">{current.user_email}</p></div><StatusPill status={current.case_status} /></div>
-          <p className="mt-3 text-[12px] leading-5 text-ink">{current.comment || "用户未填写补充说明"}</p>
-          <p className="mt-2 text-[10.5px] text-ink-muted">原因：{current.reason || "—"}</p>
+          <p className="mt-3 text-[12px] leading-5 text-ink">{current.comment || t("userNoComment")}</p>
+          <p className="mt-2 text-[10.5px] text-ink-muted">{t("reason", { reason: current.reason ? feedbackReasonLabel(current.reason) : "—" })}</p>
         </div>
 
         <div>
-          <div className="flex items-center gap-2"><h3 className="text-[11.5px] font-bold text-ink">反馈时上下文</h3><span className="text-[10px] text-ink-subtle">仅展示反馈前的 Trace</span></div>
+          <div className="flex items-center gap-2"><h3 className="text-[11.5px] font-bold text-ink">{t("context")}</h3><span className="text-[10px] text-ink-subtle">{t("contextHint")}</span></div>
           <div className="mt-2 space-y-2">
             {detail?.context_traces.map((trace, index) => <TraceContext key={trace.trace_id} trace={trace} index={index} />)}
-            {detail && !detail.context_traces.length ? <EmptyState text="反馈发生前没有可用 Trace" /> : null}
-            {!detail ? <EmptyState text="正在读取上下文…" /> : null}
+            {detail && !detail.context_traces.length ? <EmptyState text={t("noTrace")} /> : null}
+            {!detail ? <EmptyState text={t("loadingContext")} /> : null}
           </div>
         </div>
 
         {current.rating === "down" ? (
           <div className="space-y-3 border-t border-line pt-4">
             <div className="grid grid-cols-2 gap-2">
-              <label className="text-[10.5px] font-semibold text-ink-muted">状态<select aria-label="Case 状态" value={status} onChange={(event) => setStatus(event.target.value as FeedbackCaseStatus)} className="mt-1 h-9 w-full rounded-lg border border-line bg-white px-2 text-[11.5px] text-ink"><option value="pending">待处理</option><option value="in_progress">处理中</option><option value="resolved">已解决</option><option value="closed">已关闭</option></select></label>
-              <label className="text-[10.5px] font-semibold text-ink-muted">负责人<input aria-label="Case 负责人" value={assignee} onChange={(event) => setAssignee(event.target.value.slice(0, 80))} placeholder="未分配" className="mt-1 h-9 w-full rounded-lg border border-line bg-white px-2 text-[11.5px] text-ink" /></label>
+              <label className="text-[10.5px] font-semibold text-ink-muted">{t("statusLabel")}<select aria-label={t("caseStatusAria")} value={status} onChange={(event) => setStatus(event.target.value as FeedbackCaseStatus)} className="mt-1 h-9 w-full rounded-lg border border-line bg-white px-2 text-[11.5px] text-ink"><option value="pending">{t("status.pending")}</option><option value="in_progress">{t("status.in_progress")}</option><option value="resolved">{t("status.resolved")}</option><option value="closed">{t("status.closed")}</option></select></label>
+              <label className="text-[10.5px] font-semibold text-ink-muted">{t("assignee")}<input aria-label={t("assigneeAria")} value={assignee} onChange={(event) => setAssignee(event.target.value.slice(0, 80))} placeholder={t("assigneePlaceholder")} className="mt-1 h-9 w-full rounded-lg border border-line bg-white px-2 text-[11.5px] text-ink" /></label>
             </div>
-            <label className="block text-[10.5px] font-semibold text-ink-muted">处理结论<textarea aria-label="处理结论" value={conclusion} onChange={(event) => setConclusion(event.target.value.slice(0, 1000))} rows={3} placeholder="记录原因、修复版本或后续动作" className="mt-1 w-full resize-none rounded-lg border border-line px-2.5 py-2 text-[11.5px] font-normal text-ink outline-none focus:border-accent" /></label>
-            <button type="button" disabled={saving} onClick={() => void save()} className="btn-primary w-full"><UserRoundCheck className="h-4 w-4" />{saving ? "保存中…" : "保存处理结果"}</button>
+            <label className="block text-[10.5px] font-semibold text-ink-muted">{t("conclusion")}<textarea aria-label={t("conclusion")} value={conclusion} onChange={(event) => setConclusion(event.target.value.slice(0, 1000))} rows={3} placeholder={t("conclusionPlaceholder")} className="mt-1 w-full resize-none rounded-lg border border-line px-2.5 py-2 text-[11.5px] font-normal text-ink outline-none focus:border-accent" /></label>
+            <button type="button" disabled={saving} onClick={() => void save()} className="btn-primary w-full"><UserRoundCheck className="h-4 w-4" />{saving ? t("saving") : t("save")}</button>
           </div>
         ) : null}
 
-        <div className="border-t border-line pt-4"><h3 className="text-[11.5px] font-bold text-ink">操作历史</h3><div className="mt-3 space-y-3">{current.history.map((item, index) => <div key={`${item.at}-${index}`} className="flex gap-2.5"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-app-soft text-ink-subtle"><Clock3 className="h-3 w-3" /></span><div><p className="text-[10.5px] leading-4 text-ink">{item.action}</p><p className="mt-0.5 text-[9.5px] text-ink-subtle">{item.actor_name} · {formatDateTime(item.at)}</p></div></div>)}</div></div>
+        <div className="border-t border-line pt-4"><h3 className="text-[11.5px] font-bold text-ink">{t("history")}</h3><div className="mt-3 space-y-3">{current.history.map((item, index) => <div key={`${item.at}-${index}`} className="flex gap-2.5"><span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-app-soft text-ink-subtle"><Clock3 className="h-3 w-3" /></span><div><p className="text-[10.5px] leading-4 text-ink">{item.action}</p><p className="mt-0.5 text-[9.5px] text-ink-subtle">{item.actor_name} · {formatDateTime(item.at)}</p></div></div>)}</div></div>
       </div>
     </SectionCard>
   );
 }
 
 function TraceContext({ trace, index }: { trace: TraceRecord; index: number }) {
+  const { t } = useTranslation("fb");
   const root = trace.spans.find((span) => span.span_id === trace.root_span_id) ?? trace.spans[0];
   const prompt = extractText(root?.input) || extractEventText(trace, "user");
   const response = extractText(root?.output) || extractEventText(trace, "final");
@@ -298,13 +304,13 @@ function TraceContext({ trace, index }: { trace: TraceRecord; index: number }) {
   return (
     <details className="rounded-lg bg-app-soft px-3 py-2.5" open={index === 0}>
       <summary className="cursor-pointer list-none">
-        <div className="flex items-center gap-2"><strong className="text-[11px] text-ink">第 {index + 1} 轮</strong><span className="text-[10px] text-ink-subtle">{formatDateTime(trace.created_at)}</span><span className="ml-auto text-[10px] text-ink-muted">{trace.spans.length} Span · {duration === null ? "—" : formatDuration(duration)}</span></div>
-        <p className="mt-1 truncate text-[10.5px] text-ink-muted">{prompt || "未采集到用户输入"}</p>
+        <div className="flex items-center gap-2"><strong className="text-[11px] text-ink">{t("round", { n: index + 1 })}</strong><span className="text-[10px] text-ink-subtle">{formatDateTime(trace.created_at)}</span><span className="ml-auto text-[10px] text-ink-muted">{trace.spans.length} Span · {duration === null ? "—" : formatDuration(duration)}</span></div>
+        <p className="mt-1 truncate text-[10.5px] text-ink-muted">{prompt || t("noPrompt")}</p>
       </summary>
       <div className="mt-2 space-y-2 border-t border-line pt-2 text-[10.5px]">
-        <ContextLine label="用户输入" text={prompt || "未采集"} />
-        <ContextLine label="最终回复" text={response || "未采集"} />
-        <Link to={`/admin/observability?userId=${encodeURIComponent(trace.user_id)}&traceId=${encodeURIComponent(trace.trace_id)}`} className="inline-flex font-semibold text-accent hover:text-accent-hover">查看完整 Trace</Link>
+        <ContextLine label={t("userInput")} text={prompt || t("notCaptured")} />
+        <ContextLine label={t("finalReply")} text={response || t("notCaptured")} />
+        <Link to={`/admin/observability?userId=${encodeURIComponent(trace.user_id)}&traceId=${encodeURIComponent(trace.trace_id)}`} className="inline-flex font-semibold text-accent hover:text-accent-hover">{t("viewTrace")}</Link>
       </div>
     </details>
   );
@@ -332,7 +338,8 @@ function extractEventText(trace: TraceRecord, kind: string): string {
 }
 
 function StatusPill({ status }: { status: FeedbackCaseStatus }) {
-  const labels: Record<FeedbackCaseStatus, string> = { pending: "待处理", in_progress: "处理中", resolved: "已解决", closed: "已关闭" };
+  const { t } = useTranslation("fb");
+  const labels: Record<FeedbackCaseStatus, string> = { pending: t("status.pending"), in_progress: t("status.in_progress"), resolved: t("status.resolved"), closed: t("status.closed") };
   return <span className={classNames("ml-auto inline-flex rounded-full px-2 py-0.5 text-[9.5px] font-bold", status === "pending" ? "bg-danger-soft text-danger" : status === "in_progress" ? "bg-warning-soft text-warning-deep" : status === "resolved" ? "bg-success-soft text-success-deep" : "bg-app-soft text-ink-muted")}>{labels[status]}</span>;
 }
 
@@ -355,7 +362,7 @@ function formatPercentChange(value?: number) {
 }
 
 function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat(currentLocale(), { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
 function formatDuration(ms: number) {

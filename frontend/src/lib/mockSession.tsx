@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 
 export type MockRole = "user" | "admin";
@@ -16,23 +17,23 @@ export interface MockProfile {
 const MOCK_PROFILES: Record<MockRole, MockProfile> = {
   user: {
     id: "user-lin-chen",
-    name: "林晨",
+    get name() { return i18n.t("common:mock.userName"); },
     role: "user",
-    roleLabel: "普通用户",
-    tenant: "天舟科技",
+    get roleLabel() { return i18n.t("common:mock.role.user"); },
+    get tenant() { return i18n.t("common:mock.tenant"); },
     tenantId: "default",
     actorUserId: "anonymous",
-    initials: "林",
+    get initials() { return i18n.t("common:mock.userInitials"); },
   },
   admin: {
     id: "admin-zhou-ran",
-    name: "周然",
+    get name() { return i18n.t("common:mock.adminName"); },
     role: "admin",
-    roleLabel: "平台管理员",
-    tenant: "天舟科技",
+    get roleLabel() { return i18n.t("common:mock.role.admin"); },
+    get tenant() { return i18n.t("common:mock.tenant"); },
     tenantId: "default",
     actorUserId: "admin-zhou-ran",
-    initials: "周",
+    get initials() { return i18n.t("common:mock.adminInitials"); },
   },
 };
 

@@ -1,0 +1,17 @@
+export default {
+  notFound: "工作区不存在或不可访问",
+  pickAnother: "请从左侧选择其他工作区。",
+  folders: "文件夹",
+  newFolder: "新建文件夹",
+  taskInputAria: "工作区任务输入",
+  taskPlaceholder: "告诉我你想完成什么…",
+  taskSearchAria: "搜索或创建任务",
+  taskHint: "搜索工作区，或直接创建一个任务",
+  startTask: "开始任务",
+  noMatchFiles: "没有匹配的文件",
+  noArtifacts: "暂无产物或文件夹",
+  conversations: "会话",
+  noMatchConversations: "没有匹配的会话",
+  noConversations: "这个工作区还没有会话",
+  newConversation: "新对话",
+};

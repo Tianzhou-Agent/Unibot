@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import { PersonalObservabilityView } from "@/components/observability/PersonalObservabilityView";
@@ -10,6 +11,7 @@ import { classNames } from "@/lib/utils";
 import type { ConversationRecord, LLMCallRecord, TraceRecord } from "@/types";
 
 export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const { t } = useTranslation("obsDrawer");
   const { config } = useAuth();
   const { profile } = useMockSession();
   const [mounted, setMounted] = useState(false);
@@ -63,7 +65,7 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
       />
       <div
         role="dialog"
-        aria-label="对话观测抽屉"
+        aria-label={t("aria")}
         className={classNames(
           "absolute inset-y-0 right-0 flex w-full flex-col bg-app-bg shadow-2xl transition-[width,transform] duration-300",
           expanded ? "inset-x-0" : "max-w-[960px]",
@@ -71,12 +73,12 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
         )}
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-white px-3 py-2">
-          <span className="text-[13px] font-extrabold text-ink">对话观测</span>
+          <span className="text-[13px] font-extrabold text-ink">{t("title")}</span>
           <span className="truncate font-mono text-[10.5px] text-ink-subtle">Session ID：{sessionId}</span>
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
-            aria-label={expanded ? "退出全屏" : "展开全屏"}
+            aria-label={expanded ? t("exitFullscreen") : t("fullscreen")}
             className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-app-soft hover:text-ink"
           >
             {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
@@ -84,7 +86,7 @@ export function ConversationObsDrawer({ sessionId, onClose }: { sessionId: strin
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭观测抽屉"
+            aria-label={t("close")}
             className="flex h-7 w-7 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-app-soft hover:text-ink"
           >
             <X className="h-4 w-4" />

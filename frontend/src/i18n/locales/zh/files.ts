@@ -1,0 +1,15 @@
+export default {
+  userFiles: "用户文件",
+  title: "文件",
+  searchPlaceholder: "搜索所有层级的文件",
+  searchAria: "搜索所有文件",
+  userLevel: "用户层级",
+  workspaceLevel: "Workspace 层级",
+  noMatch: "没有匹配的文件",
+  noWorkspaces: "还没有 Workspace。",
+  scopeAria: "{{label}}文件层级",
+  openAria: "打开{{label}}文件",
+  summary: "{{kind}} · {{files}} 个文件 · {{folders}} 个文件夹",
+  open: "打开",
+  empty: "暂无文件",
+};

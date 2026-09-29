@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { DatabaseZap } from "lucide-react";
 import { classNames } from "@/lib/utils";
 
 export function MockDataBadge() {
+  const { t } = useTranslation("common");
   return (
     <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-warning-ring bg-warning-soft px-2.5 text-[11.5px] font-bold text-warning-deep">
-      <DatabaseZap className="h-3.5 w-3.5" />Mock 数据
+      <DatabaseZap className="h-3.5 w-3.5" />{t("mockData")}
     </span>
   );
 }
@@ -93,6 +95,7 @@ export function LineChart({
   primaryLabel: string;
   secondaryLabel?: string;
 }) {
+  const { t } = useTranslation("common");
   const width = 620;
   const height = 190;
   const padding = 18;
@@ -109,7 +112,7 @@ export function LineChart({
         <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-accent" />{primaryLabel}</span>
         {secondaryLabel ? <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-warning" />{secondaryLabel}</span> : null}
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-48 w-full overflow-visible" role="img" aria-label={`${primaryLabel}趋势图`}>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-48 w-full overflow-visible" role="img" aria-label={t("trendChart", { label: primaryLabel })}>
         {[0, 1, 2, 3].map((line) => {
           const y = padding + ((height - padding * 2) / 3) * line;
           return <line key={line} x1={padding} x2={width - padding} y1={y} y2={y} stroke="#E2E8F0" strokeDasharray="4 5" />;

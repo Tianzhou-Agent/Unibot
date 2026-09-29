@@ -1,0 +1,17 @@
+export default {
+  notFound: "Workspace not found or inaccessible",
+  pickAnother: "Choose another workspace from the sidebar.",
+  folders: "Folders",
+  newFolder: "New folder",
+  taskInputAria: "Workspace task input",
+  taskPlaceholder: "Tell me what you want to get done…",
+  taskSearchAria: "Search or create a task",
+  taskHint: "Search this workspace, or just create a task",
+  startTask: "Start task",
+  noMatchFiles: "No matching files",
+  noArtifacts: "No artifacts or folders",
+  conversations: "Conversations",
+  noMatchConversations: "No matching conversations",
+  noConversations: "This workspace has no conversations yet",
+  newConversation: "New conversation",
+};

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import i18n from "@/i18n";
 import { useMatch } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useMockSession } from "@/lib/mockSession";
@@ -70,7 +71,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         tenant_id: profile.tenantId,
       });
       if (activeActorKeyRef.current !== expectedActorKey) {
-        throw new Error("当前用户已切换，请重新创建工作区。");
+        throw new Error(i18n.t("common:workspace.userSwitched"));
       }
       reloadRequestRef.current += 1;
       setLoading(false);

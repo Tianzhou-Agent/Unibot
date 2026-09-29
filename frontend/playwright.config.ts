@@ -15,6 +15,11 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:5173",
     timezoneId: "Asia/Shanghai",
+    // The app defaults to English; the suites assert on the Chinese UI copy, so pin the stored language to zh.
+    storageState: {
+      cookies: [],
+      origins: [{ origin: "http://127.0.0.1:5173", localStorage: [{ name: "unibot.language", value: "zh" }] }],
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH

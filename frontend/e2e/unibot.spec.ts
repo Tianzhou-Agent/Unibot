@@ -1431,11 +1431,12 @@ test("FE-E2E-001WAA 创建工作区期间切换用户不会写入旧 actor 响�
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
   await expect.poll(() => state.lastWorkspaceCreatePayload?.user_id).toBe("anonymous");
 
-  await page.getByRole("button", { name: "打开用户菜单", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
-  await page.getByRole("menuitem", { name: "切换为管理员", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+  await page.getByRole("link", { name: "设置", exact: true }).last().evaluate((link: HTMLAnchorElement) => link.click());
+  await page.getByRole("button", { name: "账户", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+  await page.getByRole("button", { name: "切换为管理员", exact: true }).evaluate((button: HTMLButtonElement) => button.click());
   await expect.poll(() => state.lastWorkspaceListScope?.user_id).toBe("admin-zhou-ran");
   await expect(dialog.getByText("当前用户已切换，请重新创建工作区。", { exact: true })).toBeVisible();
-  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page).toHaveURL(/\/settings\?tab=account$/);
   await expect(page.locator('aside a[href="/workspaces/workspace-e2e-1"]')).toHaveCount(0);
 });
 
@@ -2223,16 +2224,10 @@ test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", as
       },
     ],
   });
-  await page.goto("/settings");
+  await page.goto("/settings?tab=models");
 
-  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
-  const userMenu = page.getByRole("menu", { name: "用户菜单", exact: true });
-  await expect(userMenu.getByRole("menuitem", { name: "应用", exact: true })).toHaveCount(0);
-  const homeMenuItem = userMenu.getByRole("menuitem", { name: "主页", exact: true });
-  await expect(homeMenuItem).toBeVisible();
-  await expect(homeMenuItem.locator("svg")).toHaveClass(/lucide-house/);
-  await expect(userMenu.getByRole("menuitem", { name: "设置", exact: true })).toBeVisible();
-  await expect(userMenu.getByRole("menuitem", { name: "管理", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "打开用户菜单", exact: true })).toHaveCount(0);
+  await expect(page.locator("aside").getByRole("link", { name: "设置", exact: true }).last()).toBeVisible();
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
   const providerSection = page.getByLabel("Provider 团队模型服务");
   await providerSection.getByRole("heading", { name: "团队模型服务", exact: true }).click();
@@ -2252,9 +2247,10 @@ test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", as
   await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("当前模型").getByText("快速模型", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
-  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true }).click();
-  await expect(page).toHaveURL(/\/obs$/);
+  await page.getByRole("button", { name: "账户", exact: true }).click();
+  await expect(page.getByRole("link", { name: /^管理/ })).toBeVisible();
+  await page.getByRole("button", { name: "个人总览", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\?tab=overview$/);
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
 });
 
@@ -2275,7 +2271,7 @@ test("FE-E2E-004F 可从折叠状态删除 Provider", async ({ page }) => {
       },
     ],
   });
-  await page.goto("/settings");
+  await page.goto("/settings?tab=models");
 
   const providerSection = page.getByLabel("Provider 待删除模型服务");
   await page.getByRole("button", { name: "删除 待删除模型服务", exact: true }).click();
@@ -2302,17 +2298,17 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "需要管理员权限", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "可观测", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "打开用户菜单", exact: true }).click();
-  await expect(page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true })).toBeVisible();
+  await page.locator("aside").getByRole("link", { name: "设置", exact: true }).last().click();
+  await expect(page.getByRole("button", { name: "个人总览", exact: true })).toBeVisible();
 
-  await page.getByRole("menu", { name: "用户菜单", exact: true }).getByRole("menuitem", { name: "主页", exact: true }).click();
-  await expect(page).toHaveURL(/\/obs$/);
+  await page.getByRole("button", { name: "个人总览", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\?tab=overview$/);
   await expect(page.getByRole("heading", { name: "OBS", exact: true })).toHaveCount(0);
   await expect(page.getByText("后端异常", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "我的数据", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "全部用户", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "个人总览", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("OBS 视图选择").getByRole("button", { name: "个人总览", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "当前对话", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Token 消耗日历")).toBeVisible();
 
@@ -2387,7 +2383,7 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(modelRawLog.getByText("原始输出", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "个人总览", exact: true }).click();
-  await expect(page).toHaveURL(/\/obs$/);
+  await expect(page).toHaveURL(/\/settings\?tab=overview$/);
   await expect(page.getByRole("button", { name: "日", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "周", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "月", exact: true })).toBeVisible();

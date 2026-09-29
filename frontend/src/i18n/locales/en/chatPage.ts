@@ -1,0 +1,63 @@
+export default {
+  err: {
+    llmFailed: "Model call failed",
+    capabilityFailed: "Capability call failed",
+    wrongWorkspace: "This conversation does not belong to the current workspace. Select the right workspace from the sidebar.",
+    streamFailed: "Streaming call failed",
+    noCompletion: "The agent flow ended without returning a completion event.",
+  },
+  activity: {
+    awaitingApproval: "Waiting for your approval",
+    stopping: "Stopping…",
+    runningApproved: "Running the approved call…",
+    cancelling: "Cancelling the call…",
+  },
+  newConversation: "New conversation",
+  badge: {
+    deleted: "Deleted",
+    running: "Running",
+    ready: "Ready",
+  },
+  viewObsAria: "View observability data for this conversation",
+  titleAria: "Conversation title",
+  save: "Save",
+  cancel: "Cancel",
+  deleteNote: "It will be hidden from the list, and you can restore it right away.",
+  confirmDelete: "Confirm delete",
+  failure: {
+    capability: "Capability call failed: {{name}} · {{error}}",
+    call: "Call failed: {{error}}",
+  },
+  viewRawLogs: "View raw logs",
+  iterations: "{{count}} model iteration(s)",
+  viewCalls: "View call records",
+  stopped: "Generation stopped. You can resume it or just send a new message.",
+  resume: "Resume",
+  dismissError: "Dismiss error",
+  sendFailed: "Sending did not complete. Your draft was kept; try again.",
+  composerPlaceholder: "Add constraints, or plan the next step…",
+  messageAria: "Message",
+  stopAria: "Stop generating",
+  sendAria: "Send message",
+  welcome: {
+    title: "Start a new conversation",
+    body: "Unibot keeps multi-turn context, combines the right capabilities for your goal, and waits for your confirmation before high-risk actions.",
+    f1: {
+      title: "Multi-turn context",
+      body: "Conversation history restores automatically",
+    },
+    f2: {
+      title: "Capability orchestration",
+      body: "Combined automatically per task",
+    },
+    f3: {
+      title: "Safety confirmation",
+      body: "High-risk actions stay under control",
+    },
+  },
+  deleted: {
+    title: "“{{title}}” was deleted",
+    body: "Once restored, it will reappear in the conversation list.",
+    restore: "Restore conversation",
+  },
+};

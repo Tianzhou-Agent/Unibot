@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, FileText, ListTree, RefreshCw } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
@@ -12,6 +13,7 @@ import type {
 } from "@/types";
 
 export function DocumentOutlineWidget({ widget, workspaceId }: { widget: WidgetDefinition; workspaceId?: string | null }) {
+  const { t } = useTranslation("outline");
   const { profile } = useMockSession();
   const sections = useMemo(() => widget.sections ?? [], [widget.sections]);
   const defaultSection = useMemo(() => chooseDefaultSection(sections), [sections]);
@@ -66,24 +68,24 @@ export function DocumentOutlineWidget({ widget, workspaceId }: { widget: WidgetD
   }, [profile.actorUserId, profile.tenantId, reloadKey, selected, widget.document_name, workspaceId]);
 
   return (
-    <section className="overflow-hidden rounded-lg border border-line bg-white shadow-soft" aria-label={`文档章节 ${widget.title}`}>
+    <section className="overflow-hidden rounded-lg border border-line bg-white shadow-soft" aria-label={t("aria", { title: widget.title })}>
       <header className="flex min-h-14 items-center gap-3 border-b border-line bg-app-soft px-4 py-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-accent shadow-sm">
           <FileText className="h-4.5 w-4.5" />
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[13.5px] font-extrabold text-ink">{widget.title}</h3>
-          <p className="mt-0.5 text-[10.5px] text-ink-muted">{chapterCount} 个章节 · {sections.length} 个标题</p>
+          <p className="mt-0.5 text-[10.5px] text-ink-muted">{t("summary", { chapters: chapterCount, headings: sections.length })}</p>
         </div>
-        <span className="rounded bg-accent-soft px-2 py-1 text-[9.5px] font-bold text-accent">章节浏览</span>
+        <span className="rounded bg-accent-soft px-2 py-1 text-[9.5px] font-bold text-accent">{t("badge")}</span>
       </header>
 
       <div className="grid h-[min(560px,68vh)] min-h-[400px] grid-rows-[180px_minmax(0,1fr)] md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
         <aside className="flex min-h-0 flex-col border-b border-line bg-app-soft md:border-b-0 md:border-r">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3 text-[10.5px] font-bold text-ink-muted">
-            <ListTree className="h-3.5 w-3.5" />选择章节
+            <ListTree className="h-3.5 w-3.5" />{t("pick")}
           </div>
-          <nav className="min-h-0 flex-1 overflow-y-auto p-1.5" aria-label="文档章节目录">
+          <nav className="min-h-0 flex-1 overflow-y-auto p-1.5" aria-label={t("navAria")}>
             {sections.map((item) => {
               const active = item.index === selected?.index;
               const depth = Math.max(0, item.level - rootLevel);
@@ -111,7 +113,7 @@ export function DocumentOutlineWidget({ widget, workspaceId }: { widget: WidgetD
           {selected ? (
             <div className="flex h-10 shrink-0 items-center border-b border-line px-3 text-[10px] text-ink-subtle">
               <span className="truncate">{selected.heading}</span>
-              <span className="ml-auto shrink-0 pl-3">第 {selected.line_start}-{selected.line_end} 行</span>
+              <span className="ml-auto shrink-0 pl-3">{t("lines", { start: selected.line_start, end: selected.line_end })}</span>
             </div>
           ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -121,12 +123,12 @@ export function DocumentOutlineWidget({ widget, workspaceId }: { widget: WidgetD
                 <AlertTriangle className="h-6 w-6 text-warning" />
                 <p className="mt-2 text-[11.5px] text-danger-deep">{error}</p>
                 <button type="button" onClick={() => setReloadKey((value) => value + 1)} className="btn-outline mt-3 h-8 text-[11px]">
-                  <RefreshCw className="h-3.5 w-3.5" />重试
+                  <RefreshCw className="h-3.5 w-3.5" />{t("retry")}
                 </button>
               </div>
             ) : null}
             {!loading && !error && section ? <MarkdownContent content={section.content} /> : null}
-            {!loading && !error && !section ? <p className="py-16 text-center text-[11.5px] text-ink-muted">当前文档没有可浏览的章节。</p> : null}
+            {!loading && !error && !section ? <p className="py-16 text-center text-[11.5px] text-ink-muted">{t("empty")}</p> : null}
           </div>
         </div>
       </div>
@@ -143,8 +145,9 @@ function chooseDefaultSection(
 }
 
 function SectionLoading() {
+  const { t } = useTranslation("outline");
   return (
-    <div className="animate-pulse space-y-3" aria-label="正在加载章节">
+    <div className="animate-pulse space-y-3" aria-label={t("loading")}>
       <div className="h-6 w-2/3 rounded bg-line" />
       <div className="h-3 w-full rounded bg-line/80" />
       <div className="h-3 w-11/12 rounded bg-line/80" />

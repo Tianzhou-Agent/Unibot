@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n, { currentLocale } from "@/i18n";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Brain, MessageCircle, Plus, Search, Trash2, X } from "lucide-react";
 import { api, apiErrorMessage } from "@/lib/api";
@@ -6,10 +8,10 @@ import type { MemoryCategory, MemoryListResponse, MemoryRecord, MemoryStatsRespo
 
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 const CATEGORIES: Array<{ value: MemoryCategory; label: string }> = [
-  { value: "fact", label: "事实" },
-  { value: "preference", label: "偏好" },
-  { value: "goal", label: "目标" },
-  { value: "instruction", label: "指令" },
+  { value: "fact", get label() { return i18n.t("memory:cat.fact"); } },
+  { value: "preference", get label() { return i18n.t("memory:cat.preference"); } },
+  { value: "goal", get label() { return i18n.t("memory:cat.goal"); } },
+  { value: "instruction", get label() { return i18n.t("memory:cat.instruction"); } },
 ];
 
 export function MemoryMainWidget({
@@ -19,6 +21,7 @@ export function MemoryMainWidget({
   disabled?: boolean;
   onPrompt?: (prompt: string) => void;
 }) {
+  const { t } = useTranslation("memory");
   const [items, setItems] = useState<MemoryRecord[]>([]);
   const [stats, setStats] = useState<MemoryStatsResponse | null>(null);
   const [query, setQuery] = useState("");
@@ -92,15 +95,15 @@ export function MemoryMainWidget({
         <form onSubmit={save} className="border-b border-line p-3">
           <div className="flex items-center gap-2">
             <Brain className="h-4 w-4 text-accent" />
-            <h2 className="text-[12.5px] font-extrabold text-ink">添加记忆</h2>
+            <h2 className="text-[12.5px] font-extrabold text-ink">{t("add")}</h2>
           </div>
           <textarea
             value={content}
             onChange={(event) => setContent(event.target.value)}
             disabled={disabled || saving}
             rows={4}
-            aria-label="新记忆"
-            placeholder="输入需要长期保留的信息"
+            aria-label={t("newAria")}
+            placeholder={t("newPlaceholder")}
             className="input-soft mt-2.5 resize-none bg-white text-[11.5px]"
           />
           <div className="mt-2 flex items-center gap-1.5">
@@ -108,7 +111,7 @@ export function MemoryMainWidget({
               value={newCategory}
               onChange={(event) => setNewCategory(event.target.value as MemoryCategory)}
               disabled={disabled || saving}
-              aria-label="记忆分类"
+              aria-label={t("categoryAria")}
               className="h-9 min-w-0 flex-1 rounded-lg border border-line bg-white px-2.5 text-[11px] font-semibold text-ink outline-none focus:border-accent"
             >
               {CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
@@ -117,16 +120,16 @@ export function MemoryMainWidget({
               type="submit"
               disabled={disabled || saving || !content.trim()}
               className="btn-primary h-9 w-9 shrink-0 p-0 disabled:opacity-50"
-              aria-label="保存记忆"
-              title="保存记忆"
+              aria-label={t("saveAria")}
+              title={t("saveAria")}
             >
               <Plus className="h-4 w-4" />
             </button>
           </div>
         </form>
 
-        <nav className="grid grid-cols-5 gap-1.5 p-2 md:block md:min-h-0 md:flex-1 md:space-y-1 md:overflow-y-auto" aria-label="记忆分类">
-          <CategoryFilter label="全部" value={stats?.total ?? 0} active={category === "all"} onClick={() => setCategory("all")} />
+        <nav className="grid grid-cols-5 gap-1.5 p-2 md:block md:min-h-0 md:flex-1 md:space-y-1 md:overflow-y-auto" aria-label={t("categoryAria")}>
+          <CategoryFilter label={t("all")} value={stats?.total ?? 0} active={category === "all"} onClick={() => setCategory("all")} />
           {CATEGORIES.map((item) => (
             <CategoryFilter
               key={item.value}
@@ -142,8 +145,8 @@ export function MemoryMainWidget({
       <section className="flex min-h-0 min-w-0 flex-col">
         <header className="flex min-h-14 flex-wrap items-center gap-3 border-b border-line px-3 py-2">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[13.5px] font-extrabold text-ink">长期记忆</h2>
-            <p className="text-[10.5px] text-ink-muted">{items.length} 条结果</p>
+            <h2 className="text-[13.5px] font-extrabold text-ink">{t("longTerm")}</h2>
+            <p className="text-[10.5px] text-ink-muted">{t("results", { count: items.length })}</p>
           </div>
           <label className="flex h-9 w-full items-center gap-2 rounded-lg border border-line-strong bg-app-soft px-3 focus-within:border-accent sm:w-64">
             <Search className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
@@ -151,18 +154,18 @@ export function MemoryMainWidget({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               type="search"
-              aria-label="搜索记忆"
-              placeholder="搜索记忆"
+              aria-label={t("searchAria")}
+              placeholder={t("searchAria")}
               className="min-w-0 flex-1 bg-transparent text-[11.5px] outline-none placeholder:text-ink-subtle"
             />
-            {query ? <button type="button" onClick={() => setQuery("")} aria-label="清除搜索" title="清除搜索"><X className="h-3.5 w-3.5 text-ink-muted" /></button> : null}
+            {query ? <button type="button" onClick={() => setQuery("")} aria-label={t("clearSearch")} title={t("clearSearch")}><X className="h-3.5 w-3.5 text-ink-muted" /></button> : null}
           </label>
         </header>
 
         {error ? (
           <div className="flex items-center gap-2 border-b border-danger-ring bg-danger-soft px-3 py-2 text-[10.5px] text-danger-deep">
             <span className="min-w-0 flex-1">{error}</span>
-            <button type="button" onClick={() => setError(null)} aria-label="关闭错误" title="关闭"><X className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => setError(null)} aria-label={t("closeError")} title={t("close")}><X className="h-3.5 w-3.5" /></button>
           </div>
         ) : null}
 
@@ -171,11 +174,11 @@ export function MemoryMainWidget({
           {!loading && !items.length ? (
             <div className="flex min-h-56 flex-col items-center justify-center text-center text-ink-muted">
               <Brain className="h-7 w-7 text-ink-subtle" />
-              <p className="mt-2 text-[12px] font-semibold">{query ? "没有匹配的记忆" : "还没有长期记忆"}</p>
+              <p className="mt-2 text-[12px] font-semibold">{query ? t("noMatch") : t("noMemories")}</p>
             </div>
           ) : null}
           {!loading && items.length ? (
-            <div className="grid gap-2.5 xl:grid-cols-2" aria-label="记忆列表">
+            <div className="grid gap-2.5 xl:grid-cols-2" aria-label={t("listAria")}>
               {items.map((memory) => (
                 <article key={memory.id} className="flex min-h-[126px] flex-col rounded-lg border border-line bg-white p-3">
                   <div className="flex items-start gap-2.5">
@@ -189,25 +192,25 @@ export function MemoryMainWidget({
                     <span className="ml-auto" />
                     <button
                       type="button"
-                      onClick={() => onPrompt?.(`请根据这条记忆继续对话：${memory.content}`)}
+                      onClick={() => onPrompt?.(t("askPrompt", { content: memory.content }))}
                       className="btn-ghost h-7 w-7 p-0"
-                      aria-label="在对话中询问"
-                      title="在对话中询问"
+                      aria-label={t("askInChat")}
+                      title={t("askInChat")}
                     >
                       <MessageCircle className="h-3.5 w-3.5" />
                     </button>
                     {pendingDelete === memory.id ? (
                       <>
-                        <button type="button" onClick={() => setPendingDelete(null)} className="btn-outline h-7 px-2 text-[10px]">取消</button>
-                        <button type="button" onClick={() => void remove(memory.id)} className="btn-danger-outline h-7 px-2 text-[10px]">删除</button>
+                        <button type="button" onClick={() => setPendingDelete(null)} className="btn-outline h-7 px-2 text-[10px]">{t("cancel")}</button>
+                        <button type="button" onClick={() => void remove(memory.id)} className="btn-danger-outline h-7 px-2 text-[10px]">{t("delete")}</button>
                       </>
                     ) : (
                       <button
                         type="button"
                         onClick={() => setPendingDelete(memory.id)}
                         className="btn-ghost h-7 w-7 p-0 text-danger"
-                        aria-label="删除记忆"
-                        title="删除记忆"
+                        aria-label={t("deleteAria")}
+                        title={t("deleteAria")}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -251,5 +254,5 @@ function categoryTone(category: MemoryCategory): string {
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat(currentLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }

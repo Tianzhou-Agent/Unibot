@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { currentLocale } from "@/i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -61,6 +63,7 @@ const EXAMPLES: Record<SandboxExecutionLanguage, string> = {
 };
 
 export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | null }) {
+  const { t } = useTranslation("codeRunner");
   const { profile } = useMockSession();
   const scope = useMemo<Record<string, string>>(
     () => ({
@@ -129,10 +132,10 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
         tone: execution.status === "succeeded" ? "success" : "error",
         text:
           execution.status === "succeeded"
-            ? `执行成功，退出码 ${execution.exit_code ?? 0}`
+            ? t("ok", { code: execution.exit_code ?? 0 })
             : execution.status === "timed_out"
-              ? "执行超时，进程已终止"
-              : `执行失败，退出码 ${execution.exit_code ?? "未知"}`,
+              ? t("timeout")
+              : t("fail", { code: execution.exit_code ?? t("unknown") }),
       });
       await ensureSandbox();
     } catch (error) {
@@ -148,7 +151,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
     try {
       const record = await api.post<SandboxRecord>("/sandboxes/stop", scope);
       setSandbox(record);
-      setNotice({ tone: "success", text: "运行容器已停止，工作区文件仍会保留。" });
+      setNotice({ tone: "success", text: t("stopped") });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
     }
@@ -157,8 +160,8 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
   async function resetSandbox() {
     const confirmed = window.confirm(
       workspaceId
-        ? "确定重置当前运行环境吗？依赖缓存和执行历史会被删除，工作区 NAS 产物会保留。"
-        : "确定重置当前沙箱吗？工作区文件和执行历史都会被删除。",
+        ? t("resetWs")
+        : t("resetSandbox"),
     );
     if (!confirmed) return;
     setNotice(null);
@@ -170,8 +173,8 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
       setNotice({
         tone: "success",
         text: workspaceId
-          ? `运行环境 ${record.runtime_name} 已重建，NAS 产物已保留。`
-          : `沙箱 ${record.runtime_name} 已重建。`,
+          ? t("rebuiltWs", { name: record.runtime_name })
+          : t("rebuiltSandbox", { name: record.runtime_name }),
       });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
@@ -185,7 +188,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-app-bg text-[12px] text-ink-muted">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />正在初始化用户沙箱…
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />{t("init")}
       </div>
     );
   }
@@ -200,27 +203,27 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[14px] font-extrabold text-ink">代码运行器</h2>
+                <h2 className="text-[14px] font-extrabold text-ink">{t("title")}</h2>
                 <StatusBadge status={status} />
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-ink-muted">
                 {workspaceId
-                  ? "代码产物写入当前工作区 NAS；Python、npm 依赖和临时文件保存在独立运行环境中。"
-                  : "每个用户使用独立沙箱。Python、npm 等用户级依赖可跨容器停止与恢复保留。"}
+                  ? t("descWs")
+                  : t("descUser")}
               </p>
             </div>
             <button type="button" onClick={() => void stopSandbox()} className="btn-outline h-8 text-[11px]">
-              <Square className="h-3.5 w-3.5" />停止容器
+              <Square className="h-3.5 w-3.5" />{t("stop")}
             </button>
             <button type="button" onClick={() => void resetSandbox()} className="btn-danger-outline h-8 text-[11px]">
-              <RotateCcw className="h-3.5 w-3.5" />重置环境
+              <RotateCcw className="h-3.5 w-3.5" />{t("reset")}
             </button>
           </div>
           {sandbox ? (
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <Info icon={Box} label="运行时" value={sandbox.runtime_name} mono />
-              <Info icon={Server} label="隔离驱动" value={sandbox.driver === "kubernetes" ? "Kubernetes · gVisor" : "本地开发驱动"} />
-              <Info icon={Clock3} label="工作区" value={sandbox.workspace} mono />
+              <Info icon={Box} label={t("info.runtime")} value={sandbox.runtime_name} mono />
+              <Info icon={Server} label={t("info.driver")} value={sandbox.driver === "kubernetes" ? "Kubernetes · gVisor" : t("info.driverLocal")} />
+              <Info icon={Clock3} label={t("info.workspace")} value={sandbox.workspace} mono />
             </div>
           ) : null}
         </header>
@@ -267,7 +270,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
             </span>
             <span className="flex-1" />
             <label className="flex items-center gap-1.5 text-[10.5px] font-bold text-slate-300">
-              超时
+              {t("timeoutLabel")}
               <input
                 type="number"
                 min={1}
@@ -276,7 +279,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
                 onChange={(event) => setTimeoutSeconds(Number(event.target.value))}
                 className="h-7 w-16 rounded-md border border-slate-600 bg-slate-900 px-2 text-[10.5px] text-slate-100 outline-none focus:border-accent"
               />
-              秒
+              {t("seconds")}
             </label>
             <button
               type="button"
@@ -285,7 +288,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
               className="btn-primary h-8 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {running ? "运行中…" : "运行脚本"}
+              {running ? t("running") : t("run")}
             </button>
           </div>
           <div data-testid="script-editor" className="bg-[#282c34]">
@@ -303,7 +306,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
               wrapEnabled={false}
               value={activeScript}
               onLoad={(editor) => {
-                editor.setOption("textInputAriaLabel", "脚本编辑器");
+                editor.setOption("textInputAriaLabel", t("editorAria"));
                 editor.textInput.setAriaLabel();
               }}
               onChange={(value) => setScripts((current) => ({ ...current, [language]: value }))}
@@ -315,7 +318,7 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
                 showFoldWidgets: true,
                 showLineNumbers: true,
                 tabSize: 2,
-                textInputAriaLabel: "脚本编辑器",
+                textInputAriaLabel: t("editorAria"),
                 useSoftTabs: true,
                 useWorker: false,
               }}
@@ -341,11 +344,12 @@ export function CodeRunnerMainWidget({ workspaceId }: { workspaceId?: string | n
 }
 
 function OutputPanel({ execution }: { execution: SandboxExecution | null }) {
+  const { t } = useTranslation("codeRunner");
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white">
       <header className="flex items-center gap-2 border-b border-line px-3 py-2.5">
         <TerminalSquare className="h-4 w-4 text-accent" />
-        <h3 className="text-[12.5px] font-extrabold text-ink">运行输出</h3>
+        <h3 className="text-[12.5px] font-extrabold text-ink">{t("output")}</h3>
         {execution ? (
           <>
             <ExecutionBadge status={execution.status} />
@@ -355,15 +359,15 @@ function OutputPanel({ execution }: { execution: SandboxExecution | null }) {
       </header>
       {!execution ? (
         <div className="flex min-h-52 items-center justify-center text-[11.5px] text-ink-muted">
-          运行脚本后在这里查看标准输出和错误。
+          {t("emptyOutput")}
         </div>
       ) : (
         <div className="space-y-3 p-3">
-          <CodeBlock label="标准输出" value={execution.stdout || "（无输出）"} />
-          {execution.stderr ? <CodeBlock label="标准错误" value={execution.stderr} error /> : null}
+          <CodeBlock label={t("stdout")} value={execution.stdout || t("noOutput")} />
+          {execution.stderr ? <CodeBlock label={t("stderr")} value={execution.stderr} error /> : null}
           <p className="text-[10px] text-ink-subtle">
-            退出码：{execution.exit_code ?? "—"} · 工作目录：/workspace/{execution.working_directory === "." ? "" : execution.working_directory}
-            {execution.truncated ? " · 输出已截断" : ""}
+            {t("exitCode", { code: execution.exit_code ?? "—", dir: execution.working_directory === "." ? "" : execution.working_directory })}
+            {execution.truncated ? t("truncated") : ""}
           </p>
         </div>
       )}
@@ -380,16 +384,17 @@ function HistoryPanel({
   selected: string | null;
   onSelect: (execution: SandboxExecution) => void;
 }) {
+  const { t } = useTranslation("codeRunner");
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white">
       <header className="flex items-center gap-2 border-b border-line px-3 py-2.5">
         <Clock3 className="h-4 w-4 text-accent" />
-        <h3 className="text-[12.5px] font-extrabold text-ink">执行历史</h3>
+        <h3 className="text-[12.5px] font-extrabold text-ink">{t("history")}</h3>
         <span className="rounded-md bg-app-soft px-1.5 py-0.5 text-[9.5px] font-bold text-ink-muted">{executions.length}</span>
       </header>
       <div className="max-h-[420px] overflow-y-auto p-2">
         {!executions.length ? (
-          <div className="py-12 text-center text-[11.5px] text-ink-muted">暂无执行记录</div>
+          <div className="py-12 text-center text-[11.5px] text-ink-muted">{t("noHistory")}</div>
         ) : (
           <div className="space-y-1.5">
             {executions.map((execution) => (
@@ -438,12 +443,13 @@ function CodeBlock({ label, value, error = false }: { label: string; value: stri
 }
 
 function StatusBadge({ status }: { status: SandboxStatus }) {
+  const { t } = useTranslation("codeRunner");
   const label: Record<SandboxStatus, string> = {
-    provisioning: "初始化中",
-    ready: "就绪",
-    busy: "运行中",
-    stopped: "已停止",
-    error: "异常",
+    provisioning: t("sandbox.provisioning"),
+    ready: t("sandbox.ready"),
+    busy: t("sandbox.busy"),
+    stopped: t("sandbox.stopped"),
+    error: t("sandbox.error"),
   };
   const style: Record<SandboxStatus, string> = {
     provisioning: "bg-warning-soft text-warning-deep",
@@ -456,7 +462,8 @@ function StatusBadge({ status }: { status: SandboxStatus }) {
 }
 
 function ExecutionBadge({ status }: { status: SandboxExecution["status"] }) {
-  const label = { running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时" }[status];
+  const { t } = useTranslation("codeRunner");
+  const label = t(`exec.${status}`);
   const style = {
     running: "bg-warning-soft text-warning-deep",
     succeeded: "bg-success-soft text-success-deep",
@@ -489,7 +496,7 @@ function Info({
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(currentLocale(), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

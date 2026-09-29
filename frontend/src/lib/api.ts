@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import type { ChatResponse } from "@/types";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -11,7 +12,7 @@ export class ApiError extends Error {
   status: number;
   body: unknown;
   constructor(status: number, body: unknown, message?: string) {
-    super(message ?? `请求失败：${status}`);
+    super(message ?? i18n.t("common:error.requestFailed", { status }));
     this.status = status;
     this.body = body;
   }
@@ -31,7 +32,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const body = text ? safeJson(text) : null;
   if (!res.ok) {
     notifyAuthenticationRequired(path, res.status);
-    throw new ApiError(res.status, body, `请求 ${path} 失败（${res.status}）`);
+    throw new ApiError(res.status, body, i18n.t("common:error.requestPathFailed", { path, status: res.status }));
   }
   return body as T;
 }
@@ -50,7 +51,7 @@ async function requestBlob(path: string, init: RequestInit = {}): Promise<BlobRe
   if (!res.ok) {
     const text = await res.text();
     notifyAuthenticationRequired(path, res.status);
-    throw new ApiError(res.status, text ? safeJson(text) : null, `请求 ${path} 失败（${res.status}）`);
+    throw new ApiError(res.status, text ? safeJson(text) : null, i18n.t("common:error.requestPathFailed", { path, status: res.status }));
   }
   return {
     blob: await res.blob(),
@@ -63,7 +64,7 @@ export function apiErrorMessage(error: unknown): string {
     const body = error.body as { error?: { user_message?: string; message?: string } } | null;
     return body?.error?.user_message ?? body?.error?.message ?? error.message;
   }
-  return error instanceof Error ? error.message : "请求失败，请稍后重试。";
+  return error instanceof Error ? error.message : i18n.t("common:error.retryLater");
 }
 
 export type StreamEvent =
@@ -129,7 +130,7 @@ async function streamEvents(
     notifyAuthenticationRequired(path, response.status);
     throw new ApiError(response.status, text ? safeJson(text) : null);
   }
-  if (!response.body) throw new Error("浏览器未提供流式响应体。");
+  if (!response.body) throw new Error(i18n.t("common:error.noStream"));
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

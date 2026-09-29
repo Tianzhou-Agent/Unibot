@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import {
   AppWindow,
   ChevronRight,
@@ -29,13 +31,14 @@ export function ToolCallList({
   showHeader?: boolean;
   headerCount?: number;
 }) {
+  const { t } = useTranslation("chat");
   if (!calls.length) return null;
   return (
-    <section className="space-y-2" aria-label="工具调用">
+    <section className="space-y-2" aria-label={t("tool.aria")}>
       {showHeader ? (
         <div className="flex items-center gap-1.5 text-[11px] text-ink-subtle">
           <Wrench className="h-3 w-3" />
-          <span>工具调用</span>
+          <span>{t("tool.header")}</span>
           <span className="font-mono">{headerCount ?? calls.length}</span>
         </div>
       ) : null}
@@ -64,10 +67,11 @@ export function ToolResultCard({ message, compact = false, debugMode = false }: 
   compact?: boolean;
   debugMode?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const state = toolResultIsError(message.content) ? "error" : "success";
   return (
     <ToolCallCard
-      name={message.name ?? "能力调用"}
+      name={message.name ?? t("tool.capabilityCall")}
       resultText={message.content}
       state={state}
       compact={compact}
@@ -91,6 +95,7 @@ export function ToolCallCard({
   compact?: boolean;
   debugMode?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   const label = toolLabel(name);
   const summary = summarizeArguments(argumentsText) || summarizeResult(resultText) || statusLabel(state);
   const Icon = toolIcon(name);
@@ -99,7 +104,7 @@ export function ToolCallCard({
   return (
     <details
       className="group overflow-hidden rounded-xl border border-line bg-white"
-      aria-label={`工具调用 ${name} ${statusLabel(state)}`}
+      aria-label={t("tool.callAria", { name, status: statusLabel(state) })}
       open={state === "running" || state === "error"}
     >
       <summary className={classNames(
@@ -121,13 +126,13 @@ export function ToolCallCard({
 
       {hasDetails ? (
         <div className={classNames("border-t border-line bg-app-soft", compact ? "px-3 py-2.5" : "px-4 py-3")}>
-          {argumentsText ? <ToolPayload label="调用参数" value={argumentsText} compact={compact} /> : null}
-          {resultText ? <ToolPayload label={state === "error" ? "错误信息" : "返回结果"} value={resultText} compact={compact} separated={Boolean(argumentsText)} /> : null}
+          {argumentsText ? <ToolPayload label={t("tool.args")} value={argumentsText} compact={compact} /> : null}
+          {resultText ? <ToolPayload label={state === "error" ? t("tool.error") : t("tool.result")} value={resultText} compact={compact} separated={Boolean(argumentsText)} /> : null}
           {debugMode ? (
             <details className="mt-3 border-t border-line pt-2.5">
-              <summary className="cursor-pointer text-[10px] text-ink-subtle focus:outline-none">查看完整调用数据</summary>
+              <summary className="cursor-pointer text-[10px] text-ink-subtle focus:outline-none">{t("tool.viewRaw")}</summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[9.5px] leading-[1.6] text-ink-muted">
-                {name}{argumentsText ? `\n\n调用参数\n${formatJson(argumentsText)}` : ""}{resultText ? `\n\n返回结果\n${formatJson(resultText)}` : ""}
+                {name}{argumentsText ? `\n\n${t("tool.args")}\n${formatJson(argumentsText)}` : ""}{resultText ? `\n\n${t("tool.result")}\n${formatJson(resultText)}` : ""}
               </pre>
             </details>
           ) : null}
@@ -184,17 +189,17 @@ function ToolPayload({ label, value, compact, separated = false }: { label: stri
 
 function toolLabel(name: string): string {
   const value = name.toLowerCase();
-  if (value.startsWith("aina_") || value.includes("open_aina")) return "打开应用";
-  if (value.includes("list_app")) return "查询应用";
-  if (value.includes("search")) return "联网搜索";
-  if (value.includes("browser") || value.includes("fetch") || value.includes("open_url")) return "打开网页";
-  if (value.includes("code") || value.includes("runner") || value.includes("execute") || value.includes("terminal")) return "代码执行";
+  if (value.startsWith("aina_") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
+  if (value.includes("list_app")) return i18n.t("chat:tool.label.listApps");
+  if (value.includes("search")) return i18n.t("chat:tool.label.webSearch");
+  if (value.includes("browser") || value.includes("fetch") || value.includes("open_url")) return i18n.t("chat:tool.label.openWeb");
+  if (value.includes("code") || value.includes("runner") || value.includes("execute") || value.includes("terminal")) return i18n.t("chat:tool.label.runCode");
   if (value.includes("document") || value.includes("file")) {
-    if (value.includes("read") || value.includes("list") || value.includes("tree")) return "读取文档";
-    return "写入文档";
+    if (value.includes("read") || value.includes("list") || value.includes("tree")) return i18n.t("chat:tool.label.readDoc");
+    return i18n.t("chat:tool.label.writeDoc");
   }
-  if (value.includes("memory")) return "记忆管理";
-  if (value.includes("schedule")) return "定时任务";
+  if (value.includes("memory")) return i18n.t("chat:tool.label.memory");
+  if (value.includes("schedule")) return i18n.t("chat:tool.label.schedule");
   return name;
 }
 
@@ -217,7 +222,7 @@ function summarizeArguments(value?: string | null): string {
     const parts = keys.flatMap((key) => typeof payload[key] === "string" && payload[key] ? [String(payload[key])] : []);
     if (parts.length) return parts.slice(0, 2).join(" · ");
     const count = Object.keys(payload).length;
-    return count ? `${count} 个参数` : "无参数";
+    return count ? i18n.t("chat:tool.argCount", { count }) : i18n.t("chat:tool.noArgs");
   } catch {
     return truncate(value, 80);
   }
@@ -234,7 +239,7 @@ function summarizeResult(value?: string | null): string {
     for (const key of ["message", "status", "document_name", "name"]) {
       if (typeof payload[key] === "string" && payload[key]) return String(payload[key]);
     }
-    return `${Object.keys(payload).length} 个返回字段`;
+    return i18n.t("chat:tool.resultFields", { count: Object.keys(payload).length });
   } catch {
     return truncate(value, 80);
   }
@@ -256,9 +261,9 @@ function formatPayloadPreview(value: string): string {
   try {
     const payload: unknown = JSON.parse(value);
     if (payload === null || typeof payload !== "object") return truncate(String(payload), 180);
-    if (Array.isArray(payload)) return `${payload.length} 项${payload.length ? ` · ${payload.slice(0, 3).map(previewValue).join(" · ")}` : ""}`;
+    if (Array.isArray(payload)) return `${i18n.t("chat:tool.items", { count: payload.length })}${payload.length ? ` · ${payload.slice(0, 3).map(previewValue).join(" · ")}` : ""}`;
     const entries = Object.entries(payload as Record<string, unknown>);
-    if (!entries.length) return "无内容";
+    if (!entries.length) return i18n.t("chat:tool.empty");
     return entries.slice(0, 6).map(([key, item]) => `${key}: ${previewValue(item)}`).join("\n");
   } catch {
     return truncate(value, 360);
@@ -268,18 +273,18 @@ function formatPayloadPreview(value: string): string {
 function previewValue(value: unknown): string {
   if (Array.isArray(value)) {
     const preview = value.slice(0, 3).filter((item) => ["string", "number", "boolean"].includes(typeof item)).join(", ");
-    return `${value.length} 项${preview ? ` · ${truncate(preview, 90)}` : ""}`;
+    return `${i18n.t("chat:tool.items", { count: value.length })}${preview ? ` · ${truncate(preview, 90)}` : ""}`;
   }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
     if (typeof record.message === "string") return truncate(record.message, 120);
-    return `${Object.keys(record).length} 个字段`;
+    return i18n.t("chat:tool.fields", { count: Object.keys(record).length });
   }
   return truncate(String(value), 140);
 }
 
 function statusLabel(state: ToolCallState) {
-  return { queued: "排队中", running: "运行中", success: "完成", error: "失败" }[state];
+  return i18n.t(`chat:tool.status.${state}`);
 }
 
 function statusDot(state: ToolCallState) {

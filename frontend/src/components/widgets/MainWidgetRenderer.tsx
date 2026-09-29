@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
@@ -36,17 +37,18 @@ export function MainWidgetRenderer({
   onDocumentTaskContextChange?: (context: DocumentTaskContext | null) => void;
   refreshToken?: string | null;
 }) {
+  const { t } = useTranslation("common");
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
   if (ainaId === "unibot-code-runner") {
     return (
-      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载代码编辑器…</div>}>
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">{t("widget.loadingEditor")}</div>}>
         <CodeRunnerMainWidget workspaceId={workspaceId} />
       </Suspense>
     );
   }
   if (ainaId === "unibot-image-recognition") {
     return (
-      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">正在加载图片识别…</div>}>
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">{t("widget.loadingImage")}</div>}>
         <ImageRecognitionMainWidget />
       </Suspense>
     );

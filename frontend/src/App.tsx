@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import ChatModePage from "@/pages/ChatModePage";
 import CanvasModePage from "@/pages/CanvasModePage";
@@ -33,7 +33,7 @@ export default function App() {
         <Route path="/plugin" element={<AllAppsPage />} />
         <Route path="/apps" element={<Navigate to="/plugin" replace />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />
-        <Route path="/obs" element={<DebugPage />} />
+        <Route path="/obs" element={<PersonalObsRoute />} />
         <Route path="/debug" element={<LegacyDebugRedirect />} />
         <Route element={<AdminRoute />}>
           <Route path="/admin" element={<AdminLayout />}>
@@ -47,6 +47,13 @@ export default function App() {
       </Route>
     </Routes>
   );
+}
+
+// The personal overview lives in Settings; /obs only serves per-conversation drill-downs.
+function PersonalObsRoute() {
+  const [searchParams] = useSearchParams();
+  if (!searchParams.get("sessionId")) return <Navigate to="/settings?tab=overview" replace />;
+  return <DebugPage />;
 }
 
 function LegacyDebugRedirect() {

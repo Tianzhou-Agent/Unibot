@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n, { currentLocale } from "@/i18n";
 import { type ChangeEvent, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
@@ -50,8 +52,8 @@ const DEFAULT_PROJECT_SCAFFOLD: AinaProjectScaffoldRequest = {
 
 const SAMPLE_TOOL = {
   tool_id: "browser.demo.add",
-  name: "浏览器加法工具",
-  description: "通过本地演示运行服务将两个整数相加。",
+  get name() { return i18n.t("apps:sample.tool.name"); },
+  get description() { return i18n.t("apps:sample.tool.desc"); },
   input_schema: {
     type: "object",
     properties: { a: { type: "integer" }, b: { type: "integer" } },
@@ -71,8 +73,8 @@ const SAMPLE_TOOL = {
 const SAMPLE_RISKY_TOOL = {
   ...SAMPLE_TOOL,
   tool_id: "browser.demo.risky-add",
-  name: "高风险演示工具",
-  description: "用于验证授权门禁的演示调用；实际只执行整数相加。",
+  get name() { return i18n.t("apps:sample.risky.name"); },
+  get description() { return i18n.t("apps:sample.risky.desc"); },
   side_effect_level: "high",
 };
 
@@ -80,9 +82,9 @@ const SAMPLE_AINA = {
   protocol_version: "1.0",
   aina: {
     id: "com.example.browser-arithmetic",
-    name: "浏览器算术 AINA",
+    get name() { return i18n.t("apps:sample.aina.name"); },
     version: "1.0.0",
-    description: "用于浏览器端到端测试的远程算术应用。",
+    get description() { return i18n.t("apps:sample.aina.desc"); },
     publisher: { id: "unibot-demo", name: "Unibot Demo" },
   },
   runtime: {
@@ -95,8 +97,8 @@ const SAMPLE_AINA = {
     skills: [
       {
         id: "multiply",
-        name: "整数乘法",
-        description: "返回确定性的整数乘法结果。",
+        get name() { return i18n.t("apps:sample.skill1.name"); },
+        get description() { return i18n.t("apps:sample.skill1.desc"); },
         input_schema: { type: "object" },
       },
     ],
@@ -107,19 +109,19 @@ const SAMPLE_AINA = {
   main_widget: {
     id: "arithmetic-main",
     kind: "form",
-    title: "整数乘法",
-    description: "输入两个整数，通过对话调用当前 AINA。",
-    markdown: "### 交互式乘法\n\n你也可以在左侧对话框直接描述计算需求。",
+    get title() { return i18n.t("apps:sample.widget.title"); },
+    get description() { return i18n.t("apps:sample.widget.desc"); },
+    get markdown() { return i18n.t("apps:sample.widget.markdown"); },
     fields: [
-      { id: "left", label: "第一个整数", input_type: "number", placeholder: "6", required: true },
-      { id: "right", label: "第二个整数", input_type: "number", placeholder: "7", required: true },
+      { id: "left", get label() { return i18n.t("apps:sample.widget.left"); }, input_type: "number", placeholder: "6", required: true },
+      { id: "right", get label() { return i18n.t("apps:sample.widget.right"); }, input_type: "number", placeholder: "7", required: true },
     ],
     actions: [
       {
         id: "multiply",
-        label: "计算乘积",
+        get label() { return i18n.t("apps:sample.widget.action"); },
         kind: "prompt",
-        prompt: "请计算 {left} 乘以 {right}，并返回结果。",
+        get prompt() { return i18n.t("apps:sample.widget.prompt"); },
       },
     ],
   },
@@ -129,12 +131,12 @@ const SAMPLE_AINA = {
 
 const SAMPLE_SKILL = {
   skill_id: "browser.demo.arithmetic",
-  name: "算术验证技能",
-  description: "指导智能体优先使用已注册的确定性算术工具。",
+  get name() { return i18n.t("apps:sample.skill.name"); },
+  get description() { return i18n.t("apps:sample.skill.desc"); },
   version: "1.0.0",
   input_schema: { type: "object" },
   output_schema: { type: "object" },
-  instructions: "遇到精确加法请求时，调用浏览器加法工具，并基于工具结果回答。",
+  get instructions() { return i18n.t("apps:sample.skill.instructions"); },
   tools: ["browser.demo.add"],
   permissions: [],
   publisher: "unibot-demo",
@@ -143,6 +145,7 @@ const SAMPLE_SKILL = {
 };
 
 export default function AllAppsPage() {
+  const { t } = useTranslation("apps");
   const navigate = useNavigate();
   const { user, config } = useAuth();
   const canManageRegistry = !config.auth_required || Boolean(user?.is_admin);
@@ -226,7 +229,7 @@ export default function AllAppsPage() {
       setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
       setNotice({
         tone: "success",
-        text: `${project.manifest.aina.name} 已校验并保存为项目，尚未部署。`,
+        text: t("notice.projectSaved", { name: project.manifest.aina.name }),
       });
     } catch (importError) {
       setNotice({ tone: "error", text: apiErrorMessage(importError) });
@@ -245,7 +248,7 @@ export default function AllAppsPage() {
         result.blob,
         result.filename ?? `${scaffold.aina_id}-${scaffold.version ?? "0.1.0"}.aina.zip`,
       );
-      setNotice({ tone: "success", text: "AINA Project 模板已下载。" });
+      setNotice({ tone: "success", text: t("notice.templateDownloaded") });
       setScaffoldOpen(false);
     } catch (scaffoldError) {
       setNotice({ tone: "error", text: apiErrorMessage(scaffoldError) });
@@ -270,13 +273,13 @@ export default function AllAppsPage() {
   }
 
   async function deleteProject(project: AinaProjectRecord) {
-    if (!window.confirm(`删除项目“${project.manifest.aina.name}”？此操作不会影响已注册的 AINA。`)) return;
+    if (!window.confirm(t("confirm.deleteProject", { name: project.manifest.aina.name }))) return;
     setProjectAction(project.id);
     setNotice(null);
     try {
       await api.delete(`/aina-projects/${encodeURIComponent(project.id)}`);
       setProjects((current) => current.filter((item) => item.id !== project.id));
-      setNotice({ tone: "success", text: `${project.manifest.aina.name} 项目已删除。` });
+      setNotice({ tone: "success", text: t("notice.projectDeleted", { name: project.manifest.aina.name }) });
     } catch (deleteError) {
       setNotice({ tone: "error", text: apiErrorMessage(deleteError) });
     } finally {
@@ -292,7 +295,7 @@ export default function AllAppsPage() {
         `/aina-projects/${encodeURIComponent(project.id)}/deploy`,
       );
       setProjects((current) => current.map((item) => item.id === deployed.id ? deployed : item));
-      setNotice({ tone: "success", text: `${deployed.manifest.aina.name} 已部署，可以安装并从对话调用。` });
+      setNotice({ tone: "success", text: t("notice.deployed", { name: deployed.manifest.aina.name }) });
       await load();
     } catch (deployError) {
       setNotice({ tone: "error", text: apiErrorMessage(deployError) });
@@ -302,7 +305,7 @@ export default function AllAppsPage() {
   }
 
   async function undeployProject(project: AinaProjectRecord) {
-    if (!window.confirm(`取消部署“${project.manifest.aina.name}”？已有安装也会一并移除。`)) return;
+    if (!window.confirm(t("confirm.undeploy", { name: project.manifest.aina.name }))) return;
     setProjectAction(project.id);
     setNotice(null);
     try {
@@ -310,7 +313,7 @@ export default function AllAppsPage() {
         `/aina-projects/${encodeURIComponent(project.id)}/deployment`,
       );
       setProjects((current) => current.map((item) => item.id === deployed.id ? deployed : item));
-      setNotice({ tone: "success", text: `${deployed.manifest.aina.name} 已取消部署，源码项目仍然保留。` });
+      setNotice({ tone: "success", text: t("notice.undeployed", { name: deployed.manifest.aina.name }) });
       await load();
     } catch (deployError) {
       setNotice({ tone: "error", text: apiErrorMessage(deployError) });
@@ -326,7 +329,7 @@ export default function AllAppsPage() {
       const payload = JSON.parse(editorText) as unknown;
       const path = tab === "aina" ? "/ainas" : tab === "tools" ? "/tools" : "/skills";
       await api.post(path, payload);
-      setNotice({ tone: "success", text: `${tabLabel(tab)}注册成功。` });
+      setNotice({ tone: "success", text: t("notice.registered", { label: tabLabel(tab) }) });
       setEditorOpen(false);
       await load();
     } catch (registerError) {
@@ -344,7 +347,7 @@ export default function AllAppsPage() {
         granted_permissions: aina.manifest.permissions,
         configuration: {},
       });
-      setNotice({ tone: "success", text: `${aina.manifest.aina.name} 已安装并完成权限授权。` });
+      setNotice({ tone: "success", text: t("notice.installed", { name: aina.manifest.aina.name }) });
       await load();
     } catch (installError) {
       setNotice({ tone: "error", text: apiErrorMessage(installError) });
@@ -356,7 +359,7 @@ export default function AllAppsPage() {
       await api.delete(
         `/ainas/${aina.manifest.aina.id}/install?user_id=anonymous&tenant_id=default`,
       );
-      setNotice({ tone: "success", text: `${aina.manifest.aina.name} 已卸载。` });
+      setNotice({ tone: "success", text: t("notice.uninstalled", { name: aina.manifest.aina.name }) });
       await load();
     } catch (uninstallError) {
       setNotice({ tone: "error", text: apiErrorMessage(uninstallError) });
@@ -367,7 +370,7 @@ export default function AllAppsPage() {
     const path = kind === "aina" ? `/ainas/${id}` : kind === "tools" ? `/tools/${id}` : `/skills/${id}`;
     try {
       await api.delete(path);
-      setNotice({ tone: "success", text: "能力定义已删除。" });
+      setNotice({ tone: "success", text: t("notice.definitionDeleted") });
       await load();
     } catch (removeError) {
       setNotice({ tone: "error", text: apiErrorMessage(removeError) });
@@ -390,11 +393,11 @@ export default function AllAppsPage() {
   return (
     <div className="flex h-full flex-col bg-app-bg">
       <Topbar
-        title="插件"
-        badge={{ label: `${total} 项能力`, tone: "neutral" }}
+        title={t("title")}
+        badge={{ label: t("badge", { count: total }), tone: "neutral" }}
         actions={
-          <button type="button" onClick={() => void load()} className="btn-outline h-8" aria-label="刷新能力">
-            <RefreshCw className="w-3.5 h-3.5" />刷新
+          <button type="button" onClick={() => void load()} className="btn-outline h-8" aria-label={t("refreshAria")}>
+            <RefreshCw className="w-3.5 h-3.5" />{t("refresh")}
           </button>
         }
       />
@@ -403,18 +406,18 @@ export default function AllAppsPage() {
           <section className="rounded-xl border border-line bg-white p-4 shadow-soft">
             <div className="flex flex-wrap items-center gap-2">
               <TabButton active={tab === "aina"} onClick={() => setTab("aina")} icon={<AppWindow className="w-4 h-4" />}>
-                AINA 应用 <Count value={ainas.length} />
+                {t("tab.aina")} <Count value={ainas.length} />
               </TabButton>
               <TabButton active={tab === "tools"} onClick={() => setTab("tools")} icon={<Wrench className="w-4 h-4" />}>
-                工具 <Count value={tools.length} />
+                {t("tab.tools")} <Count value={tools.length} />
               </TabButton>
               <TabButton active={tab === "skills"} onClick={() => setTab("skills")} icon={<Code2 className="w-4 h-4" />}>
-                技能 <Count value={skills.length} />
+                {t("tab.skills")} <Count value={skills.length} />
               </TabButton>
               <span className="flex-1" />
               {tab === "tools" ? (
                 <button type="button" onClick={() => openEditor("tools", "risky")} className="btn-outline">
-                  <ShieldAlert className="w-4 h-4 text-warning" />高风险示例
+                  <ShieldAlert className="w-4 h-4 text-warning" />{t("riskySample")}
                 </button>
               ) : null}
               {tab === "aina" ? (
@@ -424,7 +427,7 @@ export default function AllAppsPage() {
                     type="file"
                     accept=".zip,.aina.zip,application/zip"
                     className="hidden"
-                    aria-label="选择 AINA Project ZIP"
+                    aria-label={t("zipAria")}
                     onChange={(event) => void importProject(event)}
                   />
                   <button
@@ -437,7 +440,7 @@ export default function AllAppsPage() {
                     className="btn-outline"
                     aria-expanded={scaffoldOpen}
                   >
-                    <FileArchive className="w-4 h-4" />项目模板
+                    <FileArchive className="w-4 h-4" />{t("template")}
                   </button>
                   <button
                     type="button"
@@ -446,13 +449,13 @@ export default function AllAppsPage() {
                     className="btn-outline"
                   >
                     {projectAction === "import" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                    {projectAction === "import" ? "正在导入…" : "导入 Project ZIP"}
+                    {projectAction === "import" ? t("importing") : t("importZip")}
                   </button>
                 </>
               ) : null}
               {canManageRegistry ? <button type="button" onClick={() => openEditor()} className="btn bg-ink text-white hover:bg-black">
-                <Plus className="w-4 h-4" />注册{tabLabel(tab)}
-              </button> : <p className="text-xs text-ink-muted">注册和删除能力定义需要管理员权限。</p>}
+                <Plus className="w-4 h-4" />{t("register", { label: tabLabel(tab) })}
+              </button> : <p className="text-xs text-ink-muted">{t("adminOnly")}</p>}
             </div>
           </section>
 
@@ -525,6 +528,7 @@ function ProjectScaffoldForm({
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const { t } = useTranslation("apps");
   return (
     <form onSubmit={onSubmit} className="rounded-xl border border-line bg-white p-4 shadow-soft">
       <div className="flex items-start gap-3">
@@ -532,8 +536,8 @@ function ProjectScaffoldForm({
           <FileArchive className="h-5 w-5" />
         </div>
         <div>
-          <h2 className="text-[14px] font-extrabold text-ink">生成 AINA Project 模板</h2>
-          <p className="mt-0.5 text-[11.5px] text-ink-muted">下载可编辑的源码 ZIP，开发完成后再导入并校验。</p>
+          <h2 className="text-[14px] font-extrabold text-ink">{t("scaffold.title")}</h2>
+          <p className="mt-0.5 text-[11.5px] text-ink-muted">{t("scaffold.desc")}</p>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -546,7 +550,7 @@ function ProjectScaffoldForm({
             placeholder="com.example.my-aina"
           />
         </ProjectField>
-        <ProjectField label="名称">
+        <ProjectField label={t("scaffold.name")}>
           <input
             required
             value={value.name}
@@ -555,7 +559,7 @@ function ProjectScaffoldForm({
             placeholder="My AINA"
           />
         </ProjectField>
-        <ProjectField label="版本">
+        <ProjectField label={t("scaffold.version")}>
           <input
             required
             value={value.version ?? ""}
@@ -564,7 +568,7 @@ function ProjectScaffoldForm({
             placeholder="0.1.0"
           />
         </ProjectField>
-        <ProjectField label="运行语言">
+        <ProjectField label={t("scaffold.language")}>
           <select
             value={value.language}
             onChange={(event) => onChange({ ...value, language: event.target.value as "python" | "node" })}
@@ -575,23 +579,23 @@ function ProjectScaffoldForm({
           </select>
         </ProjectField>
         <div className="sm:col-span-2">
-          <ProjectField label="描述">
+          <ProjectField label={t("scaffold.description")}>
             <textarea
               required
               rows={3}
               value={value.description}
               onChange={(event) => onChange({ ...value, description: event.target.value })}
               className="input-soft resize-none"
-              placeholder="这个 AINA Project 提供什么能力？"
+              placeholder={t("scaffold.descPlaceholder")}
             />
           </ProjectField>
         </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="btn-outline">取消</button>
+        <button type="button" onClick={onCancel} className="btn-outline">{t("scaffold.cancel")}</button>
         <button type="submit" disabled={downloading} className="btn bg-ink text-white hover:bg-black">
           {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          {downloading ? "正在生成…" : "下载 ZIP 模板"}
+          {downloading ? t("scaffold.generating") : t("scaffold.download")}
         </button>
       </div>
     </form>
@@ -622,6 +626,7 @@ function ProjectSection({
   onDeploy: (project: AinaProjectRecord) => void;
   onUndeploy: (project: AinaProjectRecord) => void;
 }) {
+  const { t } = useTranslation("apps");
   return (
     <section aria-label="AINA Projects" className="mb-4 rounded-xl border border-line bg-white p-4 shadow-soft">
       <div className="flex items-start gap-3">
@@ -633,7 +638,7 @@ function ProjectSection({
             <h2 className="text-[14px] font-extrabold text-ink">AINA Projects</h2>
             <Count value={projects.length} />
           </div>
-          <p className="mt-0.5 text-[11.5px] text-ink-muted">源码包经平台校验后独立保存，不会自动安装，也不会进入可调用 AINA 列表。</p>
+          <p className="mt-0.5 text-[11.5px] text-ink-muted">{t("projects.desc")}</p>
         </div>
       </div>
       {projects.length ? (
@@ -655,10 +660,10 @@ function ProjectSection({
                       <h3 className="truncate text-[13.5px] font-extrabold text-ink">{project.manifest.aina.name}</h3>
                       <StatusChip tone={project.status === "deployed" || project.status === "validated" ? "success" : "warning"}>
                         {project.status === "deployed"
-                          ? "已部署"
+                          ? t("project.deployed")
                           : project.status === "validated"
-                            ? managed ? "已校验·待部署" : "已校验"
-                            : "导入未完成"}
+                            ? managed ? t("project.validatedManaged") : t("project.validated")
+                            : t("project.incomplete")}
                       </StatusChip>
                     </div>
                     <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-subtle">
@@ -669,11 +674,11 @@ function ProjectSection({
                 <p className="mt-2 line-clamp-2 text-[11.5px] leading-relaxed text-ink-muted">{project.manifest.aina.description}</p>
                 <div className="mt-3 space-y-1 rounded-lg bg-white px-2.5 py-2 text-[10.5px] text-ink-muted">
                   <p className="truncate font-mono">{runtimeLabel}</p>
-                  <p className="truncate">{project.source_filename} · {project.file_count} 个文件 · {formatBytes(project.size_bytes)}</p>
+                  <p className="truncate">{t("project.files", { filename: project.source_filename, count: project.file_count, size: formatBytes(project.size_bytes) })}</p>
                   <p className="truncate font-mono" title={project.archive_sha256}>SHA-256 {project.archive_sha256.slice(0, 12)}…</p>
                 </div>
                 <div className="mt-3 flex items-center gap-2">
-                  <span className="text-[10px] text-ink-subtle">更新于 {formatDate(project.updated_at)}</span>
+                  <span className="text-[10px] text-ink-subtle">{t("project.updated", { date: formatDate(project.updated_at) })}</span>
                   <span className="flex-1" />
                   {project.status === "validated" ? (
                     <button
@@ -681,10 +686,10 @@ function ProjectSection({
                       disabled={busyProjectId !== null}
                       onClick={() => onDeploy(project)}
                       className="btn h-8 bg-ink text-white hover:bg-black"
-                      aria-label={`部署项目 ${project.manifest.aina.name}`}
+                      aria-label={t("project.deployAria", { name: project.manifest.aina.name })}
                     >
                       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
-                      {busy ? "部署中…" : "部署"}
+                      {busy ? t("project.deploying") : t("project.deploy")}
                     </button>
                   ) : project.status === "deployed" ? (
                     <button
@@ -692,10 +697,10 @@ function ProjectSection({
                       disabled={busyProjectId !== null}
                       onClick={() => onUndeploy(project)}
                       className="btn-outline h-8"
-                      aria-label={`取消部署项目 ${project.manifest.aina.name}`}
+                      aria-label={t("project.undeployAria", { name: project.manifest.aina.name })}
                     >
                       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
-                      取消部署
+                      {t("project.undeploy")}
                     </button>
                   ) : null}
                   <button
@@ -703,17 +708,17 @@ function ProjectSection({
                     disabled={busyProjectId !== null || project.status === "importing"}
                     onClick={() => onDownload(project)}
                     className="btn-outline h-8"
-                    aria-label={`下载项目 ${project.manifest.aina.name}`}
+                    aria-label={t("project.downloadAria", { name: project.manifest.aina.name })}
                   >
                     {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                    下载
+                    {t("project.download")}
                   </button>
                   <button
                     type="button"
                     disabled={busyProjectId !== null || project.status === "deployed"}
                     onClick={() => onDelete(project)}
                     className="btn-ghost h-8 text-danger"
-                    aria-label={`删除项目 ${project.manifest.aina.name}`}
+                    aria-label={t("project.deleteAria", { name: project.manifest.aina.name })}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -724,8 +729,8 @@ function ProjectSection({
         </div>
       ) : (
         <div className="mt-4 rounded-lg border border-dashed border-line-strong bg-app-soft/40 px-4 py-5 text-center">
-          <p className="text-[12px] font-bold text-ink">尚未导入 AINA Project</p>
-          <p className="mt-1 text-[11px] text-ink-muted">可先下载项目模板，完成开发后导入 ZIP 校验。</p>
+          <p className="text-[12px] font-bold text-ink">{t("projects.emptyTitle")}</p>
+          <p className="mt-1 text-[11px] text-ink-muted">{t("projects.emptyBody")}</p>
         </div>
       )}
     </section>
@@ -747,8 +752,9 @@ function AinaGrid({
   onOpen: (aina: AinaRecord) => void;
   onDelete?: (id: string) => void;
 }) {
+  const { t } = useTranslation("apps");
   const [selectedAina, setSelectedAina] = useState<AinaRecord | null>(null);
-  if (!ainas.length) return <EmptyState icon={<AppWindow />} title="尚未注册 AINA" detail="请先注册远程运行服务清单。" />;
+  if (!ainas.length) return <EmptyState icon={<AppWindow />} title={t("aina.emptyTitle")} detail={t("aina.emptyDetail")} />;
   return (
     <>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -766,7 +772,7 @@ function AinaGrid({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <h2 className="truncate text-[15px] font-extrabold text-ink">{manifest.aina.name}</h2>
-                  {builtin ? <StatusChip tone="success">系统内置</StatusChip> : installed ? <StatusChip tone="success">已安装</StatusChip> : <StatusChip>{managed ? "已部署" : "已注册"}</StatusChip>}
+                  {builtin ? <StatusChip tone="success">{t("aina.builtin")}</StatusChip> : installed ? <StatusChip tone="success">{t("aina.installed")}</StatusChip> : <StatusChip>{managed ? t("aina.deployed") : t("aina.registered")}</StatusChip>}
                 </div>
                 <p className="mt-0.5 font-mono text-[10.5px] text-ink-muted">{manifest.aina.id} · v{manifest.aina.version}</p>
               </div>
@@ -779,12 +785,12 @@ function AinaGrid({
                   {manifest.runtime.type === "remote"
                     ? manifest.runtime.endpoint
                     : manifest.runtime.type === "managed"
-                      ? `本地托管 · ${manifest.runtime.language === "python" ? "Python" : "Node.js"}`
+                      ? t("aina.managed", { lang: manifest.runtime.language === "python" ? "Python" : "Node.js" })
                       : "platform://builtin"}
                 </span>
               </div>
               <div className="text-[11px] text-ink-muted">
-                {manifest.capabilities.skills.length} 项技能 · {manifest.capabilities.tools.length} 项工具 · {manifest.permissions.length} 项权限
+                {t("aina.counts", { skills: manifest.capabilities.skills.length, tools: manifest.capabilities.tools.length, perms: manifest.permissions.length })}
               </div>
             </div>
             {manifest.permissions.length ? (
@@ -794,32 +800,32 @@ function AinaGrid({
             ) : null}
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button type="button" onClick={() => setSelectedAina(record)} className="btn-outline">
-                <ListTree className="h-4 w-4" />查看能力
+                <ListTree className="h-4 w-4" />{t("aina.viewCaps")}
               </button>
               {builtin ? (
                 <button type="button" onClick={() => onOpen(record)} className="btn bg-ink text-white hover:bg-black">
                   <AppWindow className="h-4 w-4" />
-                  {manifest.aina.id === "unibot-scheduler" ? "管理任务" : "打开应用"}
+                  {manifest.aina.id === "unibot-scheduler" ? t("aina.manageTasks") : t("aina.open")}
                 </button>
               ) : installed ? (
                 <>
                   {manifest.main_widget ? (
                     <button type="button" onClick={() => onOpen(record)} className="btn bg-ink text-white hover:bg-black">
-                      <AppWindow className="h-4 w-4" />打开应用
+                      <AppWindow className="h-4 w-4" />{t("aina.open")}
                     </button>
                   ) : null}
                   <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
-                    <Unplug className="w-4 h-4" />卸载
+                    <Unplug className="w-4 h-4" />{t("aina.uninstall")}
                   </button>
                 </>
               ) : (
                 <button type="button" onClick={() => onInstall(record)} className="btn bg-ink text-white hover:bg-black">
-                  <Download className="w-4 h-4" />安装并授权
+                  <Download className="w-4 h-4" />{t("aina.install")}
                 </button>
               )}
               <span className="flex-1" />
               {!builtin && !managed && onDelete ? (
-                <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={`删除 ${manifest.aina.name}`}>
+                <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={t("aina.deleteAria", { name: manifest.aina.name })}>
                   <Trash2 className="w-4 h-4" />
                 </button>
               ) : null}
@@ -834,7 +840,8 @@ function AinaGrid({
 }
 
 function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete?: (id: string) => void }) {
-  if (!tools.length) return <EmptyState icon={<Wrench />} title="尚未注册工具" detail="请注册 OpenAI 函数结构和远程执行地址。" />;
+  const { t } = useTranslation("apps");
+  if (!tools.length) return <EmptyState icon={<Wrench />} title={t("tool.emptyTitle")} detail={t("tool.emptyDetail")} />;
   return (
     <div className="space-y-2.5">
       {tools.map((tool) => (
@@ -846,14 +853,14 @@ function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete?: (id: st
             <div className="flex items-center gap-2">
               <h2 className="text-[14px] font-extrabold text-ink">{tool.name}</h2>
               <StatusChip tone={tool.side_effect_level === "high" ? "warning" : "neutral"}>
-                {tool.side_effect_level === "high" ? "需确认" : "无副作用"}
+                {tool.side_effect_level === "high" ? t("tool.needsApproval") : t("tool.noSideEffects")}
               </StatusChip>
             </div>
             <p className="mt-1 text-[12px] text-ink-muted">{tool.description}</p>
             <p className="mt-1 truncate font-mono text-[10.5px] text-ink-subtle">{tool.tool_id} · {tool.endpoint}</p>
           </div>
-          {onDelete ? <button type="button" onClick={() => onDelete(tool.tool_id)} className="btn-danger-outline" aria-label={`删除 ${tool.name}`}>
-            <Trash2 className="w-4 h-4" />删除
+          {onDelete ? <button type="button" onClick={() => onDelete(tool.tool_id)} className="btn-danger-outline" aria-label={t("tool.deleteAria", { name: tool.name })}>
+            <Trash2 className="w-4 h-4" />{t("tool.delete")}
           </button> : null}
         </article>
       ))}
@@ -862,7 +869,8 @@ function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete?: (id: st
 }
 
 function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete?: (id: string) => void }) {
-  if (!skills.length) return <EmptyState icon={<Code2 />} title="尚未定义技能" detail="技能为智能体提供可复用的行为指令。" />;
+  const { t } = useTranslation("apps");
+  if (!skills.length) return <EmptyState icon={<Code2 />} title={t("skill.emptyTitle")} detail={t("skill.emptyDetail")} />;
   return (
     <div className="grid grid-cols-2 gap-3">
       {skills.map((skill) => (
@@ -877,7 +885,7 @@ function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete?: (id
           <div className="mt-3 flex items-center gap-2">
             <span className="font-mono text-[10.5px] text-ink-subtle">{skill.skill_id}</span>
             <span className="flex-1" />
-            {onDelete ? <button type="button" onClick={() => onDelete(skill.skill_id)} className="btn-ghost text-danger" aria-label={`删除 ${skill.name}`}><Trash2 className="w-4 h-4" /></button> : null}
+            {onDelete ? <button type="button" onClick={() => onDelete(skill.skill_id)} className="btn-ghost text-danger" aria-label={t("skill.deleteAria", { name: skill.name })}><Trash2 className="w-4 h-4" /></button> : null}
           </div>
         </article>
       ))}
@@ -886,13 +894,14 @@ function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete?: (id
 }
 
 function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { tab: Tab; text: string; saving: boolean; onChange: (text: string) => void; onClose: () => void; onSave: () => void }) {
+  const { t } = useTranslation("apps");
   return (
     <section className="overflow-hidden rounded-xl border border-line bg-white shadow-soft">
       <div className="flex h-12 items-center gap-2 border-b border-line bg-app-soft px-4">
         <Code2 className="h-4 w-4 text-ink-muted" />
-        <h2 className="text-[13px] font-extrabold text-ink">注册{tabLabel(tab)} JSON</h2>
+        <h2 className="text-[13px] font-extrabold text-ink">{t("editor.title", { label: tabLabel(tab) })}</h2>
         <span className="flex-1" />
-        <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label="关闭注册编辑器"><X className="w-4 h-4" /></button>
+        <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label={t("editor.close")}><X className="w-4 h-4" /></button>
       </div>
       <div className="p-4">
         <textarea
@@ -904,10 +913,10 @@ function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { ta
           className="w-full rounded-lg border border-line-strong bg-slate-950 p-3 font-mono text-[11.5px] leading-relaxed text-slate-100 outline-none focus:border-accent"
         />
         <div className="mt-3 flex items-center gap-2">
-          <p className="text-[11px] text-ink-muted">提交前由后端执行数据结构、协议和远程健康检查。</p>
+          <p className="text-[11px] text-ink-muted">{t("editor.hint")}</p>
           <span className="flex-1" />
-          <button type="button" onClick={onClose} className="btn-outline">取消</button>
-          <button type="button" disabled={saving} onClick={onSave} className="btn bg-ink text-white hover:bg-black">{saving ? "正在注册…" : "提交注册"}</button>
+          <button type="button" onClick={onClose} className="btn-outline">{t("editor.cancel")}</button>
+          <button type="button" disabled={saving} onClick={onSave} className="btn bg-ink text-white hover:bg-black">{saving ? t("editor.registering") : t("editor.submit")}</button>
         </div>
       </div>
     </section>
@@ -929,11 +938,12 @@ function StatusChip({ children, tone = "neutral" }: { children: React.ReactNode;
 }
 
 function Notice({ tone, text, onClose }: { tone: "success" | "error"; text: string; onClose: () => void }) {
+  const { t } = useTranslation("apps");
   return (
     <div className={classNames("rounded-lg border p-3 flex items-center gap-2.5", tone === "success" ? "border-success/20 bg-success-soft text-success-deep" : "border-danger-ring bg-danger-soft text-danger-deep")}>
       {tone === "success" ? <CheckCircle2 className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
       <span className="flex-1 text-[12.5px] font-semibold">{text}</span>
-      <button type="button" onClick={onClose} aria-label="关闭提示"><X className="w-4 h-4" /></button>
+      <button type="button" onClick={onClose} aria-label={t("dismiss")}><X className="w-4 h-4" /></button>
     </div>
   );
 }
@@ -953,7 +963,7 @@ function LoadingCards() {
 }
 
 function tabLabel(tab: Tab): string {
-  return tab === "aina" ? "AINA" : tab === "tools" ? "工具" : "技能";
+  return tab === "aina" ? "AINA" : i18n.t(`apps:label.${tab}`);
 }
 
 function formatBytes(bytes: number): string {
@@ -964,7 +974,7 @@ function formatBytes(bytes: number): string {
 
 function formatDate(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("zh-CN");
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(currentLocale());
 }
 
 function downloadBlob(blob: Blob, filename: string) {

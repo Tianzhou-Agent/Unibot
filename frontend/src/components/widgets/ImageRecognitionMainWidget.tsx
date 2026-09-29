@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -21,6 +22,7 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const BOX_COLORS = ["#2563eb", "#e11d48", "#16a34a", "#9333ea", "#ea580c", "#0891b2"];
 
 export function ImageRecognitionMainWidget() {
+  const { t } = useTranslation("imageRec");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
   const [health, setHealth] = useState<VisionHealth | null>(null);
@@ -72,11 +74,11 @@ export function ImageRecognitionMainWidget() {
   const chooseFile = useCallback(
     (file: File) => {
       if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
-        setError("仅支持 JPEG、PNG 或 WebP 图片。");
+        setError(t("err.type"));
         return;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        setError("图片不能超过 10 MB。");
+        setError(t("err.size"));
         return;
       }
       setPreviewUrl((current) => {
@@ -125,8 +127,8 @@ export function ImageRecognitionMainWidget() {
                 <ScanSearch className="h-4.5 w-4.5" />
               </span>
               <div>
-                <h2 className="text-[15px] font-extrabold text-ink">YOLO26m 目标检测</h2>
-                <p className="text-[11.5px] text-ink-muted">粘贴或选择图片，自动识别目标、位置与置信度</p>
+                <h2 className="text-[15px] font-extrabold text-ink">{t("title")}</h2>
+                <p className="text-[11.5px] text-ink-muted">{t("subtitle")}</p>
               </div>
             </div>
           </div>
@@ -137,7 +139,7 @@ export function ImageRecognitionMainWidget() {
           <section className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-line bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
               <div>
-                <h3 className="text-[13px] font-bold text-ink">图片预览</h3>
+                <h3 className="text-[13px] font-bold text-ink">{t("preview")}</h3>
                 {selectedFile ? (
                   <p className="mt-0.5 text-[10.5px] text-ink-muted">
                     {selectedFile.name} · {formatFileSize(selectedFile.size)}
@@ -153,12 +155,12 @@ export function ImageRecognitionMainWidget() {
                     className="btn-outline !px-3 !py-1.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <RefreshCw className={classNames("h-3.5 w-3.5", detecting && "animate-spin")} />
-                    重新识别
+                    {t("redetect")}
                   </button>
                   <button
                     type="button"
                     onClick={clearImage}
-                    aria-label="清除图片"
+                    aria-label={t("clearAria")}
                     className="flex h-8 w-8 items-center justify-center rounded-lg border border-line text-ink-muted transition hover:border-danger/30 hover:bg-danger/5 hover:text-danger"
                   >
                     <X className="h-4 w-4" />
@@ -183,7 +185,7 @@ export function ImageRecognitionMainWidget() {
                 <div className="relative inline-block max-h-full max-w-full overflow-hidden rounded-lg bg-[#0b1220] shadow-inner">
                   <img
                     src={previewUrl}
-                    alt="待识别图片预览"
+                    alt={t("previewAlt")}
                     className="block max-h-[660px] max-w-full object-contain"
                   />
                   {result ? (
@@ -191,7 +193,7 @@ export function ImageRecognitionMainWidget() {
                       viewBox={`0 0 ${result.image.width} ${result.image.height}`}
                       preserveAspectRatio="none"
                       className="pointer-events-none absolute inset-0 h-full w-full"
-                      aria-label="目标检测框"
+                      aria-label={t("boxesAria")}
                     >
                       {result.detections.map((detection, index) => {
                         const color = BOX_COLORS[index % BOX_COLORS.length];
@@ -233,7 +235,7 @@ export function ImageRecognitionMainWidget() {
                     <div className="absolute inset-0 flex items-center justify-center bg-[#081225]/70 text-white backdrop-blur-[1px]">
                       <div className="flex items-center gap-2 rounded-lg bg-black/35 px-4 py-2 text-[12px] font-semibold">
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        正在识别…
+                        {t("detecting")}
                       </div>
                     </div>
                   ) : null}
@@ -247,17 +249,17 @@ export function ImageRecognitionMainWidget() {
                   <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand">
                     <ImagePlus className="h-7 w-7" />
                   </span>
-                  <strong className="text-[14px] text-ink">粘贴、拖入或选择图片</strong>
+                  <strong className="text-[14px] text-ink">{t("drop.title")}</strong>
                   <span className="mt-2 text-[11.5px] leading-5 text-ink-muted">
-                    支持 JPEG、PNG、WebP
+                    {t("drop.formats")}
                     <br />
-                    单张图片最大 10 MB
+                    {t("drop.size")}
                     <br />
-                    图片仅用于本次识别，不会持久化保存
+                    {t("drop.privacy")}
                   </span>
                   <span className="btn-primary mt-4">
                     <Upload className="h-4 w-4" />
-                    选择图片
+                    {t("drop.choose")}
                   </span>
                 </button>
               )}
@@ -265,7 +267,7 @@ export function ImageRecognitionMainWidget() {
                 ref={fileInputRef}
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                aria-label="选择识别图片"
+                aria-label={t("fileAria")}
                 className="sr-only"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -279,10 +281,10 @@ export function ImageRecognitionMainWidget() {
             <div className="border-b border-line px-4 py-3">
               <div className="flex items-center gap-2">
                 <Gauge className="h-4 w-4 text-brand" />
-                <h3 className="text-[13px] font-bold text-ink">识别结果</h3>
+                <h3 className="text-[13px] font-bold text-ink">{t("results")}</h3>
                 {result ? (
                   <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold text-brand">
-                    {result.detections.length} 个目标
+                    {t("targetCount", { count: result.detections.length })}
                   </span>
                 ) : null}
               </div>
@@ -299,17 +301,17 @@ export function ImageRecognitionMainWidget() {
               ) : detecting ? (
                 <div className="flex h-full min-h-48 flex-col items-center justify-center text-center text-ink-muted">
                   <Loader2 className="mb-3 h-7 w-7 animate-spin text-brand" />
-                  <strong className="text-[12px] text-ink">YOLO26m 正在分析图片</strong>
-                  <span className="mt-1 text-[11px]">首次运行可能需要加载模型</span>
+                  <strong className="text-[12px] text-ink">{t("analyzing")}</strong>
+                  <span className="mt-1 text-[11px]">{t("firstRun")}</span>
                 </div>
               ) : result ? (
                 <DetectionResults result={result} />
               ) : (
                 <div className="flex h-full min-h-48 flex-col items-center justify-center px-5 text-center text-ink-muted">
                   <Clipboard className="mb-3 h-7 w-7 text-ink-faint" />
-                  <strong className="text-[12px] text-ink">等待图片</strong>
+                  <strong className="text-[12px] text-ink">{t("waiting")}</strong>
                   <span className="mt-1 text-[11px] leading-5">
-                    可直接按 Ctrl+V 粘贴剪贴板中的截图，也可以从本地选择图片
+                    {t("waitingHint")}
                   </span>
                 </div>
               )}
@@ -330,11 +332,12 @@ function HealthBadge({
   error: string | null;
   onRetry: () => Promise<void>;
 }) {
+  const { t } = useTranslation("imageRec");
   if (error) {
     return (
       <button type="button" onClick={() => void onRetry()} className="flex items-center gap-2 rounded-lg bg-danger/5 px-3 py-2 text-[11px] text-danger">
         <AlertCircle className="h-3.5 w-3.5" />
-        服务不可用，点击重试
+        {t("health.unavailable")}
       </button>
     );
   }
@@ -342,7 +345,7 @@ function HealthBadge({
     return (
       <div className="flex items-center gap-2 rounded-lg bg-surface-subtle px-3 py-2 text-[11px] text-ink-muted">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        检查识别服务
+        {t("health.checking")}
       </div>
     );
   }
@@ -355,13 +358,14 @@ function HealthBadge({
 }
 
 function DetectionResults({ result }: { result: VisionDetectionResponse }) {
+  const { t } = useTranslation("imageRec");
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
-        <ResultMetric icon={<ScanSearch className="h-3.5 w-3.5" />} label="检测目标" value={`${result.detections.length} 个`} />
-        <ResultMetric icon={<Gauge className="h-3.5 w-3.5" />} label="推理耗时" value={`${Math.round(result.inference_ms)} ms`} />
-        <ResultMetric icon={<Cpu className="h-3.5 w-3.5" />} label="运行设备" value={deviceLabel(result.device)} />
-        <ResultMetric icon={<ImagePlus className="h-3.5 w-3.5" />} label="图片尺寸" value={`${result.image.width} × ${result.image.height}`} />
+        <ResultMetric icon={<ScanSearch className="h-3.5 w-3.5" />} label={t("metric.targets")} value={t("metric.targetsValue", { count: result.detections.length })} />
+        <ResultMetric icon={<Gauge className="h-3.5 w-3.5" />} label={t("metric.inference")} value={`${Math.round(result.inference_ms)} ms`} />
+        <ResultMetric icon={<Cpu className="h-3.5 w-3.5" />} label={t("metric.device")} value={deviceLabel(result.device)} />
+        <ResultMetric icon={<ImagePlus className="h-3.5 w-3.5" />} label={t("metric.size")} value={`${result.image.width} × ${result.image.height}`} />
       </div>
 
       {result.detections.length ? (
@@ -392,7 +396,7 @@ function DetectionResults({ result }: { result: VisionDetectionResponse }) {
         </div>
       ) : (
         <div className="rounded-lg border border-line bg-surface-subtle p-4 text-center text-[11.5px] text-ink-muted">
-          未检测到置信度足够的目标
+          {t("noneFound")}
         </div>
       )}
     </div>

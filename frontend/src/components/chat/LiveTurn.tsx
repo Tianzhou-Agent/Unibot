@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
@@ -74,22 +75,11 @@ export function LiveTurn({ items, compact = false, debugMode = false }: {
   );
 }
 
-const THINKING_WORDS = [
-  "思考中",
-  "琢磨中",
-  "推敲中",
-  "酝酿中",
-  "斟酌中",
-  "盘算中",
-  "构思中",
-  "梳理思路",
-  "串联线索",
-  "组织语言",
-  "捋一捋",
-  "灵感加载中",
-];
+const THINKING_WORD_KEYS = Array.from({ length: 12 }, (_, i) => `thinking.w${i}`);
 
 export function ThinkingIndicator({ label, compact = false }: { label?: string | null; compact?: boolean }) {
+  const { t } = useTranslation("chat");
+  const THINKING_WORDS = THINKING_WORD_KEYS.map((key) => t(key));
   const [index, setIndex] = useState(() => Math.floor(Math.random() * THINKING_WORDS.length));
   useEffect(() => {
     if (label) return;
@@ -107,7 +97,7 @@ export function ThinkingIndicator({ label, compact = false }: { label?: string |
       <span key={text} className={classNames("thinking-shimmer font-medium", compact ? "text-[12px]" : "text-[13px]")} aria-hidden>
         {text}
       </span>
-      <span className="sr-only">{label || "正在思考"}</span>
+      <span className="sr-only">{label || t("thinkingNow")}</span>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { CHAT_THREAD_TODO_MODE } from "@/mocks/seed";
 import type { ChatThread } from "@/types";
@@ -7,6 +8,7 @@ import { Topbar } from "@/components/layout/Topbar";
 
 export default function TodoModePage() {
   const [thread, setThread] = useState<ChatThread>(CHAT_THREAD_TODO_MODE);
+  const { t } = useTranslation("common");
 
   useEffect(() => {
     api.get<ChatThread>("/sessions/sess_sr_add/thread").then(setThread).catch(() => {});
@@ -14,7 +16,7 @@ export default function TodoModePage() {
 
   return (
     <div className="h-full flex flex-col bg-app-bg">
-      <Topbar title={thread.title} badge={{ label: "任务进行中", tone: "warning" }} />
+      <Topbar title={thread.title} badge={{ label: t("todo.inProgress"), tone: "warning" }} />
       <div className="flex-1 min-h-0">
         <div className="h-full rounded-lg border border-line bg-white flex flex-col overflow-hidden">
           <div className="flex-1 min-h-0 overflow-y-auto px-1.5 py-2">
