@@ -32,31 +32,43 @@ class ConversationService:
     async def create(self, payload: ConversationCreate) -> Conversation:
         return await self._repo.create_conversation(payload)
 
-    async def get(self, conversation_id: str) -> Conversation:
-        conversation = await self._repo.get_conversation(conversation_id)
-        if conversation is None:
-            raise not_found("conversation", conversation_id)
-        return conversation
+    async def get(self, conversation_id: str, *, include_deleted: bool = False) -> Conversation:
+        return await self._repo.get_conversation(conversation_id, include_deleted=include_deleted)
 
-    async def get_optional(self, conversation_id: str) -> Conversation | None:
-        return await self._repo.get_conversation(conversation_id)
+    async def get_reconciled(self, conversation_id: str) -> Conversation:
+        """The conversation, with a run whose owner is gone marked as finished."""
+        return await self._repo.reconcile_conversation_run(conversation_id)
 
     async def update(self, conversation_id: str, payload: ConversationUpdate) -> Conversation:
-        conversation = await self._repo.update_conversation(conversation_id, payload)
-        if conversation is None:
-            raise not_found("conversation", conversation_id)
-        return conversation
+        return await self._repo.update_conversation(conversation_id, payload)
 
-    async def delete(self, conversation_id: str) -> None:
-        deleted = await self._repo.delete_conversation(conversation_id)
-        if not deleted:
-            raise not_found("conversation", conversation_id)
+    async def restore(self, conversation_id: str) -> Conversation:
+        return await self._repo.set_conversation_status(conversation_id, "active")
 
     async def list_for_actor(
-        self, *, user_id: str, tenant_id: str, workspace_id: str | None = None
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        category: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[Conversation]:
+        if workspace_id is not None:
+            await self._repo.require_workspace_actor(workspace_id, user_id=user_id, tenant_id=tenant_id)
         return await self._repo.list_conversations(
-            user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id
+            user_id=user_id, tenant_id=tenant_id, category=category, workspace_id=workspace_id
+        )
+
+    async def list_approvals(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        conversation_id: str | None = None,
+        status: str | None = None,
+    ) -> list[ApprovalRecord]:
+        return await self._repo.list_approvals(
+            conversation_id=conversation_id, user_id=user_id, tenant_id=tenant_id, status=status
         )
 
     def ensure_ownership(self, conversation: Conversation, *, user_id: str, tenant_id: str) -> None:
@@ -82,10 +94,7 @@ class ConversationService:
         return await self._repo.create_approval(approval)
 
     async def get_approval(self, approval_id: str) -> ApprovalRecord:
-        approval = await self._repo.get_approval(approval_id)
-        if approval is None:
-            raise not_found("approval", approval_id)
-        return approval
+        return await self._repo.get_approval(approval_id)
 
     async def require_for_actor(self, conversation_id: str, *, user_id: str, tenant_id: str) -> Conversation:
         return await self._repo.require_conversation_actor(conversation_id, user_id=user_id, tenant_id=tenant_id)

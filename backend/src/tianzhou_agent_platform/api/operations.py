@@ -7,6 +7,7 @@ from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
     bind_actor,
     chat_service,
+    conversation_service,
     repository,
     require_actor_ownership,
     require_platform_admin,
@@ -228,7 +229,7 @@ def create_operations_router() -> APIRouter:
         status: str | None = None,
     ) -> list[ApprovalRecord]:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        return await repository(request).list_approvals(
+        return await conversation_service(request).list_approvals(
             conversation_id=conversation_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,

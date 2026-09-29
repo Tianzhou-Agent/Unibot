@@ -7,6 +7,7 @@ migration gates: runtime isolation, protocol injection and composition smoke.
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
@@ -143,49 +144,78 @@ def test_conversation_service_accepts_protocol_repository() -> None:
         def __init__(self) -> None:
             self.store = {}
 
-        async def create_conversation(self, payload: ConversationCreate):
+        async def create_conversation(self, data: ConversationCreate):
             conv = Conversation(
                 id=f"conv_{uuid4().hex}",
-                user_id=payload.user_id,
-                tenant_id=payload.tenant_id,
-                title=payload.title,
+                user_id=data.user_id,
+                tenant_id=data.tenant_id,
+                title=data.title,
             )
             self.store[conv.id] = conv
             return conv
 
-        async def get_conversation(self, conversation_id: str):
-            return self.store.get(conversation_id)
-
-        async def update_conversation(self, conversation_id: str, payload):
-            return self.store.get(conversation_id)
-
-        async def delete_conversation(self, conversation_id: str) -> bool:
-            return self.store.pop(conversation_id, None) is not None
-
-        async def list_conversations(self, *, user_id: str, tenant_id: str, workspace_id=None):
+        async def list_conversations(self, *, user_id=None, tenant_id=None, category=None, workspace_id=None):
             return [c for c in self.store.values() if c.user_id == user_id]
-
-        async def append_messages(self, conversation_id: str, messages):
-            return self.store.get(conversation_id)
-
-        async def create_approval(self, approval):
-            return approval
-
-        async def get_approval(self, approval_id: str):
-            return None
-
-        async def list_approvals(self, *, conversation_id: str, status: str | None = None):
-            return []
 
     async def run() -> None:
         service = ConversationService(FakeRepo())
         conv = await service.create(ConversationCreate(user_id="u1", tenant_id="t1", title="hi"))
         assert conv.user_id == "u1"
+        assert await service.list_for_actor(user_id="u1", tenant_id="t1") == [conv]
         service.ensure_ownership(conv, user_id="u1", tenant_id="t1")
         with pytest.raises(Exception):
             service.ensure_ownership(conv, user_id="other", tenant_id="t1")
 
     asyncio.run(run())
+
+
+def _protocol_methods(protocol: type) -> list[str]:
+    return [name for name, value in vars(protocol).items() if inspect.iscoroutinefunction(value)]
+
+
+@pytest.mark.parametrize(
+    "protocol_path",
+    [
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.conversations.repository:ApprovalRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRunRepository",
+        "tianzhou_agent_platform.model_providers.repository:ModelProviderRepository",
+    ],
+)
+def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
+    # A protocol method the concrete repository lacks, or calls differently, fails only at runtime; compare
+    # parameters (names, kinds, defaults) against both repositories main.py can inject.
+    import importlib
+
+    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+    from tianzhou_agent_platform.store.repository import PersistentRepository
+
+    module_name, _, class_name = protocol_path.partition(":")
+    protocol = getattr(importlib.import_module(module_name), class_name)
+    mismatches: list[str] = []
+    for concrete in (InMemoryRepository, PersistentRepository):
+        for name in _protocol_methods(protocol):
+            implementation = getattr(concrete, name, None)
+            if implementation is None:
+                mismatches.append(f"{concrete.__name__}.{name} is missing")
+                continue
+            expected = [
+                (p.name, p.kind, p.default) for p in inspect.signature(getattr(protocol, name)).parameters.values()
+            ]
+            actual = [(p.name, p.kind, p.default) for p in inspect.signature(implementation).parameters.values()]
+            if expected != actual:
+                mismatches.append(f"{concrete.__name__}.{name}: {actual} != {expected}")
+    assert not mismatches, mismatches
+
+
+def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> None:
+    offenders: list[str] = []
+    for route in ("conversations.py", "model_settings.py"):
+        tree = ast.parse((SRC / "api" / route).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "tianzhou_agent_platform.api.dependencies":
+                offenders.extend(f"{route}: {alias.name}" for alias in node.names if alias.name == "repository")
+    assert not offenders, offenders
 
 
 def test_native_messages_are_execution_representation() -> None:
