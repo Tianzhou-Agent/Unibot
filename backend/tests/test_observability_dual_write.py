@@ -123,6 +123,40 @@ async def _fresh_resume_aspect(
 
 
 @pytest.mark.asyncio
+async def test_unfinished_model_span_of_a_cancelled_trace_keeps_its_model_and_ends_cancelled(pipeline) -> None:
+    # A stopped turn cancels its model call before the span finishes; the trace still ends it.
+    aspect = pipeline["aspect"]
+    wal = pipeline["wal"]
+    await aspect.create_agent_trace(
+        trace_id="trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        root_span_id="span_bbbbbbbbbbbbbbbbbbbb",
+        conversation_id="conv_1",
+        user_id="user_1",
+        tenant_id="tenant_1",
+        input_data={},
+        attributes={},
+    )
+    await aspect.start_span(
+        "trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        span_id="span_cccccccccccccccccccc",
+        parent_span_id="span_bbbbbbbbbbbbbbbbbbbb",
+        kind="model",
+        name="model.complete",
+        target_id="model-prod",
+    )
+    await aspect.finish_trace("trace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cancelled")
+    wal.close()
+    await wal.wait_closed()
+    await pipeline["worker"]._scan_and_replay()  # noqa: SLF001 - test helper
+
+    span = next(
+        s for s in pipeline["store"].spans.values() if s["legacy_span_id"] == "span_cccccccccccccccccccc"
+    )
+    assert span["model"] == "model-prod"
+    assert span["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_dual_write_produces_wal_records_and_barrier(pipeline) -> None:
     aspect = pipeline["aspect"]
     wal = pipeline["wal"]
