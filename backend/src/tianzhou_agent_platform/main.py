@@ -444,6 +444,8 @@ def create_app(
     async def attach_request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
         request.state.request_trace_id = request.headers.get("X-Trace-ID") or f"request_{uuid4().hex}"
         user = await auth_service.resolve_session(request.cookies.get(SESSION_COOKIE))
+        if user is None and resolved_settings.dev_auth_bypass:
+            user = await auth_service.ensure_dev_user()
         if user is not None:
             request.state.user = user
             request.state.actor = RequestActor(user_id=user.id, tenant_id=user.tenant_id)

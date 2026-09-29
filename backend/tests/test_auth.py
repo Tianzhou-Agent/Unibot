@@ -18,6 +18,8 @@ from tianzhou_agent_platform.main import create_app
 def _settings(**overrides: object) -> AgentSettings:
     overrides.setdefault("github_oauth_client_id", None)
     overrides.setdefault("github_oauth_client_secret", None)
+    overrides.setdefault("env", "production")
+    overrides.setdefault("dev_auth_bypass", False)
     return AgentSettings(  # type: ignore[call-arg]
         _env_file=None,
         auth_secret=SecretStr("test-auth-secret-with-enough-entropy"),
@@ -264,3 +266,22 @@ async def test_github_identity_does_not_auto_link_an_unverified_local_email() ->
 
     assert error.value.status_code == 409
     assert error.value.user_message == "该邮箱已有账户，请先使用邮箱登录。"
+
+
+def test_dev_auth_bypass_acts_as_dev_admin_without_login() -> None:
+    app = create_app(
+        settings=_settings(env="development", dev_auth_bypass=True),
+        repository=InMemoryRepository(),
+        enforce_auth=True,
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/conversations").status_code == 200
+        user = client.get("/auth/me").json()["user"]
+        assert user["id"] == "user_dev"
+        assert user["is_admin"] is True
+
+
+def test_dev_auth_bypass_requires_development_env() -> None:
+    with pytest.raises(ValueError, match="UNIBOT_ENV=development"):
+        _settings(dev_auth_bypass=True)
