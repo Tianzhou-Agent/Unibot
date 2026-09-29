@@ -4,10 +4,13 @@ import socket
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+DEV_USER_ID = "user_dev"
+DEV_USER_EMAIL = "dev@example.com"
 
 
 class AgentSettings(BaseSettings):
@@ -198,6 +201,14 @@ class AgentSettings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("UNIBOT_AUTH_REGISTRATION_ENABLED", "auth_registration_enabled"),
     )
+    env: Literal["development", "production"] = Field(
+        default="production",
+        validation_alias=AliasChoices("UNIBOT_ENV", "env"),
+    )
+    dev_auth_bypass: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_DEV_AUTH_BYPASS", "dev_auth_bypass"),
+    )
     frontend_base_url: str = Field(
         default="http://127.0.0.1:5173",
         validation_alias=AliasChoices("UNIBOT_FRONTEND_BASE_URL", "frontend_base_url"),
@@ -302,6 +313,12 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("UNIBOT_SYSTEM_PROMPT", "system_prompt"),
     )
 
+    @model_validator(mode="after")
+    def _restrict_dev_auth_bypass(self) -> "AgentSettings":
+        if self.dev_auth_bypass and self.env != "development":
+            raise ValueError("UNIBOT_DEV_AUTH_BYPASS requires UNIBOT_ENV=development")
+        return self
+
     @property
     def chat_completions_url(self) -> str | None:
         if self.llm_base_url is None:
@@ -327,6 +344,8 @@ class AgentSettings(BaseSettings):
             for identity in self.admin_identities.split(",")
             if identity.strip()
         }
+        if self.dev_auth_bypass and user_id == DEV_USER_ID:
+            return True
         # Registration does not verify claimed email ownership, and external
         # login names may change. Only the platform's immutable user ID is trusted.
         return user_id in allowed

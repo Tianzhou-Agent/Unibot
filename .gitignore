@@ -16,3 +16,7 @@ backend/backend-live*.log
 frontend/debug.log
 backend/test-temp*/
 .playwright-mcp/
+/agent-eval/reports/
+/agent-eval/.work/
+/agent-eval/.venv/
+/agent-eval/.pytest_cache/

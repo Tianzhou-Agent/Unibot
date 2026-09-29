@@ -13,7 +13,7 @@ from jose import JWTError, jwt
 from pwdlib import PasswordHash
 
 from tianzhou_agent_platform.auth.models import UserRecord
-from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.config import DEV_USER_EMAIL, DEV_USER_ID, AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
@@ -56,6 +56,21 @@ class AuthService:
             password_hash=self._password_hash.hash(password),
         )
         return await self.repository.create_user(user)
+
+    async def ensure_dev_user(self) -> UserRecord:
+        """Return the fixed local user used when UNIBOT_DEV_AUTH_BYPASS is on."""
+        user = await self.repository.find_user_by_id(DEV_USER_ID)
+        if user is not None:
+            return user
+        try:
+            return await self.repository.create_user(
+                UserRecord(id=DEV_USER_ID, email=DEV_USER_EMAIL, name="Dev User")
+            )
+        except PlatformError:
+            user = await self.repository.find_user_by_id(DEV_USER_ID)
+            if user is None:
+                raise
+            return user
 
     async def authenticate_password(self, *, email: str, password: str) -> UserRecord:
         user = await self.repository.find_user_by_email(email.strip().lower())
