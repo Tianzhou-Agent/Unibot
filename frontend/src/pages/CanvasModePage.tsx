@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowUp, Bot, MessageSquareText, PanelRightOpen, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowUp, Bot, MessageSquareText, PanelRightOpen, Play, Sparkles, Square } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
@@ -10,7 +10,7 @@ import { Topbar } from "@/components/layout/Topbar";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
-import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
+import { api, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
@@ -43,6 +43,7 @@ export default function CanvasModePage() {
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
   const [recoveringRun, setRecoveringRun] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +99,7 @@ export default function CanvasModePage() {
       setSending(running);
       setActivity(null);
     }
+    setStopped(record.run_status === "stopped");
     setError(record.run_error ?? null);
     return record;
   }, []);
@@ -124,6 +126,7 @@ export default function CanvasModePage() {
       setMessages([]);
       setSending(false);
       setRecoveringRun(false);
+      setStopped(false);
       setLiveItems([]);
       setActivity(null);
       setApproval(null);
@@ -188,9 +191,11 @@ export default function CanvasModePage() {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
   }, [messages, liveItems, activity, approval, sending, clarificationWidgets]);
 
-  async function sendMessage(text: string) {
-    const prompt = text.trim();
-    if (!prompt || sending) return;
+  const sendMessage = (text: string) => (text.trim() ? runTurn(text.trim()) : Promise.resolve(undefined));
+
+  /** Runs a turn for `prompt`, or continues the conversation's stopped turn when `prompt` is null. */
+  async function runTurn(prompt: string | null) {
+    if (sending || (prompt === null && !conversationId)) return;
     setClarificationWidgets([]);
     const runAinaId = ainaId;
     let runConversationId = conversationId;
@@ -204,7 +209,7 @@ export default function CanvasModePage() {
       && activeWorkspaceIdRef.current === routeWorkspaceId
       && activeAinaIdRef.current === runAinaId
       && activeConversationIdRef.current === runConversationId;
-    const optimistic: BackendMessage = {
+    const optimistic: BackendMessage | null = prompt === null ? null : {
       id: uid("canvas-user"),
       role: "user",
       content: prompt,
@@ -212,7 +217,8 @@ export default function CanvasModePage() {
       widgets: [],
       created_at: new Date().toISOString(),
     };
-    setMessages((current) => [...current, optimistic]);
+    if (optimistic) setMessages((current) => [...current, optimistic]);
+    setStopped(false);
     setSending(true);
     setLiveItems([]);
     setActivity(null);
@@ -243,29 +249,34 @@ export default function CanvasModePage() {
           state: canvas ? { canvas: { ...canvas, conversation_id: created.id } } : undefined,
         });
       }
-      await streamChat(
-        {
-          message: prompt,
-          conversation_id: targetConversationId,
-          workspace_id: routeWorkspaceId,
-          preferred_aina_id: runAinaId,
-          ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
-          ...actor,
-        },
-        (event: StreamEvent) => {
-          if (event.type === "message.completed") completion = event.response;
-          if (event.type === "error") {
-            streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
-          }
-          if (!isActiveRun()) return;
-          setLiveItems((current) => applyLiveEvent(current, event));
-          if (event.type === "approval.required") setActivity("等待你的授权确认");
-          if (event.type === "error") {
-            setError(streamFailure);
-          }
-        },
-        streamController.signal,
-      );
+      const onEvent = (event: StreamEvent) => {
+        if (event.type === "message.completed") completion = event.response;
+        if (event.type === "error") {
+          streamFailure = event.error?.message ?? event.code ?? "AINA 调用失败";
+        }
+        if (!isActiveRun()) return;
+        setLiveItems((current) => applyLiveEvent(current, event));
+        if (event.type === "approval.required") setActivity("等待你的授权确认");
+        if (event.type === "error") {
+          setError(streamFailure);
+        }
+      };
+      if (prompt === null) {
+        await streamResume(targetConversationId, actor, onEvent, streamController.signal);
+      } else {
+        await streamChat(
+          {
+            message: prompt,
+            conversation_id: targetConversationId,
+            workspace_id: routeWorkspaceId,
+            preferred_aina_id: runAinaId,
+            ui_context: documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
+            ...actor,
+          },
+          onEvent,
+          streamController.signal,
+        );
+      }
       if (!completion) throw new Error(streamFailure ?? "AINA 会话没有返回完成事件。");
       if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
@@ -286,7 +297,7 @@ export default function CanvasModePage() {
       return true;
     } catch (sendError) {
       if (isActiveRun()) {
-        setMessages((current) => current.filter((message) => message.id !== optimistic.id));
+        if (optimistic) setMessages((current) => current.filter((message) => message.id !== optimistic.id));
         setError(apiErrorMessage(sendError));
         return Boolean(completion);
       }
@@ -301,6 +312,17 @@ export default function CanvasModePage() {
         setLiveItems([]);
         setActivity(null);
       }
+    }
+  }
+
+  async function stopRun() {
+    const id = localRunRef.current?.conversationId ?? conversationId;
+    if (!id) return;
+    setActivity("正在停止…");
+    try {
+      await api.post(`/conversations/${id}/stop`, actor);
+    } catch (stopError) {
+      setError(apiErrorMessage(stopError));
     }
   }
 
@@ -471,15 +493,25 @@ export default function CanvasModePage() {
                     onDeny={() => void resolveApproval("deny")}
                   />
                 ) : null}
+                {stopped && !sending ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-line bg-white p-2.5">
+                    <span className="flex-1 text-[11.5px] text-ink-muted">已停止生成。</span>
+                    <button type="button" onClick={() => void runTurn(null)} className="btn-outline h-7 text-[11px]">
+                      <Play className="h-3 w-3" />继续生成
+                    </button>
+                  </div>
+                ) : null}
                 {error ? <p className="rounded-lg border border-danger-ring bg-danger-soft p-3 text-[11.5px] text-danger-deep">{error}</p> : null}
                 <div ref={endRef} />
               </div>
               <CanvasComposer
                 key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${ainaId}:${composerVersion}`}
                 disabled={sending}
+                running={sending && Boolean(conversationId)}
                 context={documentTaskContext}
                 sessionId={conversationId}
                 onSend={sendMessage}
+                onStop={() => void stopRun()}
               />
             </section>
 
@@ -574,11 +606,13 @@ function CanvasMessage({
   );
 }
 
-function CanvasComposer({ disabled, context, sessionId, onSend }: {
+function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop }: {
   disabled: boolean;
+  running: boolean;
   context: DocumentTaskContext | null;
   sessionId: string | null;
   onSend: (text: string) => Promise<boolean | undefined>;
+  onStop: () => void;
 }) {
   const [text, setText] = useState("");
   const [sendFailed, setSendFailed] = useState(false);
@@ -623,17 +657,28 @@ function CanvasComposer({ disabled, context, sessionId, onSend }: {
         />
         <div className="mt-1 flex items-center justify-between gap-2">
           <ModelSelector disabled={disabled} />
-          <button
-            type="submit"
-            disabled={disabled || !text.trim()}
-            className={classNames(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-white",
-              disabled || !text.trim() ? "cursor-not-allowed bg-ink-subtle" : "bg-accent hover:bg-accent-hover",
-            )}
-            aria-label="发送画布消息"
-          >
-            <ArrowUp className="h-3.5 w-3.5" />
-          </button>
+          {running ? (
+            <button
+              type="button"
+              onClick={onStop}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-ink text-white hover:bg-ink-muted"
+              aria-label="停止生成"
+            >
+              <Square className="h-3 w-3 fill-current" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={disabled || !text.trim()}
+              className={classNames(
+                "flex h-8 w-8 items-center justify-center rounded-lg text-white",
+                disabled || !text.trim() ? "cursor-not-allowed bg-ink-subtle" : "bg-accent hover:bg-accent-hover",
+              )}
+              aria-label="发送画布消息"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </form>
     </div>

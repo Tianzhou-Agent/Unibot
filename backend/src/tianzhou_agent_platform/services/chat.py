@@ -1,4 +1,4 @@
-"""Application workflow of a chat turn and its approval continuation.
+"""Application workflow of a chat turn, its approval continuation, and stopping and resuming it.
 
 ChatService resolves the actor's conversation, holds the conversation's run lease, opens and closes the run's
 trace, selects the actor's model and delegates execution to the native ``AgentRunner``. It translates failures and
@@ -20,6 +20,7 @@ from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
 from tianzhou_agent_platform.model_providers.service import ModelProviderService
 from tianzhou_agent_platform.services.agent_integration.runner import AgentRunner
+from tianzhou_agent_platform.services.run_stops import RunStops
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,13 @@ class ChatService:
         model_providers: ModelProviderService,
         runner: AgentRunner,
         events: Any,
+        stops: RunStops | None = None,
     ) -> None:
         self.conversations = conversations
         self.model_providers = model_providers
         self.runner = runner
         self.events = events
+        self.stops = stops or RunStops()
 
     async def run_turn(
         self,
@@ -75,8 +78,55 @@ class ChatService:
                 )
                 await self.events.finish(approval.trace_id, "completed")
             conversation = await self.conversations.get(conversation.id)
-            with use_model_runtime(await self._model_runtime(request.user_id, request.tenant_id)):
-                response = await self.runner.run_turn(conversation, request, trace_id=trace_id, event_sink=event_sink)
+            async with self.stops.watch(conversation.id, trace_id) as stop:
+                with use_model_runtime(await self._model_runtime(request.user_id, request.tenant_id)):
+                    response = await self.runner.run_turn(
+                        conversation, request, trace_id=trace_id, event_sink=event_sink, stop=stop
+                    )
+        except BaseException as exc:
+            await self._fail_run(conversation.id, trace_id, exc)
+            raise
+        await self._finish(conversation.id, trace_id, response)
+        return response
+
+    async def stop(self, conversation_id: str, *, user_id: str, tenant_id: str) -> None:
+        """Ask the conversation's running turn to stop; the turn itself ends as ``stopped``."""
+        conversation = await self.conversations.require_for_actor(
+            conversation_id, user_id=user_id, tenant_id=tenant_id
+        )
+        if conversation.run_status != "running" or conversation.active_trace_id is None:
+            raise conflict("This conversation has no running request")
+        await self.stops.request(conversation.id, conversation.active_trace_id)
+
+    async def resume(
+        self,
+        conversation_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        event_sink: EventSink | None = None,
+    ) -> ChatResponse:
+        """Continue a stopped turn from its checkpoint, as a new run of the conversation."""
+        conversation = await self.conversations.require_for_actor(
+            conversation_id, user_id=user_id, tenant_id=tenant_id
+        )
+        if conversation.run_status != "stopped":
+            raise conflict("This conversation has no stopped request to continue")
+        trace_id = f"trace_{uuid4().hex}"
+        await self.events.start(
+            trace_id=trace_id,
+            conversation_id=conversation.id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            input_data={"resume": True},
+        )
+        try:
+            conversation = await self.conversations.start_run(conversation.id, trace_id)
+            async with self.stops.watch(conversation.id, trace_id) as stop:
+                with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
+                    response = await self.runner.resume_turn(
+                        conversation, trace_id=trace_id, event_sink=event_sink, stop=stop
+                    )
         except BaseException as exc:
             await self._fail_run(conversation.id, trace_id, exc)
             raise
@@ -109,8 +159,9 @@ class ChatService:
         # The resumed tool calls and model requests are recorded as children of the run's root span.
         await self.events.resume(approval.trace_id, conversation_id=conversation.id)
         try:
-            with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
-                response = await continuation.run()
+            async with self.stops.watch(conversation.id, approval.trace_id) as stop:
+                with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
+                    response = await continuation.run(stop)
         except BaseException as exc:
             await self._fail_run(conversation.id, approval.trace_id, exc)
             raise
@@ -194,12 +245,14 @@ class ChatService:
             expected_trace_id=trace_id,
         )
         root_span_id = self.events.root_span_id(trace_id)
+        # A stopped run ends its trace; resuming it is a new run.
+        trace_status = "cancelled" if response.status == "stopped" else response.status
         # A paused run keeps its root span open for the resume.
         if response.status != "approval_required" and root_span_id is not None:
             await self.events.finish_span(
                 trace_id,
                 root_span_id,
-                "completed" if response.status == "completed" else "failed",
+                trace_status if trace_status in {"completed", "cancelled"} else "failed",
                 output_data={
                     "content": response.content,
                     "status": response.status,
@@ -213,7 +266,7 @@ class ChatService:
                     "usage_estimated": response.usage.estimated,
                 },
             )
-        await self.events.finish(trace_id, response.status)
+        await self.events.finish(trace_id, trace_status)
 
     async def _fail_run(self, conversation_id: str, trace_id: str, exc: BaseException) -> None:
         if isinstance(exc, asyncio.CancelledError):

@@ -1644,14 +1644,12 @@ class InMemoryRepository:
             trace.status = status  # type: ignore[assignment]
             completed_at = datetime.now(UTC)
             trace.completed_at = completed_at
-            if status in {"completed", "failed"}:
+            if status in {"completed", "failed", "cancelled"}:
                 for span in trace.spans:
                     if span.status != "running":
                         continue
-                    if span.span_id == trace.root_span_id:
-                        span.status = "completed" if status == "completed" else "failed"
-                    elif status == "failed":
-                        span.status = "failed"
+                    if span.span_id == trace.root_span_id or status == "failed":
+                        span.status = status  # type: ignore[assignment]
                     else:
                         span.status = "cancelled"
                     span.completed_at = completed_at

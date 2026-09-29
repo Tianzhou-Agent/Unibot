@@ -5,7 +5,10 @@ import {
   ArrowUp,
   Bot,
   Check,
+  CirclePause,
+  Play,
   RotateCcw,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -20,7 +23,7 @@ import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
-import { api, apiErrorMessage, streamChat, type StreamEvent } from "@/lib/api";
+import { api, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
@@ -62,6 +65,8 @@ export default function ChatModePage() {
   const [composerVersion, setComposerVersion] = useState(0);
   const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
+  // Archived message count when the optimistic message was sent; a later archived copy replaces it.
+  const optimisticBaselineRef = useRef(0);
   const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -254,10 +259,14 @@ export default function ChatModePage() {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
   }, [conversation?.messages, optimisticUser, liveItems, activity, approval, sending, clarificationWidgets]);
 
-  async function sendMessage(text: string) {
+  const sendMessage = (text: string) => runTurn(text);
+
+  /** Runs a turn for `text`, or continues the conversation's stopped turn when `text` is null. */
+  async function runTurn(text: string | null) {
     if (sending || deleted) return;
     setClarificationWidgets([]);
-    const localMessage: BackendMessage = {
+    const draftTitle = text === null ? null : text.length > 24 ? `${text.slice(0, 24)}…` : text;
+    const localMessage: BackendMessage | null = text === null ? null : {
       id: uid("local"),
       role: "user",
       content: text,
@@ -265,6 +274,7 @@ export default function ChatModePage() {
       widgets: [],
       created_at: new Date().toISOString(),
     };
+    optimisticBaselineRef.current = conversation?.messages.length ?? 0;
     setOptimisticUser(localMessage);
     setLiveItems([]);
     setActivity(null);
@@ -290,7 +300,7 @@ export default function ChatModePage() {
         targetConversation = await api.post<ConversationRecord>("/conversations", {
           ...actor,
           workspace_id: routeWorkspaceId,
-          title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
+          title: draftTitle,
           category: "general",
         });
         if (!isActiveRun()) return;
@@ -306,33 +316,38 @@ export default function ChatModePage() {
       }
       runConversationId = targetConversation.id;
       localRunConversationIdRef.current = targetConversation.id;
-      await streamChat(
-        {
-          message: text,
-          conversation_id: targetConversation.id,
-          workspace_id: routeWorkspaceId,
-          ...actor,
-        },
-        (event: StreamEvent) => {
-          if (event.type === "message.completed") completion = event.response;
-          if (event.type === "error") {
-            streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
-          }
-          if (!isActiveRun()) return;
-          setLiveItems((current) => applyLiveEvent(current, event));
-          if (event.type === "approval.required") setActivity("等待你的授权确认");
-          if (event.type === "error") {
-            setError(streamFailure);
-          }
-        },
-        streamController.signal,
-      );
+      const onEvent = (event: StreamEvent) => {
+        if (event.type === "message.completed") completion = event.response;
+        if (event.type === "error") {
+          streamFailure = event.error?.message ?? event.code ?? "流式调用失败";
+        }
+        if (!isActiveRun()) return;
+        setLiveItems((current) => applyLiveEvent(current, event));
+        if (event.type === "approval.required") setActivity("等待你的授权确认");
+        if (event.type === "error") {
+          setError(streamFailure);
+        }
+      };
+      if (text === null) {
+        await streamResume(targetConversation.id, actor, onEvent, streamController.signal);
+      } else {
+        await streamChat(
+          {
+            message: text,
+            conversation_id: targetConversation.id,
+            workspace_id: routeWorkspaceId,
+            ...actor,
+          },
+          onEvent,
+          streamController.signal,
+        );
+      }
       if (!completion) throw new Error(streamFailure ?? "智能体流程结束前没有返回完成事件。");
       if (!isActiveRun()) return;
       const completed = completion as ChatResponse;
-      if (["New conversation", "新对话"].includes(targetConversation.title)) {
+      if (draftTitle !== null && ["New conversation", "新对话"].includes(targetConversation.title)) {
         await api.patch(`/conversations/${completed.conversation_id}`, {
-          title: text.length > 24 ? `${text.slice(0, 24)}…` : text,
+          title: draftTitle,
         });
       }
       if (!isActiveRun()) return;
@@ -371,6 +386,17 @@ export default function ChatModePage() {
         setActivity(null);
         setSending(false);
       }
+    }
+  }
+
+  async function stopRun() {
+    const id = localRunConversationIdRef.current ?? conversation?.id;
+    if (!id) return;
+    setActivity("正在停止…");
+    try {
+      await api.post(`/conversations/${id}/stop`, actor);
+    } catch (stopError) {
+      setError(apiErrorMessage(stopError));
     }
   }
 
@@ -459,10 +485,14 @@ export default function ChatModePage() {
     || searchParams.get("prompt")?.trim()
     || "";
 
-  const messages = useMemo(
-    () => [...(conversation?.messages ?? []), ...(optimisticUser ? [optimisticUser] : [])],
-    [conversation?.messages, optimisticUser],
-  );
+  const messages = useMemo(() => {
+    const archived = conversation?.messages ?? [];
+    // The run archives the user message when it starts, so a reload during the run already contains it.
+    const echoed = optimisticUser !== null && archived
+      .slice(optimisticBaselineRef.current)
+      .some((message) => message.role === "user" && message.content === optimisticUser.content);
+    return optimisticUser && !echoed ? [...archived, optimisticUser] : archived;
+  }, [conversation?.messages, optimisticUser]);
   const toolResultsByCallId = useMemo(() => new Map(
     messages
       .filter((message) => message.role === "tool" && message.tool_call_id)
@@ -587,6 +617,9 @@ export default function ChatModePage() {
                   onDeny={() => void resolveApproval("deny")}
                 />
               ) : null}
+              {conversation?.run_status === "stopped" && !sending && !deleted ? (
+                <StoppedNotice onResume={() => void runTurn(null)} />
+              ) : null}
               {error ? <ErrorNotice message={error} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
               {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
               <div ref={endRef} />
@@ -596,9 +629,11 @@ export default function ChatModePage() {
             <ChatComposer
               key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${composerVersion}`}
               disabled={sending || loading}
+              running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
               onSend={sendMessage}
+              onStop={() => void stopRun()}
             />
           ) : null}
         </div>
@@ -725,6 +760,18 @@ function RunSummary({ response }: { response: ChatResponse }) {
   );
 }
 
+function StoppedNotice({ onResume }: { onResume: () => void }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg border border-line bg-white p-3">
+      <CirclePause className="h-4 w-4 text-ink-muted" />
+      <span className="flex-1 text-[12.5px] text-ink-muted">已停止生成。可以继续生成，或直接发送新消息。</span>
+      <button type="button" onClick={onResume} className="btn-outline h-8">
+        <Play className="h-3.5 w-3.5" />继续生成
+      </button>
+    </div>
+  );
+}
+
 function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; detailsHref: string | null; onDismiss: () => void }) {
   return (
     <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 flex items-center gap-2.5">
@@ -740,14 +787,18 @@ function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; det
 
 function ChatComposer({
   disabled,
+  running,
   initialText,
   sessionId,
   onSend,
+  onStop,
 }: {
   disabled: boolean;
+  running: boolean;
   initialText: string;
   sessionId: string | null;
   onSend: (text: string) => Promise<boolean | undefined>;
+  onStop: () => void;
 }) {
   const [text, setText] = useState(initialText);
   const [sendFailed, setSendFailed] = useState(false);
@@ -792,19 +843,30 @@ function ChatComposer({
           />
           <div className="mt-2 flex items-center justify-between gap-2">
             <ModelSelector disabled={disabled} />
-            <button
-              type="submit"
-              disabled={disabled || !text.trim()}
-              className={classNames(
-                "flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors",
-                !disabled && text.trim()
-                  ? "bg-accent hover:bg-accent-hover"
-                  : "bg-ink cursor-not-allowed opacity-80",
-              )}
-              aria-label="发送消息"
-            >
-              <ArrowUp className="w-4 h-4" />
-            </button>
+            {running ? (
+              <button
+                type="button"
+                onClick={onStop}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-white transition-colors hover:bg-ink-muted"
+                aria-label="停止生成"
+              >
+                <Square className="h-3 w-3 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={disabled || !text.trim()}
+                className={classNames(
+                  "flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors",
+                  !disabled && text.trim()
+                    ? "bg-accent hover:bg-accent-hover"
+                    : "bg-ink cursor-not-allowed opacity-80",
+                )}
+                aria-label="发送消息"
+              >
+                <ArrowUp className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </form>
       </div>

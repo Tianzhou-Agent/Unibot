@@ -172,7 +172,7 @@ export interface ConversationRecord {
   title: string;
   category: string;
   status: ConversationStatus;
-  run_status: "idle" | "running" | "approval_required" | "failed";
+  run_status: "idle" | "running" | "approval_required" | "failed" | "stopped";
   active_trace_id?: string | null;
   run_error?: string | null;
   run_started_at?: string | null;
@@ -435,7 +435,7 @@ export interface ChatResponse {
   conversation_id: string;
   message_id?: string | null;
   content: string;
-  status: "completed" | "approval_required" | "failed";
+  status: "completed" | "approval_required" | "failed" | "stopped";
   trace_id: string;
   iterations: number;
   usage: { input_tokens: number; output_tokens: number; estimated?: boolean };

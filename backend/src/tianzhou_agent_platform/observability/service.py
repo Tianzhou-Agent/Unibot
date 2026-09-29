@@ -51,6 +51,7 @@ from tianzhou_agent_platform.observability.telemetry import (
     ATTR_RAW_IO_SHA256,
     ATTR_RAW_IO_SIZE,
     ATTR_RAW_IO_STATUS,
+    ATTR_REQUEST_MODEL,
     ATTR_SEQUENCE_NO,
     ATTR_SESSION_ID,
     ATTR_SPAN_KIND,
@@ -62,6 +63,8 @@ from tianzhou_agent_platform.observability.telemetry import (
     ATTR_TTFT_MS,
     ATTR_USER_ID,
     STATUS_APPROVAL_REQUIRED,
+    STATUS_CANCELLED,
+    STATUS_FAILED,
     STATUS_RUNNING,
     UNIBOT_STATUS_ATTR,
 )
@@ -415,6 +418,9 @@ class ObservabilityAspect:
         span.set_attribute(ATTR_SEQUENCE_NO, self._next_sequence(otel_trace_id))
         span.set_attribute(ATTR_TARGET_ID, target_id or "")
         span.set_attribute(ATTR_TARGET_VERSION, target_version or "")
+        if kind == "model" and target_id:
+            # A model span targets the model it calls; the OBS ``model`` column reads this attribute.
+            span.set_attribute(ATTR_REQUEST_MODEL, target_id)
         if trace_context is not None:
             span.set_attribute(ATTR_SESSION_ID, trace_context.conversation_id or "")
             span.set_attribute(ATTR_USER_ID, trace_context.user_id)
@@ -1048,7 +1054,7 @@ class ObservabilityAspect:
             except Exception:
                 logger.exception("OBS direct-write fallback failed for trace %s", trace_id)
         if status != STATUS_APPROVAL_REQUIRED:
-            self._cleanup_trace_state(trace_id)
+            self._cleanup_trace_state(trace_id, status)
 
     def _build_fallback_records(
         self,
@@ -1186,9 +1192,11 @@ class ObservabilityAspect:
             )
         return records
 
-    def _cleanup_trace_state(self, trace_id: str) -> None:
+    def _cleanup_trace_state(self, trace_id: str, status: str) -> None:
         """Drop per-trace runtime state after a terminal finish (review P2-1).
-        approval_required keeps its state for the confirmation resume path."""
+        approval_required keeps its state for the confirmation resume path.
+        Spans still open never finished (e.g. a model call of a stopped turn): they
+        end as failed with a failed trace, else as cancelled."""
         otel_trace_id = self._otel_trace_ids.pop(trace_id, None)
         self._otel_root_span_ids.pop(trace_id, None)
         self._trace_contexts.pop(trace_id, None)
@@ -1201,6 +1209,7 @@ class ObservabilityAspect:
         for legacy_span_id, span in list(self._spans.items()):
             if span.attributes.get(ATTR_LEGACY_TRACE_ID) == trace_id:
                 if span.is_recording():
+                    span.set_attribute(UNIBOT_STATUS_ATTR, STATUS_FAILED if status == STATUS_FAILED else STATUS_CANCELLED)
                     span.end()
                 self._spans.pop(legacy_span_id, None)
                 self._otel_span_ids.pop(legacy_span_id, None)

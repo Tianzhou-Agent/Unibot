@@ -40,6 +40,13 @@ class ApprovalAction(StrictModel):
     tenant_id: str = "default"
 
 
+class ConversationAction(StrictModel):
+    """Actor of a stop or resume request."""
+
+    user_id: str = "anonymous"
+    tenant_id: str = "default"
+
+
 class ApprovalRecord(StrictModel):
     id: str
     conversation_id: str
@@ -63,7 +70,7 @@ class ChatResponse(StrictModel):
     conversation_id: str
     message_id: str | None = None
     content: str
-    status: Literal["completed", "approval_required", "failed"]
+    status: Literal["completed", "approval_required", "failed", "stopped"]
     trace_id: str
     iterations: int
     usage: Usage = Field(default_factory=Usage)

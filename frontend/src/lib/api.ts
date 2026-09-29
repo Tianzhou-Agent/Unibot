@@ -98,7 +98,26 @@ export async function streamChat(
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`${BASE}/chat/stream`, {
+  return streamEvents("/chat/stream", payload, onEvent, signal);
+}
+
+/** Continues a stopped conversation turn from its checkpoint, streaming like a new turn. */
+export async function streamResume(
+  conversationId: string,
+  actor: { user_id?: string; tenant_id?: string },
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamEvents(`/conversations/${conversationId}/resume/stream`, actor, onEvent, signal);
+}
+
+async function streamEvents(
+  path: string,
+  payload: unknown,
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -107,7 +126,7 @@ export async function streamChat(
   });
   if (!response.ok) {
     const text = await response.text();
-    notifyAuthenticationRequired("/chat/stream", response.status);
+    notifyAuthenticationRequired(path, response.status);
     throw new ApiError(response.status, text ? safeJson(text) : null);
   }
   if (!response.body) throw new Error("浏览器未提供流式响应体。");

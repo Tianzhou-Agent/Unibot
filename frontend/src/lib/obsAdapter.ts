@@ -110,7 +110,8 @@ export function adaptSessionDetail(session: ObsSessionDetail): AdaptedSession {
       context_type: "conversation",
       context_id: session.session_id,
       endpoint: "",
-      model: span.model ?? span.name,
+      // Spans recorded before the model attribute existed still name their model in ``target_id``.
+      model: span.model || span.target_id || span.name,
       status: (span.status as LLMCallRecord["status"]) ?? "completed",
       request: (span.input as Record<string, unknown> | undefined) ?? {},
       response: adaptModelResponse(span),
