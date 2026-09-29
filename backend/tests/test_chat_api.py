@@ -12,12 +12,11 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.chat import LLMCallRecord, TraceRecord
-from tianzhou_agent_platform.core.conversation import ConversationCreate
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
+from tianzhou_agent_platform.conversations.models import ConversationCreate
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.main import create_app
-from tianzhou_agent_platform.core.llm import EventSink, LLMResult
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
 
 
@@ -272,30 +271,17 @@ def test_trace_creation_failure_does_not_block_chat() -> None:
     assert recovered.json()["active_trace_id"] is None
 
 
-class BlockingLLM:
+class BlockingLLM(ScriptedLLM):
     def __init__(self) -> None:
-        self.started = threading.Event()
-        self.release = threading.Event()
+        super().__init__([assistant("finished")])
+        object.__setattr__(self, "started", threading.Event())
+        object.__setattr__(self, "release", threading.Event())
 
-    async def complete(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        tool_choice: dict[str, Any] | str | None = None,
-        event_sink: EventSink | None = None,
-        trace_id: str | None = None,
-        span_id: str | None = None,
-        context_type: str | None = None,
-        context_id: str | None = None,
-    ) -> LLMResult:
-        del messages, tools, tool_choice, trace_id, span_id, context_type, context_id
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
         self.started.set()
         while not self.release.is_set():
             await asyncio.sleep(0.01)
-        if event_sink is not None:
-            await event_sink({"type": "message.delta", "delta": "finished"})
-        return assistant("finished")
+        return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
 def test_conversation_exposes_running_state_until_background_work_finishes() -> None:
@@ -658,6 +644,59 @@ def test_high_risk_tool_denial_closes_pending_call_without_execution() -> None:
     assert any(event["kind"] == "approval.denied" for event in trace.json()["events"])
 
 
+def test_lost_working_memory_never_replays_an_approved_call_but_can_be_denied() -> None:
+    calls = 0
+
+    async def remote(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"sent": True})
+
+    tool = {
+        "tool_id": "demo.send",
+        "name": "Send message",
+        "description": "Send a message to an external recipient.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"recipient": {"type": "string"}},
+            "required": ["recipient"],
+        },
+        "endpoint": "https://tool.invalid/send",
+        "side_effect_level": "high",
+    }
+    llm = ScriptedLLM([call_first_tool(arguments='{"recipient": "user@example.com"}')])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    app = create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)
+    with TestClient(app) as client:
+        client.post("/tools", json=tool)
+        pending = client.post("/chat", json={"message": "Send", "capability": "tool:demo.send"}).json()
+        client.portal.call(app.state.agent_checkpointer.adelete_thread, f"lc-v2:{pending['conversation_id']}")
+        confirmed = client.post(f"/approvals/{pending['approval']['id']}/confirm", json={})
+        approvals = client.get("/approvals", params={"conversation_id": pending["conversation_id"]}).json()
+        paused = client.get(f"/conversations/{pending['conversation_id']}").json()
+
+    assert confirmed.status_code == 409
+    assert calls == 0
+    # A stale confirmation resolves nothing: the approval can still be denied and the run stays paused.
+    assert [item["status"] for item in approvals] == ["pending"]
+    assert paused["run_status"] == "approval_required"
+
+    llm = ScriptedLLM([call_first_tool(arguments='{"recipient": "user@example.com"}')])
+    app = create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)
+    with TestClient(app) as client:
+        client.post("/tools", json=tool)
+        pending = client.post("/chat", json={"message": "Send", "capability": "tool:demo.send"}).json()
+        client.portal.call(app.state.agent_checkpointer.adelete_thread, f"lc-v2:{pending['conversation_id']}")
+        denied = client.post(f"/approvals/{pending['approval']['id']}/deny", json={})
+        conversation = client.get(f"/conversations/{pending['conversation_id']}").json()
+
+    assert denied.json()["status"] == "denied"
+    assert calls == 0
+    assert conversation["run_status"] == "idle"
+    assert [message["role"] for message in conversation["messages"][-2:]] == ["tool", "assistant"]
+    assert conversation["messages"][-1]["content"] == "The requested operation was cancelled."
+
+
 def test_new_turn_cancels_pending_approval_and_closes_trace() -> None:
     calls = 0
 
@@ -699,10 +738,18 @@ def test_new_turn_cancels_pending_approval_and_closes_trace() -> None:
         )
         approvals = client.get("/approvals", params={"conversation_id": pending["conversation_id"]})
         trace = client.get(f"/traces/{pending['trace_id']}")
+        conversation = client.get(f"/conversations/{pending['conversation_id']}")
 
     assert follow_up.status_code == 200
     assert calls == 0
     assert [item["status"] for item in approvals.json()] == ["denied"]
+    assert [message["role"] for message in conversation.json()["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "assistant",
+    ]
     assert trace.json()["status"] == "completed"
     assert any(event["kind"] == "approval.cancelled" for event in trace.json()["events"])
 
@@ -715,6 +762,7 @@ def test_iteration_limit_stops_repeated_tool_loop() -> None:
         [
             call_first_tool(call_id="call_1"),
             call_first_tool(call_id="call_2"),
+            assistant("Starting over."),
         ]
     )
     capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
@@ -732,11 +780,16 @@ def test_iteration_limit_stops_repeated_tool_loop() -> None:
             },
         )
         response = client.post("/chat", json={"message": "Loop"})
+        follow_up = client.post("/chat", json={"message": "Try again", "conversation_id": response.json()["conversation_id"]})
 
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
     assert response.json()["iterations"] == 2
     assert "stopped after 2" in response.json()["content"]
+    # The stopped run leaves consistent working memory: the next turn starts cleanly from it.
+    assert follow_up.json()["status"] == "completed"
+    assert follow_up.json()["content"] == "Starting over."
+    assert llm.calls[2]["messages"][-1]["content"] == "Try again"
 
 
 def test_validation_errors_use_standard_error_protocol() -> None:

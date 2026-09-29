@@ -38,7 +38,7 @@ from tianzhou_agent_platform.aina.vision.builtin import (
     unibot_image_recognition_record,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 from tianzhou_agent_platform.sandbox.service import SandboxService
 

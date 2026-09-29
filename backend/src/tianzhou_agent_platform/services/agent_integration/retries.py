@@ -1,74 +1,60 @@
-"""Retry eligibility policy for Unibot (plan §6.7).
+"""Automatic tool retries for Unibot (plan §6.7).
 
-Only explicitly eligible read-only tools get automatic retries. Side-effecting
-tools and uncertain AINA operations are excluded. Physical attempt ceilings
-and idempotency keys are preserved through native ToolRetryMiddleware config.
+Automatic retries use native ``ToolRetryMiddleware``: only side-effect-free remote tools are retried, each with its
+own configured ``retries`` budget, and only for transient failures. The remote gateway makes a single attempt, so
+retries are never nested. Side-effecting tools and AINA operations are never retried automatically.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections import defaultdict
+from typing import Sequence, cast
 
-from langchain.agents.middleware import ModelCallLimitMiddleware, ToolRetryMiddleware
+from langchain.agents.middleware import ToolRetryMiddleware
+
+from tianzhou_agent_platform.aina.tool.models import ToolRecord
+from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
 
 
 def is_transient_error(exc: BaseException) -> bool:
-    """Transient-error predicate for eligible tool retries."""
-    from tianzhou_agent_platform.core.errors import PlatformError
-
+    """Timeouts, unreachable hosts and remote 5xx responses; never rate limits or invalid payloads."""
     if isinstance(exc, PlatformError):
-        return bool(exc.retryable)
-    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-        return True
-    name = type(exc).__name__
-    return name in {"Timeout", "ReadTimeout", "ConnectTimeout", "RemoteProtocolError"}
+        return exc.retryable and (exc.debug or {}).get("remote_status") != 429
+    return isinstance(exc, (TimeoutError, ConnectionError))
 
 
-def build_tool_retry_middleware(
-    *,
-    eligible_tools: Sequence[str],
-    max_retries: int = 2,
-    on_failure: str = "error",
-    backoff_factor: float = 0.5,
-    initial_delay: float = 0.1,
-    max_delay: float = 5.0,
-) -> ToolRetryMiddleware:
-    """Native retries only for explicitly eligible read-only tools.
+class _ToolRetryGroup(ToolRetryMiddleware):
+    """``ToolRetryMiddleware`` for the tools sharing one retry budget (instances need distinct names)."""
 
-    ``on_failure="error"`` routes exhausted retries to ToolErrorMiddleware
-    (compose ToolRetryMiddleware *inner* relative to ToolErrorMiddleware).
+    def __init__(self, *, max_retries: int, tools: Sequence[str]) -> None:
+        super().__init__(
+            max_retries=max_retries,
+            tools=list(tools),
+            retry_on=is_transient_error,
+            on_failure="error",
+            backoff_factor=2.0,
+            initial_delay=0.1,
+            max_delay=5.0,
+            jitter=False,
+        )
+        self._label = f"{type(self).__name__}[{max_retries}]"
+
+    @property
+    def name(self) -> str:
+        return self._label
+
+
+def tool_retry_middleware(registry: dict[str, Capability]) -> list[ToolRetryMiddleware]:
+    """One retry middleware per distinct retry budget of the registered side-effect-free remote tools.
+
+    ``on_failure="error"`` re-raises the final failure, so compose these innermost, inside the capability-call
+    wrapper that records one span per logical call and turns the failure into the model-visible error.
     """
-    return ToolRetryMiddleware(
-        max_retries=max_retries,
-        tools=list(eligible_tools),
-        retry_on=is_transient_error,
-        on_failure=on_failure,  # type: ignore[arg-type]
-        backoff_factor=backoff_factor,
-        initial_delay=initial_delay,
-        max_delay=max_delay,
-        jitter=False,
-    )
-
-
-def build_model_call_limit(
-    *,
-    run_limit: int | None = None,
-    thread_limit: int | None = None,
-    exit_behavior: str = "end",
-) -> ModelCallLimitMiddleware:
-    """Native model-call budget. A pause must not grant unlimited extra calls.
-
-    ``thread_limit`` persists across runs on the same thread (survives approval
-    pause). ``run_limit`` is per invocation. Public reporting derives deltas
-    from native counters.
-    """
-    return ModelCallLimitMiddleware(
-        run_limit=run_limit,
-        thread_limit=thread_limit,
-        exit_behavior=exit_behavior,  # type: ignore[arg-type]
-    )
-
-
-def side_effecting_tool_names(names: Iterable[str]) -> set[str]:
-    """Explicit denylist helper — names that must never auto-retry."""
-    return set(names)
+    groups: dict[int, list[str]] = defaultdict(list)
+    for name, capability in registry.items():
+        if capability.retries_transiently:
+            retries = cast(ToolRecord, capability.value).retries
+            if retries > 0:
+                groups[retries].append(name)
+    return [_ToolRetryGroup(max_retries=retries, tools=names) for retries, names in sorted(groups.items())]

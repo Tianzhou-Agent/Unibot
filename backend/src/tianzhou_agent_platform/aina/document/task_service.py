@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from collections.abc import Callable
 from datetime import UTC, datetime
+
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.language_models.chat_models import BaseChatModel
 from tianzhou_agent_platform.aina.document.service import (
     MAX_DOCUMENT_BYTES,
     DocumentService,
@@ -17,8 +20,7 @@ from tianzhou_agent_platform.aina.document.task_models import (
     DocumentEditTaskStatus,
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
-from tianzhou_agent_platform.core.llm import LLMClient
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageValidationError
 
 _SUBMIT_DRAFT_TOOL = {
@@ -46,11 +48,15 @@ class DocumentEditTaskService:
         self,
         documents: DocumentService,
         repository: InMemoryRepository,
-        llm: LLMClient,
+        llm: BaseChatModel | None,
+        *,
+        model_callbacks: Callable[[BaseChatModel, str], list[BaseCallbackHandler]] | None = None,
     ) -> None:
         self.documents = documents
         self.repository = repository
         self.llm = llm
+        # Native callbacks attached to each draft request of a task (e.g. ``/llm-calls`` recording).
+        self.model_callbacks = model_callbacks
         self._merge_locks: dict[str, asyncio.Lock] = {}
 
     async def create_task(self, name: str, data: DocumentEditTaskCreate) -> DocumentEditTask:
@@ -797,42 +803,7 @@ class DocumentEditWorker:
         # The draft function is the only bound tool, so "required" forces it; providers honor "required" more
         # reliably than a named function choice (MiMo: 6/6 vs 4/6 calls in a live probe).
         tool_choice = "required"
-        # Migration window: injected LLMClient (tests/legacy) keeps the old port;
-        # production uses native ainvoke via model_providers.factory. Phase 7
-        # removes the LLMClient branch after fixtures move to BaseChatModel.
-        if self.service.llm is not None and hasattr(self.service.llm, "complete"):
-            from tianzhou_agent_platform.core.model_settings import use_model_runtime
 
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ]
-            with use_model_runtime(runtime_model):
-                result = await self.service.llm.complete(
-                    messages=messages,
-                    tools=[_SUBMIT_DRAFT_TOOL],
-                    tool_choice=tool_choice,
-                    context_type="document_edit_task",
-                    context_id=task.id,
-                )
-            calls = result.message.get("tool_calls") or []
-            if not calls and (text_draft := _text_draft(result.message.get("content"))) is not None:
-                return text_draft
-            if len(calls) != 1:
-                raise _MissingDraft("The model did not submit a document section draft")
-            function = calls[0].get("function") or {}
-            if function.get("name") != "submit_document_section_draft":
-                raise _MissingDraft("The model returned an unexpected draft function")
-            try:
-                arguments = json.loads(function.get("arguments") or "{}")
-            except json.JSONDecodeError as exc:
-                raise _MissingDraft("The model returned invalid draft arguments") from exc
-            content = arguments.get("section_content")
-            if not isinstance(content, str):
-                raise _MissingDraft("The model draft did not contain section_content")
-            return content
-
-        from langchain_core.language_models.chat_models import BaseChatModel
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime
@@ -841,13 +812,15 @@ class DocumentEditWorker:
         # (e.g. the llm_* settings); only when neither exists is document editing unavailable.
         if runtime_model is not None:
             model = create_model_from_runtime(runtime_model, max_retries=0)
-        elif isinstance(self.service.llm, BaseChatModel):
+        elif self.service.llm is not None:
             model = self.service.llm
         else:
             raise ValueError("No model provider is configured for document editing")
         bound = model.bind_tools([_SUBMIT_DRAFT_TOOL], tool_choice=tool_choice)
+        callbacks = self.service.model_callbacks(model, task.id) if self.service.model_callbacks else []
         response = await bound.ainvoke(
-            [SystemMessage(content=system), HumanMessage(content=user)]
+            [SystemMessage(content=system), HumanMessage(content=user)],
+            config={"callbacks": callbacks},
         )
         calls = getattr(response, "tool_calls", None) or []
         if not calls and (text_draft := _text_draft(response.content)) is not None:

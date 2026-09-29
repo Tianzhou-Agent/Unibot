@@ -581,7 +581,7 @@ def test_aina_widget_output_is_returned_and_persisted() -> None:
 
 def test_open_aina_accepts_the_advertised_entry_function_name() -> None:
     # Live models sometimes pass the entry function they were shown instead of the AINA id.
-    from tianzhou_agent_platform.core.agent import _function_name
+    from tianzhou_agent_platform.services.agent_integration.capabilities import function_name as _function_name
 
     llm = ScriptedLLM(
         [

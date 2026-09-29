@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from tianzhou_agent_platform.core.trace_details import redact_trace_data
+from tianzhou_agent_platform.observability.trace_details import redact_trace_data
 
 logger = logging.getLogger(__name__)
 

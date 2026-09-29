@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.drivers import SandboxDriver
 from tianzhou_agent_platform.sandbox.models import (
     SandboxEnsureRequest,

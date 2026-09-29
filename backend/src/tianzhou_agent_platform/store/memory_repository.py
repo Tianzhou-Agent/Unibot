@@ -1725,18 +1725,6 @@ class InMemoryRepository:
             await self._save_record(APPROVALS_RESOURCE, approval.id, approval)
         return self._copy(approval)
 
-    async def update_approval(self, approval_id: str, **fields: Any) -> ApprovalRecord | None:
-        """Partial update consumed by ConversationService.resolve_approval."""
-        async with self._lock:
-            approval = self._approvals.get(approval_id)
-            if approval is None:
-                return None
-            for name, value in fields.items():
-                if hasattr(approval, name):
-                    setattr(approval, name, value)
-            await self._save_record(APPROVALS_RESOURCE, approval_id, approval)
-            return self._copy(approval)
-
     async def append_messages(
         self, conversation_id: str, messages: Iterable[Message]
     ) -> Conversation | None:

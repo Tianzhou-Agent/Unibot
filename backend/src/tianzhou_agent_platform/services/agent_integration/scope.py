@@ -1,21 +1,19 @@
-"""Scope/authorization policy bound outside the runtime.
+"""Capability scope of an agent run: what each model request advertises and how out-of-scope calls are answered.
 
-Re-resolve permissions on approval resume. Scope activation affects the
-following model request; sibling calls remain governed by the original batch
-scope. One-AINA-activation rule is enforced here (business policy).
+Every capability reachable in a run is registered as a tool; the scope decides which ones the next model request
+advertises, with which system prompt. Activating an AINA scope changes the following model request; sibling calls
+of the same response stay governed by the scope they were proposed in.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable, Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
-
-from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import current_batch
 
 
 @dataclass
@@ -53,6 +51,9 @@ class RunScope:
     # Per-request context appended to the scope prompt (e.g. the current task projection), refreshed before
     # every model call so tool effects earlier in the run are visible.
     prompt_suffix: Callable[[], Awaitable[str]] | None = None
+    # Transient UI context of this turn: shown to the model inside the user message with this id, never stored.
+    ui_context: str | None = None
+    ui_context_message_id: str | None = None
 
 
 class CapabilityScopeMiddleware(AgentMiddleware):
@@ -70,10 +71,12 @@ class CapabilityScopeMiddleware(AgentMiddleware):
             "tools": tools,
             "system_message": SystemMessage(content=prompt),
         }
+        messages = list(request.messages)
+        if self.scope.ui_context:
+            messages = [_with_ui_context(message, self.scope) for message in messages]
         if self.scope.project_messages is not None:
-            overrides["messages"] = self.scope.project_messages(
-                list(request.messages), set(self.scope.visible) | self.scope.activated_entries
-            )
+            messages = self.scope.project_messages(messages, set(self.scope.visible) | self.scope.activated_entries)
+        overrides["messages"] = messages
         forced, self.scope.forced_function = self.scope.forced_function, None
         if forced is not None and forced in self.scope.visible:
             overrides["tool_choice"] = forced
@@ -123,6 +126,13 @@ class CapabilityScopeMiddleware(AgentMiddleware):
         return result
 
 
+def _with_ui_context(message: Any, scope: RunScope) -> Any:
+    if not isinstance(message, HumanMessage) or message.id != scope.ui_context_message_id:
+        return message
+    content = message.content if isinstance(message.content, str) else str(message.content)
+    return message.model_copy(update={"content": f"{content}\n\n<ui_context>\n{scope.ui_context}\n</ui_context>"})
+
+
 def _error_payload(result: Any) -> dict[str, Any] | None:
     content = getattr(result, "content", None)
     if not isinstance(content, str):
@@ -158,60 +168,3 @@ def filter_advertised_tools(
             continue
         result.append(tool)
     return result
-
-
-def ensure_execution_scope(
-    name: str,
-    *,
-    allowed_names: set[str] | None = None,
-    hidden_names: set[str] | None = None,
-) -> None:
-    """Execution-time scope check (defense in depth beyond advertisement)."""
-    from tianzhou_agent_platform.core.errors import PlatformError
-
-    hidden = hidden_names or set()
-    if name in hidden or (allowed_names is not None and name not in allowed_names):
-        raise PlatformError(
-            code="PERMISSION_DENIED",
-            message=f"Tool {name!r} is not permitted for this invocation",
-            status_code=403,
-            source="auth",
-            user_message="没有执行该工具的权限。",
-        )
-
-
-def claim_scope_activation(name: str) -> bool:
-    """One-AINA-activation rule: only one scope activation per batch.
-
-    Returns True if this call may activate scope. Sibling calls remain under
-    the original batch scope.
-    """
-    coord = current_batch()
-    if coord is None:
-        return True
-    ledger = coord.ledger
-    if ledger.activated_scope:
-        return False
-    ledger.activated_scope = True
-    return True
-
-
-def revalidate_permissions_on_resume(
-    pending_names: Iterable[str],
-    *,
-    allowed_names: set[str] | None = None,
-    hidden_names: set[str] | None = None,
-) -> list[str]:
-    """Re-resolve permissions when approving a paused batch.
-
-    Returns names that are still permitted. Callers must not execute the rest.
-    """
-    permitted: list[str] = []
-    hidden = hidden_names or set()
-    for name in pending_names:
-        if name in hidden:
-            continue
-        if allowed_names is not None and name not in allowed_names:
-            continue
-        permitted.append(name)
-    return permitted

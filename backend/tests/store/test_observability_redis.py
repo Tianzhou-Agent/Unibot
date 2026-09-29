@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from tianzhou_agent_platform.core.observability_stream import RedisObsIngestWorker
+from tianzhou_agent_platform.observability.stream import RedisObsIngestWorker
 from tianzhou_agent_platform.store.observability_buffer import ObsBufferError, ObsRecord
 from tianzhou_agent_platform.store.observability_redis import RedisObsBuffer
 

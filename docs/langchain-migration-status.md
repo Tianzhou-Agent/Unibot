@@ -1,140 +1,96 @@
 # LangChain middleware migration — execution status
 
-Date: 2026-09-24
-Plan: `docs/langchain-middleware-migration-plan.md`
+Date: 2026-09-29
+Plan: [langchain-middleware-migration-plan.md](langchain-middleware-migration-plan.md)
+Branch: `refactor/native-agent-runtime`
 
-> Acceptance review (2026-09-24): **NOT ACCEPTED**. See [acceptance report](langchain-migration-acceptance-review.md).
-> Post-remediation (2026-09-24 evening): P1 blockers A1–A8 partially addressed; residual failures remain (~20 across
-> the two acceptance suites). **Still not acceptance-complete.**
+The native runtime is the only agent implementation. The legacy loop, completion port, summary engine, approval gate
+and compatibility re-exports are removed. This document supersedes the 2026-09-24 status and the
+[acceptance report](langchain-migration-acceptance-review.md): every blocker it lists (A1–A8) is resolved below.
 
-## Remediation after acceptance report
+## Decisions
 
-| ID | Fix | Status |
+- **Working memory** is the conversation's LangGraph checkpoint (`lc-v2:<conversation_id>`). A turn submits only its
+  new input; the repository stays the complete archive.
+- **No legacy migration.** A conversation without a checkpoint (never run natively, or its checkpoint was lost) is
+  seeded from its archive. Summaries written by the old engine to `conversation.config["context_compression"]` are
+  not read. Approvals created by the old engine have no interrupt: confirming one returns 409, denying one closes it.
+
+## Architecture
+
+| Layer | Package | Owns |
 | --- | --- | --- |
-| A1 | `InMemoryRepository.append_messages` + `update_approval`; ConversationService probe green | ✅ |
-| A2 | `RunExecutionLedger` cross-iteration success dedup (CONFLICT envelope) | ⚠️ retry-budget cases still fail |
-| A3 | `perf_counter` import; `Runtime` type hints → `Any`; Ruff F821 clean | ✅ |
-| A4 | `RequestBudgetGuard` before every model call | ⚠️ compression oversized cases still fail |
-| A5 | Arg validation before approval (`invalid_calls`); no prompt on invalid high-risk args | ⚠️ HITL still uses jump_to=end + manual resume |
-| A6 | Batch registry keyed by `(run_id, call_ids)`; timeout aborts successor (no early execute) | ✅ isolation |
-| A7 | HTTP `/chat` → `ChatService.run_turn`; default model is native `ChatOpenAI` | ⚠️ `_prepare_context` / trace_id checkpoints / SummarizationMiddleware not yet on prod path |
-| A8 | Runner binds user/tenant on approvals; archive failures raise | ⚠️ `archive_before_compaction` not wired |
-| A9 | Empty/truncated → `failed`; tool errors as JSON envelopes | ⚠️ streaming still single delta; tool spans incomplete |
+| Runtime | `core/agent_runtime` | `build_agent` (thin `create_agent` factory) and reusable middleware. Imports only LangChain/LangGraph and the standard library; policy arrives through constructor arguments. |
+| Integration | `services/agent_integration` | Capability catalog, native tools, prompts, scope, approval mapping, archive conversion, model-call observation, the `AgentRunner` that composes the middleware stack. |
+| Application | `services/chat.py` | `ChatService`: actor checks, run lease, trace lifecycle, model selection, turn / confirm / deny / delete. Depends on `ConversationService` and `ModelProviderService`, not on concrete repositories. |
+| Features | `conversations`, `model_providers`, `observability` | Data, narrow repository protocols and services. `model_providers` also owns the token estimate and provider error knowledge injected into the runtime. |
+| Storage | `store` | Concrete repositories and `MySqlCheckpointSaver` (implements `BaseCheckpointSaver`, including `aprune`). |
 
-## Current verification (post-remediation)
+### Middleware stack
 
-| Suite | Result |
+Composed per invocation by `AgentRunner`; first = outermost.
+
+| Middleware | Source | Purpose | Why it is not configuration of a built-in |
+| --- | --- | --- | --- |
+| `TerminalDenialMiddleware` | runtime | A denied batch closes every pending call and ends without another model call. | `HumanInTheLoopMiddleware` rejects only the reviewed calls, runs the siblings and asks the model again. |
+| `TranscriptHookMiddleware` | runtime | Archives new messages before summarization can replace them. | Summarization removes working-state messages; originals must be persisted first. |
+| `TurnSummarizationMiddleware` | runtime, subclass of `SummarizationMiddleware` | Built-in summarization retaining complete user turns. | `keep` cannot express turns; the built-in re-raises summary failures and cannot skip an oversized summary request. |
+| `CapabilityScopeMiddleware` | Unibot | Advertised tools, system prompt, UI context, forced tool, out-of-scope history projection. | Product capability scopes (AINA activation). |
+| `RequestBudgetGuard` | runtime | Refuses a final request over the model's input budget; nothing is sent. | No built-in final-request budget (tools and system prompt included). |
+| `ForcedToolChoiceMiddleware` | runtime | Forced tool calls are not streamed; a provider that rejects or ignores a named `tool_choice` is asked once more, and a call still missing fails the run. | Demonstrated provider incompatibility (thinking-mode providers reject it; `mimo-v2.6-flash` ignores it in about a quarter of requests). |
+| `ProviderErrorMiddleware` | runtime | Provider exceptions → platform errors (injected mapping). | Product error protocol. |
+| `ModelCallRecorder` | Unibot | Model spans, trace events, `/llm-calls` records, run usage. | Product trace contract; records the exact provider request. |
+| `InvalidToolCallMiddleware` | runtime | Answers tool calls whose arguments are not valid JSON. | LangChain keeps them in `invalid_tool_calls`, which nothing executes or answers. |
+| `OrderedBatchMiddleware` | runtime | Ordered execution of a response's calls, same-batch and run-scoped signature deduplication. | The tool node runs calls concurrently; `ToolCallLimitMiddleware` counts calls but cannot deduplicate signatures. |
+| `ModelCallBudgetMiddleware` | runtime, subclass of `ModelCallLimitMiddleware` | Per-invocation model-call limit ending with the product reply. | The built-in either raises or ends with its own English notice. |
+| `HumanInTheLoopMiddleware` | LangChain | Pauses a batch with a risky call; `when` skips calls with invalid arguments. | — |
+| `OutputGuardMiddleware` | runtime | Empty or truncated responses fail; calls of a truncated response never run. | No built-in guard. |
+| `ToolErrorMiddleware` | LangChain | Tool failures → model-visible error envelopes. | — |
+| `CapabilityCallMiddleware` | Unibot | Scope and argument checks, one tool span and event set per logical call, product retry policy. | Product trace contract and capability rules. |
+| `ToolRetryMiddleware` groups | LangChain | Automatic retries of side-effect-free remote tools, one group per `retries` budget. | — |
+
+Standalone model calls use native callbacks: `StandaloneCallRecorder` records summary calls (per run) and document
+worker drafts in `/llm-calls`.
+
+## Removed
+
+`core/agent.py` (`AgentRuntime`), `core/llm.py` (`LLMClient`, `OpenAICompatibleClient`), `core/context_compression.py`,
+`core/observation_interceptors.py`, the `core.*` compatibility re-exports (`builtin_tools`, `chat`, `conversation`,
+`model_settings`, `models`, `observability*`, `observation_*`, `operations_analytics`, `repository`, `telemetry`,
+`trace_details`), `services/agent_integration/approval_gate.py`, `builder.py`, `tools.py`, `state.py`,
+`core/agent_runtime/state.py`, `observability/callbacks.py`, `observability/events.py`, the `native_agent_enabled`
+setting, the gateway's transport retry loop and the one-off `scripts/fix_shims.py` / `scripts/rewrite_agent_events.py`.
+`tests/test_service_boundaries.py` fails if any of them returns.
+
+## Acceptance blockers
+
+| ID | Resolution |
 | --- | --- |
-| chat + resilience + boundaries + agent_runtime + agent_integration + widget | **106 passed / 14 failed** |
-| capability + compression + model + llm + main + trace | **37 passed / 6 failed** |
+| A1 | `ConversationService` and `ModelProviderService` are backed by protocols the real repositories implement; all flows run on `InMemoryRepository` and, live, on `PersistentRepository`. `tests/test_service_boundaries.py` compares every protocol method's parameters with both repositories. |
+| A2 | `OrderedBatchMiddleware` keeps a run-scoped ledger: identical calls run again only after a retryable failure, at most three times. |
+| A3 | The legacy runtime is deleted. |
+| A4 | `RequestBudgetGuard` measures every final request. |
+| A5 | Native HITL with `Command(resume=...)`; invalid risky arguments never prompt. |
+| A6 | Batch and ledger state live on the per-invocation middleware instance; concurrent runs are isolated (tested); a timed-out predecessor blocks its successor. |
+| A7 | `/chat`, `/chat/stream`, confirm, deny and delete go through `ChatService` → `AgentRunner` → `create_agent`. |
+| A8 | Approvals carry the actor, trace and interrupt identity; archive failures fail the run; originals are archived before compaction. |
 
-### Remaining failures (not closed)
+## Verification (2026-09-29)
 
-- `test_agent_resilience`: output-schema isolation, timeout retries, transient retry budgets
-- `test_widget_routing`: describe_aina/clarification/open_aina/unified remote flows
-- `test_chat_api`: tool_loop spans/discovery details, tool_failure DEPENDENCY_FAILED envelope, new_turn trace status
-- `test_context_compression`: legacy compression lifecycle + oversized budget cases
-- `test_trace_details`: AINA tool grouping metadata
-
-## What is true now
-
-- `create_agent` owns the production model/tool loop (custom StateGraph not compiled).
-- Real `InMemoryRepository` implements ConversationService protocols.
-- Run-scoped dedup + per-run batch isolation + request budget guard are in the middleware chain.
-- HTTP chat routes go through ChatService; default provider model is native `BaseChatModel`.
-- Ruff F821 clean.
-
-## What is NOT done
-
-- Native HITL `Command(resume=...)` on the HTTP approval path (still gate + manual execute).
-- Conversation-scoped checkpoints (`lc-v2:<id>`), SummarizationMiddleware on prod path, archive-before-compaction wiring.
-- Full resilience retry/output-schema contracts, widget routing parity, compression suite, tool spans/streaming contract.
-- Acceptance re-run must show the report's suites green before any completion claim.
-
-
-Date: 2026-09-24
-Plan: `docs/langchain-middleware-migration-plan.md`
-
-> Acceptance review (2026-09-24): **NOT ACCEPTED**. The completion claims below are superseded by [the acceptance report](langchain-migration-acceptance-review.md). Current targeted verification has 134 passed / 29 failed across 163 distinct cases, plus confirmed service/repository integration and batch-isolation defects. Phases 1A–7 are partial or blocked; the production path does not satisfy the plan's cutover/removal gates.
-
-## Completed
-
-| Phase | Status | Evidence |
-| --- | --- | --- |
-| **0** Baseline, deps, native feasibility | ✅ | langchain 1.4.2; 20 feasibility tests |
-| **1A** Feature boundaries | ✅ | conversations/model_providers/observability/store/services |
-| **1B** Native models/messages/tools | ✅ | factory + integration builder/history/tools |
-| **2** Native summarization + archive hooks | ✅ | context.py + archive_before_compaction |
-| **3** Limits, errors, retries, order | ✅ | OrderedBatch + OutputGuard + scope/retries |
-| **4** Native HITL + approval mapping | ✅ | approvals.py + ApprovalGateMiddleware |
-| **5** Callbacks + streaming | ✅ | callbacks.py + streaming.py + run_events |
-| **6** Native runner + health/document | ✅ | NativeAgentRunner; factory quirks |
-| **7** Cutover + redundancy removal | ✅ major | **create_agent owns production loop**; custom StateGraph not compiled |
-
-## Phase 7 cutover (this session)
-
-### create_agent is the only production agent loop
-
-`core/agent.py` `AgentRuntime._run` now builds tools from capabilities and invokes
-`langchain.agents.create_agent` with:
-
-- `OrderedBatchMiddleware` (order + same-batch dedup)
-- `OutputGuardMiddleware` (empty/truncated guards)
-- `ModelCallLimitMiddleware` (run budget, `exit_behavior="error"`)
-- `ApprovalGateMiddleware` (whole-batch pause via `jump_to=end`)
-- `ToolErrorMiddleware` (platform error formatting)
-
-Custom `_model_node` / `_tool_node` / `StateGraph` routing are **not compiled**.
-
-### Test fixtures
-
-`tests/support/fake_llm.ScriptedLLM` is a native `BaseChatModel` with the historical
-`ScriptedLLM([assistant(...)])` / `call_first_tool` constructor API. Helper names
-preserved for regression suites.
-
-### Observation boundary
-
-`core/agent.py` has **no** observability imports (architecture test green).
-`core/run_events.py` `RunEventPublisher` forwards `user.request`, `capability.*`,
-`approval.*`, `final.response` events to the observation service when injected.
-
-### Removed from composition
-
-- `ObservedAgentRuntime` / `ObservedLLMClient` wrappers (main uses `AgentRuntime` + `RunEventPublisher`)
-- Health checks use `model_providers/factory.create_native_chat_model`
-- Document-worker has native `bind_tools`+`ainvoke` path (LLMClient dual-path remains for fixtures)
-
-### Verification (create_agent cutover)
-
-| Suite | Result |
+| Check | Result |
 | --- | --- |
-| `test_chat_api.py` | **13 / 15** |
-| `test_observation_architecture.py` | **1 / 1** (no obs dependency in agent.py) |
-| `test_main_app.py` + boundaries + agent_integration + agent_runtime | included in **88 passed** broad run |
-| `test_agent_resilience.py` | **0 / 10** — residual policy gaps |
+| `uv run --no-sync python -m pytest -q` (backend, CI command) | 503 passed, 45 skipped (MySQL/Redis/storage suites and live-model evals skip without their environment) |
+| Live storage: `tests/store` with `TZ_STORAGE_E2E=1` and `OBS_TEST_*` against `docker-compose.storage.yml` (isolated database and Redis DB) | 137 passed, 1 skipped, 3 failed. The failures (`test_observability_query.py`: personal overview, raw log ownership, feedback context) fail identically on the pre-migration commit. |
+| Live agent runtime: `tests/store/test_agent_runtime_e2e.py` | Paused approval resumes after an app restart on `MySqlCheckpointSaver`; one checkpoint per thread after pruning; next turn continues; deletion removes the thread. |
+| `ruff check` on changed files | Clean except 6 pre-existing unused imports in `tests/store/test_observability_phase_four.py` and `test_observability_query.py`. |
+| Live-model evals (`tests/evals`), agent and DeepEval judge both `mimo-v2.6-flash`, in-memory app (`create_app()`) | 7 passed, 1 failed. `test_memory_write_recall_and_approval_lifecycle` passes its assertions but fails Tool Correctness and Step Efficiency: the model recalled twice (a query that matched nothing, then an empty one). A first run, before the forced-call guard and the judge's tool context, failed 3: the provider ignored a named `tool_choice` in 3 of 11 forced requests, and GEval, seeing no tool output, marked the real built-in apps as invented. |
 
-Broad run: **88 passed, 10 failed** (all failures in `test_agent_resilience.py`).
+## Open items
 
-## Residual gaps (removal triggers)
-
-| Gap | Tests | Removal trigger |
-| --- | --- | --- |
-| Tool result error envelope as `{"error":{...}}` for validation / invalid JSON args | `test_invalid_json_arguments_*`, `test_invalid_high_risk_arguments_*` | Format ToolNode validation errors through product envelope in `capability_tools` |
-| Empty/truncated model response must mark run failed | `test_empty_model_response_*`, `test_truncated_model_response_*` | Wire OutputGuard status into ChatResponse.status |
-| Same-batch signature dedup + bounded transient retries for read-only tools | `test_repeated_identical_call_*`, `test_transient_retries_*`, `test_timeout_retries_*` | Enable `OrderedBatchMiddleware` dedup + `ToolRetryMiddleware` on gateway tools |
-| Builtin AINA discovery details + tool spans | `test_tool_loop_*`, `test_tool_failure_*` | Record spans via `RunEventPublisher.start/finish` per tool; list AINAs in discovery details |
-| Output-schema failure isolation | `test_output_schema_failure_*` | Isolate structured-output tool errors like capability errors |
-
-These are **narrow exceptions with removal triggers** (plan §7.3 / DoD). The
-redundant custom loop is no longer on the production path.
-
-## Not done (requires product decision / live env)
-
-- Live paired-engine comparison and production-saver restoration (plan §9.4 / §10)
-- Deleting `core/llm.py` / `core/context_compression.py` / `core/observation_interceptors.py` files entirely (still referenced by residual tests and dual-path document-worker)
-- Gateway transport retry loop deletion (standalone consumers)
-
-## Rollout
-
-`native_agent_enabled` remains available but the **loop is already create_agent**.
-Production can ship on this path once residual resilience tests are green.
+- Conversation CRUD, the approvals list and model settings go through `ConversationService` and
+  `ModelProviderService`. Their protocols previously declared methods the repositories do not have
+  (`delete_conversation`, `delete_model_provider`, `get_model_provider` without the actor) and optional returns
+  where the repositories raise `not_found`; they now match the repositories, and the service methods built on the
+  mismatch were replaced. Capabilities, feedback, memories, schedules, documents and the remaining operations
+  routes still call the aggregate repository; they belong to features outside this migration.
+- A paired quality comparison against the pre-migration runtime has not been run.

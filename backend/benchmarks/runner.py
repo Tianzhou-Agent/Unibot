@@ -7,41 +7,52 @@ from time import perf_counter
 from typing import Any
 
 import httpx
+from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from benchmarks.cases import ACTOR, Case
 from benchmarks.environment import BenchmarkWorld, grade_trial
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.llm import LLMClient, LLMResult, OpenAICompatibleClient
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.model_providers.factory import create_model_from_settings
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 
 
-class MeteredLLM:
-    def __init__(self, client: LLMClient) -> None:
-        self.client = client
+class UsageMeter(AsyncCallbackHandler):
+    """Native callback recording the usage of every model call the benchmarked model makes."""
+
+    def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self._open: dict[Any, tuple[dict[str, Any], float]] = {}
 
-    async def complete(self, **kwargs: Any) -> LLMResult:
+    async def on_chat_model_start(
+        self, serialized: dict[str, Any], messages: Any, *, run_id: Any, metadata: dict[str, Any] | None = None, **_: Any
+    ) -> None:
+        metadata = metadata or {}
+        context_type = metadata.get("context_type") or (
+            "compression" if metadata.get("lc_source") == "summarization" else None
+        )
         call = {"status": "failed", "input_tokens": None, "output_tokens": None,
-                "usage_estimated": False, "context_type": kwargs.get("context_type")}
+                "usage_estimated": False, "context_type": context_type}
         self.calls.append(call)
-        start = perf_counter()
-        try:
-            result = await self.client.complete(**kwargs)
-            call.update(status="completed", input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-                        usage_estimated=result.usage_estimated, finish_reason=result.finish_reason)
-            return result
-        finally:
-            call["duration_ms"] = (perf_counter() - start) * 1000
+        self._open[run_id] = (call, perf_counter())
 
-    async def aclose(self) -> None:
-        close = getattr(self.client, "aclose", None)
-        if close is not None:
-            await close()
+    async def on_llm_end(self, response: Any, *, run_id: Any, **_: Any) -> None:
+        call, start = self._open.pop(run_id, ({}, perf_counter()))
+        message = response.generations[0][0].message
+        usage = getattr(message, "usage_metadata", None)
+        call.update(status="completed", input_tokens=usage["input_tokens"] if usage else None,
+                    output_tokens=usage["output_tokens"] if usage else None, usage_estimated=usage is None,
+                    finish_reason=message.response_metadata.get("finish_reason"),
+                    duration_ms=(perf_counter() - start) * 1000)
+
+    async def on_llm_error(self, error: BaseException, *, run_id: Any, **_: Any) -> None:
+        call, start = self._open.pop(run_id, ({}, perf_counter()))
+        call["duration_ms"] = (perf_counter() - start) * 1000
 
 
 def token_cost(calls: list[dict[str, Any]], rates: tuple[float, float] | None) -> dict[str, Any]:
@@ -58,7 +69,7 @@ def token_cost(calls: list[dict[str, Any]], rates: tuple[float, float] | None) -
 
 async def run_trial(
     case: Case, settings: AgentSettings, trial: int, work_root: Path, *,
-    timeout_seconds: float = 180, rates: tuple[float, float] | None = None, llm: LLMClient | None = None,
+    timeout_seconds: float = 180, rates: tuple[float, float] | None = None, llm: BaseChatModel | None = None,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
         "case_id": case.id, "category": case.category, "trial": trial,
@@ -76,10 +87,17 @@ async def run_trial(
         world = BenchmarkWorld(case, repository, documents)
         await world.seed()
         record.update(initial_state=await world.snapshot(), memory_id=world.memory_id)
-        meter = MeteredLLM(llm if llm is not None else OpenAICompatibleClient(isolated_settings))
+        meter = UsageMeter()
+        model = llm or create_model_from_settings(
+            model=isolated_settings.llm_model or "",
+            api_key=isolated_settings.llm_api_key.get_secret_value() if isolated_settings.llm_api_key else None,
+            base_url=isolated_settings.llm_base_url,
+            timeout_seconds=isolated_settings.llm_timeout_seconds,
+        )
+        model = model.model_copy(update={"callbacks": [meter]})
         async with httpx.AsyncClient(transport=httpx.MockTransport(world.handle)) as connectors:
             app = create_app(
-                settings=isolated_settings, repository=repository, llm=meter,
+                settings=isolated_settings, repository=repository, llm=model,
                 capability_http_client=connectors, vision_http_client=connectors, document_service=documents,
                 sandbox_service=create_sandbox_service(isolated_settings, repository, enforce_isolation=True),
             )

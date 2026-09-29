@@ -1,42 +1,38 @@
-"""Shared native counting/estimate helpers.
+"""Token estimates and budgets shared by the agent integration and observability.
 
-Used by runtime budget guards and observability. Injected as callables so
-observability does not import runtime internals.
+The runtime middleware receives these as injected callables, so neither observability nor the runtime depends on
+the other.
 """
 
 from __future__ import annotations
 
+import json
+import math
 from typing import Any
 
 
-def estimate_message_tokens(messages: Any) -> int:
-    """Fallback estimate when providers cannot supply a reliable count."""
-    total = 0
-    for message in messages or []:
-        if isinstance(message, str):
-            total += max(1, len(message) // 4)
-            continue
-        content = getattr(message, "content", None)
-        if isinstance(content, str):
-            total += max(1, len(content) // 4)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, str):
-                    total += max(1, len(block) // 4)
-                elif isinstance(block, dict):
-                    total += max(1, len(str(block.get("text", ""))) // 4)
-        total += 4  # role/name overhead
+def estimate_request_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> int:
+    """Conservative tokenizer-free estimate for multilingual JSON chat payloads.
+
+    Counts every non-ASCII character as a token, so CJK text is not underestimated the way a characters/4 rule
+    (``count_tokens_approximately``) would underestimate it.
+    """
+    total = sum(_estimate_value_tokens(message) + 4 for message in messages)
+    if tools:
+        total += _estimate_value_tokens(tools)
     return total
 
 
-def estimate_tools_tokens(tools: Any) -> int:
-    """Rough token cost of advertising tool schemas."""
-    import json
+def output_token_reserve(context_window_tokens: int) -> int:
+    """Answer space kept free in every request: a quarter of the window, at most 4096 tokens."""
+    return min(4_096, context_window_tokens // 4)
 
-    if not tools:
-        return 0
-    try:
-        payload = json.dumps(tools, default=str)
-    except TypeError:
-        payload = str(tools)
-    return max(1, len(payload) // 4)
+
+def request_input_budget(context_window_tokens: int) -> int:
+    return context_window_tokens - output_token_reserve(context_window_tokens)
+
+
+def _estimate_value_tokens(value: Any) -> int:
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    ascii_count = sum(character.isascii() for character in text)
+    return math.ceil(ascii_count / 4) + (len(text) - ascii_count)

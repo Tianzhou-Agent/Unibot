@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tianzhou_agent_platform.core.context_compression import estimate_request_tokens
-from tianzhou_agent_platform.core.observability_query import ObsQueryService
+from tianzhou_agent_platform.model_providers.tokens import estimate_request_tokens
+from tianzhou_agent_platform.observability.query import ObsQueryService
 
 
 def _model_span_row(**overrides):

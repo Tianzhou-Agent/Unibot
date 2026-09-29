@@ -18,7 +18,7 @@ from tianzhou_agent_platform.aina.scheduler import (
     next_scheduled_run,
 )
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tests.support.fake_llm import ScriptedLLM
 

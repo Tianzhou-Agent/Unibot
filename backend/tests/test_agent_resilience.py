@@ -13,7 +13,7 @@ from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.llm import LLMResult
+from tests.support.fake_llm import LLMResult
 from tianzhou_agent_platform.main import create_app
 
 
@@ -326,9 +326,68 @@ def test_truncated_model_response_is_failed_and_never_executes_partial_tool_call
         assert "Partial answer" in response["content"]
 
 
+def test_forced_tool_the_model_keeps_ignoring_fails_the_turn_without_its_answer() -> None:
+    requests = []
+    llm = ScriptedLLM([assistant("It is 42."), assistant("Still 42.")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: requests.append(request)))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post("/tools", json=_tool_definition())
+        response = client.post("/chat", json={"message": "Run it", "capability": "tool:resilience.tool"}).json()
+        conversation = client.get(f"/conversations/{response['conversation_id']}").json()
+
+    assert response["status"] == "failed"
+    assert "without using the selected capability" in response["content"]
+    assert not requests and len(llm.calls) == 2
+    assert all(call["tool_choice"] is not None for call in llm.calls)
+    assert conversation["run_status"] == "failed"
+    assert not any("42" in str(message["content"]) for message in conversation["messages"])
+
+
+@pytest.mark.parametrize("side_effect_level,expected_calls", [("none", 2), ("low", 1)])
+def test_automatic_retries_do_not_repeat_operations_with_side_effects(side_effect_level, expected_calls):
+    calls = []
+
+    def timeout(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("Outcome unknown", request=request)
+
+    llm = ScriptedLLM([call_first_tool(arguments='{"value":7}'), assistant("The tool timed out.")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(timeout))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        client.post("/tools", json=_tool_definition(side_effect_level=side_effect_level, retries=1))
+        response = client.post("/chat", json={"message": "Run it", "capability": "tool:resilience.tool"})
+
+    assert response.json()["status"] == "completed"
+    assert len(calls) == expected_calls
+    # Every automatic attempt is the same logical call.
+    assert {request.headers["Idempotency-Key"] for request in calls} == {"call_1"}
+
+
+def test_high_risk_tools_are_never_retried_automatically() -> None:
+    from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
+    from tianzhou_agent_platform.services.agent_integration.retries import tool_retry_middleware
+
+    def capability(name: str, side_effect_level: str) -> Capability:
+        tool = ToolRecord(**_tool_definition(tool_id=name, side_effect_level=side_effect_level, retries=3))
+        return Capability(
+            kind="tool",
+            capability_id=name,
+            function_name=name,
+            display_name=name,
+            description="",
+            input_schema={},
+            requires_confirmation=side_effect_level == "high",
+            value=tool,
+        )
+
+    registry = {name: capability(name, level) for name, level in (("read", "none"), ("send", "high"))}
+    [retry] = tool_retry_middleware(registry)
+    assert retry.max_retries == 3
+    assert retry._should_retry_tool("read") and not retry._should_retry_tool("send")
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("side_effect_level,expected_calls", [("none", 2), ("low", 1), ("high", 1)])
-async def test_transport_retries_do_not_repeat_operations_with_side_effects(side_effect_level, expected_calls):
+async def test_gateway_makes_a_single_transport_attempt():
     calls = []
 
     def timeout(request):
@@ -337,9 +396,9 @@ async def test_transport_retries_do_not_repeat_operations_with_side_effects(side
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as http_client:
         gateway = RemoteCapabilityGateway(_settings(), http_client)
-        tool = ToolRecord(**_tool_definition(side_effect_level=side_effect_level, retries=1))
+        tool = ToolRecord(**_tool_definition(retries=3))
         with pytest.raises(PlatformError, match="timed out"):
             await gateway.invoke_tool(tool, arguments={"value": 7}, call_id="call",
                                       user_id="u", tenant_id="t", conversation_id="c", trace_id="trace")
-        assert len(calls) == expected_calls
+        assert len(calls) == 1
         await gateway.aclose()

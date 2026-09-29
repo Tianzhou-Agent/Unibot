@@ -45,3 +45,14 @@ def map_provider_error(exc: openai.OpenAIError) -> PlatformError:
         source="model",
         debug={"provider_status": status_code} if status_code is not None else {},
     )
+
+
+def map_model_error(exc: Exception) -> PlatformError | None:
+    """Platform error of a failed model call, or None when the exception did not come from the provider."""
+    return map_provider_error(exc) if isinstance(exc, openai.OpenAIError) else None
+
+
+def rejects_tool_choice(exc: BaseException) -> bool:
+    """The provider rejected the request's named ``tool_choice`` (possibly already mapped to a platform error)."""
+    cause = exc if isinstance(exc, openai.BadRequestError) else exc.__cause__
+    return isinstance(cause, openai.BadRequestError) and "tool_choice" in str(cause).lower()

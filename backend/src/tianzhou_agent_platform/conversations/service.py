@@ -16,46 +16,59 @@ from tianzhou_agent_platform.conversations.models import (
 from tianzhou_agent_platform.conversations.repository import (
     ApprovalRepository,
     ConversationRepository,
+    ConversationRunRepository,
 )
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
-from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
+from tianzhou_agent_platform.core.errors import PlatformError, not_found
 
 
 class ConversationService:
     def __init__(
         self,
-        repository: ConversationRepository & ApprovalRepository,
+        repository: ConversationRepository & ApprovalRepository & ConversationRunRepository,
     ) -> None:
         self._repo = repository
 
     async def create(self, payload: ConversationCreate) -> Conversation:
         return await self._repo.create_conversation(payload)
 
-    async def get(self, conversation_id: str) -> Conversation:
-        conversation = await self._repo.get_conversation(conversation_id)
-        if conversation is None:
-            raise not_found("conversation", conversation_id)
-        return conversation
+    async def get(self, conversation_id: str, *, include_deleted: bool = False) -> Conversation:
+        return await self._repo.get_conversation(conversation_id, include_deleted=include_deleted)
 
-    async def get_optional(self, conversation_id: str) -> Conversation | None:
-        return await self._repo.get_conversation(conversation_id)
+    async def get_reconciled(self, conversation_id: str) -> Conversation:
+        """The conversation, with a run whose owner is gone marked as finished."""
+        return await self._repo.reconcile_conversation_run(conversation_id)
 
     async def update(self, conversation_id: str, payload: ConversationUpdate) -> Conversation:
-        conversation = await self._repo.update_conversation(conversation_id, payload)
-        if conversation is None:
-            raise not_found("conversation", conversation_id)
-        return conversation
+        return await self._repo.update_conversation(conversation_id, payload)
 
-    async def delete(self, conversation_id: str) -> None:
-        deleted = await self._repo.delete_conversation(conversation_id)
-        if not deleted:
-            raise not_found("conversation", conversation_id)
+    async def restore(self, conversation_id: str) -> Conversation:
+        return await self._repo.set_conversation_status(conversation_id, "active")
 
     async def list_for_actor(
-        self, *, user_id: str, tenant_id: str, workspace_id: str | None = None
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        category: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[Conversation]:
+        if workspace_id is not None:
+            await self._repo.require_workspace_actor(workspace_id, user_id=user_id, tenant_id=tenant_id)
         return await self._repo.list_conversations(
-            user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id
+            user_id=user_id, tenant_id=tenant_id, category=category, workspace_id=workspace_id
+        )
+
+    async def list_approvals(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        conversation_id: str | None = None,
+        status: str | None = None,
+    ) -> list[ApprovalRecord]:
+        return await self._repo.list_approvals(
+            conversation_id=conversation_id, user_id=user_id, tenant_id=tenant_id, status=status
         )
 
     def ensure_ownership(self, conversation: Conversation, *, user_id: str, tenant_id: str) -> None:
@@ -81,39 +94,41 @@ class ConversationService:
         return await self._repo.create_approval(approval)
 
     async def get_approval(self, approval_id: str) -> ApprovalRecord:
-        approval = await self._repo.get_approval(approval_id)
-        if approval is None:
-            raise not_found("approval", approval_id)
-        return approval
+        return await self._repo.get_approval(approval_id)
 
-    async def resolve_approval(
+    async def require_for_actor(self, conversation_id: str, *, user_id: str, tenant_id: str) -> Conversation:
+        return await self._repo.require_conversation_actor(conversation_id, user_id=user_id, tenant_id=tenant_id)
+
+    async def start_run(self, conversation_id: str, trace_id: str) -> Conversation:
+        """Take the conversation's run lease; fails with CONFLICT while another run holds it."""
+        return await self._repo.start_conversation_run(conversation_id, trace_id)
+
+    async def finish_run(
         self,
-        approval_id: str,
+        conversation_id: str,
         *,
-        status: str,
-        user_id: str,
-        tenant_id: str,
-        run_generation: int | None = None,
-    ) -> ApprovalRecord:
-        approval = await self.get_approval(approval_id)
-        self.ensure_ownership(
-            Conversation(
-                id=approval.conversation_id,
-                user_id=approval.user_id,
-                tenant_id=approval.tenant_id,
-                title="",
-            ),
-            user_id=user_id,
-            tenant_id=tenant_id,
-        )
-        if approval.status != "pending":
-            raise conflict(f"Approval {approval_id!r} is already {approval.status}")
-        if run_generation is not None and approval.run_generation != run_generation:
-            raise conflict(f"Approval {approval_id!r} belongs to a superseded run generation")
-        from tianzhou_agent_platform.core.base import utc_now
-
-        return await self._repo.update_approval(
-            approval_id,
+        status: str = "idle",
+        error: str | None = None,
+        expected_trace_id: str | None = None,
+    ) -> Conversation:
+        """Release the run lease (a no-op when ``expected_trace_id`` no longer holds it)."""
+        return await self._repo.finish_conversation_run(
+            conversation_id,
             status=status,
-            resolved_at=utc_now(),
+            error=error,
+            expected_trace_id=expected_trace_id,
         )
+
+    async def mark_deleted(self, conversation_id: str) -> Conversation:
+        return await self._repo.set_conversation_status(conversation_id, "deleted")
+
+    async def bind_aina(self, conversation_id: str, aina_id: str) -> Conversation:
+        """Record that the conversation routed to an AINA (it becomes the last used one)."""
+        return await self._repo.bind_conversation_aina(conversation_id, aina_id, mark_used=True)
+
+    async def set_approval_status(self, approval_id: str, status: str) -> ApprovalRecord:
+        return await self._repo.set_approval_status(approval_id, status)
+
+    async def cancel_pending_approvals(self, conversation_id: str) -> list[ApprovalRecord]:
+        """Deny the conversation's pending approvals; returns those that belong to a recorded trace."""
+        return await self._repo.cancel_pending_approvals(conversation_id)

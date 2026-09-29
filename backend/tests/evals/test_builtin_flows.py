@@ -61,7 +61,8 @@ def test_list_apps_agent_flow() -> None:
         run,
         task="List the AINA applications available to the current user",
         expected_output=(
-            "The available applications include unibot-memory; do not invent other applications."
+            "A summary of the applications list_app returned, including unibot-memory, and no application it did "
+            "not return."
         ),
         expected_tools=["list_app"],
         criteria="The answer must accurately summarize the applications returned by the list_app capability.",

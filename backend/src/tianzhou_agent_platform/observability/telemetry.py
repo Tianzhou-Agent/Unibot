@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult  # noqa: F401 - interface parity
 from opentelemetry.trace import StatusCode, get_tracer_provider, set_tracer_provider
 
-from tianzhou_agent_platform.core.observation_context import is_observation_suppressed
+from tianzhou_agent_platform.observability.context import is_observation_suppressed
 from tianzhou_agent_platform.store.observability_buffer import (
     DurableObsBuffer,
     ObsBufferError,

@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
-from tianzhou_agent_platform.core.chat import TraceRecord
+from tianzhou_agent_platform.observability.models import TraceRecord
 
 
 FeedbackRating = Literal["up", "down"]

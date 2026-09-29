@@ -1,90 +1,95 @@
-"""Native HITL configuration and public approval mapping (plan §6.6).
+"""Native human-in-the-loop for risky capabilities and its public approval mapping.
 
-HumanInTheLoopMiddleware owns interruption/resumption. This module maps
-native decisions/interrupts to application execution references and configures
-batch/terminal policy. ConversationService owns approval records.
+``HumanInTheLoopMiddleware`` pauses the whole model response (no sibling call runs) with a checkpointed interrupt
+and resumes it with ``Command(resume=...)``. This module configures it, maps the interrupt to the public
+``ApprovalRecord`` and supplies the texts of the runtime's ``TerminalDenialMiddleware``: a denied batch closes every
+pending call and ends the run without another model answer.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal, Sequence
+from typing import Any
 from uuid import uuid4
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
+from langchain_core.messages import AIMessage
+from langgraph.types import Interrupt
 
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
+from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
+from tianzhou_agent_platform.services.agent_integration.capability_tools import validate_capability_args
+from tianzhou_agent_platform.services.agent_integration.history import native_to_wire
 
-DecisionType = Literal["approve", "edit", "reject", "respond"]
+DENIED_TOOL_RESULT = "The user denied this operation."
+CANCELLED_REPLY = "The requested operation was cancelled."
 
 
-def build_hitl_middleware(
-    *,
-    risky_tools: dict[str, Sequence[DecisionType] | bool],
-    description_prefix: str = "Tool execution requires approval",
-) -> HumanInTheLoopMiddleware:
-    """Configure native HITL for risky tools.
+def build_approval_middleware(registry: dict[str, Capability]) -> HumanInTheLoopMiddleware:
+    """Interrupt before any call of a capability that requires confirmation.
 
-    Invalid risky arguments must produce errors, not approval prompts — the
-    ``when`` predicate and pre-validation in ChatService handle that.
+    Invalid arguments never ask for approval: such a call runs (and fails validation) without an interrupt.
     """
-    interrupt_on: dict[str, Any] = {}
-    for name, config in risky_tools.items():
-        if config is True:
-            interrupt_on[name] = InterruptOnConfig(
-                allowed_decisions=["approve", "edit", "reject", "respond"]
-            )
-        elif config is False:
-            continue
-        else:
-            interrupt_on[name] = InterruptOnConfig(allowed_decisions=list(config))
     return HumanInTheLoopMiddleware(
-        interrupt_on=interrupt_on,
-        description_prefix=description_prefix,
+        interrupt_on={
+            name: InterruptOnConfig(
+                allowed_decisions=["approve", "reject"],
+                description=capability.display_name,
+                when=_has_valid_arguments(capability),
+            )
+            for name, capability in registry.items()
+            if capability.requires_confirmation
+        },
     )
 
 
-def native_resume_payload(decisions: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Public confirm/deny → native Command(resume=...) payload.
+def _has_valid_arguments(capability: Capability) -> Any:
+    def when(request: Any) -> bool:
+        try:
+            validate_capability_args(
+                input_schema=capability.input_schema,
+                args=request.tool_call.get("args"),
+                function_name=capability.function_name,
+            )
+        except PlatformError:
+            return False
+        return True
 
-    HITL resume shape: ``{"decisions": [{"type": "approve"|...}, ...]}``.
-    """
-    return {"decisions": [dict(item) for item in decisions]}
-
-
-def approve_all(count: int) -> dict[str, Any]:
-    return native_resume_payload([{"type": "approve"}] * count)
-
-
-def reject_all(count: int) -> dict[str, Any]:
-    """Denial closes pending calls without another model generation."""
-    return native_resume_payload([{"type": "reject"}] * count)
+    return when
 
 
-def approval_record_from_interrupt(
+def approval_record(
     *,
+    interrupt: Interrupt,
+    messages: list[Any],
     conversation_id: str,
     user_id: str,
     tenant_id: str,
     trace_id: str,
-    tool_calls: list[dict[str, Any]],
-    capability_names: list[str],
-    runtime_ref: dict[str, Any],
-    run_generation: int = 0,
+    thread_id: str,
 ) -> ApprovalRecord:
-    """Durably associate approval ID with runtime/thread/interrupt metadata."""
+    """Public approval for a paused batch; the native interrupt is kept as an opaque execution reference."""
+    batch = next((message for message in reversed(messages) if isinstance(message, AIMessage)), None)
+    wire = native_to_wire(batch) if batch is not None else None
+    actions = interrupt.value.get("action_requests") or []
     return ApprovalRecord(
         id=f"approval_{uuid4().hex}",
         conversation_id=conversation_id,
         user_id=user_id,
         tenant_id=tenant_id,
         trace_id=trace_id,
-        tool_calls=tool_calls,
-        capability_names=capability_names,
-        status="pending",
-        runtime_ref=runtime_ref,
-        run_generation=run_generation,
+        tool_calls=(wire or {}).get("tool_calls") or [],
+        capability_names=[str(action.get("description") or action.get("name")) for action in actions],
+        runtime_ref={
+            "engine": "langgraph",
+            "thread_id": thread_id,
+            "interrupt_id": interrupt.id,
+            "action_count": len(actions),
+        },
     )
 
 
-def is_interrupt_payload(value: Any) -> bool:
-    return isinstance(value, dict) and ("decisions" in value or "__interrupt__" in str(value))
+def resume_decisions(interrupt: Interrupt, *, approve: bool) -> dict[str, Any]:
+    """``Command(resume=...)`` payload deciding every action of the paused batch the same way."""
+    count = len(interrupt.value.get("action_requests") or [])
+    return {"decisions": [{"type": "approve" if approve else "reject"} for _ in range(count)]}

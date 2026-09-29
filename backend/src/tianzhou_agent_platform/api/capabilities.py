@@ -17,7 +17,7 @@ from tianzhou_agent_platform.api.dependencies import (
     actor_scope, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.builtin_tools import open_aina
+from tianzhou_agent_platform.services.platform_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
 
 

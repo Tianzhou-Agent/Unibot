@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError
 from tianzhou_agent_platform.store.redis.client import RedisStore
 from tianzhou_agent_platform.tasks.models import (

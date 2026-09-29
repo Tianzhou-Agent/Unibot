@@ -7,6 +7,7 @@ migration gates: runtime isolation, protocol injection and composition smoke.
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
@@ -22,15 +23,32 @@ RUNTIME_FORBIDDEN = (
     "tianzhou_agent_platform.aina",
     "tianzhou_agent_platform.store",
     "tianzhou_agent_platform.api",
-    "tianzhou_agent_platform.core.agent",  # legacy loop
-    "tianzhou_agent_platform.core.llm",  # legacy model port
-    "tianzhou_agent_platform.core.repository",
-    "tianzhou_agent_platform.core.chat",
-    "tianzhou_agent_platform.core.conversation",
-    "tianzhou_agent_platform.core.model_settings",
-    "tianzhou_agent_platform.core.observability",
-    "tianzhou_agent_platform.core.builtin_tools",
-    "tianzhou_agent_platform.core.context_compression",
+)
+
+# Retired by the LangChain migration (plan §7.3): the legacy loop, completion port, summary engine and the
+# compatibility re-exports of moved feature modules.
+REMOVED_MODULES = (
+    "core/agent.py",
+    "core/llm.py",
+    "core/context_compression.py",
+    "core/observation_interceptors.py",
+    "core/models.py",
+    "core/builtin_tools.py",
+    "core/chat.py",
+    "core/conversation.py",
+    "core/model_settings.py",
+    "core/observability.py",
+    "core/observability_query.py",
+    "core/observability_stream.py",
+    "core/observability_writer.py",
+    "core/observation_context.py",
+    "core/observation_logging.py",
+    "core/operations_analytics.py",
+    "core/repository.py",
+    "core/telemetry.py",
+    "core/trace_details.py",
+    "services/agent_integration/approval_gate.py",
+    "services/agent_integration/builder.py",
 )
 
 
@@ -62,6 +80,21 @@ def test_agent_runtime_has_no_domain_or_persistence_imports() -> None:
                 if name == forbidden or name.startswith(forbidden + "."):
                     offenders.append(f"{path.name}: {name}")
     assert not offenders, f"core/agent_runtime must not import: {offenders}"
+
+
+def test_legacy_runtime_modules_are_removed() -> None:
+    assert [module for module in REMOVED_MODULES if (SRC / module).exists()] == []
+
+
+def test_application_services_use_feature_contracts_not_concrete_repositories() -> None:
+    # Plan §7.2: the chat workflow and the integration layer depend on feature services and protocols; only
+    # main.py composes concrete store implementations.
+    offenders: list[str] = []
+    for path in [SRC / "services" / "chat.py", *(SRC / "services" / "agent_integration").rglob("*.py")]:
+        for name in _imported_names(path):
+            if name == "tianzhou_agent_platform.store" or name.startswith("tianzhou_agent_platform.store."):
+                offenders.append(f"{path.name}: {name}")
+    assert not offenders, offenders
 
 
 def test_conversations_does_not_import_chat_service_or_langgraph_execution() -> None:
@@ -111,52 +144,78 @@ def test_conversation_service_accepts_protocol_repository() -> None:
         def __init__(self) -> None:
             self.store = {}
 
-        async def create_conversation(self, payload: ConversationCreate):
+        async def create_conversation(self, data: ConversationCreate):
             conv = Conversation(
                 id=f"conv_{uuid4().hex}",
-                user_id=payload.user_id,
-                tenant_id=payload.tenant_id,
-                title=payload.title,
+                user_id=data.user_id,
+                tenant_id=data.tenant_id,
+                title=data.title,
             )
             self.store[conv.id] = conv
             return conv
 
-        async def get_conversation(self, conversation_id: str):
-            return self.store.get(conversation_id)
-
-        async def update_conversation(self, conversation_id: str, payload):
-            return self.store.get(conversation_id)
-
-        async def delete_conversation(self, conversation_id: str) -> bool:
-            return self.store.pop(conversation_id, None) is not None
-
-        async def list_conversations(self, *, user_id: str, tenant_id: str, workspace_id=None):
+        async def list_conversations(self, *, user_id=None, tenant_id=None, category=None, workspace_id=None):
             return [c for c in self.store.values() if c.user_id == user_id]
-
-        async def append_messages(self, conversation_id: str, messages):
-            return self.store.get(conversation_id)
-
-        async def create_approval(self, approval):
-            return approval
-
-        async def get_approval(self, approval_id: str):
-            return None
-
-        async def update_approval(self, approval_id: str, **fields):
-            return None
-
-        async def list_approvals(self, *, conversation_id: str, status: str | None = None):
-            return []
 
     async def run() -> None:
         service = ConversationService(FakeRepo())
         conv = await service.create(ConversationCreate(user_id="u1", tenant_id="t1", title="hi"))
         assert conv.user_id == "u1"
+        assert await service.list_for_actor(user_id="u1", tenant_id="t1") == [conv]
         service.ensure_ownership(conv, user_id="u1", tenant_id="t1")
         with pytest.raises(Exception):
             service.ensure_ownership(conv, user_id="other", tenant_id="t1")
 
     asyncio.run(run())
+
+
+def _protocol_methods(protocol: type) -> list[str]:
+    return [name for name, value in vars(protocol).items() if inspect.iscoroutinefunction(value)]
+
+
+@pytest.mark.parametrize(
+    "protocol_path",
+    [
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.conversations.repository:ApprovalRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRunRepository",
+        "tianzhou_agent_platform.model_providers.repository:ModelProviderRepository",
+    ],
+)
+def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
+    # A protocol method the concrete repository lacks, or calls differently, fails only at runtime; compare
+    # parameters (names, kinds, defaults) against both repositories main.py can inject.
+    import importlib
+
+    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+    from tianzhou_agent_platform.store.repository import PersistentRepository
+
+    module_name, _, class_name = protocol_path.partition(":")
+    protocol = getattr(importlib.import_module(module_name), class_name)
+    mismatches: list[str] = []
+    for concrete in (InMemoryRepository, PersistentRepository):
+        for name in _protocol_methods(protocol):
+            implementation = getattr(concrete, name, None)
+            if implementation is None:
+                mismatches.append(f"{concrete.__name__}.{name} is missing")
+                continue
+            expected = [
+                (p.name, p.kind, p.default) for p in inspect.signature(getattr(protocol, name)).parameters.values()
+            ]
+            actual = [(p.name, p.kind, p.default) for p in inspect.signature(implementation).parameters.values()]
+            if expected != actual:
+                mismatches.append(f"{concrete.__name__}.{name}: {actual} != {expected}")
+    assert not mismatches, mismatches
+
+
+def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> None:
+    offenders: list[str] = []
+    for route in ("conversations.py", "model_settings.py"):
+        tree = ast.parse((SRC / "api" / route).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "tianzhou_agent_platform.api.dependencies":
+                offenders.extend(f"{route}: {alias.name}" for alias in node.names if alias.name == "repository")
+    assert not offenders, offenders
 
 
 def test_native_messages_are_execution_representation() -> None:

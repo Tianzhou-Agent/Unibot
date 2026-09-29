@@ -13,7 +13,7 @@ from tianzhou_agent_platform.api.dependencies import (
     request_actor,
     require_platform_admin,
 )
-from tianzhou_agent_platform.core.conversation import Conversation, Message
+from tianzhou_agent_platform.conversations.models import Conversation, Message
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.core.feedback import (
     FeedbackCaseUpdate,
@@ -25,7 +25,7 @@ from tianzhou_agent_platform.core.feedback import (
     FeedbackTrendPoint,
     FeedbackUpsert,
 )
-from tianzhou_agent_platform.core.chat import TraceRecord
+from tianzhou_agent_platform.observability.models import TraceRecord
 
 logger = logging.getLogger(__name__)
 

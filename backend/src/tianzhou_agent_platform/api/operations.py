@@ -6,16 +6,18 @@ from fastapi import APIRouter, Query, Request
 from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
     bind_actor,
+    chat_service,
+    conversation_service,
     repository,
     require_actor_ownership,
     require_platform_admin,
-    runtime,
 )
 from tianzhou_agent_platform.auth.models import AdminUserSummary
-from tianzhou_agent_platform.core.chat import ApprovalAction, ApprovalRecord, ChatResponse, LLMCallRecord, TraceRecord
-from tianzhou_agent_platform.core.conversation import Conversation
-from tianzhou_agent_platform.core.observability_query import ObsQueryService
-from tianzhou_agent_platform.core.operations_analytics import OperationsAnalyticsService, operations_bounds
+from tianzhou_agent_platform.conversations.schemas import ApprovalAction, ApprovalRecord, ChatResponse
+from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
+from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.observability.query import ObsQueryService
+from tianzhou_agent_platform.observability.analytics import OperationsAnalyticsService, operations_bounds
 
 
 def _obs_query(request: Request) -> ObsQueryService:
@@ -199,7 +201,7 @@ def create_operations_router() -> APIRouter:
         request: Request,
     ) -> ChatResponse:
         scoped = bind_actor(request, payload)
-        return await runtime(request).confirm(
+        return await chat_service(request).confirm(
             approval_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
@@ -212,7 +214,7 @@ def create_operations_router() -> APIRouter:
         request: Request,
     ) -> ApprovalRecord:
         scoped = bind_actor(request, payload)
-        return await runtime(request).deny(
+        return await chat_service(request).deny(
             approval_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
@@ -227,7 +229,7 @@ def create_operations_router() -> APIRouter:
         status: str | None = None,
     ) -> list[ApprovalRecord]:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        return await repository(request).list_approvals(
+        return await conversation_service(request).list_approvals(
             conversation_id=conversation_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,

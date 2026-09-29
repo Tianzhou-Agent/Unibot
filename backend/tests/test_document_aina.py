@@ -21,8 +21,8 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentDraftSecti
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.core.llm import LLMResult
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tests.support.fake_llm import LLMResult
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.nas.filesystem import NasStore

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.main import create_app
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.drivers import LocalProcessSandboxDriver
 from tianzhou_agent_platform.sandbox.models import SandboxEnsureRequest
 from tianzhou_agent_platform.sandbox.service import SandboxService

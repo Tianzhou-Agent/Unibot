@@ -1,7 +1,7 @@
 """Explicit run-event publisher for chat/trace recording.
 
 Application-layer events (user.request, approval.*, capability.*, final.response)
-are published here so core.agent stays free of observability imports.
+are published here so the agent runner stays free of observability imports.
 """
 
 from __future__ import annotations

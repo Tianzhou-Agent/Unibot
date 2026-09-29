@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from tianzhou_agent_platform.core.observation_context import (
+from tianzhou_agent_platform.observability.context import (
     ObservationContext,
     bind_observation_context,
     suppress_observation,
 )
-from tianzhou_agent_platform.core.observation_logging import ObservationLogHandler
+from tianzhou_agent_platform.observability.logging import ObservationLogHandler
 from tianzhou_agent_platform.store.observability_wal import (
     WalWriter,
     iter_segment_infos,

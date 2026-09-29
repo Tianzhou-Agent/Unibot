@@ -1,171 +1,159 @@
-"""Phase 4: native HITL mapping, resume payloads and supersession."""
+"""Native HITL for risky capabilities: batch pause, approval mapping, resume and terminal denial."""
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.prebuilt import ToolRuntime
 from langgraph.types import Command
 
+from tianzhou_agent_platform.core.agent_runtime import build_agent
+from tianzhou_agent_platform.core.agent_runtime.middleware.approval_policy import TerminalDenialMiddleware
 from tianzhou_agent_platform.services.agent_integration.approvals import (
-    approval_record_from_interrupt,
-    approve_all,
-    build_hitl_middleware,
-    is_interrupt_payload,
-    reject_all,
+    CANCELLED_REPLY,
+    DENIED_TOOL_RESULT,
+    approval_record,
+    build_approval_middleware,
+    resume_decisions,
 )
-from tianzhou_agent_platform.services.agent_integration.builder import build_chat_agent
+from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
 from tests.support.fake_chat_model import ScriptedChatModel, assistant, multi_tool_calling, tool_calling
+
+EXECUTED: list[str] = []
 
 
 @tool
-def risky_tool(action: str, runtime: ToolRuntime) -> str:
+def risky_tool(action: str) -> str:
     """Requires approval."""
+    EXECUTED.append(f"risky:{action}")
     return f"done:{action}"
 
 
 @tool
-def safe_tool(tag: str, runtime: ToolRuntime) -> str:
+def safe_tool(tag: str) -> str:
     """No approval required."""
+    EXECUTED.append(f"safe:{tag}")
     return f"safe:{tag}"
 
 
-def test_build_hitl_middleware_maps_decisions() -> None:
-    mw = build_hitl_middleware(
-        risky_tools={
-            "risky_tool": ["approve", "reject"],
-            "auto_tool": False,
-            "full_tool": True,
-        }
+def _capability(name: str, *, requires_confirmation: bool) -> Capability:
+    return Capability(
+        kind="builtin",
+        capability_id=name,
+        function_name=name,
+        display_name=name.replace("_", " ").title(),
+        description="",
+        input_schema={"type": "object", "properties": {"action": {"type": "string"}}, "required": ["action"]},
+        requires_confirmation=requires_confirmation,
+        value=name,
     )
-    assert "risky_tool" in mw.interrupt_on
-    assert "auto_tool" not in mw.interrupt_on
-    assert "full_tool" in mw.interrupt_on
-    assert set(mw.interrupt_on["risky_tool"]["allowed_decisions"]) == {"approve", "reject"}
 
 
-def test_resume_payloads() -> None:
-    assert approve_all(2) == {"decisions": [{"type": "approve"}, {"type": "approve"}]}
-    assert reject_all(1) == {"decisions": [{"type": "reject"}]}
-    assert is_interrupt_payload(approve_all(1))
-    assert not is_interrupt_payload({"foo": 1})
+REGISTRY = {
+    "risky_tool": _capability("risky_tool", requires_confirmation=True),
+    "safe_tool": _capability("safe_tool", requires_confirmation=False),
+}
 
 
-def test_approval_record_binds_runtime_ref() -> None:
-    record = approval_record_from_interrupt(
-        conversation_id="c1",
-        user_id="u",
-        tenant_id="t",
-        trace_id="tr",
-        tool_calls=[{"id": "x", "name": "risky_tool", "args": {}}],
-        capability_names=["Risky"],
-        runtime_ref={"thread_id": "lc-v2:c1", "interrupt_id": "i1"},
-        run_generation=3,
-    )
-    assert record.status == "pending"
-    assert record.runtime_ref is not None
-    assert record.runtime_ref["thread_id"] == "lc-v2:c1"
-    assert record.run_generation == 3
-
-
-async def test_mixed_risky_batch_pauses_before_any_sibling() -> None:
-    checkpointer = InMemorySaver()
-    model = ScriptedChatModel(
-        responses=[
-            multi_tool_calling(
-                [
-                    ("safe_tool", {"tag": "s"}, "s1"),
-                    ("risky_tool", {"action": "pay"}, "r1"),
-                ]
-            ),
-            assistant("all done"),
-        ]
-    )
-    agent = build_chat_agent(
+def _agent(model: ScriptedChatModel, checkpointer: InMemorySaver, *, denied: bool = False):  # type: ignore[no-untyped-def]
+    return build_agent(
         model=model,
         tools=[safe_tool, risky_tool],
         middleware=[
-            build_hitl_middleware(risky_tools={"risky_tool": ["approve", "reject"]})
+            TerminalDenialMiddleware(denied=denied, tool_result=DENIED_TOOL_RESULT, reply=CANCELLED_REPLY),
+            build_approval_middleware(REGISTRY),
         ],
         checkpointer=checkpointer,
-        use_model_call_limit=False,
     )
-    config = {"configurable": {"thread_id": "hitl-mixed-p4"}}
-    result = await agent.ainvoke({"messages": [HumanMessage(content="mixed")]}, config=config)
-    tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
-    assert not tool_msgs, "no sibling may execute before approval"
-
-    resume = await agent.ainvoke(Command(resume=approve_all(1)), config=config)
-    tool_msgs = [m for m in resume["messages"] if isinstance(m, ToolMessage)]
-    assert len(tool_msgs) == 2
-    assert any("safe:" in m.content for m in tool_msgs)
-    assert any("done:pay" in m.content for m in tool_msgs)
 
 
-async def test_deny_closes_batch_without_side_effect() -> None:
+def test_only_capabilities_requiring_confirmation_interrupt() -> None:
+    middleware = build_approval_middleware(REGISTRY)
+    assert set(middleware.interrupt_on) == {"risky_tool"}
+    assert middleware.interrupt_on["risky_tool"]["allowed_decisions"] == ["approve", "reject"]
+    assert middleware.interrupt_on["risky_tool"]["description"] == "Risky Tool"
+
+
+async def test_mixed_risky_batch_pauses_before_any_sibling_and_maps_to_an_approval() -> None:
+    EXECUTED.clear()
     checkpointer = InMemorySaver()
     model = ScriptedChatModel(
         responses=[
-            tool_calling("risky_tool", {"action": "send"}, call_id="r1"),
-            assistant("should not matter"),
+            multi_tool_calling([("safe_tool", {"tag": "s"}, "s1"), ("risky_tool", {"action": "pay"}, "r1")]),
+            assistant("all done"),
         ]
     )
-    agent = build_chat_agent(
-        model=model,
-        tools=[risky_tool],
-        middleware=[build_hitl_middleware(risky_tools={"risky_tool": ["approve", "reject"]})],
-        checkpointer=checkpointer,
-        use_model_call_limit=False,
+    agent = _agent(model, checkpointer)
+    config = {"configurable": {"thread_id": "lc-v2:c1"}}
+    await agent.ainvoke({"messages": [HumanMessage(content="mixed")]}, config=config)
+    state = await agent.aget_state(config)
+
+    assert EXECUTED == []
+    [interrupt] = state.interrupts
+    record = approval_record(
+        interrupt=interrupt,
+        messages=state.values["messages"],
+        conversation_id="c1",
+        user_id="u",
+        tenant_id="t",
+        trace_id="trace_1",
+        thread_id="lc-v2:c1",
     )
-    config = {"configurable": {"thread_id": "hitl-deny-p4"}}
+    assert record.status == "pending"
+    assert record.capability_names == ["Risky Tool"]
+    assert [call["function"]["name"] for call in record.tool_calls] == ["safe_tool", "risky_tool"]
+    assert record.runtime_ref == {
+        "engine": "langgraph",
+        "thread_id": "lc-v2:c1",
+        "interrupt_id": interrupt.id,
+        "action_count": 1,
+    }
+
+    # A recreated agent over the same saver resumes the original checkpointed calls.
+    resumed = _agent(ScriptedChatModel(responses=[assistant("all done")]), checkpointer)
+    result = await resumed.ainvoke(Command(resume=resume_decisions(interrupt, approve=True)), config=config)
+    assert sorted(EXECUTED) == ["risky:pay", "safe:s"]
+    assert result["messages"][-1].content == "all done"
+
+
+async def test_invalid_risky_arguments_do_not_request_approval() -> None:
+    EXECUTED.clear()
+    checkpointer = InMemorySaver()
+    model = ScriptedChatModel(responses=[tool_calling("risky_tool", {"wrong": 1}, call_id="r1"), assistant("fix the input")])
+    agent = _agent(model, checkpointer)
+    config = {"configurable": {"thread_id": "lc-v2:c2"}}
     await agent.ainvoke({"messages": [HumanMessage(content="go")]}, config=config)
-    resume = await agent.ainvoke(Command(resume=reject_all(1)), config=config)
-    for m in resume["messages"]:
-        if isinstance(m, ToolMessage):
-            assert "done:send" not in m.content
+
+    assert not (await agent.aget_state(config)).interrupts
 
 
-async def test_saver_recreation_resumes_original_calls() -> None:
+async def test_denial_closes_the_batch_without_another_model_call() -> None:
+    EXECUTED.clear()
     checkpointer = InMemorySaver()
     model = ScriptedChatModel(
-        responses=[
-            tool_calling("risky_tool", {"action": "x"}, call_id="r1"),
-            assistant("executed"),
-        ]
+        responses=[multi_tool_calling([("safe_tool", {"tag": "s"}, "s1"), ("risky_tool", {"action": "pay"}, "r1")])]
     )
-    agent = build_chat_agent(
-        model=model,
-        tools=[risky_tool],
-        middleware=[build_hitl_middleware(risky_tools={"risky_tool": ["approve"]})],
-        checkpointer=checkpointer,
-        use_model_call_limit=False,
-    )
-    config = {"configurable": {"thread_id": "hitl-recreate-p4"}}
-    await agent.ainvoke({"messages": [HumanMessage(content="go")]}, config=config)
+    config = {"configurable": {"thread_id": "lc-v2:c3"}}
+    await _agent(model, checkpointer).ainvoke({"messages": [HumanMessage(content="go")]}, config=config)
+    [interrupt] = (await _agent(model, checkpointer).aget_state(config)).interrupts
 
-    # Recreate agent (runtime recreation) with the same saver.
-    model2 = ScriptedChatModel(responses=[assistant("executed")])
-    agent2 = build_chat_agent(
-        model=model2,
-        tools=[risky_tool],
-        middleware=[build_hitl_middleware(risky_tools={"risky_tool": ["approve"]})],
-        checkpointer=checkpointer,
-        use_model_call_limit=False,
-    )
-    resume = await agent2.ainvoke(Command(resume=approve_all(1)), config=config)
-    tool_msgs = [m for m in resume["messages"] if isinstance(m, ToolMessage)]
-    assert tool_msgs
-    assert "done:x" in tool_msgs[0].content
-
-
-def test_revalidate_on_resume_blocks_stale_names() -> None:
-    from tianzhou_agent_platform.services.agent_integration.scope import (
-        revalidate_permissions_on_resume,
+    # The scripted model has no response left: any further model call would fail the run.
+    result = await _agent(model, checkpointer, denied=True).ainvoke(
+        Command(resume=resume_decisions(interrupt, approve=False)),
+        config=config,
     )
 
-    permitted = revalidate_permissions_on_resume(
-        ["risky_tool", "revoked_tool"],
-        allowed_names={"risky_tool"},
-    )
-    assert permitted == ["risky_tool"]
+    assert EXECUTED == []
+    tool_messages = {message.tool_call_id: message for message in result["messages"] if isinstance(message, ToolMessage)}
+    assert tool_messages["s1"].content == DENIED_TOOL_RESULT
+    assert "rejected" in tool_messages["r1"].content
+    assert isinstance(result["messages"][-1], AIMessage)
+    assert result["messages"][-1].content == CANCELLED_REPLY
+
+
+def test_resume_decisions_cover_every_paused_action() -> None:
+    from langgraph.types import Interrupt
+
+    interrupt = Interrupt(value={"action_requests": [{"name": "a"}, {"name": "b"}]}, id="i1")
+    assert resume_decisions(interrupt, approve=True) == {"decisions": [{"type": "approve"}, {"type": "approve"}]}
+    assert resume_decisions(interrupt, approve=False) == {"decisions": [{"type": "reject"}, {"type": "reject"}]}

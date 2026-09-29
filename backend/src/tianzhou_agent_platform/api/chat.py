@@ -6,8 +6,8 @@ from typing import Any, cast
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from tianzhou_agent_platform.api.dependencies import bind_actor, chat_service, runtime
-from tianzhou_agent_platform.core.chat import ChatRequest, ChatResponse
+from tianzhou_agent_platform.api.dependencies import bind_actor, chat_service
+from tianzhou_agent_platform.conversations.schemas import ChatRequest, ChatResponse
 from tianzhou_agent_platform.core.errors import PlatformError
 
 
@@ -16,14 +16,10 @@ def create_chat_router() -> APIRouter:
 
     @router.post("/chat", response_model=ChatResponse)
     async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
-        service = chat_service(request)
-        if service is not None:
-            return await service.run_turn(bind_actor(request, payload), event_sink=None)
-        return await runtime(request).chat(bind_actor(request, payload))
+        return await chat_service(request).run_turn(bind_actor(request, payload))
 
     @router.post("/chat/stream")
     async def stream_chat(payload: ChatRequest, request: Request) -> StreamingResponse:
-        agent_runtime = runtime(request)
         service = chat_service(request)
         scoped_payload = bind_actor(request, payload)
         background_tasks = cast(set[asyncio.Task[None]], request.app.state.background_tasks)
@@ -36,10 +32,7 @@ def create_chat_router() -> APIRouter:
 
             async def produce() -> None:
                 try:
-                    if service is not None:
-                        result = await service.run_turn(scoped_payload, event_sink=sink)
-                    else:
-                        result = await agent_runtime.chat(scoped_payload, event_sink=sink)
+                    result = await service.run_turn(scoped_payload, event_sink=sink)
                     await queue.put({"type": "message.completed", "response": result.model_dump(mode="json")})
                 except PlatformError as exc:
                     await queue.put(

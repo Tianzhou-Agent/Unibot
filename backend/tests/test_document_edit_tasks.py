@@ -16,7 +16,7 @@ from tianzhou_agent_platform.aina.document.task_service import (
     DocumentEditWorker,
 )
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
@@ -80,6 +80,24 @@ def test_nested_document_path_supports_edit_tasks(tmp_path: Path) -> None:
     assert task["document_name"] == "Projects/Specs/guide.md"
     assert task["sections"][0]["draft_content"] == "## Intro\n\nNested draft."
     assert listed["items"][0]["id"] == task["id"]
+
+
+def test_edit_task_draft_requests_are_recorded_as_model_calls(tmp_path: Path) -> None:
+    llm = ScriptedLLM([_draft("## Intro\n\nNew intro.")])
+    with TestClient(_app(tmp_path, llm)) as client:
+        client.post("/documents", json={"name": "guide", "content": "# Guide\n\n## Intro\n\nOld."})
+        created = client.post(
+            "/documents/guide.md/edit-tasks",
+            json={"description": "Rewrite intro", "sections": [{"heading": "Intro"}]},
+        ).json()
+        _wait_for_review(client, created["id"])
+        calls = client.get("/llm-calls").json()
+
+    [draft] = [call for call in calls if call["context_type"] == "document_edit_task"]
+    assert draft["context_id"] == created["id"]
+    assert draft["status"] == "completed"
+    assert draft["model"] == "scripted-llm"
+    assert draft["response"]["choices"][0]["message"]["role"] == "assistant"
 
 
 def test_edit_task_generates_reviewable_drafts_and_merges_once(tmp_path: Path) -> None:

@@ -1,9 +1,10 @@
-"""Observation of every model request the native agent loop makes.
+"""Observation of model requests.
 
-Wraps the model call (inside the scope middleware, so the recorded request is exactly what the provider
-receives) and publishes the trace contract the legacy LLM port produced: ``model.requested`` /
-``model.completed`` / ``model.failed`` events, a ``model`` span, a persisted ``/llm-calls`` record with the
-redacted request and response, and the run's accumulated token usage.
+``ModelCallRecorder`` wraps each model call of the agent loop (inside the scope middleware, so the recorded request
+is exactly what the provider receives) and publishes ``model.requested`` / ``model.completed`` / ``model.failed``
+events, a ``model`` span, a persisted ``/llm-calls`` record with the redacted request and response, and the run's
+token usage. ``StandaloneCallRecorder`` is a native callback that records model calls made outside the agent's model
+node (summaries, document drafts).
 """
 
 from __future__ import annotations
@@ -15,12 +16,13 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-import openai
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from tianzhou_agent_platform.model_providers.errors import map_provider_error
+from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.model_providers.errors import exception_detail
 from tianzhou_agent_platform.observability.models import LLMCallRecord
 from tianzhou_agent_platform.observability.trace_details import redact_trace_data
 
@@ -144,7 +146,7 @@ class ModelCallRecorder(AgentMiddleware):
                         "status": "failed",
                         "response": redact_trace_data({"error": error}),
                         "duration_ms": duration_ms,
-                        "error": redact_trace_data(str(exc)),
+                        "error": redact_trace_data(exception_detail(exc)),
                         "completed_at": datetime.now(UTC),
                     }
                 )
@@ -239,10 +241,101 @@ class ModelCallRecorder(AgentMiddleware):
             return
 
 
+def is_summary_call(metadata: dict[str, Any]) -> bool:
+    """A model call ``SummarizationMiddleware`` makes (every attempt of its built-in retry)."""
+    return metadata.get("lc_source") == "summarization"
+
+
+class StandaloneCallRecorder(AsyncCallbackHandler):
+    """Native callback persisting the ``/llm-calls`` records of model calls made outside the agent's model node.
+
+    Agent model calls are recorded by ``ModelCallRecorder``. Attach this handler through the runnable config of a
+    standalone call (e.g. a document draft), or of an agent run with ``select`` limiting it to the run's internal
+    calls (e.g. ``is_summary_call``).
+    """
+
+    def __init__(
+        self,
+        *,
+        call_sink: Callable[[LLMCallRecord], Awaitable[None]] | None,
+        context_type: str,
+        context_id: str,
+        model: str,
+        endpoint: str,
+        to_wire: Callable[[Any], dict[str, Any] | None],
+        trace_id: str | None = None,
+        select: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> None:
+        super().__init__()
+        self._call_sink = call_sink
+        self._context_type = context_type
+        self._context_id = context_id
+        self._model = model
+        self._endpoint = endpoint
+        self._to_wire = to_wire
+        self._trace_id = trace_id
+        self._select = select
+        self._started: dict[Any, tuple[float, list[dict[str, Any]]]] = {}
+        # Span the next recorded calls belong to (e.g. set when a summary starts).
+        self.span_id: str | None = None
+        self.usage = RunUsage()
+
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[Any]],
+        *,
+        run_id: Any,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if self._select is not None and not self._select(metadata or {}):
+            return
+        wire = [record for batch in messages for message in batch if (record := self._to_wire(message))]
+        self._started[run_id] = (perf_counter(), wire)
+
+    async def on_llm_end(self, response: Any, *, run_id: Any, **kwargs: Any) -> None:
+        started = self._started.pop(run_id, None)
+        if started is None:
+            return
+        generation = response.generations[0][0] if response.generations and response.generations[0] else None
+        message = getattr(generation, "message", None)
+        input_tokens, output_tokens = await self._record(started, response=message if isinstance(message, AIMessage) else None)
+        self.usage.input_tokens += input_tokens
+        self.usage.output_tokens += output_tokens
+
+    async def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
+        started = self._started.pop(run_id, None)
+        if started is not None:
+            await self._record(started, response=None, error=error if isinstance(error, Exception) else Exception(str(error)))
+
+    async def _record(
+        self,
+        started: tuple[float, list[dict[str, Any]]],
+        *,
+        response: AIMessage | None,
+        error: Exception | None = None,
+    ) -> tuple[int, int]:
+        began, messages = started
+        return await record_standalone_call(
+            self._call_sink,
+            trace_id=self._trace_id,
+            span_id=self.span_id,
+            context_type=self._context_type,
+            context_id=self._context_id,
+            model=self._model,
+            endpoint=self._endpoint,
+            messages=messages,
+            response=response,
+            duration_ms=(perf_counter() - began) * 1000,
+            error=error,
+        )
+
+
 async def record_standalone_call(
     call_sink: Callable[[LLMCallRecord], Awaitable[None]] | None,
     *,
-    trace_id: str,
+    trace_id: str | None,
     span_id: str | None,
     context_type: str,
     context_id: str,
@@ -361,31 +454,12 @@ def _tool_call_details(call: dict[str, Any], capabilities: dict[str, Any]) -> di
 
 
 def _error_details(exc: Exception) -> dict[str, Any]:
-    code = getattr(exc, "code", None)
-    if code is not None:
-        return {"code": code, "message": getattr(exc, "message", str(exc)), "retryable": getattr(exc, "retryable", False)}
-    return {"type": type(exc).__name__, "message": str(exc)}
+    if isinstance(exc, PlatformError):
+        return {"code": exc.code, "message": exc.message, "retryable": exc.retryable}
+    return {"type": type(exc).__name__, "message": exception_detail(exc)}
 
 
 def _served_model(message: AIMessage | None, requested: str) -> str:
     """Model the provider reports as having served the call (falls back to the requested one)."""
     metadata = getattr(message, "response_metadata", None) or {}
     return str(metadata.get("model_name") or metadata.get("model") or requested)
-
-
-class ProviderErrorMiddleware(AgentMiddleware):
-    """Raise provider (OpenAI-compatible) failures as platform errors with the product's code and retryability.
-
-    Native chat models raise raw ``openai`` exceptions; without this a provider 401 surfaced as a retryable
-    INTERNAL_ERROR ("The agent run failed unexpectedly") instead of DEPENDENCY_FAILED "... returned HTTP 401".
-    """
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest,
-        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
-        try:
-            return await handler(request)
-        except openai.OpenAIError as exc:
-            raise map_provider_error(exc) from exc

@@ -127,6 +127,7 @@ def assert_agent_run(
                 criteria=criteria,
                 evaluation_steps=[
                     "Identify the factual and behavioral requirements stated by the criteria and expected output.",
+                    "Treat the outputs of the tools called as ground truth for the facts the actual output reports.",
                     "Verify that the actual output satisfies every requirement without contradiction or fabrication.",
                     "Allow equivalent wording and Markdown formatting unless the criteria explicitly requires exact text.",
                 ],
@@ -134,6 +135,7 @@ def assert_agent_run(
                     SingleTurnParams.INPUT,
                     SingleTurnParams.ACTUAL_OUTPUT,
                     SingleTurnParams.EXPECTED_OUTPUT,
+                    SingleTurnParams.TOOLS_CALLED,
                 ],
                 threshold=0.7,
                 model=judge,

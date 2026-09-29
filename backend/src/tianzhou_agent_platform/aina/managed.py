@@ -18,7 +18,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
-from tianzhou_agent_platform.core.repository import InMemoryRepository
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxExecutionRequest
 from tianzhou_agent_platform.sandbox.service import SandboxService
 
