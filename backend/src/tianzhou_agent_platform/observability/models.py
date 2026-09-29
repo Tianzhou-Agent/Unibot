@@ -46,7 +46,7 @@ class TraceRecord(StrictModel):
     conversation_id: str | None = None
     user_id: str
     tenant_id: str
-    status: Literal["running", "completed", "approval_required", "failed"] = "running"
+    status: Literal["running", "completed", "approval_required", "failed", "cancelled"] = "running"
     events: list[TraceEvent] = Field(default_factory=list)
     spans: list[TraceSpan] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)

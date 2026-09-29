@@ -69,7 +69,7 @@ class Conversation(StrictModel):
     title: str
     category: str = "general"
     status: Literal["active", "archived", "deleted"] = "active"
-    run_status: Literal["idle", "running", "approval_required", "failed"] = "idle"
+    run_status: Literal["idle", "running", "approval_required", "failed", "stopped"] = "idle"
     active_trace_id: str | None = None
     run_error: str | None = None
     run_started_at: datetime | None = None

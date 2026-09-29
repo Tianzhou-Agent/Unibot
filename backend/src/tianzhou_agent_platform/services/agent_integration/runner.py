@@ -2,7 +2,8 @@
 
 Working memory is the checkpointed agent state of the conversation's thread (``lc-v2:<conversation_id>``): a turn
 submits only its new input. A conversation without a checkpoint is seeded from its archive. Approvals pause with a
-native interrupt and continue with ``Command(resume=...)``. After every invocation the thread keeps only its latest
+native interrupt and continue with ``Command(resume=...)``. A turn the user stops ends at its last checkpointed step
+and continues with ``None`` input (see ``resume_turn``). After every invocation the thread keeps only its latest
 checkpoint.
 
 Middleware, first = outermost (``before_model`` hooks run in this order, ``after_model`` hooks in reverse):
@@ -41,7 +42,7 @@ from uuid import uuid4
 
 from langchain.agents.middleware import ToolErrorMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 
@@ -112,6 +113,7 @@ from tianzhou_agent_platform.services.agent_integration.retries import tool_retr
 from tianzhou_agent_platform.services.agent_integration.run import AgentRun, EventSink
 from tianzhou_agent_platform.services.agent_integration.scope import CapabilityScopeMiddleware, RunScope
 from tianzhou_agent_platform.services.agent_integration.streaming import StreamRelay
+from tianzhou_agent_platform.services.run_stops import TurnStop
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +121,8 @@ THREAD_PREFIX = "lc-v2:"
 ABANDONED_CALL_RESULT = "Cancelled because the user started a new turn before granting approval."
 COMPLETED_REPLY = "The requested operation was completed."
 EMPTY_REPLY = OutputGuardMiddleware.EMPTY_REPLY
+STOPPED_REPLY = "The response was stopped by the user."
+STOPPED_TOOL_RESULT = "Stopped by the user before this call completed; it may have partially run."
 FORCED_CALL_MISSING_REPLY = (
     "The model answered without using the selected capability, so no result was produced. Please retry, or "
     "choose a model that supports forced tool calls."
@@ -180,7 +184,7 @@ class ApprovalContinuation:
         self._interrupt = interrupt
         self._known_ids = known_ids
 
-    async def run(self) -> ChatResponse:
+    async def run(self, stop: TurnStop | None = None) -> ChatResponse:
         if self._interrupt is None:
             return await self._runner._close_denied_without_interrupt(self._conversation, self._approval)
         return await self._runner._invoke(
@@ -188,6 +192,7 @@ class ApprovalContinuation:
             Command(resume=resume_decisions(self._interrupt, approve=self._approve)),
             known_ids=self._known_ids,
             resumed=True,
+            stop=stop,
         )
 
 
@@ -230,6 +235,7 @@ class AgentRunner:
         *,
         trace_id: str,
         event_sink: EventSink | None = None,
+        stop: TurnStop | None = None,
     ) -> ChatResponse:
         """Run one user turn. The caller holds the conversation's run lease."""
         config = self._config(conversation, trace_id)
@@ -271,6 +277,50 @@ class AgentRunner:
             invocation,
             {"messages": [*seed, *closures, user_message]},
             known_ids=known_ids | {message.id for message in closures} | {user_message.id},
+            stop=stop,
+        )
+
+    async def resume_turn(
+        self,
+        conversation: Conversation,
+        *,
+        trace_id: str,
+        event_sink: EventSink | None = None,
+        stop: TurnStop | None = None,
+    ) -> ChatResponse:
+        """Continue a stopped turn from its last checkpointed step. The caller holds the conversation's run lease.
+
+        The turn's routing scope is not checkpointed, so, like an approval continuation, the continued run offers
+        every capability of the conversation. Raises CONFLICT when the checkpoint has nothing left to run.
+        """
+        run = self._new_run(conversation, trace_id, event_sink)
+        archiver = TranscriptArchiver(
+            self.conversations,
+            conversation_id=conversation.id,
+            trace_id=trace_id,
+            archived_ids=[message.id for message in conversation.messages],
+        )
+        invocation = await self._prepare(
+            conversation,
+            run,
+            archiver,
+            capabilities=await self.catalog.available(conversation),
+            system_prompt=await self.prompts.build(conversation),
+            forced_capability=None,
+        )
+        state = await invocation.agent.aget_state(invocation.config)
+        if not state.next or state.interrupts:
+            raise PlatformError(
+                "CONFLICT",
+                "The stopped turn can no longer be resumed",
+                status_code=409,
+                user_message="该回复已无法继续，请重新发送请求。",
+            )
+        return await self._invoke(
+            invocation,
+            None,
+            known_ids={message.id for message in state.values.get("messages") or []},
+            stop=stop,
         )
 
     async def open_approval(
@@ -549,22 +599,29 @@ class AgentRunner:
         *,
         known_ids: set[str | None],
         resumed: bool = False,
+        stop: TurnStop | None = None,
     ) -> ChatResponse:
         run = invocation.run
         agent, config = invocation.agent, invocation.config
         relay = StreamRelay(run.event_sink) if run.event_sink is not None else None
         if relay is None:
-            await agent.ainvoke(agent_input, config=config)
+            execution = agent.ainvoke(agent_input, config=config)
         else:
-            await relay.relay(agent.astream(agent_input, config=config, stream_mode="messages"))
+            execution = relay.relay(agent.astream(agent_input, config=config, stream_mode="messages"))
+        stopped = not await (stop or TurnStop()).run(execution)
+        if stopped:
+            await self._settle_stopped(invocation, agent_input)
         state = await agent.aget_state(config)
         messages: list[BaseMessage] = list(state.values.get("messages") or [])
         produced = [message for message in messages if message.id not in known_ids and not is_summary_message(message)]
 
-        status: Literal["completed", "approval_required", "failed"] = "completed"
+        status: Literal["completed", "approval_required", "failed", "stopped"] = "completed"
         approval: ApprovalRecord | None = None
         extra: list[AIMessage] = []
-        if state.interrupts:
+        if stopped:
+            status = "stopped"
+            content = STOPPED_REPLY
+        elif state.interrupts:
             status = "approval_required"
             approval = approval_record(
                 interrupt=state.interrupts[0],
@@ -624,7 +681,7 @@ class AgentRunner:
             await run.emit(
                 {"type": "approval.required", "approval_id": approval.id, "capabilities": approval.capability_names}
             )
-        elif relay is not None:
+        elif relay is not None and not stopped:
             await relay.finish(content)
         await self._prune_history(run.conversation_id)
 
@@ -663,6 +720,31 @@ class AgentRunner:
             },
         )
         return response
+
+    async def _settle_stopped(self, invocation: _Invocation, agent_input: Any) -> None:
+        """Leave the checkpoint of a stopped turn ready to resume and consistent for a new turn.
+
+        A stop before the agent recorded the turn's input records it as pending. A stop during a tool step keeps the
+        results of the calls that finished (LangGraph holds them only as pending writes, which new input discards)
+        and closes the unfinished calls: they may already have had effects, so they are never re-run. A stop during
+        a model call needs nothing: resuming runs that step again.
+        """
+        agent, config = invocation.agent, invocation.config
+        state = await agent.aget_state(config)
+        messages: list[BaseMessage] = list(state.values.get("messages") or [])
+        present = {message.id for message in messages}
+        if isinstance(agent_input, dict) and any(item.id not in present for item in agent_input["messages"]):
+            await agent.aupdate_state(config, agent_input, as_node="__start__")
+            return
+        closures = dangling_tool_closures(messages, STOPPED_TOOL_RESULT)
+        if not closures:
+            return
+        last_ai = next(message for message in reversed(messages) if isinstance(message, AIMessage))
+        call_ids = {call.get("id") for call in [*last_ai.tool_calls, *last_ai.invalid_tool_calls]}
+        finished = [
+            message for message in messages if isinstance(message, ToolMessage) and message.tool_call_id in call_ids
+        ]
+        await agent.aupdate_state(config, {"messages": [*finished, *closures]}, as_node="tools")
 
     async def _prune_history(self, conversation_id: str) -> None:
         """Keep only the thread's latest checkpoint (with its pending writes, e.g. a paused approval)."""

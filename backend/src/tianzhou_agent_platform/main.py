@@ -362,6 +362,7 @@ def create_app(
     from tianzhou_agent_platform.conversations.service import ConversationService
     from tianzhou_agent_platform.model_providers.service import ModelProviderService
     from tianzhou_agent_platform.services.chat import ChatService
+    from tianzhou_agent_platform.services.run_stops import RunStops
 
     conversation_service = ConversationService(resolved_repository)
     model_provider_service = ModelProviderService(resolved_repository)
@@ -429,6 +430,7 @@ def create_app(
             # Models the app builds itself follow the actor's model settings per request; an injected model is fixed.
             model_factory=(lambda runtime, **options: create_model_from_runtime(runtime, **options)) if llm is None else None,
         ),
+        stops=RunStops(storage_stores.redis if storage_stores is not None else None),
     )
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
