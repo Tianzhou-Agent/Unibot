@@ -197,6 +197,7 @@ class CapabilityExecutor:
             "activated": True,
             "aina_id": capability.capability_id,
             "available_capability_ids": sorted(item.capability_id for item in scoped.values()),
+            "note": "Only this AINA's capabilities were activated for this turn; its application UI was not opened.",
         }
 
 
