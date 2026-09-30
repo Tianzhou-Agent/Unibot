@@ -1656,8 +1656,8 @@ test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文",
   await expect(draft).toHaveValue("## 简介\n\n模型运行期间继续编辑。");
   await expect(page.getByText("对话上下文：润色简介 / 简介", { exact: true })).toBeVisible();
   expect(state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
-  expect(state.lastStreamPayload?.ui_context).toContain("任务 ID：document-edit-e2e");
-  expect(state.lastStreamPayload?.ui_context).toContain("章节 ID：draft-section-e2e");
+  expect(state.lastStreamPayload?.ui_context).toContain("Task id: document-edit-e2e");
+  expect(state.lastStreamPayload?.ui_context).toContain("Section id: draft-section-e2e");
 });
 
 test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", async ({ page }) => {
