@@ -49,7 +49,7 @@ def test_ordinary_chat_does_not_call_capabilities() -> None:
 
 
 def test_list_apps_agent_flow() -> None:
-    run = asyncio.run(_run_once("列出应用"))
+    run = asyncio.run(_run_once("List the apps."))
 
     assert run.response["status"] == "completed"
     assert run.response["iterations"] <= 3
@@ -72,7 +72,7 @@ def test_list_apps_agent_flow() -> None:
 def test_open_aina_agent_flow() -> None:
     run = asyncio.run(
         _run_once(
-            "打开 unibot-memory 应用",
+            "Open the unibot-memory app.",
             capability="builtin:open_aina",
         )
     )

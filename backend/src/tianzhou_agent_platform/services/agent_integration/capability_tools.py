@@ -26,7 +26,7 @@ def validate_capability_args(
             message=f"Capability {function_name} arguments must be an object",
             status_code=400,
             source="tool",
-            user_message="参数无效，请修正后重试。",
+            user_message="Invalid arguments; fix them and retry.",
         )
     try:
         from tianzhou_agent_platform.core.schema import validate_value
@@ -40,7 +40,7 @@ def validate_capability_args(
             message=f"Capability {function_name} arguments failed schema validation",
             status_code=400,
             source="tool",
-            user_message="参数无效，请修正后重试。",
+            user_message="Invalid arguments; fix them and retry.",
         ) from exc
 
 

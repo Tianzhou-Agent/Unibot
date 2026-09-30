@@ -691,15 +691,15 @@ function CanvasComposer({ disabled, running, context, sessionId, onSend, onStop 
 
 function documentTaskUiContext(context: DocumentTaskContext): string {
   return [
-    "用户正在文档编辑器中检视一个章节草稿。用户提到“当前任务”或“当前章节”时，请使用以下精确上下文：",
-    `文档：${context.documentName}`,
-    `任务标题：${context.taskTitle}`,
-    `任务 ID：${context.taskId}`,
-    `任务状态：${context.taskStatus}`,
-    `章节：${context.sectionHeading}`,
-    `章节 ID：${context.sectionId}`,
-    `当前草稿版本：${context.draftRevision}`,
-    "如需继续让 AI 修改，请调用 document.edit_task.ai_revise；不要直接更新正式文档。",
+    "The user is reviewing a section draft in the document editor. When the user says \"this task\" or \"this section\", use this exact context:",
+    `Document: ${context.documentName}`,
+    `Task title: ${context.taskTitle}`,
+    `Task id: ${context.taskId}`,
+    `Task status: ${context.taskStatus}`,
+    `Section: ${context.sectionHeading}`,
+    `Section id: ${context.sectionId}`,
+    `Current draft revision: ${context.draftRevision}`,
+    "To have the AI revise it further, call document.edit_task.ai_revise; never update the formal document directly.",
   ].join("\n");
 }
 

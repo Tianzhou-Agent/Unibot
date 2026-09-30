@@ -29,9 +29,9 @@ def unibot_memory_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_MEMORY_ID,
-                name="记忆管理",
+                name="Memory",
                 version="1.0.0",
-                description="保存、召回和删除用户的长期事实、偏好、目标与指令。",
+                description="Save, recall and delete the user's durable facts, preferences, goals and instructions.",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -39,8 +39,8 @@ def unibot_memory_record() -> AinaRecord:
                 skills=[
                     AinaCapability(
                         id="memory-management",
-                        name="持久记忆管理",
-                        description="管理跨对话保留的长期记忆，不保存临时聊天内容。",
+                        name="Durable memory management",
+                        description="Manage long-term memory kept across conversations; transient chat is not saved.",
                         instructions=(
                             "When the user explicitly asks to remember a durable fact, call memory.remember. "
                             "When they correct or refine an existing memory and its id is known, call memory.update. "
@@ -52,19 +52,19 @@ def unibot_memory_record() -> AinaRecord:
                 tools=[
                     AinaCapability(
                         id=REMEMBER_TOOL_ID,
-                        name="记住信息",
-                        description="保存一条长期事实、偏好、目标或指令。",
+                        name="Remember",
+                        description="Save one durable fact, preference, goal or instruction.",
                         input_schema={
                             "type": "object",
                             "properties": {
                                 "content": {
                                     "type": "string",
-                                    "description": "需要长期保存的简洁陈述。",
+                                    "description": "A concise statement to keep long term.",
                                 },
                                 "category": {
                                     "type": "string",
                                     "enum": ["fact", "preference", "goal", "instruction"],
-                                    "description": "记忆分类。",
+                                    "description": "Memory category.",
                                 },
                             },
                             "required": ["content", "category"],
@@ -73,14 +73,14 @@ def unibot_memory_record() -> AinaRecord:
                     ),
                     AinaCapability(
                         id=RECALL_TOOL_ID,
-                        name="召回记忆",
-                        description="检索与查询相关的记忆。",
+                        name="Recall memory",
+                        description="Retrieve memories relevant to a query.",
                         input_schema={
                             "type": "object",
                             "properties": {
                                 "query": {
                                     "type": "string",
-                                    "description": "用于匹配长期记忆的查询；留空时返回最近记忆。",
+                                    "description": "Query matched against long-term memory; leave empty to return recent memories.",
                                 }
                             },
                             "additionalProperties": False,
@@ -88,23 +88,23 @@ def unibot_memory_record() -> AinaRecord:
                     ),
                     AinaCapability(
                         id=UPDATE_TOOL_ID,
-                        name="更新记忆",
-                        description="根据准确的记忆 ID 原地更新内容或分类，不创建重复记忆。",
+                        name="Update memory",
+                        description="Update the content or category of a memory in place by its exact id, without creating a duplicate.",
                         input_schema={
                             "type": "object",
                             "properties": {
                                 "memory_id": {
                                     "type": "string",
-                                    "description": "需要更新的准确记忆 ID。",
+                                    "description": "Exact id of the memory to update.",
                                 },
                                 "content": {
                                     "type": "string",
-                                    "description": "更新后的完整记忆内容。",
+                                    "description": "The complete updated memory content.",
                                 },
                                 "category": {
                                     "type": "string",
                                     "enum": ["fact", "preference", "goal", "instruction"],
-                                    "description": "可选的新分类。",
+                                    "description": "Optional new category.",
                                 },
                             },
                             "required": ["memory_id", "content"],
@@ -113,14 +113,14 @@ def unibot_memory_record() -> AinaRecord:
                     ),
                     AinaCapability(
                         id=FORGET_TOOL_ID,
-                        name="删除记忆",
-                        description="根据准确的记忆 ID 删除一条记忆。",
+                        name="Forget memory",
+                        description="Delete one memory by its exact id.",
                         input_schema={
                             "type": "object",
                             "properties": {
                                 "memory_id": {
                                     "type": "string",
-                                    "description": "需要永久删除的准确记忆 ID。",
+                                    "description": "Exact id of the memory to delete permanently.",
                                 }
                             },
                             "required": ["memory_id"],
@@ -132,11 +132,11 @@ def unibot_memory_record() -> AinaRecord:
             main_widget=WidgetDefinition(
                 id="unibot-memory-main",
                 kind="memory",
-                title="记忆系统",
-                description="管理跨对话保留的事实、偏好、目标和指令。",
+                title="Memory",
+                description="Manage facts, preferences, goals and instructions kept across conversations.",
                 markdown=(
-                    "### 持久记忆\n\n记忆会在后续对话中按相关性召回。只保存长期有用的信息，"
-                    "不会把完整聊天记录直接当作记忆。"
+                    "### Durable memory\n\nMemories are recalled by relevance in later conversations. Only information "
+                    "that stays useful is saved; chat transcripts are never stored as memory as a whole."
                 ),
             ),
             authentication=Authentication(type="none"),

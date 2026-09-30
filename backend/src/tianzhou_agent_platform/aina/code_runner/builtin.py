@@ -58,20 +58,20 @@ def code_runner_tool_capabilities() -> list[AinaCapability]:
     return [
         AinaCapability(
             id=RUN_PYTHON_TOOL_ID,
-            name="运行 Python",
-            description="在当前用户的隔离沙箱中运行 Python 代码，并返回标准输出、错误和退出码。",
+            name="Run Python",
+            description="Run Python code in the current user's isolated sandbox and return stdout, stderr and the exit code.",
             input_schema=common_schema,
         ),
         AinaCapability(
             id=RUN_BASH_TOOL_ID,
-            name="运行 Bash",
-            description="在当前用户的隔离沙箱中运行 Bash 脚本，可下载用户级依赖或处理工作区文件。",
+            name="Run Bash",
+            description="Run a Bash script in the current user's isolated sandbox, e.g. to install user-level dependencies or process workspace files.",
             input_schema=common_schema,
         ),
         AinaCapability(
             id=RUN_NODE_TOOL_ID,
-            name="运行 Node.js",
-            description="在当前用户的隔离沙箱中运行 Node.js 代码，并返回执行结果。",
+            name="Run Node.js",
+            description="Run Node.js code in the current user's isolated sandbox and return the result.",
             input_schema=common_schema,
         ),
     ]
@@ -83,9 +83,9 @@ def unibot_code_runner_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_CODE_RUNNER_ID,
-                name="代码运行器",
+                name="Code Runner",
                 version="1.0.0",
-                description="为每个用户提供独立工作区，在隔离沙箱中运行 Python、Bash 和 Node.js 脚本。",
+                description="A separate workspace per user that runs Python, Bash and Node.js scripts in an isolated sandbox.",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -95,16 +95,16 @@ def unibot_code_runner_record() -> AinaRecord:
                     AinaUiCapability(
                         id="code-runner",
                         kind="panel",
-                        description="编辑脚本、运行调试、查看输出和执行历史。",
+                        description="Edit scripts, run and debug them, and view output and run history.",
                     )
                 ],
             ),
             main_widget=WidgetDefinition(
                 id="unibot-code-runner-main",
                 kind="panel",
-                title="代码运行器",
-                description="在当前用户的隔离沙箱中执行脚本。",
-                markdown="工作区会跨沙箱重启保留；运行环境空闲后可停止，下一次使用时自动恢复。",
+                title="Code Runner",
+                description="Run scripts in the current user's isolated sandbox.",
+                markdown="The workspace survives sandbox restarts; an idle runtime may stop and resumes automatically on next use.",
             ),
             permissions=["sandbox.execute", "network.download"],
             authentication=Authentication(type="none"),

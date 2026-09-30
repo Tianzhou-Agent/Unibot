@@ -69,18 +69,18 @@ DOCUMENT_TOOL_IDS = {
 def document_tool_capabilities() -> list[AinaCapability]:
     name_property = {
         "type": "string",
-        "description": "Markdown 文档名称；省略 .md 扩展名时会自动补充。",
+        "description": "Markdown document name; the .md extension is added when omitted.",
         "minLength": 1,
         "maxLength": 500,
     }
     content_property = {
         "type": "string",
-        "description": "UTF-8 编码的 Markdown 内容。",
+        "description": "UTF-8 Markdown content.",
         "maxLength": 2_000_000,
     }
     heading_property = {
         "type": "string",
-        "description": "目录中返回的精确标题文字，不包含开头的 #。",
+        "description": "Exact heading text as returned by the outline, without the leading #.",
         "minLength": 1,
         "maxLength": 500,
     }
@@ -88,28 +88,29 @@ def document_tool_capabilities() -> list[AinaCapability]:
         "type": "integer",
         "minimum": 1,
         "default": 1,
-        "description": "同名标题第几次出现；默认 1。",
+        "description": "Which occurrence of a repeated heading; defaults to 1.",
     }
     capabilities = [
         AinaCapability(
             id=LIST_DOCUMENTS_TOOL_ID,
-            name="列出文档",
-            description="仅当用户想浏览全部文件且没有提供名称、主题或关键词时，列出所有 Markdown 文档。",
+            name="List documents",
+            description="List every Markdown document. Use only when the user wants to browse all files and gave no name, topic or keyword.",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         AinaCapability(
             id=SEARCH_DOCUMENTS_TOOL_ID,
-            name="搜索文档",
+            name="Search documents",
             description=(
-                "按关键词搜索当前用户 Markdown 文档的文件名和正文。用户提供了名称、主题、标题或内容关键词时，"
-                "优先使用此工具，不要先列出全部文档。"
+                "Search the file names and bodies of the current user's Markdown documents by keyword. Prefer this "
+                "tool whenever the user gives a name, topic, heading or content keyword; do not list every "
+                "document first."
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "保留用户指定的文档名称、主题或关键词，不要改写成“所有文档”。",
+                        "description": "The document name, topic or keyword the user gave; do not rewrite it as 'all documents'.",
                     }
                 },
                 "required": ["query"],
@@ -118,10 +119,11 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=BROWSE_DOCUMENT_TOOL_ID,
-            name="浏览文档章节",
+            name="Browse document sections",
             description=(
-                "当用户想查看文档目录、章节结构或选择章节阅读时使用。返回交互式章节导航组件，"
-                "不要在文字回答中重复罗列标题。"
+                "Use when the user wants to see a document's outline or section structure, or pick a section to "
+                "read. Returns an interactive section navigation widget; do not repeat the headings in the "
+                "text answer."
             ),
             input_schema={
                 "type": "object",
@@ -132,8 +134,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=OUTLINE_DOCUMENT_TOOL_ID,
-            name="读取文档目录",
-            description="只读取 Markdown 标题目录、行范围和 revision，不返回正文；局部编辑时先用它定位章节。",
+            name="Read document outline",
+            description="Read only the Markdown heading outline, line ranges and revision, without body text. Use it first to locate a section before a partial edit.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -143,8 +145,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=READ_DOCUMENT_SECTION_TOOL_ID,
-            name="读取文档章节",
-            description="只读取一个 Markdown 标题及其正文，并返回用于安全更新的 revision。",
+            name="Read document section",
+            description="Read one Markdown heading and its body, and return the revision needed for a safe update.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -158,8 +160,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=READ_DOCUMENT_TOOL_ID,
-            name="读取文档",
-            description="读取一个 Markdown 文档的完整内容和元数据；仅在任务确实需要全文时使用。",
+            name="Read document",
+            description="Read the full content and metadata of one Markdown document. Use only when the task really needs the whole text.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -169,8 +171,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=CREATE_DOCUMENT_TOOL_ID,
-            name="创建文档",
-            description="创建新的 Markdown 文档，不会覆盖已有文件。",
+            name="Create document",
+            description="Create a new Markdown document; never overwrites an existing file.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -180,8 +182,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=UPDATE_DOCUMENT_SECTION_TOOL_ID,
-            name="更新文档章节",
-            description="只替换一个 Markdown 章节。section_content 必须以同层级标题开始，revision 过期时拒绝覆盖。",
+            name="Update document section",
+            description="Replace exactly one Markdown section. section_content must start with a heading of the same level; the update is rejected when the revision is stale.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -190,11 +192,11 @@ def document_tool_capabilities() -> list[AinaCapability]:
                     "occurrence": occurrence_property,
                     "section_content": {
                         "type": "string",
-                        "description": "目标章节的完整 Markdown，仅包含该标题、正文及其子标题。",
+                        "description": "The complete Markdown of the target section: only its heading, body and sub-headings.",
                     },
                     "expected_revision": {
                         "type": "string",
-                        "description": "document.read_section 返回的 revision，必须原样传入。",
+                        "description": "The revision returned by document.read_section, passed unchanged.",
                     },
                 },
                 "required": ["name", "heading", "section_content", "expected_revision"],
@@ -203,8 +205,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=APPEND_DOCUMENT_TOOL_ID,
-            name="追加文档内容",
-            description="在已有文档末尾追加 Markdown 内容，不替换原内容。",
+            name="Append to document",
+            description="Append Markdown content to the end of an existing document without replacing it.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -214,8 +216,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=RENAME_DOCUMENT_TOOL_ID,
-            name="重命名文档",
-            description="重命名已有 Markdown 文档，不改变文档内容。",
+            name="Rename document",
+            description="Rename an existing Markdown document without changing its content.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "new_name": name_property},
@@ -225,8 +227,8 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=DELETE_DOCUMENT_TOOL_ID,
-            name="删除文档",
-            description="经用户确认后永久删除已有 Markdown 文档。",
+            name="Delete document",
+            description="Permanently delete an existing Markdown document after the user confirms.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -236,7 +238,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=CREATE_EDIT_TASK_TOOL_ID,
-            name="创建文档修改任务",
+            name="Create document edit task",
             description=(
                 "Create an asynchronous reviewed edit task for one or more non-overlapping sections. "
                 "Use document.outline first to obtain exact heading and occurrence values. The formal document "
@@ -273,7 +275,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=LIST_EDIT_TASKS_TOOL_ID,
-            name="列出文档修改任务",
+            name="List document edit tasks",
             description="List reviewed edit tasks for a document, including status, section ids, and draft revisions.",
             input_schema={
                 "type": "object",
@@ -284,7 +286,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=READ_EDIT_TASK_TOOL_ID,
-            name="读取文档修改任务",
+            name="Read document edit task",
             description="Read one edit task and its reviewable section drafts by exact task_id.",
             input_schema={
                 "type": "object",
@@ -295,7 +297,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=UPDATE_DRAFT_TOOL_ID,
-            name="修改章节草稿",
+            name="Update section draft",
             description=(
                 "Replace one review draft after the user directly edits or dictates its complete Markdown. "
                 "Pass the current draft_revision to prevent overwriting a newer draft."
@@ -314,7 +316,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=AI_REVISE_DRAFT_TOOL_ID,
-            name="让 AI 继续修改章节草稿",
+            name="Revise section draft with AI",
             description=(
                 "Queue an asynchronous AI revision for one existing section draft. Read the task first and pass "
                 "the current draft_revision. This still does not change the formal document."
@@ -333,7 +335,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=RETRY_EDIT_TASK_TOOL_ID,
-            name="重试文档修改任务",
+            name="Retry document edit task",
             description="Retry failed draft generation for an edit task.",
             input_schema={
                 "type": "object",
@@ -344,7 +346,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=MERGE_EDIT_SECTION_TOOL_ID,
-            name="合入章节草稿",
+            name="Merge section draft",
             description=(
                 "Merge one reviewed section draft into the formal document. Only call after the user explicitly "
                 "chooses to merge that section; the platform will request confirmation before changing the document."
@@ -358,7 +360,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         ),
         AinaCapability(
             id=ABANDON_EDIT_SECTION_TOOL_ID,
-            name="放弃章节草稿",
+            name="Abandon section draft",
             description="Abandon one reviewed section draft without changing the formal document.",
             input_schema={
                 "type": "object",
@@ -377,9 +379,9 @@ def unibot_documents_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_DOCUMENTS_ID,
-                name="文档编辑器",
+                name="Document Editor",
                 version="1.0.0",
-                description="创建、读取、编辑、重命名和删除存储在 NAS 中的 Markdown 文档。",
+                description="Create, read, edit, rename and delete Markdown documents stored on NAS.",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -387,8 +389,8 @@ def unibot_documents_record() -> AinaRecord:
                 skills=[
                     AinaCapability(
                         id="markdown-document-management",
-                        name="Markdown 文档管理",
-                        description="在持久化 NAS 存储中编写和维护用户自己的 Markdown 文档。",
+                        name="Markdown document management",
+                        description="Write and maintain the user's own Markdown documents on persistent NAS storage.",
                         instructions=(
                             "Use document.search when the user provides a filename, topic, title, or content "
                             "keyword. Preserve that query instead of replacing it with a request for all documents. "
@@ -418,20 +420,20 @@ def unibot_documents_record() -> AinaRecord:
                     AinaUiCapability(
                         id="document-editor",
                         kind="document",
-                        description="由平台渲染、以 NAS 为存储的 Markdown 文件列表、编辑器和预览。",
+                        description="Platform-rendered Markdown file list, editor and preview backed by NAS storage.",
                     ),
                     AinaUiCapability(
                         id="document-outline",
                         kind="document_outline",
-                        description="在对话中按标题层级浏览文档，并按需读取单个章节。",
+                        description="Browse a document by heading level in the chat and read single sections on demand.",
                     ),
                 ],
             ),
             main_widget=WidgetDefinition(
                 id="unibot-documents-main",
                 kind="document",
-                title="Markdown 文档编辑器",
-                description="创建和编辑持久化存储在 NAS 中的 Markdown 文档。",
+                title="Markdown Document Editor",
+                description="Create and edit Markdown documents persisted on NAS.",
             ),
             authentication=Authentication(type="none"),
         ),
@@ -499,7 +501,7 @@ async def invoke_document_tool(
             id=f"document-outline-{outline.revision[:16]}",
             kind="document_outline",
             title=outline.name,
-            description="选择章节即可查看对应内容，无需再次发送消息。",
+            description="Pick a section to view its content; no need to send another message.",
             document_name=outline.name,
             sections=[
                 WidgetDocumentSection(**heading.model_dump())
@@ -517,8 +519,9 @@ async def invoke_document_tool(
                 "heading_count": len(outline.headings),
                 "presentation": "interactive_document_outline_widget",
                 "response_instruction": (
-                    "Reply exactly in Chinese: 已加载章节导航，请在下方组件中选择要查看的章节。 "
-                    "Do not add headings, counts, or other explanation."
+                    "Reply with one short sentence, in the user's language, saying the section navigation is "
+                    "loaded and the user can pick a section in the widget below. Do not add headings, counts, "
+                    "or other explanation."
                 ),
             },
             [widget],

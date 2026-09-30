@@ -205,11 +205,11 @@ def _edit_task_reply(result: Any) -> str | None:
     task = result.get("task") if isinstance(result, dict) else None
     if not isinstance(task, dict):
         return None
-    title = str(task.get("title") or "文档修改任务")
+    title = str(task.get("title") or "Document edit task")
     sections = task.get("sections")
     section_count = len(sections) if isinstance(sections, list) else 0
     return (
-        f'修改任务“{title}”已创建，AI 正在后台处理 {section_count} 个章节。'
-        "完成后会进入待检视状态，请在右侧“任务”模式查看进度和草稿。"
-        "正式文档会在您确认合并后才更新。"
+        f'Edit task "{title}" was created. The AI is working on {section_count} section(s) in the background. '
+        "When it finishes, the task moves to review; follow progress and drafts in the Tasks mode on the "
+        "right. The document itself changes only after you confirm the merge."
     )

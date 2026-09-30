@@ -33,5 +33,5 @@ def require_approved_destination(url: str, allowed_origins: str) -> None:
         "Remote capability destination is not an approved HTTP(S) origin",
         status_code=403,
         source="capability",
-        user_message="此远程能力的目标地址尚未获准。",
+        user_message="The destination of this remote capability is not approved.",
     )

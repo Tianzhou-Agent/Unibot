@@ -19,9 +19,9 @@ def unibot_scheduler_record() -> AinaRecord:
             protocol_version="1.0",
             aina=AinaIdentity(
                 id=UNIBOT_SCHEDULER_ID,
-                name="定时任务 AINA",
+                name="Scheduler",
                 version="1.0.0",
-                description="通过固定间隔或 Cron 表达式调度已安装的远程 AINA，并支持立即调试。",
+                description="Schedule installed remote AINA on a fixed interval or a cron expression, with an immediate debug run.",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -30,18 +30,18 @@ def unibot_scheduler_record() -> AinaRecord:
                     AinaUiCapability(
                         id="schedule-manager",
                         kind="panel",
-                        description="管理 AINA 定时任务、运行状态和调试结果。",
+                        description="Manage scheduled AINA tasks, their run status and debug results.",
                     )
                 ]
             ),
             main_widget=WidgetDefinition(
                 id="unibot-scheduler-main",
                 kind="panel",
-                title="定时任务 AINA",
-                description="管理分布式 AINA 调度任务。",
+                title="Scheduler",
+                description="Manage distributed AINA schedules.",
                 markdown=(
-                    "### 分布式定时调度\n\n支持固定间隔和五段 Cron 表达式。"
-                    "多个 Unibot 节点通过 Redis 租约竞争，同一计划时间仅由一个节点执行。"
+                    "### Distributed scheduling\n\nSupports fixed intervals and five-field cron expressions. "
+                    "Unibot nodes compete for a Redis lease, so each scheduled time runs on exactly one node."
                 ),
             ),
             authentication=Authentication(type="none"),

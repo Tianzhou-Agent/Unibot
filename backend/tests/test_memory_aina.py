@@ -100,7 +100,7 @@ def test_explicit_remember_request_loads_memory_tools_and_persists_fact() -> Non
         item["function"]["name"].startswith(("builtin_memory_", "aina_", "builtin_task_"))
         for item in llm.calls[1]["tools"]
     )
-    assert "持久记忆管理" in llm.calls[1]["messages"][0]["content"]
+    assert "Durable memory management" in llm.calls[1]["messages"][0]["content"]
     assert any(
         event["kind"] == "routing.scope.activated" and event["target_id"] == "unibot-memory"
         for event in trace.json()["events"]

@@ -108,7 +108,7 @@ class LocalProcessSandboxDriver(SandboxDriver):
                 "configure the Kubernetes sandbox for untrusted users",
                 status_code=403,
                 source="sandbox",
-                user_message="本地代码执行未启用，请配置隔离沙箱。",
+                user_message="Local code execution is disabled; configure an isolated sandbox.",
             )
         workspace = self._workspace(sandbox)
         workspace.mkdir(parents=True, exist_ok=True)

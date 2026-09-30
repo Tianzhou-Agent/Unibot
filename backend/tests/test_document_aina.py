@@ -518,8 +518,8 @@ def test_document_aina_chat_creates_reviewed_edit_task_without_changing_source(t
 
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
-    assert "已创建" in response.json()["content"]
-    assert "后台处理" in response.json()["content"]
+    assert "was created" in response.json()["content"]
+    assert "in the background" in response.json()["content"]
     assert task["status"] == "reviewing"
     assert task["sections"][0]["draft_content"] == "## Background\n\nAI draft."
     assert document["content"] == original
@@ -1041,7 +1041,7 @@ def test_missing_document_is_returned_to_model_for_list_and_retry(tmp_path: Path
         [
             call_first_tool(
                 prefix="builtin_document_read_",
-                description_contains="完整内容",
+                description_contains="full content",
                 arguments='{"name":"stale.md"}',
             ),
             call_first_tool(prefix="builtin_document_list_", arguments="{}"),

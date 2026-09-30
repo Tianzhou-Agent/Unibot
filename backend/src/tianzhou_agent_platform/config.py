@@ -57,7 +57,9 @@ class AgentSettings(BaseSettings):
         description="Comma-separated approved HTTP(S) origins for remote Tools and AINA; empty denies all.",
     )
     max_agent_iterations: int = Field(
-        default=8,
+        # One iteration is one model call. 20 matches CrewAI's max_iter and smolagents' max_steps; OpenAI Agents
+        # SDK (10) and LangChain AgentExecutor (15) are lower. 8 cut off multi-document tasks mid-way.
+        default=20,
         ge=1,
         le=32,
         validation_alias=AliasChoices("UNIBOT_MAX_AGENT_ITERATIONS", "max_agent_iterations"),
