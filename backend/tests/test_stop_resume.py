@@ -8,9 +8,12 @@ import threading
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
+import tianzhou_agent_platform.main as main_module
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
@@ -287,6 +290,145 @@ def test_stop_before_the_agent_starts_keeps_the_question_for_resume() -> None:
     assert [m["content"] for m in llm.calls[0]["messages"] if m["role"] == "user"] == ["early question"]
 
 
+class UncommittedStepSaver(InMemorySaver):
+    """Once armed, commits ``commits_left`` more run checkpoints and then drops them while keeping task writes.
+
+    This is what a stop leaves behind when it cancels a run between a node's finished writes and the checkpoint of
+    its step: the saved checkpoint's next task already has its result as a pending write. State updates made by the
+    platform itself (``aupdate_state``) are still committed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.commits_left: int | None = None
+        self.drop_writes = False  # also lose the writes of the steps that run meanwhile
+
+    async def aput_writes(self, config, writes, task_id, task_path=""):  # type: ignore[no-untyped-def]
+        if not self.drop_writes:
+            await super().aput_writes(config, writes, task_id, task_path)
+
+    async def aput(self, config, checkpoint, metadata, new_versions):  # type: ignore[no-untyped-def]
+        if self.commits_left is None or self.commits_left > 0 or metadata.get("source") != "loop":
+            if self.commits_left is not None and metadata.get("source") == "loop":
+                self.commits_left -= 1
+            return await super().aput(config, checkpoint, metadata, new_versions)
+        configurable = config["configurable"]
+        return {
+            "configurable": {
+                "thread_id": configurable["thread_id"],
+                "checkpoint_ns": configurable.get("checkpoint_ns", ""),
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+
+class SecondCallBlocksLLM(ScriptedLLM):
+    """Answers its first request and blocks the second one until the run is cancelled."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        super().__init__(responses)
+        object.__setattr__(self, "started", threading.Event())
+        object.__setattr__(self, "requests", 0)
+
+    async def _block_second_call(self) -> None:
+        object.__setattr__(self, "requests", self.requests + 1)
+        if self.requests == 2:
+            self.started.set()
+            while True:
+                await asyncio.sleep(0.01)
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[no-untyped-def]
+        await self._block_second_call()
+        return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+def _stop_after_uncommitted_steps(
+    monkeypatch: pytest.MonkeyPatch, *, commits_after_tool: int, follow_up: Any, lose_tool_write: bool = False
+) -> tuple[Any, SecondCallBlocksLLM, list[str]]:
+    """Run one tool call, lose the run's checkpoints from ``commits_after_tool`` steps after it (and with
+    ``lose_tool_write`` the tool step's own result write), stop during the next model call and return
+    ``follow_up(client, conversation_id)``."""
+    saver = UncommittedStepSaver()
+    monkeypatch.setattr(main_module, "InMemorySaver", lambda: saver)
+    executed: list[str] = []
+
+    async def remote(request: httpx.Request) -> httpx.Response:
+        executed.append(request.url.path)
+        saver.commits_left = commits_after_tool
+        saver.drop_writes = lose_tool_write
+        return httpx.Response(200, json={"result": "fast result"})
+
+    llm = SecondCallBlocksLLM([_call_tools("Fast lookup"), assistant("answer after stop")])
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=http_client)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.fast",
+                "name": "Fast lookup",
+                "description": "Fast lookup",
+                "input_schema": {"type": "object", "properties": {}},
+                "endpoint": "https://tool.invalid/demo.fast",
+            },
+        )
+        conversation = client.post("/conversations", json={"title": "Uncommitted step"}).json()
+        thread, result = _run_in_thread(
+            lambda: client.post("/chat", json={"message": "use the tool", "conversation_id": conversation["id"]})
+        )
+        assert llm.started.wait(timeout=5)
+        saver.drop_writes = False
+        assert client.post(f"/conversations/{conversation['id']}/stop", json={}).status_code == 202
+        thread.join(timeout=5)
+        assert result["response"].json()["status"] == "stopped"
+        saver.commits_left = None
+        return follow_up(client, conversation["id"]), llm, executed
+
+
+def test_resume_continues_when_the_next_step_finished_but_was_not_checkpointed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resumed, _, executed = _stop_after_uncommitted_steps(
+        monkeypatch,
+        commits_after_tool=1,  # the tool step is committed, the middleware step after it only left its writes
+        follow_up=lambda client, conversation_id: client.post(f"/conversations/{conversation_id}/resume", json={}),
+    )
+
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["content"] == "answer after stop"
+    assert executed == ["/demo.fast"]
+
+
+def test_resume_keeps_the_result_of_a_finished_tool_step_that_was_not_checkpointed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resumed, llm, executed = _stop_after_uncommitted_steps(
+        monkeypatch,
+        commits_after_tool=0,  # the tool call finished, but its step was never committed
+        follow_up=lambda client, conversation_id: client.post(f"/conversations/{conversation_id}/resume", json={}),
+    )
+
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["content"] == "answer after stop"
+    assert executed == ["/demo.fast"]
+    assert list(_tool_results(llm.calls[-1]["messages"]).values()) == ['{"result": "fast result"}']
+
+
+def test_new_turn_keeps_the_result_of_a_finished_tool_step_that_was_not_checkpointed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, llm, executed = _stop_after_uncommitted_steps(
+        monkeypatch,
+        commits_after_tool=0,
+        follow_up=lambda client, conversation_id: client.post(
+            "/chat", json={"message": "only that one, thanks", "conversation_id": conversation_id}
+        ),
+    )
+
+    assert response.json()["content"] == "answer after stop"
+    assert executed == ["/demo.fast"]
+    assert list(_tool_results(llm.calls[-1]["messages"]).values()) == ['{"result": "fast result"}']
+
+
 def test_stop_and_resume_require_a_running_or_stopped_turn() -> None:
     with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([assistant("done")]))) as client:
         conversation = client.post("/conversations", json={"title": "Idle"}).json()
@@ -296,3 +438,22 @@ def test_stop_and_resume_require_a_running_or_stopped_turn() -> None:
 
     assert stop.status_code == 409
     assert resume.status_code == 409
+
+
+@pytest.mark.parametrize("follow_up", ["resume", "new_turn"])
+def test_a_call_that_returned_keeps_its_result_when_the_stop_cancelled_its_step_before_saving_it(
+    monkeypatch: pytest.MonkeyPatch, follow_up: str
+) -> None:
+    def next_request(client: TestClient, conversation_id: str) -> httpx.Response:
+        if follow_up == "resume":
+            return client.post(f"/conversations/{conversation_id}/resume", json={})
+        return client.post("/chat", json={"message": "carry on", "conversation_id": conversation_id})
+
+    response, llm, executed = _stop_after_uncommitted_steps(
+        monkeypatch, commits_after_tool=0, lose_tool_write=True, follow_up=next_request
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "answer after stop"
+    assert executed == ["/demo.fast"]
+    assert list(_tool_results(llm.calls[-1]["messages"]).values()) == ['{"result": "fast result"}']
