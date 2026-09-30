@@ -19,7 +19,7 @@ from unibot_eval.dataset import (
     TraceExpectation,
     WidgetExpectation,
 )
-from unibot_eval.trajectory import SUMMARY_PREFIX, TurnObservation
+from unibot_eval.trajectory import SUMMARY_PREFIXES, TurnObservation
 
 # Categories double as the rows of the report's "behaviour" table.
 TOOL_SELECTION = "tool_selection"
@@ -28,6 +28,7 @@ CONTEXT = "context"
 OUTPUT = "output"
 PERFORMANCE = "performance"
 PROTOCOL = "protocol"  # status, widgets, approval, trace events
+STATE = "state"  # what the agent actually changed, read back through the API (http step `verify`)
 
 
 @dataclass
@@ -121,6 +122,16 @@ def check_tools(spec: ToolExpectation, turn: TurnObservation) -> list[CheckResul
     for name in spec.forbidden:
         hit = any(call.is_named(name) for call in turn.tool_calls)
         results.append(_result(f"forbidden:{name}", TOOL_SELECTION, not hit, "called" if hit else "not called"))
+    for name, bounds in spec.counts.items():
+        count = sum(call.is_named(name) for call in turn.tool_calls)
+        ok = (bounds.min is None or count >= bounds.min) and (bounds.max is None or count <= bounds.max)
+        wanted = f"{bounds.min if bounds.min is not None else 0}..{bounds.max if bounds.max is not None else '*'}"
+        results.append(_result(f"count:{name}", TOOL_SELECTION, ok, f"called {count} times, expected {wanted}"))
+    for before, after in spec.order:
+        first = {name: next((i for i, call in enumerate(turn.tool_calls) if call.is_named(name)), None)
+                 for name in (before, after)}
+        ok = first[before] is not None and first[after] is not None and first[before] < first[after]
+        results.append(_result(f"order:{before}<{after}", TOOL_SELECTION, ok, f"called {called}"))
     if not spec.allow_failed:
         failed = [call.name for call in turn.tool_calls if call.status == "failed"]
         results.append(_result("no_failed_calls", TOOL_SELECTION, not failed, f"failed: {failed}"))
@@ -168,21 +179,28 @@ def check_tool_args(spec: ArgExpectation, turn: TurnObservation) -> CheckResult:
 
 
 def check_output(spec: OutputExpectation, turn: TurnObservation) -> list[CheckResult]:
-    text = turn.content
+    return check_text(spec, turn.content, prefix="output", category=OUTPUT)
+
+
+def check_text(spec: OutputExpectation, text: str, *, prefix: str, category: str) -> list[CheckResult]:
     fold = (lambda value: value.casefold()) if spec.case_insensitive else (lambda value: value)
     results: list[CheckResult] = []
     if spec.equals is not None:
-        results.append(_result("output:equals", OUTPUT, fold(text) == fold(spec.equals.strip()), _clip(text)))
+        results.append(_result(f"{prefix}:equals", category, fold(text) == fold(spec.equals.strip()), _clip(text)))
     for needle in spec.contains:
-        results.append(_result(f"output:contains:{needle}", OUTPUT, fold(needle) in fold(text), _clip(text)))
+        results.append(_result(f"{prefix}:contains:{needle}", category, fold(needle) in fold(text), _clip(text)))
     if spec.contains_any:
         hit = any(fold(needle) in fold(text) for needle in spec.contains_any)
-        results.append(_result("output:contains_any", OUTPUT, hit, _clip(text)))
+        results.append(_result(f"{prefix}:contains_any", category, hit, _clip(text)))
     for needle in spec.not_contains:
-        results.append(_result(f"output:not_contains:{needle}", OUTPUT, fold(needle) not in fold(text), _clip(text)))
+        results.append(
+            _result(f"{prefix}:not_contains:{needle}", category, fold(needle) not in fold(text), _clip(text))
+        )
     if spec.regex is not None:
         flags = re.IGNORECASE | re.DOTALL if spec.case_insensitive else re.DOTALL
-        results.append(_result("output:regex", OUTPUT, re.search(spec.regex, text, flags) is not None, _clip(text)))
+        results.append(
+            _result(f"{prefix}:regex", category, re.search(spec.regex, text, flags) is not None, _clip(text))
+        )
     return results
 
 
@@ -205,7 +223,7 @@ def check_prompt(spec: PromptExpectation, turn: TurnObservation) -> list[CheckRe
     ]
     if spec.has_summary is not None:
         has = any(
-            message.get("role") == "system" and str(message.get("content", "")).startswith(SUMMARY_PREFIX)
+            str(message.get("content", "")).startswith(SUMMARY_PREFIXES)
             for message in first_request
         )
         results.append(_result("prompt:has_summary", CONTEXT, has == spec.has_summary, f"summary present={has}"))

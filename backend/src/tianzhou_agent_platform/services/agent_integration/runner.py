@@ -309,7 +309,9 @@ class AgentRunner:
             forced_capability=None,
         )
         state = await invocation.agent.aget_state(invocation.config)
-        if not state.next or state.interrupts:
+        # ``state.next`` leaves out steps that already finished: a stop can land after a step saved its writes but
+        # before its checkpoint, and resuming applies those writes and carries on. ``state.tasks`` has every step.
+        if not state.tasks or state.interrupts:
             raise PlatformError(
                 "CONFLICT",
                 "The stopped turn can no longer be resumed",
@@ -724,10 +726,11 @@ class AgentRunner:
     async def _settle_stopped(self, invocation: _Invocation, agent_input: Any) -> None:
         """Leave the checkpoint of a stopped turn ready to resume and consistent for a new turn.
 
-        A stop before the agent recorded the turn's input records it as pending. A stop during a tool step keeps the
-        results of the calls that finished (LangGraph holds them only as pending writes, which new input discards)
-        and closes the unfinished calls: they may already have had effects, so they are never re-run. A stop during
-        a model call needs nothing: resuming runs that step again.
+        A stop before the agent recorded the turn's input records it as pending. A stop during a tool step commits
+        the results of the calls that finished (LangGraph holds them only as pending writes, which new input discards,
+        or not at all when the stop cancelled the step before saving them) and closes the calls that never returned:
+        they may already have had effects, so they are never re-run. A stop during a model call needs nothing:
+        resuming runs that step again.
         """
         agent, config = invocation.agent, invocation.config
         state = await agent.aget_state(config)
@@ -736,14 +739,24 @@ class AgentRunner:
         if isinstance(agent_input, dict) and any(item.id not in present for item in agent_input["messages"]):
             await agent.aupdate_state(config, agent_input, as_node="__start__")
             return
-        closures = dangling_tool_closures(messages, STOPPED_TOOL_RESULT)
-        if not closures:
+        last_ai = next((message for message in reversed(messages) if isinstance(message, AIMessage)), None)
+        if last_ai is None:
             return
-        last_ai = next(message for message in reversed(messages) if isinstance(message, AIMessage))
+        # A call that returned before the stop cancelled its step keeps its real result.
+        recorded = invocation.run.finished_tool_results
+        closures = [
+            recorded.get(closure.tool_call_id, closure)
+            for closure in dangling_tool_closures(messages, STOPPED_TOOL_RESULT)
+        ]
         call_ids = {call.get("id") for call in [*last_ai.tool_calls, *last_ai.invalid_tool_calls]}
         finished = [
             message for message in messages if isinstance(message, ToolMessage) and message.tool_call_id in call_ids
         ]
+        # Results of a tool step that finished but was not checkpointed are only pending writes, even when no call
+        # is left open, so they are committed too.
+        committed = {message.id for message in await self._working_messages(config)}
+        if not closures and all(message.id in committed for message in finished):
+            return
         await agent.aupdate_state(config, {"messages": [*finished, *closures]}, as_node="tools")
 
     async def _prune_history(self, conversation_id: str) -> None:

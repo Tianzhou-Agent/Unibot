@@ -24,6 +24,16 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CallCount(_Strict):
+    min: int | None = None
+    max: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _exact(cls, data: Any) -> Any:
+        return {"min": data, "max": data} if isinstance(data, int) else data
+
+
 class ToolExpectation(_Strict):
     # Trajectory match against the ordered list of capability names the agent called.
     #   strict    same calls, same order            unordered  same calls, any order
@@ -33,6 +43,10 @@ class ToolExpectation(_Strict):
     forbidden: list[str] = Field(default_factory=list)
     none: bool = False  # the agent must not call any capability
     allow_failed: bool = False  # tolerate failed capability calls (robustness cases)
+    # Long runs: how often a capability was called ({tool: 5} is exactly 5, or {tool: {min: 1, max: 3}}), and
+    # ordering constraints: each [a, b] pair requires the first call of a to come before the first call of b.
+    counts: dict[str, CallCount] = Field(default_factory=dict)
+    order: list[tuple[str, str]] = Field(default_factory=list)
 
 
 class ArgExpectation(_Strict):
@@ -77,8 +91,14 @@ class LlmCallsExpectation(_Strict):
     served_model: str | None = None
 
 
+class BodyCheck(OutputExpectation):
+    """A check on one value of an API response, e.g. the content of a document after a long task."""
+
+    field: str | None = None  # dotted path into the JSON response; the whole body when omitted
+
+
 class HttpStep(_Strict):
-    """A setup request against the backend API (e.g. create and select a model provider)."""
+    """A setup request against the backend API (e.g. create and select a model provider), or a state check."""
 
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "POST"
     path: str
@@ -86,6 +106,8 @@ class HttpStep(_Strict):
     params: dict[str, Any] = Field(default_factory=dict)
     # Save values from the JSON response for later steps: variable name -> dotted path (e.g. "models.0.id").
     save: dict[str, str] = Field(default_factory=dict)
+    expect_status: int | None = None  # exact HTTP status required (default: any 2xx), e.g. 404 after a delete
+    verify: list[BodyCheck] = Field(default_factory=list)
 
 
 class PollStep(_Strict):
@@ -116,8 +138,21 @@ class JudgeExpectation(_Strict):
     threshold: float = 0.7
 
 
+class StopTrigger(_Strict):
+    """When the harness stops a running turn (``POST /conversations/{id}/stop``), like a user pressing stop."""
+
+    tool_calls: int | None = None  # after this many capability calls completed (from the SSE stream)
+    seconds: float | None = None  # after this many seconds
+
+    @model_validator(mode="after")
+    def _one_trigger(self) -> "StopTrigger":
+        if (self.tool_calls is None) == (self.seconds is None):
+            raise ValueError("stop_after needs exactly one of 'tool_calls' or 'seconds'")
+        return self
+
+
 class Expectation(_Strict):
-    status: Literal["completed", "approval_required", "failed"] | None = "completed"
+    status: Literal["completed", "approval_required", "failed", "stopped"] | None = "completed"
     tools: ToolExpectation | None = None
     tool_args: list[ArgExpectation] = Field(default_factory=list)
     output: OutputExpectation | None = None
@@ -141,7 +176,7 @@ class Expectation(_Strict):
 
 class Turn(_Strict):
     user: str | None = None
-    action: Literal["chat", "confirm_approval", "deny_approval", "http", "poll"] = "chat"
+    action: Literal["chat", "confirm_approval", "deny_approval", "resume", "http", "poll"] = "chat"
     actor: str = "a"  # label; each label maps to its own isolated user id and conversation
     new_conversation: bool = False
     capability: str | None = None
@@ -149,12 +184,18 @@ class Turn(_Strict):
     ui_context: str | None = None
     request: HttpStep | None = None  # action: http
     poll: PollStep | None = None  # action: poll
+    stop_after: StopTrigger | None = None  # chat: stop the turn while it runs
+    # confirm_approval: keep confirming while the continuation pauses for another approval, up to this many times.
+    max_confirmations: int = Field(default=1, ge=1)
+    timeout_s: float | None = None  # per-request timeout for long turns (default: UNIBOT_EVAL_TIMEOUT)
     expect: Expectation = Field(default_factory=Expectation)
 
     @model_validator(mode="after")
     def _message_required(self) -> "Turn":
         if self.action == "chat" and not self.user:
             raise ValueError("chat turns need a 'user' message")
+        if self.stop_after is not None and self.action != "chat":
+            raise ValueError("stop_after only applies to chat turns")
         if self.action == "http" and self.request is None:
             raise ValueError("http turns need a 'request'")
         if self.action == "poll" and self.poll is None:
@@ -175,7 +216,19 @@ class Case(_Strict):
     requires: list[str] = Field(default_factory=list)  # e.g. "compression": only runs when explicitly enabled
     vars: dict[str, str] = Field(default_factory=dict)  # extra static placeholders
     turns: list[Turn]
+    # Checks over the whole attempt: every agent turn merged into one (all tool calls in order, summed tokens,
+    # latency and iterations). Catches long-run failures no single turn shows, e.g. the same work done twice.
+    final: Expectation | None = None
     source: str | None = None
+
+    @model_validator(mode="after")
+    def _final_defaults(self) -> "Case":
+        if self.final is not None:
+            if self.final.judge:
+                raise ValueError("final checks do not support 'judge'; put the judge on a turn")
+            if "status" not in self.final.model_fields_set:
+                self.final.status = None
+        return self
 
     def render(self, variables: dict[str, str]) -> "Case":
         """Return a copy with every ``{{name}}`` placeholder replaced."""

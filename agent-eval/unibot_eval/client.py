@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from unibot_eval.telemetry import inject_trace_headers
+
+EventHook = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class BackendError(RuntimeError):
@@ -51,28 +54,71 @@ class UnibotEvalClient:
 
     # ---- agent turns -------------------------------------------------------------------------------------
 
-    async def chat(self, payload: dict[str, Any], *, stream: bool) -> ChatResult:
-        return await (self._chat_stream(payload) if stream else self._chat_blocking(payload))
+    async def chat(
+        self,
+        payload: dict[str, Any],
+        *,
+        stream: bool,
+        timeout_s: float | None = None,
+        on_event: EventHook | None = None,
+    ) -> ChatResult:
+        if stream or on_event is not None:
+            return await self._stream("/chat/stream", payload, timeout_s=timeout_s, on_event=on_event)
+        return await self._blocking("/chat", payload, timeout_s=timeout_s)
 
-    async def _chat_blocking(self, payload: dict[str, Any]) -> ChatResult:
+    async def resume(
+        self, conversation_id: str, *, user_id: str, tenant_id: str, stream: bool, timeout_s: float | None = None
+    ) -> ChatResult:
+        """Continue a stopped turn from its checkpoint."""
+        payload = {"user_id": user_id, "tenant_id": tenant_id}
+        path = f"/conversations/{conversation_id}/resume"
+        if stream:
+            return await self._stream(f"{path}/stream", payload, timeout_s=timeout_s)
+        return await self._blocking(path, payload, timeout_s=timeout_s)
+
+    async def stop(self, conversation_id: str, *, user_id: str, tenant_id: str) -> int:
+        """Ask the conversation's running turn to stop; returns the HTTP status (202, or 409 when nothing runs)."""
+        response = await self._client.post(
+            f"/conversations/{conversation_id}/stop",
+            json={"user_id": user_id, "tenant_id": tenant_id},
+            headers=inject_trace_headers({}),
+        )
+        return response.status_code
+
+    async def create_conversation(self, *, user_id: str, tenant_id: str, title: str) -> str:
+        response = await self._client.post(
+            "/conversations",
+            json={"user_id": user_id, "tenant_id": tenant_id, "title": title},
+            headers=inject_trace_headers({}),
+        )
+        return str(_json_or_raise(response)["id"])
+
+    async def _blocking(self, path: str, payload: dict[str, Any], *, timeout_s: float | None) -> ChatResult:
         started = time.perf_counter()
-        response = await self._client.post("/chat", json=payload, headers=inject_trace_headers({}))
+        response = await self._client.post(path, json=payload, headers=inject_trace_headers({}), **_timeout(timeout_s))
         latency_ms = (time.perf_counter() - started) * 1000
         return ChatResult(response=_json_or_raise(response), latency_ms=latency_ms, ttft_ms=None)
 
-    async def _chat_stream(self, payload: dict[str, Any]) -> ChatResult:
+    async def _stream(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout_s: float | None,
+        on_event: EventHook | None = None,
+    ) -> ChatResult:
         started = time.perf_counter()
         ttft_ms: float | None = None
         final: dict[str, Any] | None = None
         async with self._client.stream(
-            "POST", "/chat/stream", json=payload, headers=inject_trace_headers({})
+            "POST", path, json=payload, headers=inject_trace_headers({}), **_timeout(timeout_s)
         ) as response:
             if response.status_code >= 400:
                 body = await response.aread()
-                raise BackendError(
-                    f"POST /chat/stream -> {response.status_code}", status_code=response.status_code, body=body
-                )
+                raise BackendError(f"POST {path} -> {response.status_code}", status_code=response.status_code, body=body)
             async for event in _sse_events(response):
+                if on_event is not None:
+                    await on_event(event)
                 kind = event.get("type")
                 if kind == "message.delta" and ttft_ms is None:
                     ttft_ms = (time.perf_counter() - started) * 1000
@@ -87,14 +133,12 @@ class UnibotEvalClient:
             raise BackendError("stream ended without message.completed")
         return ChatResult(response=final, latency_ms=latency_ms, ttft_ms=ttft_ms)
 
-    async def confirm_approval(self, approval_id: str, *, user_id: str, tenant_id: str) -> ChatResult:
-        started = time.perf_counter()
-        response = await self._client.post(
-            f"/approvals/{approval_id}/confirm",
-            json={"user_id": user_id, "tenant_id": tenant_id},
-            headers=inject_trace_headers({}),
+    async def confirm_approval(
+        self, approval_id: str, *, user_id: str, tenant_id: str, timeout_s: float | None = None
+    ) -> ChatResult:
+        return await self._blocking(
+            f"/approvals/{approval_id}/confirm", {"user_id": user_id, "tenant_id": tenant_id}, timeout_s=timeout_s
         )
-        return ChatResult(_json_or_raise(response), (time.perf_counter() - started) * 1000, None)
 
     async def deny_approval(self, approval_id: str, *, user_id: str, tenant_id: str) -> dict[str, Any]:
         response = await self._client.post(
@@ -146,10 +190,26 @@ class UnibotEvalClient:
         except ValueError:
             return response.status_code, response.text
 
+    async def request_user(self) -> tuple[str, str] | None:
+        """(user id, tenant id) the backend runs this client's requests as, i.e. whose conversations the UI shows:
+        the dev-bypass user or the session cookie's user; ``anonymous`` when the backend enforces no auth; None when
+        the backend requires a login these requests do not carry."""
+        status, config = await self.request("GET", "/auth/config")
+        if status == 404 or (status == 200 and isinstance(config, dict) and not config.get("auth_required", True)):
+            return "anonymous", "default"
+        status, body = await self.request("GET", "/auth/me")
+        if status == 200 and isinstance(body, dict) and isinstance(body.get("user"), dict):
+            return str(body["user"]["id"]), str(body["user"]["tenant_id"])
+        return None
+
     async def delete_conversation(self, conversation_id: str) -> None:
         response = await self._client.delete(f"/conversations/{conversation_id}")
         if response.status_code not in {200, 204, 404}:
             raise BackendError(f"DELETE conversation -> {response.status_code}", status_code=response.status_code)
+
+
+def _timeout(timeout_s: float | None) -> dict[str, Any]:
+    return {} if timeout_s is None else {"timeout": timeout_s}
 
 
 def _json_or_raise(response: httpx.Response) -> Any:

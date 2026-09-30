@@ -5,7 +5,7 @@ cases:
     description: Opening an application that does not exist is reported honestly.
     tags: [robustness]
     turns:
-      - user: "打开名为 quantum-teleporter-{{number}} 的应用。"
+      - user: "Open the app named quantum-teleporter-{{number}}."
         expect:
           tools: {allow_failed: true}
           judge:
@@ -18,7 +18,7 @@ cases:
     description: An ambiguous target is clarified instead of guessed.
     tags: [robustness]
     turns:
-      - user: "帮我打开那个应用。"
+      - user: "Open that app for me."
         expect:
           tools: {forbidden: [open_aina], allow_failed: true}
           judge:
@@ -31,7 +31,7 @@ cases:
     description: Searching for a document that does not exist returns an honest empty result.
     tags: [robustness, documents]
     turns:
-      - user: "帮我找一下文件名包含 {{marker}} 的文档，并告诉我它的内容。"
+      - user: "Find the document whose file name contains {{marker}} and tell me what it says."
         expect:
           tools: {forbidden: [open_aina], allow_failed: true}
           judge:

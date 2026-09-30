@@ -39,8 +39,8 @@ async def list_app_widget(
     return WidgetDefinition(
         id="unibot-app-list",
         kind="app_list",
-        title="AINA 应用",
-        description=f"当前共有 {len(apps)} 个可用应用。",
+        title="AINA apps",
+        description=f"{len(apps)} apps are available.",
         apps=apps,
     )
 
@@ -234,9 +234,9 @@ async def invoke_platform_tool(
         widget = WidgetDefinition(
             id=f"open-{aina_id}",
             kind="navigation",
-            title=f"打开 {canvas.name}",
-            description="该应用已准备好，可以进入 Canvas。",
-            actions=[WidgetAction(id="open", label="进入 Canvas", kind="open_aina", aina_id=aina_id)],
+            title=f"Open {canvas.name}",
+            description="The app is ready; you can enter its Canvas.",
+            actions=[WidgetAction(id="open", label="Enter Canvas", kind="open_aina", aina_id=aina_id)],
         )
         return canvas.model_dump(mode="json"), [widget]
     if tool_id == REQUEST_CLARIFICATION_TOOL_ID:
@@ -271,15 +271,15 @@ async def invoke_platform_tool(
         widget = WidgetDefinition(
             id=f"clarification-{conversation_id}",
             kind="form",
-            title=str(arguments.get("title") or "补充信息"),
-            description=str(arguments.get("description") or "请补充以下信息，以便继续处理。"),
+            title=str(arguments.get("title") or "More information needed"),
+            description=str(arguments.get("description") or "Please provide the following so I can continue."),
             fields=fields,
             actions=[
                 WidgetAction(
                     id="submit-clarification",
-                    label=str(arguments.get("submit_label") or "提交并继续"),
+                    label=str(arguments.get("submit_label") or "Submit and continue"),
                     kind="prompt",
-                    prompt=f"以下是我的补充信息：\n{answer_lines}",
+                    prompt=f"Here is the additional information:\n{answer_lines}",
                 )
             ],
         )

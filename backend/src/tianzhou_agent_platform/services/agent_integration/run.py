@@ -10,6 +10,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from langchain_core.messages import ToolMessage
+
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
@@ -31,6 +33,9 @@ class AgentRun:
     registry: dict[str, Capability]
     event_sink: EventSink | None = None
     memory_context: list[MemoryRecord] = field(default_factory=list)
+    # Results of capability calls that returned, by call id. A stop can cancel the tool step before LangGraph saves
+    # them, and a finished call must then keep its real result instead of being closed as interrupted.
+    finished_tool_results: dict[str, ToolMessage] = field(default_factory=dict)
 
     async def emit(self, event: dict[str, Any]) -> None:
         """Send a live application event to the streaming client, if any."""

@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from unibot_eval.html_report import write_html
 from unibot_eval.runner import RunResult
 
 
@@ -36,6 +37,7 @@ def summarize(run: RunResult) -> dict[str, Any]:
             "attempt_pass_rate": _rate([attempt.passed for attempt in attempts]),
             "pass_at_k_rate": _rate([case.pass_at_k for case in cases]),
             "pass_hat_k_rate": _rate([case.pass_hat_k for case in cases]),
+            "mean_progress": round(statistics.fmean(case.progress for case in cases), 4) if cases else 0.0,
         },
         "by_tag": {
             tag: {
@@ -70,14 +72,13 @@ def write_reports(run: RunResult, out_dir: str | Path) -> dict[str, Path]:
     out.mkdir(parents=True, exist_ok=True)
     summary = summarize(run)
     json_path = out / "report.json"
-    json_path.write_text(
-        json.dumps({"summary": summary, "cases": [case.to_dict() for case in run.cases]}, ensure_ascii=False,
-                   indent=2, default=str),
-        encoding="utf-8",
-    )
+    data = json.dumps({"summary": summary, "cases": [case.to_dict() for case in run.cases]}, ensure_ascii=False,
+                      indent=2, default=str)
+    json_path.write_text(data, encoding="utf-8")
     md_path = out / "report.md"
     md_path.write_text(render_markdown(run, summary), encoding="utf-8")
-    return {"json": json_path, "markdown": md_path}
+    html_path = write_html([(out.name, json.loads(data))], out / "report.html")
+    return {"json": json_path, "markdown": md_path, "html": html_path}
 
 
 def render_markdown(run: RunResult, summary: dict[str, Any] | None = None) -> str:
@@ -90,10 +91,12 @@ def render_markdown(run: RunResult, summary: dict[str, Any] | None = None) -> st
         f"Backend `{summary['settings']['base_url']}` · judge `{summary['settings']['judge_model'] or 'disabled'}` · "
         f"{summary['started_at']} → {summary['finished_at']}",
         "",
-        "| Cases | Attempts | pass^k (all attempts pass) | pass@k (any attempt passes) | Attempt pass rate |",
-        "|---:|---:|---:|---:|---:|",
+        "| Cases | Attempts | pass^k (all attempts pass) | pass@k (any attempt passes) | Attempt pass rate | "
+        "Mean progress (checks passed) |",
+        "|---:|---:|---:|---:|---:|---:|",
         f"| {overall['cases']} | {overall['attempts']} | {_pct(overall['pass_hat_k_rate'])} | "
-        f"{_pct(overall['pass_at_k_rate'])} | {_pct(overall['attempt_pass_rate'])} |",
+        f"{_pct(overall['pass_at_k_rate'])} | {_pct(overall['attempt_pass_rate'])} | "
+        f"{_pct(overall['mean_progress'])} |",
         "",
         "## Behaviour by check category",
         "",
@@ -123,12 +126,12 @@ def render_markdown(run: RunResult, summary: dict[str, Any] | None = None) -> st
         "",
         "## Cases",
         "",
-        "| Case | Tags | k | Pass rate | pass^k |",
-        "|---|---|---:|---:|:---:|",
+        "| Case | Tags | k | Pass rate | Progress | pass^k |",
+        "|---|---|---:|---:|---:|:---:|",
     ]
     lines += [
         f"| `{case.case.id}` | {', '.join(case.case.tags)} | {case.k} | {_pct(case.pass_rate)} | "
-        f"{'✅' if case.pass_hat_k else '❌'} |"
+        f"{_pct(case.progress)} | {'✅' if case.pass_hat_k else '❌'} |"
         for case in run.cases
     ]
     failures = [(case, attempt) for case in run.cases for attempt in case.attempts if not attempt.passed]
@@ -141,7 +144,8 @@ def render_markdown(run: RunResult, summary: dict[str, Any] | None = None) -> st
             for check in attempt.checks:
                 if not check.passed:
                     detail = check.detail.replace("\n", " ")[:400]
-                    lines.append(f"- turn {check.turn} · `{check.name}` ({check.category}): {detail}")
+                    where = "whole attempt" if check.turn is None else f"turn {check.turn}"
+                    lines.append(f"- {where} · `{check.name}` ({check.category}): {detail}")
             traces = [turn["trace_id"] for turn in attempt.turns if turn.get("trace_id")]
             if traces:
                 lines.append(f"- backend traces: {', '.join(f'`{trace}`' for trace in traces)}")

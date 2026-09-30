@@ -252,6 +252,14 @@ def test_reports_are_written(tmp_path: Path) -> None:
     assert summary["by_category"]["tool_selection"]["pass_rate"] < 1
     markdown = paths["markdown"].read_text(encoding="utf-8")
     assert "## Failures" in markdown and "builtin.list_app" in markdown
+    page = paths["html"].read_text(encoding="utf-8")
+    assert "1/2" in page and "builtin.list_app" in page and "trajectory:strict" in page and "List the apps." in page
+
+    from unibot_eval.cli import main
+
+    combined = tmp_path / "all.html"
+    assert main(["report", str(paths["json"]), str(paths["json"]), "--out", str(combined)]) == 0
+    assert combined.read_text(encoding="utf-8").count("<code>builtin.list_app</code>") == 2
 
 
 def _step_case(served_model: str) -> Case:
@@ -326,3 +334,241 @@ def test_expected_backend_error_is_a_passing_check_and_unexpected_one_is_not() -
     assert expected.cases[0].attempts[0].passed
     assert not unexpected.cases[0].attempts[0].passed
     assert "HTTP 401" in (unexpected.cases[0].attempts[0].error or "")
+
+
+# ---- long-run features ---------------------------------------------------------------------------------------
+
+DOCS = ["doc-1", "doc-2", "doc-3", "doc-4", "doc-5"]
+
+
+def _seed_docs(names: list[str] = DOCS) -> list[dict]:  # type: ignore[type-arg]
+    return [
+        {"action": "http", "request": {"path": "/documents",
+                                       "body": {"user_id": "{{user_id}}", "name": name, "content": f"# {name}\n"}}}
+        for name in names
+    ]
+
+
+def _doc_state(name: str, **verify: object) -> dict:  # type: ignore[type-arg]
+    return {"action": "http", "request": {"method": "GET", "path": f"/documents/{name}.md",
+                                          "params": {"user_id": "{{user_id}}"},
+                                          "verify": [{"field": "content", **verify}]}}
+
+
+def _attempt(fake: FakeUnibot, case: dict):  # type: ignore[no-untyped-def,type-arg]
+    settings = EvalSettings(base_url="http://unibot.test", concurrency=1, trace_wait_s=0)
+    runner = EvalRunner(settings, use_judge=False, transport=fake.transport())
+    return asyncio.run(runner.run([Case.model_validate(case)], repeats=1)).cases[0].attempts[0]
+
+
+def _failed(attempt) -> set[str]:  # type: ignore[no-untyped-def]
+    return {check.name for check in attempt.checks if not check.passed}
+
+
+@pytest.mark.parametrize(
+    ("message", "present"),
+    [
+        ({"role": "user", "content": "Here is a summary of the conversation to date:\n\nticket MK-1"}, True),
+        ({"role": "system", "content": "[CONTEXT SUMMARY]\nticket MK-1"}, True),  # legacy runtime
+        ({"role": "user", "content": "Summarise this note"}, False),
+    ],
+)
+def test_prompt_summary_is_recognised(message: dict, present: bool) -> None:  # type: ignore[type-arg]
+    from unibot_eval.checks import check_prompt
+    from unibot_eval.dataset import PromptExpectation
+
+    turn = _turn({})
+    turn.llm_calls = [{"request": {"messages": [{"role": "system", "content": "You are Unibot."}, message]}}]
+    assert check_prompt(PromptExpectation(has_summary=True), turn)[0].passed is present
+
+
+def test_counts_and_order_checks() -> None:
+    from unibot_eval.checks import check_tools
+    from unibot_eval.dataset import ToolExpectation
+
+    trace = {"events": [
+        {"kind": "builtin.completed", "target_id": name, "details": {"call_id": f"c{i}"}}
+        for i, name in enumerate(["document.search", "document.read", "document.read", "document.update_section"])
+    ]}
+    spec = ToolExpectation.model_validate({
+        "counts": {"document.read": 2, "document.search": {"max": 1}, "document.delete": {"min": 1}},
+        "order": [["document.search", "document.update_section"], ["document.update_section", "document.read"]],
+    })
+    results = {result.name: result.passed for result in check_tools(spec, _turn(trace))}
+    assert results == {
+        "count:document.read": True,
+        "count:document.search": True,
+        "count:document.delete": False,
+        "order:document.search<document.update_section": True,
+        "order:document.update_section<document.read": False,
+        "no_failed_calls": True,
+    }
+
+
+FANOUT = {
+    "id": "long.fanout",
+    "turns": [
+        *_seed_docs(),
+        {"user": 'Append the line "reviewed {{marker}}" to documents doc-1, doc-2, doc-3, doc-4, doc-5.',
+         "expect": {"tools": {"counts": {"document.append": 5}}}},
+        *[_doc_state(name, contains=["reviewed {{marker}}"]) for name in DOCS],
+        {"action": "http", "request": {"method": "GET", "path": "/documents/doc-9.md",
+                                       "params": {"user_id": "{{user_id}}"}, "expect_status": 404}},
+    ],
+    "final": {"budget": {"max_duplicate_calls": 0}},
+}
+
+
+def test_fanout_state_is_verified_through_the_api() -> None:
+    attempt = _attempt(FakeUnibot(), FANOUT)
+    assert attempt.passed, [c.to_dict() for c in attempt.checks if not c.passed]
+    assert {c.category for c in attempt.checks if c.name.startswith("state:")} == {"state"}
+    assert attempt.progress == 1.0
+
+
+def test_fanout_that_stops_early_fails_count_and_state_checks() -> None:
+    attempt = _attempt(FakeUnibot(faults={"stop_early"}), FANOUT)
+    failed = _failed(attempt)
+    assert "count:document.append" in failed
+    assert any(name.startswith("state:content:contains:reviewed") for name in failed)
+    assert 0 < attempt.progress < 1
+
+
+def test_duplicate_work_is_caught_by_final_checks() -> None:
+    failed = _failed(_attempt(FakeUnibot(faults={"duplicate_append"}), FANOUT))
+    assert "final:budget:duplicate_calls" in failed
+
+
+# Exactly one "reviewed" line in the document.
+ONCE = r"^(?:(?!reviewed).)*reviewed [^\n]+\n(?:(?!reviewed).)*$"
+
+STOP_RESUME = {
+    "id": "long.stop_resume",
+    "turns": [
+        *_seed_docs(),
+        {"user": "Remember the release is on Friday.", "expect": {"status": "completed"}},
+        {"user": 'Append the line "reviewed {{marker}}" to documents doc-1, doc-2, doc-3, doc-4, doc-5.',
+         "stop_after": {"tool_calls": 2},
+         "expect": {"status": "stopped", "tools": {"counts": {"document.append": 2}}}},
+        {"action": "resume", "expect": {"status": "completed"}},
+        *[_doc_state(name, regex=ONCE) for name in DOCS],
+    ],
+    "final": {"tools": {"counts": {"document.append": 5}}, "budget": {"max_duplicate_calls": 0}},
+}
+
+
+def test_stop_after_tool_calls_then_resume_finishes_without_redoing_work() -> None:
+    fake = FakeUnibot()
+    attempt = _attempt(fake, STOP_RESUME)
+    assert attempt.passed, [c.to_dict() for c in attempt.checks if not c.passed]
+    assert len(fake.stop_requests) == 1
+    statuses = [turn["status"] for turn in attempt.turns if turn["action"] != "http"]
+    assert statuses == ["completed", "stopped", "completed"]
+
+
+def test_resume_that_repeats_finished_calls_is_caught() -> None:
+    failed = _failed(_attempt(FakeUnibot(faults={"redo_on_resume"}), STOP_RESUME))
+    assert {"final:count:document.append", "final:budget:duplicate_calls"} <= failed
+
+
+def test_stop_on_a_new_conversation_creates_it_first() -> None:
+    case = {"id": "long.stop_first_turn", "turns": [
+        *_seed_docs(DOCS[:3]),
+        {"user": 'Append the line "x" to documents doc-1, doc-2, doc-3.', "stop_after": {"tool_calls": 1},
+         "expect": {"status": "stopped"}},
+    ]}
+    fake = FakeUnibot()
+    attempt = _attempt(fake, case)
+    assert attempt.passed, [c.to_dict() for c in attempt.checks if not c.passed]
+    assert fake.stop_requests and fake.stop_requests[0] in fake.deleted
+
+
+def test_confirm_approval_repeats_until_the_chain_is_done() -> None:
+    def case(max_confirmations: int) -> dict:  # type: ignore[type-arg]
+        return {"id": "long.approval_chain", "turns": [
+            *_seed_docs(DOCS[:3]),
+            {"user": "Delete documents doc-1, doc-2, doc-3.", "expect": {"status": "approval_required"}},
+            {"action": "confirm_approval", "max_confirmations": max_confirmations,
+             "expect": {"tools": {"counts": {"document.delete": 3}}}},
+            *[{"action": "http", "request": {"method": "GET", "path": f"/documents/{name}.md",
+                                             "params": {"user_id": "{{user_id}}"}, "expect_status": 404}}
+              for name in DOCS[:3]],
+        ]}
+
+    done = _attempt(FakeUnibot(), case(5))
+    assert done.passed, [c.to_dict() for c in done.checks if not c.passed]
+    single = _attempt(FakeUnibot(), case(1))
+    assert {"status", "count:document.delete"} <= _failed(single)
+
+
+def test_stop_after_and_final_validation() -> None:
+    with pytest.raises(ValueError, match="exactly one"):
+        Case.model_validate({"id": "x", "turns": [{"user": "hi", "stop_after": {}}]})
+    with pytest.raises(ValueError, match="only applies to chat"):
+        Case.model_validate({"id": "x", "turns": [{"action": "resume", "stop_after": {"seconds": 1}}]})
+    with pytest.raises(ValueError, match="judge"):
+        Case.model_validate({"id": "x", "turns": [{"user": "hi"}], "final": {"judge": {"criteria": "c"}}})
+    case = Case.model_validate({"id": "x", "turns": [{"user": "hi"}], "final": {"budget": {"max_tool_calls": 1}}})
+    assert case.final is not None and case.final.status is None
+    assert case.render({}).final.status is None  # type: ignore[union-attr]
+
+
+def test_report_shows_progress_and_whole_attempt_failures(tmp_path: Path) -> None:
+    settings = EvalSettings(base_url="http://unibot.test", concurrency=1, trace_wait_s=0)
+    runner = EvalRunner(settings, use_judge=False, transport=FakeUnibot(faults={"duplicate_append"}).transport())
+    result = asyncio.run(runner.run([Case.model_validate(FANOUT)], repeats=1))
+    markdown = write_reports(result, tmp_path)["markdown"].read_text(encoding="utf-8")
+    assert "Progress" in markdown and "whole attempt · `final:budget:duplicate_calls`" in markdown
+    assert 0 < summarize(result)["overall"]["mean_progress"] < 1
+
+
+# ---- --show-in-ui --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("auth_user", "expected"),
+    [
+        (None, ("anonymous", "default")),  # no auth: the UI acts as the local anonymous user
+        (("user_dev", "default"), ("user_dev", "default")),  # dev auth bypass (or a session cookie)
+        (("", ""), None),  # login required and these requests carry none
+    ],
+)
+def test_request_user_is_the_user_the_ui_shows(auth_user, expected) -> None:  # type: ignore[no-untyped-def]
+    from unibot_eval.client import UnibotEvalClient
+
+    async def lookup():  # type: ignore[no-untyped-def]
+        async with UnibotEvalClient("http://unibot.test", transport=FakeUnibot(auth_user=auth_user).transport()) as c:
+            return await c.request_user()
+
+    assert asyncio.run(lookup()) == expected
+
+
+def test_show_in_ui_runs_as_the_ui_user_and_keeps_titled_conversations() -> None:
+    fake = FakeUnibot(auth_user=("user_dev", "default"))
+    settings = EvalSettings(base_url="http://unibot.test", concurrency=1, trace_wait_s=0, ui_user_id="user_dev",
+                            keep_conversations=True)
+    case = Case.model_validate({"id": "ui.case", "turns": [
+        *_seed_docs(DOCS[:1]),
+        {"user": "Reply with exactly {{marker}} and nothing else."},
+        {"user": "What was the code?"},
+        {"user": "Reply with exactly {{marker2}} and nothing else.", "new_conversation": True},
+    ]})
+    runner = EvalRunner(settings, use_judge=False, transport=fake.transport())
+    attempt = asyncio.run(runner.run([case], repeats=1)).cases[0].attempts[0]
+
+    assert attempt.passed, [c.to_dict() for c in attempt.checks if not c.passed]
+    assert ("user_dev", "doc-1.md") in fake.documents
+    titled = {c["title"]: c for c in fake.conversations.values() if c.get("title")}
+    assert set(titled) == {"[eval] ui.case #1", "[eval] ui.case #1 · conversation 2"}
+    assert all(c["user"] == "user_dev" for c in titled.values())
+    assert len(titled["[eval] ui.case #1"]["messages"]) == 4  # both turns landed in the titled conversation
+    assert not fake.deleted
+
+
+def test_show_in_ui_skips_cases_that_need_several_users() -> None:
+    from unibot_eval.cli import split_single_user
+
+    cases = select_cases(load_cases([DATASETS]), ids=["context.cross_user_isolation", "context.recall_previous_turn"])
+    kept, skipped = split_single_user(cases)
+    assert [c.id for c in kept] == ["context.recall_previous_turn"]
+    assert [c.id for c in skipped] == ["context.cross_user_isolation"]

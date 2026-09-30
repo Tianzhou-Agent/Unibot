@@ -67,7 +67,8 @@ cases:
           prompt: {not_contains: ["{{secret}}"]}
 
   # Needs a backend with a small context window so compression triggers, e.g.
-  #   UNIBOT_CONTEXT_WINDOW_TOKENS=6000 UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS=2
+  #   UNIBOT_CONTEXT_WINDOW_TOKENS=10000 UNIBOT_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.4
+  #   UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS=2
   # Run with: python -m unibot_eval run --enable compression --case context.compression*
   - id: context.compression_preserves_facts
     description: After history compaction the summary keeps the key fact and the agent still uses it.

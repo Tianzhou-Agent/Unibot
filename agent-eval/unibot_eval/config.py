@@ -28,6 +28,9 @@ class EvalSettings:
     stream: bool = True
     trace_wait_s: float = 10.0
     keep_conversations: bool = False
+    # --show-in-ui: run every attempt as this existing user (the one the UI shows) instead of fresh eval users, and
+    # title each conversation "[eval] <case id> #<attempt>" so it can be found in the sidebar.
+    ui_user_id: str | None = None
     judge: JudgeSettings = field(default_factory=JudgeSettings)
 
     @classmethod

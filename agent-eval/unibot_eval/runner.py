@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import secrets
 import time
@@ -13,13 +14,13 @@ from typing import Any
 import httpx
 from opentelemetry.trace import Status, StatusCode
 
-from unibot_eval.checks import PROTOCOL, CheckResult, run_checks
+from unibot_eval.checks import PROTOCOL, STATE, CheckResult, check_text, run_checks
 from unibot_eval.client import BackendError, ChatResult, UnibotEvalClient
 from unibot_eval.config import EvalSettings
-from unibot_eval.dataset import Case, HttpStep, PollStep, Turn, dig, fresh_vars, render_runtime
+from unibot_eval.dataset import Case, Expectation, HttpStep, PollStep, Turn, dig, fresh_vars, render_runtime
 from unibot_eval.judge import LLMJudge
 from unibot_eval.telemetry import set_attributes, tracer
-from unibot_eval.trajectory import TurnObservation, extract_tool_calls
+from unibot_eval.trajectory import TurnObservation, extract_tool_calls, merge_observations
 
 
 @dataclass
@@ -33,11 +34,17 @@ class AttemptResult:
     error: str | None = None
     notes: list[str] = field(default_factory=list)
 
+    @property
+    def progress(self) -> float:
+        """Share of checks passed: partial credit for long tasks that got most of the way."""
+        return sum(check.passed for check in self.checks) / len(self.checks) if self.checks else 0.0
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "case_id": self.case_id,
             "attempt": self.attempt,
             "passed": self.passed,
+            "progress": self.progress,
             "duration_ms": self.duration_ms,
             "error": self.error,
             "notes": self.notes,
@@ -60,6 +67,10 @@ class CaseResult:
         return sum(attempt.passed for attempt in self.attempts) / self.k if self.k else 0.0
 
     @property
+    def progress(self) -> float:
+        return sum(attempt.progress for attempt in self.attempts) / self.k if self.k else 0.0
+
+    @property
     def pass_at_k(self) -> bool:
         """Succeeded at least once in k attempts (capability)."""
         return any(attempt.passed for attempt in self.attempts)
@@ -77,6 +88,7 @@ class CaseResult:
             "source": self.case.source,
             "k": self.k,
             "pass_rate": self.pass_rate,
+            "progress": self.progress,
             "pass_at_k": self.pass_at_k,
             "pass_hat_k": self.pass_hat_k,
             "attempts": [attempt.to_dict() for attempt in self.attempts],
@@ -169,6 +181,7 @@ class EvalRunner:
         checks: list[CheckResult] = []
         notes: list[str] = []
         saved: dict[str, str] = {}  # values saved by http steps, available to later steps as {{name}}
+        opened = 0  # conversations this attempt started (numbers their titles in --show-in-ui)
         error: str | None = None
         started = time.perf_counter()
         with tracer().start_as_current_span("eval.attempt") as span:
@@ -176,14 +189,23 @@ class EvalRunner:
             async with self._client() as client:
                 try:
                     for index, turn in enumerate(rendered.turns):
-                        user_id = actors.setdefault(turn.actor, _actor_id(case.id, turn.actor, run_tag))
+                        user_id = actors.setdefault(
+                            turn.actor, self.settings.ui_user_id or _actor_id(case.id, turn.actor, run_tag)
+                        )
+                        title = None
+                        if self.settings.ui_user_id and turn.action == "chat" and (
+                            turn.new_conversation or conversations.get(turn.actor) is None
+                        ):
+                            opened += 1
+                            title = f"[eval] {case.id} #{number}" + (f" · conversation {opened}" if opened > 1 else "")
                         step_checks: list[CheckResult] = []
                         if turn.action in {"http", "poll"}:
                             observation, step_checks = await self._run_step(client, index, turn, user_id, saved)
                         else:
                             try:
                                 observation = await self._run_turn(
-                                    client, index, turn, user_id, conversations, observations
+                                    client, index, turn, user_id, conversations, observations, notes,
+                                    conversation_title=title,
                                 )
                             except BackendError as exc:
                                 if turn.expect.error is None:
@@ -203,6 +225,10 @@ class EvalRunner:
                         turn_checks += await self._judge_turn(turn, observation, observations, notes)
                         checks.extend(turn_checks)
                         _record_checks(turn_checks)
+                    if rendered.final is not None:
+                        final_checks = _final_checks(rendered.final, observations)
+                        checks.extend(final_checks)
+                        _record_checks(final_checks)
                 except (BackendError, httpx.HTTPError, KeyError, ValueError) as exc:
                     error = f"{type(exc).__name__}: {exc}"
                     checks.append(
@@ -253,7 +279,7 @@ class EvalRunner:
                 status, body = await client.request(
                     request.method, request.path, body=request.body, params=request.params
                 )
-                ok = 200 <= status < 300
+                ok = status == request.expect_status if request.expect_status is not None else 200 <= status < 300
                 checks.append(
                     CheckResult(
                         f"http:{request.method} {request.path}",
@@ -263,6 +289,10 @@ class EvalRunner:
                         f"HTTP {status}" + ("" if ok else f": {str(body)[:300]}"),
                     )
                 )
+                for spec in request.verify:
+                    value = body if spec.field is None else dig(body, spec.field)
+                    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+                    checks += check_text(spec, text, prefix=f"state:{spec.field or 'body'}", category=STATE)
                 for name, path in request.save.items():
                     value = dig(body, path)
                     if value is None:
@@ -315,13 +345,25 @@ class EvalRunner:
         user_id: str,
         conversations: dict[str, str | None],
         previous: list[TurnObservation],
+        notes: list[str],
+        *,
+        conversation_title: str | None = None,
     ) -> TurnObservation:
         tenant_id = self.settings.tenant_id
+        timeout_s = turn.timeout_s
         with tracer().start_as_current_span("eval.turn") as span:
             set_attributes(span, {"eval.turn": index, "eval.actor": turn.actor, "eval.action": turn.action})
             if turn.action == "chat":
                 if turn.new_conversation:
                     conversations[turn.actor] = None
+                if conversations.get(turn.actor) is None and (
+                    turn.stop_after is not None or conversation_title is not None
+                ):
+                    # A stop request needs the conversation id while the turn is still running; --show-in-ui names
+                    # the conversation so it can be found in the sidebar.
+                    conversations[turn.actor] = await client.create_conversation(
+                        user_id=user_id, tenant_id=tenant_id, title=conversation_title or f"eval {index}"
+                    )
                 payload = {
                     "message": turn.user,
                     "conversation_id": conversations.get(turn.actor),
@@ -331,14 +373,38 @@ class EvalRunner:
                     "preferred_aina_id": turn.preferred_aina_id,
                     "ui_context": turn.ui_context,
                 }
-                result = await client.chat(payload, stream=self.settings.stream)
+                if turn.stop_after is None:
+                    result = await client.chat(payload, stream=self.settings.stream, timeout_s=timeout_s)
+                else:
+                    result = await self._chat_and_stop(client, payload, turn, index, notes)
                 conversations[turn.actor] = result.response.get("conversation_id")
+                observation = await self._observe(client, index, turn, user_id, result)
+            elif turn.action == "resume":
+                conversation_id = conversations.get(turn.actor)
+                if conversation_id is None:
+                    raise ValueError(f"turn {index}: actor {turn.actor!r} has no conversation to resume")
+                result = await client.resume(
+                    conversation_id, user_id=user_id, tenant_id=tenant_id, stream=self.settings.stream,
+                    timeout_s=timeout_s,
+                )
+                observation = await self._observe(client, index, turn, user_id, result)
             else:
                 approval = _pending_approval(previous, turn.actor)
                 if approval is None:
                     raise ValueError(f"turn {index}: no pending approval for actor {turn.actor!r}")
                 if turn.action == "confirm_approval":
-                    result = await client.confirm_approval(approval["id"], user_id=user_id, tenant_id=tenant_id)
+                    rounds: list[TurnObservation] = []
+                    while True:
+                        result = await client.confirm_approval(
+                            approval["id"], user_id=user_id, tenant_id=tenant_id, timeout_s=timeout_s
+                        )
+                        rounds.append(await self._observe(client, index, turn, user_id, result))
+                        approval = rounds[-1].approval
+                        if rounds[-1].status != "approval_required" or approval is None:
+                            break
+                        if len(rounds) >= turn.max_confirmations:
+                            break
+                    observation = rounds[0] if len(rounds) == 1 else merge_observations(rounds, index=index)
                 else:
                     record = await client.deny_approval(approval["id"], user_id=user_id, tenant_id=tenant_id)
                     result = ChatResult(
@@ -351,27 +417,8 @@ class EvalRunner:
                         latency_ms=0.0,
                         ttft_ms=None,
                     )
-
-            observation = TurnObservation(
-                index=index,
-                actor=turn.actor,
-                user_id=user_id,
-                action=turn.action,
-                input=turn.user,
-                response=result.response,
-                latency_ms=result.latency_ms,
-                ttft_ms=result.ttft_ms,
-            )
+                    observation = await self._observe(client, index, turn, user_id, result)
             trace_id = observation.trace_id
-            if trace_id:
-                observation.trace = await client.get_trace(trace_id, wait_s=self.settings.trace_wait_s)
-                observation.tool_calls = extract_tool_calls(observation.trace)
-                try:
-                    observation.llm_calls = await client.llm_calls_for_trace(
-                        trace_id, user_id=user_id, tenant_id=tenant_id
-                    )
-                except (BackendError, httpx.HTTPError):
-                    observation.llm_calls = []
             set_attributes(
                 span,
                 {
@@ -386,6 +433,74 @@ class EvalRunner:
                 },
             )
             return observation
+
+    async def _observe(
+        self, client: UnibotEvalClient, index: int, turn: Turn, user_id: str, result: ChatResult
+    ) -> TurnObservation:
+        """Build the observation of one agent run, enriched with its backend trace and LLM calls."""
+        observation = TurnObservation(
+            index=index,
+            actor=turn.actor,
+            user_id=user_id,
+            action=turn.action,
+            input=turn.user,
+            response=result.response,
+            latency_ms=result.latency_ms,
+            ttft_ms=result.ttft_ms,
+        )
+        trace_id = observation.trace_id
+        if trace_id:
+            observation.trace = await client.get_trace(trace_id, wait_s=self.settings.trace_wait_s)
+            observation.tool_calls = extract_tool_calls(observation.trace)
+            try:
+                observation.llm_calls = await client.llm_calls_for_trace(
+                    trace_id, user_id=user_id, tenant_id=self.settings.tenant_id
+                )
+            except (BackendError, httpx.HTTPError):
+                observation.llm_calls = []
+        return observation
+
+    async def _chat_and_stop(
+        self,
+        client: UnibotEvalClient,
+        payload: dict[str, Any],
+        turn: Turn,
+        index: int,
+        notes: list[str],
+    ) -> ChatResult:
+        """Stream a turn and stop it once its ``stop_after`` trigger fires, like a user pressing stop."""
+        assert turn.stop_after is not None
+        trigger = turn.stop_after
+        conversation_id = str(payload["conversation_id"])
+        fired = False
+        completed_calls = 0
+
+        async def stop() -> None:
+            nonlocal fired
+            if fired:
+                return
+            fired = True
+            status = await client.stop(conversation_id, user_id=payload["user_id"], tenant_id=payload["tenant_id"])
+            if status != 202:
+                notes.append(f"turn {index}: stop request returned HTTP {status} (the turn had likely finished)")
+
+        async def on_event(event: dict[str, Any]) -> None:
+            nonlocal completed_calls
+            if trigger.tool_calls is not None and event.get("type") == "tool.completed":
+                completed_calls += 1
+                if completed_calls >= trigger.tool_calls:
+                    await stop()
+
+        async def stop_later(seconds: float) -> None:
+            await asyncio.sleep(seconds)
+            await stop()
+
+        timer = asyncio.create_task(stop_later(trigger.seconds)) if trigger.seconds is not None else None
+        try:
+            return await client.chat(payload, stream=True, timeout_s=turn.timeout_s, on_event=on_event)
+        finally:
+            if timer is not None:
+                timer.cancel()
 
     async def _judge_turn(
         self,
@@ -403,6 +518,20 @@ class EvalRunner:
         return list(
             await asyncio.gather(*(self._judge.evaluate(spec, observation, history) for spec in turn.expect.judge))
         )
+
+
+def _final_checks(expect: Expectation, observations: list[TurnObservation]) -> list[CheckResult]:
+    """Run case-wide checks on every agent run of the attempt merged into one observation."""
+    runs = [item for item in observations if item.action not in {"http", "poll"}]
+    if not runs:
+        return [CheckResult("final", PROTOCOL, False, 0.0, "the attempt has no agent turns to check")]
+    inputs = "\n".join(item.input for item in runs if item.input)
+    merged = merge_observations(runs, index=len(observations), input=inputs)
+    results = run_checks(expect, merged)
+    for result in results:
+        result.name = f"final:{result.name}"
+        result.turn = None
+    return results
 
 
 def _pending_approval(previous: list[TurnObservation], actor: str) -> dict[str, Any] | None:

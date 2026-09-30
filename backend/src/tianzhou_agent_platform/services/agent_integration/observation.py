@@ -213,6 +213,8 @@ class CapabilityCallMiddleware(AgentMiddleware):
             await self.failures.fail(
                 capability, call_id=call_id, function_name=name, code=code, message=text, retryable=retryable
             )
+        if isinstance(message, ToolMessage):
+            run.finished_tool_results[call_id] = message
         duration_ms = (perf_counter() - started) * 1000
         content = message.content if isinstance(message.content, str) else str(message.content)
         try:

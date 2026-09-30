@@ -17,13 +17,13 @@ cases:
             user_id: "{{user_id}}"
             name: "eval-{{marker}}"
             content: "# Eval guide\n\n## Background\n\nthis part is kinda informal and needs a proper tone.\n\n## Scope\n\nKeep this section unchanged.\n"
-      # The user is in the documents app (as in the document canvas), where "create a task / review before
-      # saving" means a document edit task rather than a to-do task.
-      - user: "用任务模式为文档 eval-{{marker}}.md 的 Background 章节生成修改草稿：改写成正式的书面语气，我审阅后再合并。"
+      # The user is in the documents app (as in the document canvas), where "task mode / review before
+      # merging" means a document edit task rather than a to-do task.
+      - user: "Use task mode to draft an edit of the Background section of document eval-{{marker}}.md: rewrite it in a formal written tone. I will review it before merging."
         preferred_aina_id: unibot-documents
         expect:
           tools: {expected: [document.edit_task.create], mode: superset}
-          output: {contains: ["已创建"]}
+          output: {contains: ["created"]}
       - action: poll
         poll:
           path: "/documents/eval-{{marker}}.md/edit-tasks"

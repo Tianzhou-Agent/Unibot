@@ -660,7 +660,8 @@ def aina_entry_description(aina: AinaRecord, *, executable: bool) -> str:
     return (
         f"{description}. Activate this built-in capability scope when the user wants work performed in this "
         "domain, including listing, searching, reading, creating, or editing its data. This entrypoint takes no "
-        "arguments and does not execute the work itself. Do not use open_aina for data work."
+        "arguments, does not execute the work itself and does not open the application UI: when the user asks to "
+        "open, enter, launch or show this app, call open_aina instead. Do not use open_aina for data work."
     )
 
 

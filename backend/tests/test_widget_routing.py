@@ -152,8 +152,8 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert widget["kind"] == "app_list"
     assert [item["aina_id"] for item in widget["apps"]] == [
         "unibot-code-runner",
-        "unibot-scheduler",
         "unibot-memory",
+        "unibot-scheduler",
         "unibot-image-recognition",
     ]
     assert conversation.json()["messages"][-1]["widgets"] == response.json()["widgets"]
@@ -172,9 +172,9 @@ def test_describe_aina_returns_real_skills_without_opening_canvas(tmp_path: Path
         [
             call_first_tool(
                 prefix="builtin_describe_aina_",
-                arguments='{"aina_id":"文档编辑器"}',
+                arguments='{"aina_id":"Document Editor"}',
             ),
-            assistant("文档编辑器声明了 Markdown 文档管理 Skill。"),
+            assistant("Document Editor declares the Markdown document management skill."),
         ]
     )
     with TestClient(
@@ -191,7 +191,7 @@ def test_describe_aina_returns_real_skills_without_opening_canvas(tmp_path: Path
     assert response.json()["widgets"] == []
     tool_result = llm.calls[1]["messages"][-1]["content"]
     assert "markdown-document-management" in tool_result
-    assert "Markdown 文档管理" in tool_result
+    assert "Markdown document management" in tool_result
     assert any(
         event["kind"] == "builtin.completed" and event["target_id"] == "describe_aina"
         for event in trace["events"]
@@ -259,7 +259,7 @@ def test_clarification_builtin_returns_a_host_rendered_prefilled_form() -> None:
     widget = response.json()["widgets"][0]
     assert widget["kind"] == "form"
     assert widget["fields"][0]["value"] == "Leadership"
-    assert widget["actions"][0]["prompt"].startswith("以下是我的补充信息")
+    assert widget["actions"][0]["prompt"].startswith("Here is the additional information")
     assert all(not message["widgets"] for message in conversation.json()["messages"])
 
 
