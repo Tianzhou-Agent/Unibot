@@ -17,7 +17,7 @@ cases:
     description: General knowledge must not trigger a false tool call.
     tags: [tool_use, no_tool]
     turns:
-      - user: "用两三句话解释 HTTP 404 和 500 状态码的区别。"
+      - user: "In two or three sentences, explain the difference between the HTTP 404 and 500 status codes."
         expect:
           tools: {none: true}
           output: {contains: ["404", "500"]}
@@ -25,13 +25,13 @@ cases:
             rubric: correctness
             criteria: >-
               404 must be described as the requested resource not being found (a client-side error) and 500 as a
-              server-side internal error. The answer is concise and in Chinese.
+              server-side internal error. The answer is concise and in English.
 
   - id: builtin.list_app
     description: Application discovery selects list_app exactly once and reports only returned apps.
     tags: [tool_use, builtin, smoke]
     turns:
-      - user: "列出应用"
+      - user: "List the apps."
         expect:
           tools: {expected: [list_app], mode: strict}
           widgets: [{kind: app_list}]
@@ -46,11 +46,11 @@ cases:
     description: A read-only question about a named AINA uses describe_aina, not open_aina.
     tags: [tool_use, builtin]
     turns:
-      - user: "unibot-memory 这个应用有哪些能力？"
+      - user: "What can the unibot-memory app do?"
         expect:
           tools: {expected: [describe_aina], mode: superset, forbidden: [open_aina]}
           tool_args:
-            - {tool: describe_aina, args: {aina_id: "re:memory|记忆"}}
+            - {tool: describe_aina, args: {aina_id: "re:memory"}}
           judge:
             rubric: groundedness
             criteria: The capabilities described must come from the describe_aina result, not from guesses.
@@ -59,7 +59,7 @@ cases:
     description: Opening an app selects open_aina with the right id and returns a navigation widget.
     tags: [tool_use, builtin]
     turns:
-      - user: "打开 unibot-memory 应用"
+      - user: "Open the unibot-memory app."
         expect:
           tools: {expected: [open_aina], mode: superset}
           tool_args:
@@ -71,7 +71,7 @@ cases:
     description: Missing information is requested through a prefilled host-rendered form.
     tags: [tool_use, builtin]
     turns:
-      - user: "用表单向我收集项目名称和截止日期，项目名称预填为 Unibot。"
+      - user: "Use a form to collect the project name and the deadline from me, with the project name prefilled as Unibot."
         expect:
           tools: {expected: [request_clarification], mode: superset}
           widgets:
@@ -86,7 +86,7 @@ cases:
     description: A two-part request uses each needed capability once, without redundant calls.
     tags: [tool_use, builtin, efficiency]
     turns:
-      - user: "先列出所有应用，然后告诉我 unibot-scheduler 能做什么。"
+      - user: "First list all apps, then tell me what unibot-scheduler can do."
         expect:
           tools: {expected: [list_app, describe_aina], mode: superset, forbidden: [open_aina]}
           budget: {max_duplicate_calls: 0, max_iterations: 4}

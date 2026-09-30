@@ -15,7 +15,9 @@ from typing import Any
 
 CAPABILITY_KINDS = ("tool", "aina", "builtin")
 CALL_PHASES = ("requested", "completed", "failed")
-SUMMARY_PREFIX = "[CONTEXT SUMMARY"
+# How a compaction summary starts in the model request: the native runtime (LangChain SummarizationMiddleware)
+# inserts a user message; the legacy runtime inserted a system message.
+SUMMARY_PREFIXES = ("Here is a summary of the conversation to date", "[CONTEXT SUMMARY")
 
 
 @dataclass
@@ -151,6 +153,54 @@ class TurnObservation:
             "widgets": [widget.get("kind") for widget in self.widgets],
             "events": self.event_kinds,
         }
+
+
+def merge_observations(observations: list[TurnObservation], *, index: int, input: str | None = None) -> TurnObservation:
+    """Fold several agent runs into one observation: calls, events, widgets and LLM calls concatenated in order;
+    iterations, tokens and latency summed; status, content and ids taken from the last run."""
+    last = observations[-1]
+    usage = {
+        "input_tokens": sum(item.input_tokens for item in observations),
+        "output_tokens": sum(item.output_tokens for item in observations),
+    }
+    merged = TurnObservation(
+        index=index,
+        actor=last.actor,
+        user_id=last.user_id,
+        action=last.action,
+        input=input if input is not None else last.input,
+        response={
+            **last.response,
+            "iterations": sum(int(item.iterations or 0) for item in observations),
+            "usage": usage,
+            "widgets": [widget for item in observations for widget in item.widgets],
+        },
+        trace={
+            "status": last.trace.get("status"),
+            "trace_id": last.trace_id,
+            "events": [event for item in observations for event in item.trace.get("events", [])],
+            "spans": [span for item in observations for span in item.trace.get("spans", [])],
+        },
+        llm_calls=[call for item in observations for call in item.llm_calls],
+        latency_ms=sum(item.latency_ms or 0.0 for item in observations),
+        ttft_ms=observations[0].ttft_ms,
+    )
+    # A gated call appears twice: pending in the run that paused for approval, executed in the continuation.
+    # Keep one entry per call id, at its first position, with the latest status and result.
+    calls: list[ToolCall] = []
+    position: dict[str, int] = {}
+    for call in (call for item in observations for call in item.tool_calls):
+        if call.call_id and call.call_id in position:
+            earlier = calls[position[call.call_id]]
+            if call.arguments is None:
+                call.arguments = earlier.arguments
+            calls[position[call.call_id]] = call
+            continue
+        if call.call_id:
+            position[call.call_id] = len(calls)
+        calls.append(call)
+    merged.tool_calls = calls
+    return merged
 
 
 def extract_tool_calls(trace: dict[str, Any]) -> list[ToolCall]:

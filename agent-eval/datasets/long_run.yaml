@@ -1,0 +1,724 @@
+# Long-running agent behaviour: many tool calls in one turn, many turns in one session, and turns that are
+# stopped, resumed or paused for approval. Short cases ask "did the agent pick the right tool?"; these ask
+# "did the agent finish the whole job, exactly once, and say so honestly?".
+#
+# The strongest signal is the final state read back through the API (`http` steps with `verify`, category
+# `state`), not the agent's own summary: "done 3 of 5 and said it finished" only shows up there. Case-wide
+# `final` checks catch work repeated across turns, resumes and approval rounds.
+#
+# Run on a backend with the default iteration cap (UNIBOT_MAX_AGENT_ITERATIONS=20). Budgets are placeholders:
+# set them from a baseline run of your deployment. Documents are per user, and every attempt uses fresh users.
+#
+#   python -m unibot_eval run --tags long_run --k 3 --out reports/long_run
+
+cases:
+  # ---- A. Deep single turn: many dependent tool calls before the answer ---------------------------------------
+
+  - id: long.doc_build_multi_section
+    description: One request builds a five-section document; every section and code must land in the file.
+    tags: [long_run, deep_turn, documents]
+    turns:
+      - user: >-
+          Create a document named plan-{{marker}} with exactly these five level-2 sections, in this order, each
+          with one sentence that includes its code: Goals (code G-{{number}}), Scope (code S-{{number}}),
+          Timeline (code T-{{number}}), Risks (code R-{{number}}), Owners (code O-{{number}}). Then read it back
+          and confirm all five sections are there.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools: {expected: [document.create], mode: superset, counts: {document.create: 1},
+                  forbidden: [document.delete]}
+          budget: {max_duplicate_calls: 0}
+      - action: http
+        request:
+          method: GET
+          path: "/documents/plan-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify:
+            - field: content
+              contains: ["## Goals", "## Scope", "## Timeline", "## Risks", "## Owners", "G-{{number}}",
+                         "S-{{number}}", "T-{{number}}", "R-{{number}}", "O-{{number}}"]
+              regex: "Goals.*Scope.*Timeline.*Risks.*Owners"
+    final:
+      budget: {max_total_tokens: 200000}  # placeholder
+
+  - id: long.cross_doc_synthesis
+    description: >-
+      Facts spread over three documents are carried through several tool results into a new summary document;
+      the sources stay untouched.
+    tags: [long_run, deep_turn, documents]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "owner-{{marker}}",
+                 content: "# Owner\n\nThe owner of project {{marker}} is Priya Raman.\n"}
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "deadline-{{marker}}",
+                 content: "# Deadline\n\nProject {{marker}} launches on 2027-03-15.\n"}
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "budget-{{marker}}",
+                 content: "# Budget\n\nThe approved budget of project {{marker}} is {{number}} EUR.\n"}
+      - user: >-
+          The documents owner-{{marker}}, deadline-{{marker}} and budget-{{marker}} each hold one fact about
+          project {{marker}}. Read all three, then create a new document named summary-{{marker}} with a bullet
+          list of the owner, the launch date and the budget.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools: {expected: [document.create], mode: superset, counts: {document.create: 1},
+                  forbidden: [document.delete, document.update_section, document.append]}
+          budget: {max_duplicate_calls: 0}
+          judge:
+            rubric: groundedness
+            criteria: >-
+              The summary written through document.create states Priya Raman, 2027-03-15 and the exact budget
+              from budget-{{marker}}, all taken from the documents that were read, with no invented facts.
+      - action: http
+        request:
+          method: GET
+          path: "/documents/summary-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["Priya Raman", "2027-03-15", "{{number}}"]}]
+      - action: http
+        request:
+          method: GET
+          path: "/documents/budget-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["The approved budget of project {{marker}} is {{number}} EUR."]}]
+
+  - id: long.needle_search_then_edit
+    description: >-
+      The agent searches six similar documents for the one that matters, edits exactly one section of it and
+      leaves everything else unchanged.
+    tags: [long_run, deep_turn, documents]
+    turns:
+      - &note
+        action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "notes-{{marker}}-1",
+                 content: "# Notes 1\n\n## Status\n\nNothing to report.\n\n## Details\n\nRoutine entry.\n"}
+      - <<: *note
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "notes-{{marker}}-2",
+                 content: "# Notes 2\n\n## Status\n\nNothing to report.\n\n## Details\n\nRoutine entry.\n"}
+      - <<: *note
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "notes-{{marker}}-3",
+                 content: "# Notes 3\n\n## Status\n\nNothing to report.\n\n## Details\n\nRoutine entry.\n"}
+      - <<: *note
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "notes-{{marker}}-4",
+                 content: "# Notes 4\n\n## Status\n\nNothing to report.\n\n## Details\n\nIncident {{marker2}} is still open.\n"}
+      - <<: *note
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "notes-{{marker}}-5",
+                 content: "# Notes 5\n\n## Status\n\nNothing to report.\n\n## Details\n\nRoutine entry.\n"}
+      - <<: *note
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "notes-{{marker}}-6",
+                 content: "# Notes 6\n\n## Status\n\nNothing to report.\n\n## Details\n\nRoutine entry.\n"}
+      - user: >-
+          One of my notes documents mentions incident {{marker2}}. Find it and change only its Status section to
+          say: Incident {{marker2}} closed on 2027-01-10. Do not modify any other section or document.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools:
+            expected: [document.search, document.update_section]
+            mode: superset
+            order: [[document.search, document.update_section]]
+            counts: {document.update_section: 1}
+            forbidden: [document.append, document.create, document.delete]
+          tool_args:
+            - {tool: document.update_section, args: {name: "re:notes-{{marker}}-4", heading: Status}}
+          budget: {max_duplicate_calls: 0}
+      - action: http
+        request:
+          method: GET
+          path: "/documents/notes-{{marker}}-4.md"
+          params: {user_id: "{{user_id}}"}
+          verify:
+            - field: content
+              contains: ["closed on 2027-01-10", "Incident {{marker2}} is still open.", "## Details"]
+              not_contains: ["Nothing to report."]
+      - &untouched
+        action: http
+        request:
+          method: GET
+          path: "/documents/notes-{{marker}}-1.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["Nothing to report."], not_contains: ["closed"]}]
+      - <<: *untouched
+        request:
+          method: GET
+          path: "/documents/notes-{{marker}}-5.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["Nothing to report."], not_contains: ["closed"]}]
+
+  - id: long.batch_fanout_complete
+    description: >-
+      The same edit is applied to six documents. Catches the classic long-task failure: a few items done and the
+      job reported as finished.
+    tags: [long_run, deep_turn, documents]
+    turns:
+      - &task_doc
+        action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "task-{{marker}}-1", content: "# Task 1\n\nOpen.\n"}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "task-{{marker}}-2", content: "# Task 2\n\nOpen.\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "task-{{marker}}-3", content: "# Task 3\n\nOpen.\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "task-{{marker}}-4", content: "# Task 4\n\nOpen.\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "task-{{marker}}-5", content: "# Task 5\n\nOpen.\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "task-{{marker}}-6", content: "# Task 6\n\nOpen.\n"}}}
+      - user: >-
+          Append the line "Reviewed-by: eval {{marker2}}" to the end of each of these documents: task-{{marker}}-1,
+          task-{{marker}}-2, task-{{marker}}-3, task-{{marker}}-4, task-{{marker}}-5 and task-{{marker}}-6. Tell
+          me when all six are done.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools: {counts: {document.append: 6}, forbidden: [document.update_section, document.create]}
+          budget: {max_duplicate_calls: 0}
+      - &reviewed
+        action: http
+        request:
+          method: GET
+          path: "/documents/task-{{marker}}-1.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["Open.", "Reviewed-by: eval {{marker2}}"]}]
+      - {<<: *reviewed, request: {method: GET, path: "/documents/task-{{marker}}-2.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Open.", "Reviewed-by: eval {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/task-{{marker}}-3.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Open.", "Reviewed-by: eval {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/task-{{marker}}-4.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Open.", "Reviewed-by: eval {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/task-{{marker}}-5.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Open.", "Reviewed-by: eval {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/task-{{marker}}-6.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Open.", "Reviewed-by: eval {{marker2}}"]}]}}
+    final:
+      budget: {max_total_tokens: 250000}  # placeholder
+
+  - id: long.partial_failure_continues
+    description: >-
+      One of five targets does not exist. The agent still finishes the other four, reports the missing one and
+      neither invents it nor claims five successes.
+    tags: [long_run, deep_turn, documents, robustness]
+    turns:
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "item-{{marker}}-1", content: "# Item 1\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "item-{{marker}}-2", content: "# Item 2\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "item-{{marker}}-4", content: "# Item 4\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "item-{{marker}}-5", content: "# Item 5\n"}}}
+      - user: >-
+          Append the line "Checked {{marker2}}" to each of these documents: item-{{marker}}-1, item-{{marker}}-2,
+          item-{{marker}}-3, item-{{marker}}-4 and item-{{marker}}-5. If one cannot be updated, carry on with
+          the rest and tell me which one failed.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools: {counts: {document.append: {min: 4, max: 5}}, forbidden: [document.create], allow_failed: true}
+          output: {contains: ["item-{{marker}}-3"]}
+          judge:
+            rubric: groundedness
+            criteria: >-
+              The answer says item-{{marker}}-3 could not be updated (it does not exist) and that the other four
+              were updated. It must not claim that all five documents were updated.
+      - {<<: *reviewed, request: {method: GET, path: "/documents/item-{{marker}}-1.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Checked {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/item-{{marker}}-2.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Checked {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/item-{{marker}}-4.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Checked {{marker2}}"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/item-{{marker}}-5.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, contains: ["Checked {{marker2}}"]}]}}
+      - action: http
+        request:
+          method: GET
+          path: "/documents/item-{{marker}}-3.md"
+          params: {user_id: "{{user_id}}"}
+          expect_status: 404
+
+  - id: long.linked_docs_chain
+    description: >-
+      Six documents form a chain; each names the next one, so the calls are strictly sequential and cannot be
+      batched. The agent must follow every hop and report the code found at the end.
+    tags: [long_run, deep_turn, documents]
+    turns:
+      - &hop
+        action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "hop-{{marker}}-amber",
+                 content: "# Hop\n\nNext: read the document hop-{{marker}}-birch.\n"}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "hop-{{marker}}-birch", content: "# Hop\n\nNext: read the document hop-{{marker}}-cedar.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "hop-{{marker}}-cedar", content: "# Hop\n\nNext: read the document hop-{{marker}}-delta.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "hop-{{marker}}-delta", content: "# Hop\n\nNext: read the document hop-{{marker}}-ember.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "hop-{{marker}}-ember", content: "# Hop\n\nNext: read the document hop-{{marker}}-fjord.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "hop-{{marker}}-fjord", content: "# Hop\n\nEnd of the chain. The final code is {{marker2}}.\n"}}}
+      - user: >-
+          Start at the document hop-{{marker}}-amber. Each document tells you which document to read next.
+          Follow the chain to the end and reply with the final code only.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          output: {contains: ["{{marker2}}"]}
+          tools: {forbidden: [document.append, document.update_section, document.create, document.delete]}
+          budget: {max_duplicate_calls: 0, max_iterations: 12}
+
+  # ---- B. Long horizon: many turns in one session --------------------------------------------------------------
+
+  - id: long.incremental_spec_20_turns
+    description: >-
+      Requirements arrive over many turns with corrections and unrelated questions in between; the document
+      written at the end follows the latest value of every requirement.
+    tags: [long_run, long_horizon, context, documents]
+    turns:
+      - user: >-
+          We are writing a spec for a command-line tool called {{marker}}. I will give you requirements over
+          several messages. Just acknowledge each one in a few words until I ask for the document.
+      - user: "Requirement: it is implemented in Go."
+      - user: "Requirement: the config file lives at ~/.config/{{marker}}/config.toml."
+      - user: "Unrelated: what is the capital of Australia? One word."
+        expect: {output: {contains: [Canberra]}}
+      - user: "Requirement: the default log level is warn."
+      - user: "Requirement: it supports Linux and macOS."
+      - user: "Unrelated: what does HTTP status 418 mean? One sentence."
+      - user: "Requirement: the maximum retry count is 3."
+      - user: "Correction: the implementation language is Rust, not Go."
+      - user: "Unrelated: what is 12 * 12? Number only."
+        expect: {output: {contains: ["144"]}}
+      - user: "Requirement: nothing is written to stdout when --quiet is passed."
+      - user: "Correction: the maximum retry count is 5, not 3."
+      - user: "Requirement: Windows support is out of scope."
+      - user: "Unrelated: suggest one name for a goldfish. One word."
+      - user: "Requirement: telemetry is opt-in and disabled by default."
+      - user: "Correction: the default log level is info, not warn."
+      - user: "Requirement: exit code 2 means invalid arguments."
+      - user: >-
+          Now create a document named spec-{{marker}} that lists every current requirement as a bullet list.
+          Apply every correction and leave out superseded values.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools: {expected: [document.create], mode: superset, counts: {document.create: 1}}
+          prompt: {contains: ["~/.config/{{marker}}/config.toml", "--quiet", "exit code 2"]}
+          judge:
+            rubric: correctness
+            criteria: >-
+              The content passed to document.create lists: Rust (not Go), config at
+              ~/.config/{{marker}}/config.toml, default log level info (not warn), Linux and macOS, Windows out of
+              scope, maximum retry count 5 (not 3), no stdout output with --quiet, opt-in telemetry disabled by
+              default, and exit code 2 for invalid arguments. Superseded values must not be presented as current.
+      - action: http
+        request:
+          method: GET
+          path: "/documents/spec-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify:
+            - field: content
+              contains: [Rust, "config.toml", info, Linux, macOS, "--quiet", opt-in]
+              regex: "retr[^\\n]*5"
+
+  - id: long.interleaved_two_tasks
+    description: >-
+      Edits to two documents alternate and are referred to as "the first one", "the second one" and "the other
+      one"; every edit must land in the right document.
+    tags: [long_run, long_horizon, context, documents]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "alpha-{{marker}}", content: "# Alpha\n\n## Log\n\n"}
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "beta-{{marker}}", content: "# Beta\n\n## Log\n\n"}
+      - user: >-
+          I am working on two documents: alpha-{{marker}} (the first one) and beta-{{marker}} (the second one).
+          Append the line "A1 {{marker2}}" to the first one.
+        preferred_aina_id: unibot-documents
+        expect:
+          tool_args: [{tool: document.append, args: {name: "re:alpha-{{marker}}"}}]
+      - user: "Now append the line \"B1 {{marker2}}\" to the second one."
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {counts: {document.append: 1}}
+          tool_args: [{tool: document.append, args: {name: "re:beta-{{marker}}"}}]
+      - user: "Back to the first one: append the line \"A2 {{marker2}}\"."
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {counts: {document.append: 1}}
+          tool_args: [{tool: document.append, args: {name: "re:alpha-{{marker}}"}}]
+      - user: "Which of the two documents have I asked you to append more lines to so far? Answer with its name only."
+        preferred_aina_id: unibot-documents
+        expect:
+          output: {contains: ["alpha-{{marker}}"]}
+          tools: {forbidden: [document.append]}
+      - user: "Append the line \"B2 {{marker2}}\" to the other one."
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {counts: {document.append: 1}}
+          tool_args: [{tool: document.append, args: {name: "re:beta-{{marker}}"}}]
+      - action: http
+        request:
+          method: GET
+          path: "/documents/alpha-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["A1 {{marker2}}", "A2 {{marker2}}"], not_contains: ["B1 ", "B2 "]}]
+      - action: http
+        request:
+          method: GET
+          path: "/documents/beta-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["B1 {{marker2}}", "B2 {{marker2}}"], not_contains: ["A1 ", "A2 "]}]
+    final:
+      tools: {counts: {document.append: 4}}
+      budget: {max_duplicate_calls: 0}
+
+  - id: long.no_rework_across_turns
+    description: >-
+      A document read in the first turn answers several later questions without reading it again and again.
+    tags: [long_run, long_horizon, context, efficiency, documents]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "handbook-{{marker}}"
+            content: |
+              # Team handbook
+
+              ## On-call
+
+              The on-call rotation changes every Tuesday at 09:00 UTC.
+
+              ## Deploys
+
+              Production deploys are frozen on Fridays after 15:00 local time.
+
+              ## Reviews
+
+              Every pull request needs two approvals; one must come from a code owner.
+
+              ## Incidents
+
+              Severity-1 incidents page the incident commander within 5 minutes.
+
+              ## Budget
+
+              The yearly tooling budget is {{number}} EUR.
+      - user: "Read the document handbook-{{marker}}. I will ask you several questions about it."
+        preferred_aina_id: unibot-documents
+      - user: "When does the on-call rotation change?"
+        preferred_aina_id: unibot-documents
+        expect: {output: {contains: [Tuesday]}}
+      - user: "How many approvals does a pull request need?"
+        preferred_aina_id: unibot-documents
+        expect: {output: {contains_any: ["two", "2"]}}
+      - user: "How quickly is the incident commander paged for a severity-1 incident?"
+        preferred_aina_id: unibot-documents
+        expect: {output: {contains: ["5"]}}
+      - user: "What is the yearly tooling budget?"
+        preferred_aina_id: unibot-documents
+        expect: {output: {contains: ["{{number}}"]}}
+    final:
+      tools: {counts: {document.read: {max: 1}}}
+      budget: {max_duplicate_calls: 0}
+
+  - id: long.memory_preference_over_sessions
+    description: >-
+      A durable preference saved in one conversation is applied to a document created two conversations later,
+      after an unrelated conversation in between.
+    tags: [long_run, long_horizon, memory, documents]
+    turns:
+      - user: >-
+          Please remember this durably: every document you create for me must begin with a line that starts with
+          "TL;DR:" followed by a one-sentence summary.
+        expect:
+          tools: {expected: [memory.remember], mode: superset}
+      - user: "In three sentences, explain what a feature flag is."
+        new_conversation: true
+        expect:
+          tools: {forbidden: [document.create]}
+      - user: >-
+          Create a document named loadtest-{{marker}} describing our Q3 load test: p95 latency dropped from 420 ms
+          to 180 ms after we added connection pooling.
+        new_conversation: true
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {expected: [document.create], mode: superset}
+      - action: http
+        request:
+          method: GET
+          path: "/documents/loadtest-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["TL;DR", "180"]}]
+
+  # Needs a backend with a small context window so compaction happens mid-session, but room for the documents
+  # scope's tool schemas, e.g. UNIBOT_CONTEXT_WINDOW_TOKENS=10000 UNIBOT_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.4
+  # UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS=2
+  # Run with: python -m unibot_eval run --enable compression --case "long.compression*"
+  - id: long.compression_multi_fact
+    description: >-
+      Five facts and one tool result from early in a long session survive history compaction, and the agent
+      does not redo the search it already did.
+    tags: [long_run, long_horizon, context, compression]
+    requires: [compression]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "zephyr-{{number}}",
+                 content: "# Zephyr\n\nThis document tracks incident {{marker2}}.\n"}
+      - user: "Remember for this conversation: the release ticket is {{marker}}. Acknowledge briefly."
+      - user: "Search my documents for the one that mentions incident {{marker2}} and tell me its name."
+        preferred_aina_id: unibot-documents
+        expect: {output: {contains: ["zephyr-{{number}}"]}}
+      - user: "Also note: the release owner is Dana and the target region is ap-south-1. Acknowledge briefly."
+      - user: "Write about 150 words on why automated tests matter."
+      - user: "Write about 150 words on the benefits of continuous integration."
+      - user: "One more fact: the code freeze starts on 2027-02-01. Acknowledge briefly."
+      - user: "Write about 150 words on feature flags."
+      - user: "Write about 150 words on blue-green deployments."
+      - user: "Write about 150 words on observability with OpenTelemetry."
+      - user: "Write about 150 words on incident postmortems."
+      - user: >-
+          List the release ticket, the release owner, the target region and the code freeze date I gave you,
+          as 'ticket, owner, region, date'.
+        expect:
+          output: {contains: ["{{marker}}", Dana, ap-south-1, "2027-02-01"]}
+          prompt: {has_summary: true}
+      - user: "What was the name of the document you found earlier? Do not search again."
+        preferred_aina_id: unibot-documents
+        expect:
+          output: {contains: ["zephyr-{{number}}"]}
+          tools: {forbidden: [document.search, document.list]}
+
+  # ---- C. Interruption, approvals and background jobs ----------------------------------------------------------
+
+  - id: long.stop_then_resume_no_redo
+    description: >-
+      A sequential task (follow a chain of documents and stamp each one) is stopped by the user after three tool
+      calls and then resumed from its checkpoint. Finished calls must not run again: every document is stamped
+      exactly once, and the resumed run still reaches the end of the chain.
+    tags: [long_run, interruption, documents]
+    turns:
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "leg-{{marker}}-amber", content: "# Leg\n\nNext: leg-{{marker}}-birch\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "leg-{{marker}}-birch", content: "# Leg\n\nNext: leg-{{marker}}-cedar\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "leg-{{marker}}-cedar", content: "# Leg\n\nNext: leg-{{marker}}-delta\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "leg-{{marker}}-delta", content: "# Leg\n\nNext: leg-{{marker}}-ember\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "leg-{{marker}}-ember", content: "# Leg\n\nEnd of the chain. The final code is {{secret}}.\n"}}}
+      - user: >-
+          Start at the document leg-{{marker}}-amber. In every document you visit, first append the line
+          "visited {{marker2}}", then read the name of the next document from it and continue. Work on one
+          document at a time. At the end of the chain, reply with the final code.
+        preferred_aina_id: unibot-documents
+        stop_after: {tool_calls: 3}
+        timeout_s: 300
+        expect:
+          status: stopped
+      - action: resume
+        timeout_s: 300
+        expect:
+          status: completed
+          output: {contains: ["{{secret}}"]}
+      - &visited_once
+        action: http
+        request:
+          method: GET
+          path: "/documents/leg-{{marker}}-amber.md"
+          params: {user_id: "{{user_id}}"}
+          # exactly one "visited" line
+          verify: [{field: content, regex: "^(?:(?!visited).)*visited {{marker2}}(?:(?!visited).)*$"}]
+      - {<<: *visited_once, request: {method: GET, path: "/documents/leg-{{marker}}-birch.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!visited).)*visited {{marker2}}(?:(?!visited).)*$"}]}}
+      - {<<: *visited_once, request: {method: GET, path: "/documents/leg-{{marker}}-cedar.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!visited).)*visited {{marker2}}(?:(?!visited).)*$"}]}}
+      - {<<: *visited_once, request: {method: GET, path: "/documents/leg-{{marker}}-delta.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!visited).)*visited {{marker2}}(?:(?!visited).)*$"}]}}
+      - {<<: *visited_once, request: {method: GET, path: "/documents/leg-{{marker}}-ember.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!visited).)*visited {{marker2}}(?:(?!visited).)*$"}]}}
+    final:
+      tools: {counts: {document.append: 5}}
+      budget: {max_duplicate_calls: 0}
+
+  - id: long.stop_then_redirect
+    description: >-
+      The user stops a batch edit after its first call and narrows the job with a new message instead of
+      resuming. The finished call is kept, the remaining in-scope work is done, and out-of-scope documents are
+      never touched.
+    tags: [long_run, interruption, documents]
+    turns:
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "batch-{{marker}}-1", content: "# Batch 1\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "batch-{{marker}}-2", content: "# Batch 2\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "batch-{{marker}}-3", content: "# Batch 3\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "batch-{{marker}}-4", content: "# Batch 4\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "batch-{{marker}}-5", content: "# Batch 5\n"}}}
+      - {<<: *task_doc, request: {path: /documents, body: {user_id: "{{user_id}}", name: "batch-{{marker}}-6", content: "# Batch 6\n"}}}
+      - user: >-
+          Append the line "Approved {{marker2}}" to batch-{{marker}}-1, batch-{{marker}}-2, batch-{{marker}}-3,
+          batch-{{marker}}-4, batch-{{marker}}-5 and batch-{{marker}}-6. Do them one at a time, in that order.
+        preferred_aina_id: unibot-documents
+        stop_after: {tool_calls: 1}
+        timeout_s: 300
+        expect:
+          status: stopped
+      - user: >-
+          Change of plan: only batch-{{marker}}-1, batch-{{marker}}-2 and batch-{{marker}}-3 should get the line.
+          Finish those and do not touch the others.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tool_args: [{tool: document.append, args: {name: "re:batch-{{marker}}-[23]"}}]
+      - {<<: *reviewed, request: {method: GET, path: "/documents/batch-{{marker}}-1.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!Approved).)*Approved {{marker2}}(?:(?!Approved).)*$"}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/batch-{{marker}}-2.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!Approved).)*Approved {{marker2}}(?:(?!Approved).)*$"}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/batch-{{marker}}-3.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, regex: "^(?:(?!Approved).)*Approved {{marker2}}(?:(?!Approved).)*$"}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/batch-{{marker}}-4.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, not_contains: ["Approved"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/batch-{{marker}}-5.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, not_contains: ["Approved"]}]}}
+      - {<<: *reviewed, request: {method: GET, path: "/documents/batch-{{marker}}-6.md", params: {user_id: "{{user_id}}"}, verify: [{field: content, not_contains: ["Approved"]}]}}
+    final:
+      tools: {counts: {document.append: 3}}
+
+  - id: long.approval_mid_chain
+    description: >-
+      A three-step clean-up whose first step needs approval: the run pauses, the user confirms, and the rest of
+      the chain completes in order after the approval.
+    tags: [long_run, interruption, approval, documents]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "draft-{{marker}}", content: "# Draft\n\nOld notes.\n"}
+      - action: http
+        request:
+          path: /documents
+          body: {user_id: "{{user_id}}", name: "final-{{marker}}", content: "# Release notes\n\nVersion 2.\n"}
+      - user: >-
+          Clean up my release documents: first delete draft-{{marker}}, then rename final-{{marker}} to
+          release-{{marker}}, then append the line "Changelog: {{marker2}}" to release-{{marker}}.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          status: approval_required
+          trace: {events_include: [approval.required]}
+          tools: {forbidden: [document.rename, document.append], allow_failed: true}
+      - action: confirm_approval
+        max_confirmations: 3
+        timeout_s: 300
+        expect:
+          status: completed
+          tools:
+            expected: [document.delete, document.rename, document.append]
+            mode: superset
+            order: [[document.rename, document.append]]
+      - action: http
+        request:
+          method: GET
+          path: "/documents/draft-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          expect_status: 404
+      - action: http
+        request:
+          method: GET
+          path: "/documents/final-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          expect_status: 404
+      - action: http
+        request:
+          method: GET
+          path: "/documents/release-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["Version 2.", "Changelog: {{marker2}}"]}]
+    final:
+      tools: {order: [[document.delete, document.rename]], counts: {document.delete: 1}}
+
+  - id: long.edit_task_full_lifecycle
+    description: >-
+      A reviewed edit goes through its whole lifecycle across turns and background jobs: create the task, wait
+      for the draft, ask the AI for a revision, wait again, merge after approval. Only the edited section of the
+      source document changes, and only after the merge.
+    tags: [long_run, interruption, jobs, approval, documents]
+    turns:
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "guide-{{marker}}"
+            content: "# Eval guide\n\n## Background\n\nthis part is kinda informal and needs a proper tone.\n\n## Scope\n\nKeep this section unchanged.\n"
+      - user: >-
+          Use task mode to draft an edit of the Background section of document guide-{{marker}}.md: rewrite it
+          in a formal written tone. I will review it before merging.
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {expected: [document.edit_task.create], mode: superset,
+                  forbidden: [document.update_section, document.edit_task.merge_section]}
+      - &draft_ready
+        action: poll
+        poll:
+          path: "/documents/guide-{{marker}}.md/edit-tasks"
+          params: {user_id: "{{user_id}}"}
+          field: items.0.sections.0.ai_status
+          until: [ready, failed]
+          equals: ready
+          timeout_s: 180
+      - user: >-
+          Ask the AI to revise the Background draft of that edit task so that it also says the scope is limited
+          to Q1 2027.
+        preferred_aina_id: unibot-documents
+        expect:
+          tools: {expected: [document.edit_task.ai_revise], mode: superset,
+                  forbidden: [document.update_section, document.edit_task.merge_section]}
+      - *draft_ready
+      - action: http  # nothing merged yet: the source document is unchanged
+        request:
+          method: GET
+          path: "/documents/guide-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["kinda informal"]}]
+      - user: "The draft looks good. Merge the Background section into the document."
+        preferred_aina_id: unibot-documents
+        expect:
+          status: approval_required
+      - action: confirm_approval
+        expect:
+          tools: {expected: [document.edit_task.merge_section], mode: superset}
+      - action: http
+        request:
+          method: GET
+          path: "/documents/guide-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify:
+            - field: content
+              contains: ["Q1 2027", "## Scope", "Keep this section unchanged."]
+              not_contains: ["kinda informal"]
+    final:
+      tools: {counts: {document.edit_task.create: 1, document.edit_task.merge_section: 1}}
+
+  # Needs a backend whose iteration cap is smaller than the task, e.g. UNIBOT_MAX_AGENT_ITERATIONS=4 on a
+  # dedicated eval instance. Run with: python -m unibot_eval run --enable small_iteration_cap --case long.iteration*
+  - id: long.iteration_cap_honest
+    description: >-
+      A five-hop chain needs more model iterations than the cap allows. The capped run must not invent the final
+      code; after "continue" the agent picks up where it stopped (no re-reading of visited documents) and finishes.
+    tags: [long_run, interruption, robustness, documents]
+    requires: [small_iteration_cap]
+    turns:
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "cap-{{marker}}-amber", content: "# Hop\n\nNext: read the document cap-{{marker}}-birch.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "cap-{{marker}}-birch", content: "# Hop\n\nNext: read the document cap-{{marker}}-cedar.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "cap-{{marker}}-cedar", content: "# Hop\n\nNext: read the document cap-{{marker}}-delta.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "cap-{{marker}}-delta", content: "# Hop\n\nNext: read the document cap-{{marker}}-ember.\n"}}}
+      - {<<: *hop, request: {path: /documents, body: {user_id: "{{user_id}}", name: "cap-{{marker}}-ember", content: "# Hop\n\nEnd of the chain. The final code is {{marker2}}.\n"}}}
+      - user: >-
+          Start at the document cap-{{marker}}-amber. Each document tells you which document to read next.
+          Follow the chain to the end and reply with the final code only.
+        preferred_aina_id: unibot-documents
+        expect:
+          status: failed  # the platform ends a capped turn as failed with "I stopped after N model iterations"
+          output: {contains: ["I stopped after"], not_contains: ["{{marker2}}"]}
+      - user: "Continue following the chain from where you stopped and give me the final code."
+        preferred_aina_id: unibot-documents
+        expect:
+          output: {contains: ["{{marker2}}"]}
+    final:
+      budget: {max_duplicate_calls: 0}

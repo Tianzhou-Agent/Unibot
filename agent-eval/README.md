@@ -28,14 +28,20 @@ datasets/*.yaml ──► runner ──► POST /chat/stream (or /chat)     ◄�
 
 | Category | Checks | Data source |
 |---|---|---|
-| `tool_selection` | Trajectory match in `strict`, `unordered`, `superset` or `subset` mode (F1 score); `none`; `forbidden` tools; no failed calls | `tool.*`, `aina.*` and `builtin.*` trace events, merged with tool spans |
+| `tool_selection` | Trajectory match in `strict`, `unordered`, `superset` or `subset` mode (F1 score); `none`; `forbidden` tools; call `counts`; call `order`; no failed calls | `tool.*`, `aina.*` and `builtin.*` trace events, merged with tool spans |
 | `tool_arguments` | Arguments are a subset or exact match, case-insensitive, with `re:` regex values | `details.arguments` / span `input` |
 | `context` | The prompt contains, or doesn't contain, given facts; a compaction summary is present; message count stays under a limit | `GET /llm-calls`: what the model actually saw |
 | `output` | `equals`, `contains`, `contains_any`, `not_contains`, `regex` | Response `content` |
-| `protocol` | Status (`completed`, `approval_required`, `failed`), expected backend errors (`error`), widgets (`app_list`, `navigation`, `form` ...), trace events such as `approval.denied` and `context.compacted`, API setup steps (`http`) and background-job results (`poll`) | Response + trace + API |
+| `protocol` | Status (`completed`, `approval_required`, `failed`, `stopped`), expected backend errors (`error`), widgets (`app_list`, `navigation`, `form` ...), trace events such as `approval.denied` and `context.compacted`, API setup steps (`http`) and background-job results (`poll`) | Response + trace + API |
+| `state` | What the agent actually changed, read back through the API after the turn (`http` step `verify`, `expect_status`), e.g. the content of every edited document | Backend REST API |
 | `llm_calls` | The model that actually served each agent call (`served_model`, as reported by the provider) | `GET /llm-calls` |
 | `performance` | Iterations, latency, TTFT, total tokens, number of tool calls, duplicate identical calls | Client timing, SSE, `usage` |
 | `judge:*` | `correctness`, `groundedness` (did the answer use the tool results?), `safety` | LangChain chat model with structured output |
+
+Checks under a case's `final:` block run on the whole attempt (every agent turn merged: all tool calls in order,
+summed tokens, latency and iterations) and are reported as `final:<check>`. The report also gives a **progress**
+score per case, the share of checks passed, so a long task that got most of the way is distinguishable from one
+that failed at the start.
 
 The `context` checks tell you *why* a context case failed. If the fact never reached the prompt, it was lost
 by history handling, compression or isolation. If the fact was in the prompt and the answer was still wrong,
@@ -95,11 +101,26 @@ Set `UNIBOT_EVAL_JUDGE=false` to skip judge checks in pytest.
 | `UNIBOT_EVAL_HEADERS` | – | JSON of extra headers, e.g. `{"Cookie": "unibot_session=..."}` when auth is enforced |
 | `UNIBOT_EVAL_TENANT` | `default` | Tenant id for eval users |
 | `UNIBOT_EVAL_KEEP_CONVERSATIONS` | `false` | Keep the conversations the eval creates, for debugging |
-| `UNIBOT_EVAL_ENABLE` | – | Optional requirements for pytest runs, e.g. `compression` |
+| `UNIBOT_EVAL_ENABLE` | – | Optional requirements for pytest runs, e.g. `compression,small_iteration_cap` |
 | `EVAL_JUDGE_MODEL` / `_BASE_URL` / `_API_KEY` | backend `llm_*` | Judge model |
 
 Every attempt uses fresh user ids (`eval-<case>-<actor>-<random>`) and deletes its conversations when it
-finishes, so attempts can't see each other's state.
+finishes, so attempts can't see each other's state. A backend started with the dev auth bypass
+(`UNIBOT_ENV=development`, `UNIBOT_DEV_AUTH_BYPASS=true`), or requests carrying a session cookie, run every request
+as one fixed user instead: the run then prints a warning, because attempts share memories and documents and
+cross-user isolation cases cannot pass.
+
+### Watching runs in the UI
+
+```powershell
+uv run python -m unibot_eval run --show-in-ui --case "long.*" --no-judge
+```
+
+`--show-in-ui` runs as the user the Unibot UI shows: the dev bypass user (`user_dev`), the user of a session cookie
+in `UNIBOT_EVAL_HEADERS`, or `anonymous` on a backend without auth. Each attempt's conversations are kept and titled
+`[eval] <case id> #<attempt>` (a case's later conversations get `· conversation 2` ...), so they appear in that user's
+sidebar; the command prints their ids. It runs one attempt per case unless `--k` is given, and skips cases that need
+several users (e.g. `context.cross_user_isolation`). Memories and documents the cases create stay in that account.
 
 ## OpenTelemetry
 
@@ -126,13 +147,15 @@ cases:
     tags: [tool_use, builtin]
     repeats: 3                     # optional per-case k
     turns:
-      - user: "打开 unibot-memory 应用"
+      - user: "Open the unibot-memory app."
         actor: a                   # each actor label is a separate user; reuse it to continue the conversation
         # new_conversation: true   # start a fresh conversation for this actor
         # capability: builtin:open_aina   # force the first call (same as the API field)
         expect:
           status: completed        # default; use approval_required for gated calls
-          tools: {expected: [open_aina], mode: superset, forbidden: [list_app], allow_failed: false}
+          tools: {expected: [open_aina], mode: superset, forbidden: [list_app], allow_failed: false,
+                  counts: {open_aina: 1},          # exactly 1; or {min: 1, max: 3}
+                  order: [[describe_aina, open_aina]]}   # first describe_aina before first open_aina
           tool_args: [{tool: open_aina, args: {aina_id: unibot-memory}}]
           output: {contains: [...], not_contains: [...], regex: "..."}
           widgets: [{kind: navigation}]
@@ -142,21 +165,36 @@ cases:
                    max_tool_calls: 2, max_duplicate_calls: 0}
           judge: {rubric: groundedness, criteria: "...", reference: "...", threshold: 0.7}
       - action: confirm_approval   # or deny_approval; acts on this actor's last pending approval
+        max_confirmations: 3       # keep confirming while the continuation pauses for the next gated call
       - action: http               # API setup step; {{user_id}}/{{tenant_id}} are this actor's ids
         request: {method: POST, path: /model-settings/providers, body: {user_id: "{{user_id}}"},
                   save: {provider_id: id}}   # saved values are available to later steps as {{provider_id}}
       - action: poll               # wait for a background job to settle
         poll: {path: "/documents/x.md/edit-tasks", params: {user_id: "{{user_id}}"},
                field: items.0.status, until: [reviewing, failed], equals: reviewing, timeout_s: 180}
+      - action: http               # state check: read back what the agent changed
+        request: {method: GET, path: "/documents/x.md", params: {user_id: "{{user_id}}"},
+                  verify: [{field: content, contains: [...], not_contains: [...], regex: "..."}]}
+                  # expect_status: 404    # e.g. the agent deleted it (default: any 2xx)
+      - user: "Append ... to documents a, b, c, d, e and f."
+        timeout_s: 300             # per-request timeout for long turns
+        stop_after: {tool_calls: 2}   # or {seconds: 5}: stop the running turn like a user pressing stop
+        expect: {status: stopped}
+      - action: resume             # continue the stopped turn from its checkpoint
       - user: "..."
         expect:
           llm_calls: {served_model: mimo-v2.5}   # model that actually served the agent's calls
           # status: failed + error: "..."        # the turn must end with this backend error
+    final:                         # checks over the whole attempt (no judge); status is not checked by default
+      tools: {counts: {document.append: 6}}
+      budget: {max_duplicate_calls: 0, max_total_tokens: 250000}
 ```
 
 Capability names are the trace `target_id` values (`list_app`, `describe_aina`, `open_aina`,
-`request_clarification`, `memory.remember`, `memory.recall`, `memory.forget`, remote `tool_id`s). The model-facing
+`request_clarification`, `memory.remember`, `memory.recall`, `memory.forget`, `document.*`, remote `tool_id`s). The model-facing
 function name is also accepted.
+
+Write prompts, criteria and seeded data in English, like all model-facing text of the platform.
 
 Try to use the cheapest check that can decide a question. Exact facts, ids and tool names belong in
 deterministic checks. Save `judge` for open-ended quality. Build new cases from real production failures:
@@ -172,10 +210,18 @@ every bug you fix should become a case.
 | `robustness.yaml` | Unknown app, ambiguous request, missing document: no fabricated success |
 | `jobs.yaml` | Document edit jobs reach review with a draft; the model selected in model settings serves chat (by the provider-reported model and black-box with a deliberately broken provider). Provider credentials come from `EVAL_PROVIDER_BASE_URL/API_KEY`, falling back to `EVAL_JUDGE_*` then `llm_*` |
 | `performance.yaml` | Latency, TTFT and token budgets. **These numbers are placeholders.** Set them from a baseline run of your deployment |
+| `long_run.yaml` | Long tasks, judged by the final document state: deep single turns (multi-section build, cross-document synthesis, search-then-edit, six-document fan-out, partial failure, a six-hop sequential chain); long sessions (a 19-turn spec with corrections, interleaved tasks, no re-reading, a memory preference across conversations, compaction); interruption (stop + resume without redoing work, stop + redirect, approval in the middle of a chain, the full edit-task lifecycle, the iteration cap) |
 
 **Compression case:** this needs a backend with a small context window so that compaction actually triggers,
-for example `UNIBOT_CONTEXT_WINDOW_TOKENS=6000` and `UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS=2` on a
-dedicated eval instance. Then run `python -m unibot_eval run --enable compression --case "context.compression*"`.
+for example `UNIBOT_CONTEXT_WINDOW_TOKENS=10000`, `UNIBOT_CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.4` and
+`UNIBOT_CONTEXT_COMPRESSION_KEEP_RECENT_TURNS=2` on a dedicated eval instance. (6000 is too small since the documents
+scope's tool schemas alone take most of it: those turns then fail on the context budget before compaction can help.) Then run `python -m unibot_eval run --enable compression --case "context.compression*"`
+(and `--case "long.compression*"`).
+
+**Long-run cases** assume the default iteration cap (`UNIBOT_MAX_AGENT_ITERATIONS=20`, one iteration = one model
+call). Run them with k>=3: `python -m unibot_eval run --tags long_run --k 3`. `long.iteration_cap_honest` needs an
+instance with a cap smaller than its task (`UNIBOT_MAX_AGENT_ITERATIONS=4`) and runs with
+`--enable small_iteration_cap`.
 
 ## Reading results
 
@@ -185,6 +231,9 @@ dedicated eval instance. Then run `python -m unibot_eval run --enable compressio
   usually shows up as a later regression.
 * **A `context` check fails on `prompt:contains`** means history handling or compression dropped the fact. If
   only `output` fails, the model ignored a fact it was given.
+* **A `state` check fails while `output` passes** means the agent reported work it did not do (or did only part
+  of). A failing `final:budget:duplicate_calls` or `final:count:*` after a stop, resume or approval means work
+  was repeated.
 * The backend trace ids for every failure are listed in `report.md`. Open them in the platform's trace view.
 
 ## Layout

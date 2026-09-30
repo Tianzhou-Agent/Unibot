@@ -2,6 +2,8 @@
 
     python -m unibot_eval run --dataset datasets --k 3 --out reports/latest
     python -m unibot_eval run --tags tool_use,context --no-judge
+    python -m unibot_eval run --case "long.*" --show-in-ui     # watch the runs in the Unibot UI
+    python -m unibot_eval report reports/a/report.json reports/b/report.json --out reports/all.html
     python -m unibot_eval list
 """
 
@@ -12,8 +14,12 @@ import asyncio
 import sys
 from pathlib import Path
 
+import httpx
+
+from unibot_eval.client import UnibotEvalClient
 from unibot_eval.config import EvalSettings
-from unibot_eval.dataset import load_cases, select_cases
+from unibot_eval.dataset import Case, load_cases, select_cases
+from unibot_eval.html_report import load_run, write_html
 from unibot_eval.report import summarize, write_reports
 from unibot_eval.runner import EvalRunner
 from unibot_eval.telemetry import setup_tracing, shutdown_tracing
@@ -43,11 +49,23 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--out", default="reports/latest", help="report directory")
     run.add_argument("--min-pass-rate", type=float, default=1.0,
                      help="exit non-zero when the pass^k case rate is below this (default 1.0)")
+    run.add_argument("--show-in-ui", action="store_true",
+                     help="run as the user the Unibot UI shows (dev auth bypass, session cookie or no auth), keep "
+                          "the conversations and title them '[eval] <case id> #<attempt>'; one attempt per case "
+                          "unless --k is given")
 
     sub.add_parser("list", help="list selected cases")
     common(sub.choices["list"])
 
+    report = sub.add_parser("report", help="merge report.json files of several runs into one HTML page")
+    report.add_argument("runs", nargs="+", help="report.json files; each run is labelled by its directory name")
+    report.add_argument("--out", default="reports/report.html", help="HTML file to write")
+
     args = parser.parse_args(argv)
+    if args.command == "report":
+        path = write_html([(Path(run).parent.name, load_run(run)) for run in args.runs], args.out)
+        print(f"report: {path}")
+        return 0
     cases = select_cases(
         load_cases(args.dataset or [DEFAULT_DATASET]),
         tags=_split(args.tags),
@@ -70,9 +88,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_stream:
         settings.stream = False
 
+    repeats = args.k
+    try:
+        user = asyncio.run(_request_user(settings))
+    except httpx.HTTPError as exc:
+        if args.show_in_ui:
+            print(f"cannot reach {settings.base_url}: {exc}", file=sys.stderr)
+            return 2
+        user = None  # the attempts report the connection errors themselves
+    if args.show_in_ui:
+        if user is None:
+            print("--show-in-ui needs a backend whose UI user these requests act as: start it with "
+                  "UNIBOT_ENV=development and UNIBOT_DEV_AUTH_BYPASS=true, or put a session cookie in "
+                  "UNIBOT_EVAL_HEADERS", file=sys.stderr)
+            return 2
+        settings.ui_user_id, settings.tenant_id = user
+        settings.keep_conversations = True
+        repeats = args.k or 1
+        cases, skipped = split_single_user(cases)
+        for case in skipped:
+            print(f"  [SKIP] {case.id}: needs separate users, which one UI user cannot provide")
+        if not cases:
+            print("no single-user cases selected", file=sys.stderr)
+            return 2
+        print(f"running as UI user {settings.ui_user_id}: conversations are kept and titled '[eval] <case id> "
+              f"#<attempt>'. Memory and document changes stay in this user's account.")
+    elif user is not None and user[0] != "anonymous":
+        print(f"warning: the backend runs every request as user {user[0]} (dev auth bypass or session cookie), so "
+              "the per-attempt eval users are ignored: attempts share memories and documents, and cross-user "
+              "isolation cases cannot pass.", file=sys.stderr)
+
     setup_tracing()
     try:
-        result = asyncio.run(EvalRunner(settings, use_judge=not args.no_judge).run(cases, repeats=args.k))
+        result = asyncio.run(EvalRunner(settings, use_judge=not args.no_judge).run(cases, repeats=repeats))
     finally:
         shutdown_tracing()
     paths = write_reports(result, args.out)
@@ -85,8 +133,24 @@ def main(argv: list[str] | None = None) -> int:
     for case in result.cases:
         mark = "PASS" if case.pass_hat_k else "FAIL"
         print(f"  [{mark}] {case.case.id} ({sum(a.passed for a in case.attempts)}/{case.k})")
-    print(f"reports: {paths['markdown']} , {paths['json']}")
+    if args.show_in_ui:
+        for case in result.cases:
+            for attempt in case.attempts:
+                ids = list(dict.fromkeys(t["conversation_id"] for t in attempt.turns if t.get("conversation_id")))
+                print(f"  {case.case.id} #{attempt.attempt}: {', '.join(ids) or 'no conversation'}")
+    print(f"reports: {paths['html']} , {paths['markdown']} , {paths['json']}")
     return 0 if overall["pass_hat_k_rate"] >= args.min_pass_rate else 1
+
+
+def split_single_user(cases: list[Case]) -> tuple[list[Case], list[Case]]:
+    """(cases one user can run, cases that need several users). --show-in-ui has only the UI user."""
+    kept = [case for case in cases if len({turn.actor for turn in case.turns}) == 1]
+    return kept, [case for case in cases if case not in kept]
+
+
+async def _request_user(settings: EvalSettings) -> tuple[str, str] | None:
+    async with UnibotEvalClient(settings.base_url, timeout_s=30, headers=settings.headers) as client:
+        return await client.request_user()
 
 
 def _split(value: str | None) -> list[str] | None:

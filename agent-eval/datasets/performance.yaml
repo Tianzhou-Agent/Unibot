@@ -7,7 +7,7 @@ cases:
     tags: [performance]
     repeats: 5
     turns:
-      - user: "你好，简单介绍一下你自己，一句话即可。"
+      - user: "Hi, introduce yourself in one sentence."
         expect:
           tools: {none: true}
           budget:
@@ -21,7 +21,7 @@ cases:
     tags: [performance, tool_use]
     repeats: 5
     turns:
-      - user: "列出应用"
+      - user: "List the apps."
         expect:
           tools: {expected: [list_app], mode: strict}
           budget:
