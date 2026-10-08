@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import JSON, Column, DateTime, MetaData, String, Table
 
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
@@ -49,47 +48,16 @@ from tianzhou_agent_platform.store.memory_repository import (
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.models import StoreQuery
+from tianzhou_agent_platform.store.repository_schema import (
+    model_from_row,
+    repository_metadata,
+    repository_tables as repository_tables,
+    row_values,
+)
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
-repository_metadata = MetaData()
 CONVERSATION_RUN_TTL_SECONDS = 15 * 60
 CONVERSATION_RUN_HEARTBEAT_SECONDS = 30
-
-
-def _record_table(name: str) -> Table:
-    return Table(
-        f"unibot_{name}",
-        repository_metadata,
-        Column("id", String(255), primary_key=True),
-        Column("payload", JSON, nullable=False),
-        Column("updated_at", DateTime(timezone=True), nullable=False),
-    )
-
-
-repository_tables = {
-    resource: _record_table(resource)
-    for resource in (
-        WORKSPACES_RESOURCE,
-        CONVERSATIONS_RESOURCE,
-        MEMORIES_RESOURCE,
-        TOOLS_RESOURCE,
-        SKILLS_RESOURCE,
-        AINAS_RESOURCE,
-        AINA_PROJECTS_RESOURCE,
-        INSTALLATIONS_RESOURCE,
-        LLM_CALLS_RESOURCE,
-        TRACES_RESOURCE,
-        APPROVALS_RESOURCE,
-        MODEL_PROVIDERS_RESOURCE,
-        SCHEDULED_AINA_TASKS_RESOURCE,
-        SCHEDULED_AINA_EXECUTIONS_RESOURCE,
-        DOCUMENT_EDIT_TASKS_RESOURCE,
-        SANDBOXES_RESOURCE,
-        SANDBOX_EXECUTIONS_RESOURCE,
-        USERS_RESOURCE,
-        FEEDBACKS_RESOURCE,
-    )
-}
 
 
 class PersistentRepository(InMemoryRepository):
@@ -197,7 +165,7 @@ class PersistentRepository(InMemoryRepository):
             async with self._lock:
                 self._users.pop(user_id, None)
             return None
-        user = UserRecord.model_validate(record.values["payload"])
+        user = model_from_row(UserRecord, record)
         async with self._lock:
             self._users[user.id] = user
         return self._copy(user)
@@ -249,7 +217,7 @@ class PersistentRepository(InMemoryRepository):
             async with self._lock:
                 self._workspaces.pop(workspace_id, None)
             raise not_found("Workspace", workspace_id)
-        workspace = Workspace.model_validate(record.values["payload"])
+        workspace = model_from_row(Workspace, record)
         async with self._lock:
             self._workspaces[workspace.id] = workspace
         return self._copy(workspace)
@@ -296,10 +264,11 @@ class PersistentRepository(InMemoryRepository):
             if existing is not None:
                 result = self._resolve_aina_project_import(existing, project)
             else:
-                payload = project.model_dump(mode="json")
-                values = {"id": project.id, "payload": payload, "updated_at": datetime.now(UTC)}
                 try:
-                    await self.stores.mysql.create(AINA_PROJECTS_RESOURCE, values)
+                    await self.stores.mysql.create(
+                        AINA_PROJECTS_RESOURCE,
+                        row_values(AINA_PROJECTS_RESOURCE, project.id, project),
+                    )
                     result = project
                 except StorageValidationError:
                     existing = await self._load_aina_project(project.id)
@@ -373,7 +342,7 @@ class PersistentRepository(InMemoryRepository):
             await self.stores.mysql.update(
                 AINA_PROJECTS_RESOURCE,
                 project_id,
-                {"payload": payload, "updated_at": datetime.now(UTC)},
+                row_values(AINA_PROJECTS_RESOURCE, project_id, updated),
             )
             async with self._lock:
                 self._aina_projects[project_id] = updated
@@ -435,7 +404,7 @@ class PersistentRepository(InMemoryRepository):
         record = await self.stores.mysql.read(AINA_PROJECTS_RESOURCE, project_id)
         if record is None:
             return None
-        return AinaProjectRecord.model_validate(record.values["payload"])
+        return model_from_row(AinaProjectRecord, record)
 
     async def get_sandbox_for_actor(
         self,
@@ -488,7 +457,7 @@ class PersistentRepository(InMemoryRepository):
     ) -> DocumentEditTask:
         record = await self.stores.mysql.read(DOCUMENT_EDIT_TASKS_RESOURCE, task_id)
         if record is not None:
-            task = DocumentEditTask.model_validate(record.values["payload"])
+            task = model_from_row(DocumentEditTask, record)
             async with self._lock:
                 self._document_edit_tasks[task.id] = task
         return await super().get_document_edit_task(task_id, user_id=user_id, tenant_id=tenant_id)
@@ -528,7 +497,7 @@ class PersistentRepository(InMemoryRepository):
         try:
             record = await self.stores.mysql.read(DOCUMENT_EDIT_TASKS_RESOURCE, task.id)
             if record is not None:
-                current = DocumentEditTask.model_validate(record.values["payload"])
+                current = model_from_row(DocumentEditTask, record)
                 async with self._lock:
                     self._document_edit_tasks[current.id] = current
             return await super().put_document_edit_task(task, expected_version=expected_version)
@@ -667,7 +636,7 @@ class PersistentRepository(InMemoryRepository):
             record = await self.stores.mysql.read(TRACES_RESOURCE, trace_id)
             if record is None:
                 raise
-            trace = TraceRecord.model_validate(record.values["payload"])
+            trace = model_from_row(TraceRecord, record)
             async with self._lock:
                 self._traces.setdefault(trace.trace_id, trace)
             return self._copy(trace)
@@ -748,14 +717,13 @@ class PersistentRepository(InMemoryRepository):
         # pipeline owns their durability now.
         if resource in self._OBSERVABILITY_RESOURCES and not self.persist_observability:
             return
-        payload = value.model_dump(mode="json")
-        values = {"payload": payload, "updated_at": datetime.now(UTC)}
+        values = row_values(resource, record_id, value)
         existing = await self.stores.mysql.read(resource, record_id)
         if existing is None:
-            await self.stores.mysql.create(resource, {"id": record_id, **values})
+            await self.stores.mysql.create(resource, values)
         else:
             await self.stores.mysql.update(resource, record_id, values)
-        await self.stores.redis.set(f"repository:{resource}", record_id, payload)
+        await self.stores.redis.set(f"repository:{resource}", record_id, value.model_dump(mode="json"))
 
     async def _delete_record(self, resource: str, record_id: str) -> None:
         if resource in self._OBSERVABILITY_RESOURCES and not self.persist_observability:
@@ -775,11 +743,12 @@ class PersistentRepository(InMemoryRepository):
         while True:
             page = await self.stores.mysql.query(resource, StoreQuery(limit=1000, offset=offset))
             for record in page.items:
-                payload = record.values["payload"]
-                item = model.model_validate(payload)
+                item = model_from_row(model, record)
                 values.append(item)
                 if cache_in_redis:
-                    await self.stores.redis.set(f"repository:{resource}", str(record.id), payload)
+                    await self.stores.redis.set(
+                        f"repository:{resource}", str(record.id), item.model_dump(mode="json")
+                    )
             if len(page.items) < page.limit:
                 break
             offset += len(page.items)

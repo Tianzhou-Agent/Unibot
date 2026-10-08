@@ -19,7 +19,7 @@ from langgraph.checkpoint.base import (
     get_checkpoint_metadata,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
-from sqlalchemy import JSON, Column, DateTime, Index, MetaData, String, Table
+from sqlalchemy import JSON, Column, DateTime, Index, Integer, MetaData, String, Table, Text
 
 from tianzhou_agent_platform.store.models import DeleteResult, StorePage, StoreQuery, StoreRecord
 
@@ -34,7 +34,9 @@ graph_checkpoints_table = Table(
     Column("thread_id", String(64), nullable=False),
     Column("checkpoint_ns", String(255), nullable=False),
     Column("checkpoint_id", String(128), nullable=False),
-    Column("payload", JSON, nullable=False),
+    Column("parent_checkpoint_id", String(128), nullable=True),
+    Column("checkpoint", JSON, nullable=False),  # serde-typed {type, data(base64)}
+    Column("metadata", JSON, nullable=False),  # serde-typed {type, data(base64)}
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Index("ix_unibot_graph_checkpoint_thread", "thread_id", "checkpoint_ns"),
 )
@@ -45,7 +47,11 @@ graph_checkpoint_writes_table = Table(
     Column("thread_id", String(64), nullable=False),
     Column("checkpoint_ns", String(255), nullable=False),
     Column("checkpoint_id", String(128), nullable=False),
-    Column("payload", JSON, nullable=False),
+    Column("task_id", String(255), nullable=False),
+    Column("task_path", Text, nullable=False),
+    Column("write_idx", Integer, nullable=False),
+    Column("channel", String(255), nullable=False),
+    Column("value", JSON, nullable=False),  # serde-typed {type, data(base64)}
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Index("ix_unibot_graph_write_checkpoint", "thread_id", "checkpoint_ns", "checkpoint_id"),
 )
@@ -127,11 +133,9 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
             "thread_id": thread_id,
             "checkpoint_ns": checkpoint_ns,
             "checkpoint_id": checkpoint_id,
-            "payload": {
-                "checkpoint": self._dump(checkpoint),
-                "metadata": self._dump(get_checkpoint_metadata(config, metadata)),
-                "parent_checkpoint_id": config["configurable"].get("checkpoint_id"),
-            },
+            "parent_checkpoint_id": config["configurable"].get("checkpoint_id"),
+            "checkpoint": self._dump(checkpoint),
+            "metadata": self._dump(get_checkpoint_metadata(config, metadata)),
             "updated_at": datetime.now(UTC),
         }
         await self._upsert(GRAPH_CHECKPOINTS_RESOURCE, record_id, values)
@@ -162,13 +166,11 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
                 "thread_id": thread_id,
                 "checkpoint_ns": checkpoint_ns,
                 "checkpoint_id": checkpoint_id,
-                "payload": {
-                    "task_id": task_id,
-                    "task_path": task_path,
-                    "index": index,
-                    "channel": channel,
-                    "value": self._dump(value),
-                },
+                "task_id": task_id,
+                "task_path": task_path,
+                "write_idx": index,
+                "channel": channel,
+                "value": self._dump(value),
                 "updated_at": datetime.now(UTC),
             }
             await self._upsert(GRAPH_CHECKPOINT_WRITES_RESOURCE, record_id, values)
@@ -263,7 +265,6 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
         thread_id = str(record.values["thread_id"])
         checkpoint_ns = str(record.values["checkpoint_ns"])
         checkpoint_id = str(record.values["checkpoint_id"])
-        payload = cast(dict[str, Any], record.values["payload"])
         writes = await self._query_all(
             GRAPH_CHECKPOINT_WRITES_RESOURCE,
             {
@@ -273,16 +274,15 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
             },
         )
         pending_writes = []
-        for write in sorted(writes, key=lambda item: int(item.values["payload"]["index"])):
-            write_payload = cast(dict[str, Any], write.values["payload"])
+        for write in sorted(writes, key=lambda item: int(item.values["write_idx"])):
             pending_writes.append(
                 (
-                    str(write_payload["task_id"]),
-                    str(write_payload["channel"]),
-                    self._load(cast(dict[str, str], write_payload["value"])),
+                    str(write.values["task_id"]),
+                    str(write.values["channel"]),
+                    self._load(cast(dict[str, str], write.values["value"])),
                 )
             )
-        parent_checkpoint_id = payload.get("parent_checkpoint_id")
+        parent_checkpoint_id = record.values.get("parent_checkpoint_id")
         return CheckpointTuple(
             config={
                 "configurable": {
@@ -291,8 +291,8 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
                     "checkpoint_id": checkpoint_id,
                 }
             },
-            checkpoint=cast(Checkpoint, self._load(cast(dict[str, str], payload["checkpoint"]))),
-            metadata=cast(CheckpointMetadata, self._load(cast(dict[str, str], payload["metadata"]))),
+            checkpoint=cast(Checkpoint, self._load(cast(dict[str, str], record.values["checkpoint"]))),
+            metadata=cast(CheckpointMetadata, self._load(cast(dict[str, str], record.values["metadata"]))),
             parent_config=(
                 {
                     "configurable": {
@@ -331,8 +331,8 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
         value_type, data = self.serde.dumps_typed(value)
         return {"type": value_type, "data": base64.b64encode(data).decode("ascii")}
 
-    def _load(self, payload: dict[str, str]) -> Any:
-        return self.serde.loads_typed((payload["type"], base64.b64decode(payload["data"])))
+    def _load(self, value: dict[str, str]) -> Any:
+        return self.serde.loads_typed((value["type"], base64.b64decode(value["data"])))
 
 
 def _thread_scope(config: RunnableConfig) -> tuple[str, str]:
