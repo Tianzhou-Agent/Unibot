@@ -290,3 +290,10 @@ class ChatService:
                 "Failed to release conversation run",
                 extra={"conversation_id": conversation_id, "trace_id": trace_id},
             )
+        # Close the run's trace as _finish does; otherwise it stays "running".
+        root_span_id = self.events.root_span_id(trace_id)
+        if root_span_id is not None:
+            await self.events.finish_span(
+                trace_id, root_span_id, "failed", error={"type": type(exc).__name__, "message": error}
+            )
+        await self.events.finish(trace_id, "failed")
