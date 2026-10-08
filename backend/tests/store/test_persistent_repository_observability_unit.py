@@ -21,6 +21,7 @@ from tianzhou_agent_platform.store.models import (
     WriteResult,
 )
 from tianzhou_agent_platform.store.repository import PersistentRepository
+from tianzhou_agent_platform.store.repository_schema import row_values
 
 
 class FakeMySqlStore:
@@ -195,10 +196,7 @@ def _seed(stores: StorageStores, resource: str, record_id: str, value: Any) -> N
     mysql.records.setdefault(resource, {})[record_id] = StoreRecord(  # type: ignore[attr-defined]
         resource=resource,
         id=record_id,
-        values={
-            "payload": value.model_dump(mode="json"),
-            "updated_at": datetime.now(UTC),
-        },
+        values=row_values(resource, record_id, value),
     )
 
 
