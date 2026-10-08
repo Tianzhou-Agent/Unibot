@@ -267,6 +267,22 @@ def test_empty_model_response_marks_run_failed() -> None:
     assert trace.json()["status"] == "failed"
 
 
+def test_model_exception_fails_the_trace_and_its_root_span() -> None:
+    def stalled(**kwargs):
+        raise TimeoutError("No streaming chunk received for 120.0s")
+
+    llm = ScriptedLLM([stalled])
+    with TestClient(create_app(settings=_settings(), llm=llm), raise_server_exceptions=False) as client:
+        response = client.post("/chat", json={"message": "Answer me"})
+        traces = client.get("/traces").json()
+
+    assert response.status_code == 500
+    assert [trace["status"] for trace in traces] == ["failed"]
+    root = next(span for span in traces[0]["spans"] if span["span_id"] == traces[0]["root_span_id"])
+    assert root["status"] == "failed"
+    assert root["error"]["message"] == "The agent run failed unexpectedly."
+
+
 @pytest.mark.parametrize("side_effect_level,always_timeout,expected_calls", [
     ("none", False, 2), ("none", True, 3), ("low", False, 1),
 ])
