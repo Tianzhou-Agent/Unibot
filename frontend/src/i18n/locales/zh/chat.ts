@@ -60,6 +60,7 @@ export default {
     label: {
       openApp: "打开应用",
       listApps: "查询应用",
+      suggestApps: "推荐应用",
       webSearch: "联网搜索",
       openWeb: "打开网页",
       runCode: "代码执行",

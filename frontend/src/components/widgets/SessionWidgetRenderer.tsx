@@ -67,7 +67,7 @@ function DeclarativeSessionWidgetRenderer({
 
       <div className="mt-3">
         {widget.markdown ? <MarkdownContent content={widget.markdown} className="mb-3" /> : null}
-        {widget.kind === "app_list" ? (
+        {widget.kind === "app_list" || widget.kind === "aina_chooser" ? (
           <SessionAppList widget={widget} disabled={disabled} onOpenAina={onOpenAina} />
         ) : (
           <WidgetFormFields widget={widget} disabled={disabled} values={values} setValues={setValues} />

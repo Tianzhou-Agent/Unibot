@@ -2205,40 +2205,69 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
 });
 
-test("FE-E2E-004G 在现有对话中打开和关闭应用，对话保持不变", async ({ page }) => {
+test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存且对话保持不变", async ({ page }) => {
+  const app = (aina_id: string, name: string, description: string) => ({
+    aina_id, name, description, version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true,
+  });
   const state = await installMockApi(page, {
     conversations: [conversation()],
-    ainas: [{
-      manifest: {
-        aina: { id: "unibot-documents", name: "文档编辑器", version: "1.0.0", description: "管理 Markdown 文档。" },
-        runtime: { type: "builtin" },
-        permissions: [],
-      },
-      status: "registered",
+    streamWidgets: [{
+      id: "unibot-aina-chooser",
+      kind: "aina_chooser",
+      title: "Suggested apps",
+      description: "整理纪要适合文档编辑器，结论可以存入记忆。",
+      markdown: null,
+      fields: [],
+      actions: [],
+      apps: [
+        app("unibot-documents", "文档编辑器", "管理 Markdown 文档。"),
+        app("unibot-memory", "Unibot Memory", "管理跨对话保留的长期记忆。"),
+      ],
     }],
   });
   await page.goto("/chat/conv-e2e-1");
-  await page.getByRole("textbox", { name: "消息", exact: true }).fill("第一条问题");
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  const chooser = page.getByRole("dialog", { name: "选择要打开的应用" });
+
+  await input.fill("帮我整理会议纪要");
   await page.getByRole("button", { name: "发送消息" }).click();
-  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  await expect(chooser).toBeVisible();
+  await expect(chooser.getByText("整理纪要适合文档编辑器，结论可以存入记忆。")).toBeVisible();
+  await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeChecked();
+  await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).not.toBeChecked();
+  await chooser.getByRole("button", { name: "暂不打开", exact: true }).last().click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
 
-  await page.getByRole("button", { name: "打开应用", exact: true }).click();
-  await page.getByRole("option", { name: /文档编辑器/ }).click();
+  await input.fill("还是打开文档吧");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await chooser.getByRole("button", { name: "打开（1）", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
-  await expect(page.getByRole("button", { name: "关闭 unibot-documents", exact: true })).toBeVisible();
-  await expect(page.locator("main p").filter({ hasText: "第一条问题" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "unibot-documents", selected: true })).toBeVisible();
 
-  await page.getByRole("textbox", { name: "消息", exact: true }).fill("在应用旁继续提问");
+  await input.fill("再记住这些决定");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
-  expect(state.lastStreamPayload?.conversation_id).toBe("conv-e2e-1");
+  await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeDisabled();
+  await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).toBeChecked();
+  await chooser.getByRole("button", { name: "打开（1）", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
+  await expect(page.locator("main p").filter({ hasText: "帮我整理会议纪要" })).toBeVisible();
 
+  await page.getByRole("tab", { name: "unibot-documents" }).click();
+  await expect(page).toHaveURL(/\?aina=unibot-documents&aina=unibot-memory&active=unibot-documents$/);
+  await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeHidden();
+
+  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
   await page.getByRole("button", { name: "关闭 unibot-documents", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
-  await expect(page.locator("main p").filter({ hasText: "在应用旁继续提问" })).toBeVisible();
+  await expect(page.locator("main p").filter({ hasText: "再记住这些决定" })).toBeVisible();
 });
 
-test("FE-E2E-004B用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
+test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
   await installMockApi(page, {
     modelProviders: [
@@ -2997,7 +3026,7 @@ test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 保持同一对话", a
   await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
 
   await page.getByRole("button", { name: "切换到记忆", exact: true }).click();
-  await expect(page).toHaveURL(/\/chat\/conv-canvas-streaming\?aina=unibot-memory$/);
+  await expect(page).toHaveURL(/\/chat\/conv-canvas-streaming\?aina=unibot-documents&aina=unibot-memory$/);
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
   await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
   await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
@@ -3123,8 +3152,8 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
 
   await memoryApp.click();
 
-  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-memory$/);
-  await expect(page.getByRole("heading", { name: "Unibot Memory", exact: true }).first()).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "长期记忆", exact: true })).toBeVisible();
 });

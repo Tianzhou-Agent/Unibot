@@ -45,6 +45,7 @@ class WidgetDocumentSection(StrictModel):
 class WidgetDefinition(StrictModel):
     id: str = Field(min_length=1, max_length=160)
     kind: Literal[
+        "aina_chooser",
         "app_list",
         "form",
         "markdown",

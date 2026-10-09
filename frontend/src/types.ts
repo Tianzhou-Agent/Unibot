@@ -279,7 +279,7 @@ export interface WidgetDocumentSectionDefinition {
 
 export interface WidgetDefinition {
   id: string;
-  kind: "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline";
+  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline";
   title: string;
   description: string;
   markdown?: string | null;

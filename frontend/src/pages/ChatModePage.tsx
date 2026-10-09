@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { AinaPicker } from "@/components/canvas/AinaPicker";
+import { AinaChooserDialog } from "@/components/canvas/AinaChooserDialog";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
@@ -35,7 +35,7 @@ import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
-import { workspaceCanvasPath, workspaceChatPath } from "@/lib/workspace";
+import { canvasQuery, readCanvasRoute, workspaceChatPath, type CanvasRoute } from "@/lib/workspace";
 import type {
   AinaCanvasResponse,
   ApprovalRecord,
@@ -88,14 +88,19 @@ export default function ChatModePage() {
   const [deleted, setDeleted] = useState(false);
   const [obsOpen, setObsOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  // The canvas is an optional add-on of the conversation, opened via `?aina=`.
-  const ainaId = searchParams.get("aina");
-  const documentName = searchParams.get("document");
-  const [canvas, setCanvas] = useState<AinaCanvasResponse | null>(null);
+  // Canvases are optional add-ons of the conversation: AINAs opened as tabs via `?aina=`.
+  const canvasRoute = useMemo(() => readCanvasRoute(searchParams), [searchParams]);
+  const { ainaIds, activeAinaId, documentName } = canvasRoute;
+  const ainaKey = ainaIds.join("\n");
+  const [canvases, setCanvases] = useState<Record<string, AinaCanvasResponse>>({});
+  const [chooser, setChooser] = useState<WidgetDefinition | null>(null);
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
-  const canvasRouteRef = useRef({ ainaId, documentName });
-  canvasRouteRef.current = { ainaId, documentName };
+  const canvasRouteRef = useRef(canvasRoute);
+  canvasRouteRef.current = canvasRoute;
+  const canvasesRef = useRef(canvases);
+  canvasesRef.current = canvases;
+  const activeCanvas = activeAinaId ? canvases[activeAinaId] : undefined;
   const endRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
   const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
@@ -232,6 +237,7 @@ export default function ChatModePage() {
     setLastRun(null);
     setError(null);
     setDeleted(false);
+    setChooser(null);
     if (conversationId) {
       void loadConversation(conversationId);
     } else {
@@ -267,55 +273,85 @@ export default function ChatModePage() {
       setActivity(null);
       setSending(false);
       setClarificationWidgets([]);
+      setChooser(null);
     };
     window.addEventListener("unibot:new-conversation", reset);
     return () => window.removeEventListener("unibot:new-conversation", reset);
   }, []);
 
-  const closeCanvas = useCallback((replace = false) => {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      next.delete("aina");
-      next.delete("document");
-      return next;
-    }, { replace });
-  }, [setSearchParams]);
+  /** Navigates to the conversation with `route`'s canvases open beside it. */
+  function navigateCanvas(route: CanvasRoute, targetConversationId: string | null, replace = false) {
+    const query = canvasQuery(route);
+    navigate(`${workspaceChatPath(routeWorkspaceId, targetConversationId)}${query ? `?${query}` : ""}`, { replace });
+  }
 
-  useEffect(() => {
-    setDocumentTaskContext(null);
-    if (ainaId) setMobilePane("app");
-  }, [ainaId]);
+  /** Opens `ids` as tabs beside the conversation, activating the first; open tabs are kept. */
+  function openAinas(ids: string[], targetConversationId = conversation?.id ?? conversationId ?? null) {
+    if (!ids.length) return;
+    setMobilePane("app");
+    const route = canvasRouteRef.current;
+    navigateCanvas({
+      ...route,
+      ainaIds: [...route.ainaIds, ...ids.filter((id) => !route.ainaIds.includes(id))],
+      activeAinaId: ids[0],
+    }, targetConversationId);
+  }
 
-  useEffect(() => {
-    if (!ainaId) {
-      setCanvas(null);
-      return;
+  function selectAina(id: string) {
+    navigateCanvas({ ...canvasRouteRef.current, activeAinaId: id }, conversation?.id ?? conversationId ?? null, true);
+  }
+
+  function closeAinas(ids: string[], replace = false) {
+    const route = canvasRouteRef.current;
+    const remaining = route.ainaIds.filter((id) => !ids.includes(id));
+    let nextActive = route.activeAinaId;
+    if (nextActive && ids.includes(nextActive)) {
+      nextActive = remaining[Math.min(route.ainaIds.indexOf(nextActive), remaining.length - 1)] ?? null;
     }
+    const keepsDocument = remaining.some((id) => canvasesRef.current[id]?.main_widget.kind === "document");
+    navigateCanvas(
+      { ainaIds: remaining, activeAinaId: nextActive, documentName: keepsDocument ? route.documentName : null },
+      conversation?.id ?? conversationId ?? null,
+      replace,
+    );
+  }
+
+  useEffect(() => {
+    setCanvases((current) => {
+      const kept = Object.entries(current).filter(([id]) => ainaIds.includes(id));
+      return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+    });
+    if (!ainaIds.some((id) => canvasesRef.current[id]?.main_widget.kind === "document")) setDocumentTaskContext(null);
+    // Opening with the conversation binds each AINA to it; reopen any not yet bound to this conversation.
+    const targetConversationId = conversationId ?? null;
+    const pending = ainaIds.filter((id) => {
+      const loaded = canvasesRef.current[id];
+      return !loaded || (loaded.conversation_id ?? null) !== targetConversationId;
+    });
     let cancelled = false;
-    // Opening with the conversation binds the AINA to it, so its turns prefer this AINA.
-    api
-      .post<AinaCanvasResponse>(`/ainas/${encodeURIComponent(ainaId)}/open`, {
-        ...actor,
-        workspace_id: routeWorkspaceId,
-        conversation_id: conversationId ?? null,
-      })
-      .then((opened) => !cancelled && setCanvas(opened))
-      .catch((openError) => {
-        if (cancelled) return;
-        setError(apiErrorMessage(openError));
-        closeCanvas(true);
-      });
+    for (const id of pending) {
+      api
+        .post<AinaCanvasResponse>(`/ainas/${encodeURIComponent(id)}/open`, {
+          ...actor,
+          workspace_id: routeWorkspaceId,
+          conversation_id: targetConversationId,
+        })
+        .then((opened) => !cancelled && setCanvases((current) => ({ ...current, [id]: opened })))
+        .catch((openError) => {
+          if (cancelled) return;
+          setError(apiErrorMessage(openError));
+          closeAinas([id], true);
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [actor, ainaId, closeCanvas, conversationId, routeWorkspaceId]);
+  }, [actor, ainaKey, conversationId, routeWorkspaceId]); // ainaKey stands for ainaIds; closeAinas only reads refs.
 
-  /** The chat path for `id`, keeping whichever canvas is open beside it. */
+  /** The chat path for `id`, keeping whichever canvases are open beside it. */
   function conversationPath(id: string) {
-    const { ainaId: openAinaId, documentName: openDocument } = canvasRouteRef.current;
-    return openAinaId
-      ? workspaceCanvasPath(routeWorkspaceId, openAinaId, id, openDocument)
-      : workspaceChatPath(routeWorkspaceId, id);
+    const query = canvasQuery(canvasRouteRef.current);
+    return `${workspaceChatPath(routeWorkspaceId, id)}${query ? `?${query}` : ""}`;
   }
 
   useEffect(() => {
@@ -365,7 +401,7 @@ export default function ChatModePage() {
           workspace_id: routeWorkspaceId,
           title: draftTitle,
           category: "general",
-          ...(ainaId ? { active_aina_ids: [ainaId], primary_aina_id: ainaId } : {}),
+          ...(ainaIds.length ? { active_aina_ids: ainaIds, primary_aina_id: activeAinaId } : {}),
         });
         if (!isActiveRun()) return;
         setConversation(targetConversation);
@@ -400,8 +436,8 @@ export default function ChatModePage() {
             message: text,
             conversation_id: targetConversation.id,
             workspace_id: routeWorkspaceId,
-            preferred_aina_id: canvasRouteRef.current.ainaId ?? undefined,
-            ui_context: canvasRouteRef.current.ainaId && documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
+            preferred_aina_id: canvasRouteRef.current.activeAinaId ?? undefined,
+            ui_context: activeCanvasIsDocument() && documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
             ...actor,
           },
           onEvent,
@@ -428,7 +464,9 @@ export default function ChatModePage() {
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
-      if (openAction?.aina_id && isActiveRun()) openAina(openAction.aina_id, completed.conversation_id);
+      const suggestion = completed.widgets.find((widget) => widget.kind === "aina_chooser" && widget.apps.length);
+      if (openAction?.aina_id && isActiveRun()) openAinas([openAction.aina_id], completed.conversation_id);
+      else if (suggestion && isActiveRun()) setChooser(suggestion);
       return true;
     } catch (sendError) {
       if (isActiveRun()) {
@@ -524,11 +562,9 @@ export default function ChatModePage() {
     }
   }
 
-  /** Opens `targetAinaId` beside the conversation; the conversation itself stays where it is. */
-  function openAina(targetAinaId: string, targetConversationId = conversation?.id) {
-    setMobilePane("app");
-    if (targetAinaId === canvasRouteRef.current.ainaId) return;
-    navigate(workspaceCanvasPath(routeWorkspaceId, targetAinaId, targetConversationId));
+  function activeCanvasIsDocument() {
+    const active = canvasRouteRef.current.activeAinaId;
+    return Boolean(active && canvasesRef.current[active]?.main_widget.kind === "document");
   }
 
   const initialPrompt = (location.state as { initialPrompt?: string } | null)?.initialPrompt?.trim()
@@ -565,10 +601,9 @@ export default function ChatModePage() {
       <Topbar
         title={title}
         badge={badge}
-        actions={!deleted ? (
+        actions={!deleted && (ainaIds.length || conversation?.id) ? (
           <div className="flex items-center gap-2">
-            {ainaId ? <CanvasPaneToggle pane={mobilePane} onChange={setMobilePane} /> : null}
-            <AinaPicker activeAinaId={ainaId} onSelect={(id) => openAina(id)} />
+            {ainaIds.length ? <CanvasPaneToggle pane={mobilePane} onChange={setMobilePane} /> : null}
             {conversation?.id ? (
               <button
                 type="button"
@@ -624,11 +659,11 @@ export default function ChatModePage() {
 
       <div className={classNames(
         "min-h-0 flex-1",
-        ainaId ? "grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)]" : "flex flex-col",
+        ainaIds.length ? "grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)]" : "flex flex-col",
       )}>
       <div className={classNames(
         "min-h-0 flex-1 flex-col overflow-hidden",
-        ainaId ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
+        ainaIds.length ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
       )}>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
           <div className="mx-auto max-w-[760px] space-y-7">
@@ -645,7 +680,7 @@ export default function ChatModePage() {
                       <div key={message.id} className={continuesToolSequence ? "!mt-2" : undefined}>
                         <ConversationMessage
                           message={message}
-                          onOpenAina={(id) => openAina(id)}
+                          onOpenAina={(id) => openAinas([id])}
                           onPrompt={sendMessage}
                           debugMode={debugMode}
                           conversationId={conversation?.id ?? ""}
@@ -665,7 +700,7 @@ export default function ChatModePage() {
                   key={widget.id}
                   widget={widget}
                   workspaceId={routeWorkspaceId}
-                  onOpenAina={(id) => openAina(id)}
+                  onOpenAina={(id) => openAinas([id])}
                   onPrompt={sendMessage}
                 />
               ))}
@@ -695,53 +730,88 @@ export default function ChatModePage() {
               running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
-              context={ainaId ? documentTaskContext : null}
+              context={activeCanvas?.main_widget.kind === "document" ? documentTaskContext : null}
               onSend={sendMessage}
               onStop={() => void stopRun()}
             />
           ) : null}
         </div>
-        {ainaId ? (
-          // Inset as a window inside the conversation, so it reads as a closable add-on.
+        {ainaIds.length ? (
+          // Inset as a window inside the conversation, so it reads as a closable add-on; one tab per open AINA.
           <section className={classNames(
             "min-h-0 flex-col p-1.5 lg:flex lg:py-2 lg:pl-0 lg:pr-2",
             mobilePane === "app" ? "flex" : "hidden",
           )}>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-soft">
-            {canvas?.aina_id === ainaId ? (
-              <>
-                <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-app-soft px-4">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-accent-soft text-accent">
-                    <Bot className="h-3.5 w-3.5" />
-                  </span>
-                  <h2 className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ink">{canvas.name}</h2>
-                  <button type="button" onClick={() => closeCanvas()} className="btn-ghost h-7 px-2" aria-label={tCanvas("close", { name: canvas.name })}>
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </header>
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <MainWidgetRenderer
-                    key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${canvas.main_widget.id}`}
-                    ainaId={canvas.aina_id}
-                    widget={canvas.main_widget}
-                    workspaceId={routeWorkspaceId}
-                    documentName={documentName}
-                    disabled={false}
-                    refreshToken={lastRun?.trace_id}
-                    onOpenAina={(id) => openAina(id)}
-                    onPrompt={(prompt) => void sendMessage(prompt)}
-                    onDocumentTaskContextChange={setDocumentTaskContext}
-                  />
-                </div>
-              </>
-            ) : (
-              <div className="h-full animate-pulse bg-line/60" />
-            )}
+              <div role="tablist" aria-label={tCanvas("tabs")} className="flex h-10 shrink-0 items-end gap-1 overflow-x-auto border-b border-line bg-app-soft px-2">
+                {ainaIds.map((id) => {
+                  const name = canvases[id]?.name ?? id;
+                  const active = id === activeAinaId;
+                  return (
+                    <div
+                      key={id}
+                      className={classNames(
+                        "-mb-px flex h-8 max-w-[220px] shrink-0 items-center gap-1 rounded-t-lg border pl-3 pr-1 text-[12px]",
+                        active ? "border-line border-b-white bg-white font-semibold text-ink" : "border-transparent text-ink-muted hover:bg-white/60",
+                      )}
+                    >
+                      <button type="button" role="tab" aria-selected={active} onClick={() => selectAina(id)} className="min-w-0 truncate">
+                        {name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => closeAinas([id])}
+                        className="rounded p-1 text-ink-subtle hover:bg-line/60 hover:text-ink"
+                        aria-label={tCanvas("close", { name })}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="relative min-h-0 flex-1">
+                {ainaIds.map((id) => {
+                  const opened = canvases[id];
+                  // Inactive tabs stay mounted so switching back keeps their state.
+                  return (
+                    <div key={id} role="tabpanel" className={classNames("absolute inset-0 overflow-hidden", id !== activeAinaId && "hidden")}>
+                      {opened ? (
+                        <MainWidgetRenderer
+                          key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${opened.main_widget.id}`}
+                          ainaId={opened.aina_id}
+                          widget={opened.main_widget}
+                          workspaceId={routeWorkspaceId}
+                          documentName={documentName}
+                          disabled={false}
+                          refreshToken={lastRun?.trace_id}
+                          onOpenAina={(next) => openAinas([next])}
+                          onPrompt={(prompt) => void sendMessage(prompt)}
+                          onDocumentTaskContextChange={setDocumentTaskContext}
+                        />
+                      ) : (
+                        <div className="h-full animate-pulse bg-line/60" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </section>
         ) : null}
       </div>
     </div>
+      {chooser ? (
+        <AinaChooserDialog
+          widget={chooser}
+          openAinaIds={ainaIds}
+          onOpen={(ids) => {
+            setChooser(null);
+            openAinas(ids);
+          }}
+          onClose={() => setChooser(null)}
+        />
+      ) : null}
       {conversation?.id && obsOpen ? (
         <ConversationObsDrawer
           sessionId={conversation.id}

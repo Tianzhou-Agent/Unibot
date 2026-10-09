@@ -380,7 +380,7 @@ def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_pat
 
     assert response.status_code == 200
     assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
-    assert len(llm.calls[0]["tools"]) == 11
+    assert len(llm.calls[0]["tools"]) == 12
     assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["details"]["source"] == "unified_entry"
@@ -459,7 +459,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    assert len(llm.calls[0]["tools"]) == 12
+    assert len(llm.calls[0]["tools"]) == 13
     entry_names = [item["function"]["name"] for item in llm.calls[0]["tools"]]
     assert any(name.startswith("builtin_list_app_") for name in entry_names)
     assert any(name.startswith("tool_report_data_") for name in entry_names)
@@ -487,7 +487,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 3,
-            "builtin_capability": 8,
+            "builtin_capability": 9,
     }
     assert remote_aina["availability"] == "installed"
     assert remote_aina["routing_candidate"] is True
@@ -596,3 +596,40 @@ def test_open_aina_accepts_the_advertised_entry_function_name() -> None:
         response = client.post("/chat", json={"message": "open memory", "capability": "builtin:open_aina"})
 
     assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-memory"
+
+
+def test_suggest_ainas_returns_a_ranked_chooser_without_opening_anything() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(
+                prefix="builtin_suggest_ainas_",
+                arguments=json.dumps(
+                    {
+                        "aina_ids": ["unibot-code-runner", "missing-app", "memory", "unibot-code-runner"],
+                        "reason": "Run the analysis in the code runner; memory keeps the decisions.",
+                    }
+                ),
+            ),
+            assistant("Pick the app you want to work in."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        conversation = client.post("/conversations", json={"title": "Plan"}).json()
+        response = client.post(
+            "/chat",
+            json={
+                "message": "Help me analyse this sales data",
+                "conversation_id": conversation["id"],
+                "capability": "builtin:suggest_ainas",
+            },
+        )
+        bound = client.get(f"/conversations/{conversation['id']}").json()
+
+    assert response.status_code == 200
+    widget = response.json()["widgets"][0]
+    assert widget["kind"] == "aina_chooser"
+    assert [app["aina_id"] for app in widget["apps"]] == ["unibot-code-runner", "unibot-memory"]
+    assert widget["description"] == "Run the analysis in the code runner; memory keeps the decisions."
+    assert widget["actions"] == []
+    assert bound["active_aina_ids"] == []
+    assert "call suggest_ainas" in llm.calls[0]["messages"][0]["content"]

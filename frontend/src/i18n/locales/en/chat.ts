@@ -60,6 +60,7 @@ export default {
     label: {
       openApp: "Open app",
       listApps: "List apps",
+      suggestApps: "Suggest apps",
       webSearch: "Web search",
       openWeb: "Open web page",
       runCode: "Run code",

@@ -5,10 +5,13 @@ export default {
   showApp: "Show app",
   app: "App",
   close: "Close {{name}}",
-  openApp: "Open app",
-  chooseApp: "Choose an app to open beside this conversation",
-  loadingApps: "Loading apps…",
-  noApps: "No apps are available. Install one from the plugin page.",
+  tabs: "Open apps",
+  chooser: {
+    title: "Choose apps to open",
+    open: "Open ({{count}})",
+    notNow: "Not now",
+    alreadyOpen: "Open",
+  },
   context: "Conversation context: {{task}} / {{section}}",
   placeholderEdit: "Describe how the AI should continue revising the current section",
 };
