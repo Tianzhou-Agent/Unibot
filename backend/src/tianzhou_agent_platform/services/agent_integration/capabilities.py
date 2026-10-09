@@ -42,6 +42,7 @@ from tianzhou_agent_platform.services.platform_tools import (
     LIST_APP_TOOL_ID,
     OPEN_AINA_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
+    SUGGEST_AINAS_TOOL_ID,
 )
 from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, task_tool_specs
 
@@ -500,6 +501,32 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
                 }
             },
             "required": ["aina_id"],
+            "additionalProperties": False,
+        },
+    ),
+    (
+        SUGGEST_AINAS_TOOL_ID,
+        "Suggest AINAs",
+        (
+            "Offer a ranked shortlist of AINAs whose UI fits the user's goal; the user picks which to open. "
+            "Never use it when the user asks to open a named app: call open_aina."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "aina_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {"type": "string"},
+                    "description": "AINA ids, best match first.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why they fit, in one sentence in the user's language.",
+                },
+            },
+            "required": ["aina_ids", "reason"],
             "additionalProperties": False,
         },
     ),

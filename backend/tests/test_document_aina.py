@@ -852,7 +852,7 @@ def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_pa
     assert first.status_code == 200
     assert second.status_code == 200
     assert len(llm.calls) == 3
-    assert len(llm.calls[1]["tools"]) == 11
+    assert len(llm.calls[1]["tools"]) == 12
     assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
     assert any(
         item["function"]["name"].startswith("builtin_document_")
@@ -899,7 +899,7 @@ def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_pat
 
     assert response.status_code == 200
     assert len(llm.calls) == 2
-    assert len(llm.calls[0]["tools"]) == 11
+    assert len(llm.calls[0]["tools"]) == 12
     assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
     resolution = next(
         event
@@ -939,7 +939,7 @@ def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert len(llm.calls) == 2
-    assert len(llm.calls[0]["tools"]) == 11
+    assert len(llm.calls[0]["tools"]) == 12
     assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[0]["tools"])
     resolution = next(
         event

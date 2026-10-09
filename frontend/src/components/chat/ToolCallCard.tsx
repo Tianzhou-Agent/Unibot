@@ -191,6 +191,7 @@ function toolLabel(name: string): string {
   const value = name.toLowerCase();
   if (value.startsWith("aina_") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
   if (value.includes("list_app")) return i18n.t("chat:tool.label.listApps");
+  if (value.includes("suggest_ainas")) return i18n.t("chat:tool.label.suggestApps");
   if (value.includes("search")) return i18n.t("chat:tool.label.webSearch");
   if (value.includes("browser") || value.includes("fetch") || value.includes("open_url")) return i18n.t("chat:tool.label.openWeb");
   if (value.includes("code") || value.includes("runner") || value.includes("execute") || value.includes("terminal")) return i18n.t("chat:tool.label.runCode");

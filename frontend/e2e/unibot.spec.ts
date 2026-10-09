@@ -580,7 +580,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         description: "管理跨对话保留的长期记忆。",
         version: "1.0.0",
         conversation_id: conversationId ?? null,
-        route: `/canvas/${ainaId}${conversationId ? `?conversation=${conversationId}` : ""}`,
+        route: `/chat${conversationId ? `/${conversationId}` : ""}?aina=${ainaId}`,
         main_widget: {
           id: `${ainaId}-main`,
           kind: ainaId === "unibot-memory" ? "memory" : ainaId === "unibot-documents" ? "document" : "panel",
@@ -1124,7 +1124,7 @@ test("FE-E2E-001 新建会话并展示流式回复", async ({ page }) => {
 
 for (const [surface, path] of [
   ["Chat", "/chat/conv-e2e-1"],
-  ["Canvas", "/canvas/unibot-documents?conversation=conv-e2e-1"],
+  ["Canvas", "/chat/conv-e2e-1?aina=unibot-documents"],
 ]) {
   test(`FE-E2E-COPY-001 ${surface} 复制指定回复并保留 Markdown`, async ({ page }, testInfo) => {
     const replies = [
@@ -1200,7 +1200,7 @@ test("FE-E2E-COPY-002 复制失败时提示并允许重试", async ({ page }) =>
 
 for (const [surface, path, inputName, sendName] of [
   ["Chat", "/chat", "消息", "发送消息"],
-  ["Canvas", "/canvas/unibot-documents", "画布消息", "发送画布消息"],
+  ["Canvas", "/chat?aina=unibot-documents", "消息", "发送消息"],
 ]) {
   for (const failurePoint of ["create", "stream"]) {
     test(`FE-E2E-DRAFT-001 ${surface} retains and retries a draft after ${failurePoint} failure`, async ({ page }) => {
@@ -1302,10 +1302,10 @@ test("FE-E2E-MOBILE-001 phone navigation overlays content and both send buttons 
 
   for (const [path, inputName, sendName] of [
     ["/chat", "消息", "发送消息"],
-    ["/canvas/unibot-documents", "画布消息", "发送画布消息"],
+    ["/chat?aina=unibot-documents", "消息", "发送消息"],
   ]) {
     await page.goto(path);
-    if (inputName === "画布消息") await page.getByRole("button", { name: "显示对话" }).click();
+    if (path.includes("aina=")) await page.getByRole("button", { name: "显示对话" }).click();
     const input = page.getByRole("textbox", { name: inputName, exact: true });
     await input.fill("手机上发送");
     const send = page.getByRole("button", { name: sendName, exact: true });
@@ -1349,7 +1349,7 @@ test("FE-E2E-001W Demo · 场景说明：进入工作区并直接发起任务", 
   await page.getByRole("link", { name: "文件", exact: true }).click();
   await expect(page).toHaveURL(/\/files$/);
   await page.getByRole("region", { name: "产品发布计划文件层级", exact: true }).getByRole("link", { name: /guide\.md/ }).click();
-  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/canvas\/unibot-documents\?document=guide\.md$/);
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\?aina=unibot-documents&document=guide\.md$/);
   const editor = page.getByRole("textbox", { name: "全文 Markdown 编辑器" });
   await editor.fill("# 发布检查清单\n\n- [x] Demo 场景已跑通\n");
   await page.getByRole("button", { name: "保存文档" }).click();
@@ -1378,7 +1378,7 @@ test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ pa
     workspace_id: "workspace-e2e-1",
   });
 
-  await page.goto("/workspaces/workspace-e2e-1/canvas/unibot-documents");
+  await page.goto("/workspaces/workspace-e2e-1/chat?aina=unibot-documents");
   await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
   await expect.poll(() => state.lastDocumentTreeScope?.user_id).toBe("admin-zhou-ran");
 
@@ -1414,7 +1414,7 @@ test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ pa
     workspace_id: "workspace-e2e-1",
   });
 
-  await page.goto("/workspaces/workspace-e2e-1/canvas/unibot-code-runner");
+  await page.goto("/workspaces/workspace-e2e-1/chat?aina=unibot-code-runner");
   await expect.poll(() => state.lastSandboxEnsurePayload).toEqual({
     user_id: "admin-zhou-ran",
     tenant_id: "default",
@@ -1510,9 +1510,9 @@ test("FE-E2E-001WD 离开运行中的 Workspace Canvas 后不会执行旧打开�
       actions: [{ id: "open-memory", label: "打开记忆", kind: "open_aina", aina_id: "unibot-memory", style: "primary" }],
     }],
   });
-  await page.goto("/workspaces/workspace-a/canvas/unibot-documents?conversation=conv-canvas-workspace");
-  await page.getByRole("textbox", { name: "画布消息" }).fill("运行一个慢 Canvas 任务");
-  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await page.goto("/workspaces/workspace-a/chat/conv-canvas-workspace?aina=unibot-documents");
+  await page.getByRole("textbox", { name: "消息" }).fill("运行一个慢 Canvas 任务");
+  await page.getByRole("button", { name: "发送消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.workspace_id).toBe("workspace-a");
   await page.locator('aside a[href="/workspaces/workspace-b"]').click();
 
@@ -1523,7 +1523,7 @@ test("FE-E2E-001WD 离开运行中的 Workspace Canvas 后不会执行旧打开�
 
 test("FE-E2E-009 文档仅通过章节编辑或任务草稿更新", async ({ page }) => {
   await installMockApi(page);
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await expect(page.getByText("全文编辑", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "章节", exact: true }).click();
@@ -1567,7 +1567,7 @@ test("FE-E2E-009B 文档 Canvas 展示嵌套文件树和全文章节导航", asy
     documentFolders: ["Projects", "Projects/Specs"],
     documentName: "Projects/Specs/guide.md",
   });
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await expect(page.getByRole("button", { name: "Projects", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Specs", exact: true })).toBeVisible();
@@ -1584,7 +1584,7 @@ test("FE-E2E-009B 文档 Canvas 展示嵌套文件树和全文章节导航", asy
 
 test("FE-E2E-009C 全文编辑器自动保存多个章节和章节外内容", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await page.getByRole("textbox", { name: "全文 Markdown 编辑器" }).fill(
     "保存后的说明。\n\n# 被修改的根标题\n\n## 简介\n\n同时修改多个范围。\n",
@@ -1601,7 +1601,7 @@ test("FE-E2E-009C 全文编辑器自动保存多个章节和章节外内容", as
 
 test("FE-E2E-009D 零合入任务结束后归入失败记录", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await page.getByRole("button", { name: "任务 0" }).click();
   await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
@@ -1619,7 +1619,7 @@ test("FE-E2E-009D 零合入任务结束后归入失败记录", async ({ page }) 
 
 test("FE-E2E-009E 章节合入冲突只展示一次任务错误", async ({ page }) => {
   await installMockApi(page, { documentMergeConflict: true });
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await page.getByRole("button", { name: "任务 0" }).click();
   await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
@@ -1635,7 +1635,7 @@ test("FE-E2E-009E 章节合入冲突只展示一次任务错误", async ({ page 
 
 test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文", async ({ page }) => {
   const state = await installMockApi(page, { streamDelayMs: 300 });
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await page.getByRole("button", { name: "任务 0" }).click();
   await page.getByRole("button", { name: "新建修改任务", exact: true }).click();
@@ -1647,8 +1647,8 @@ test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文",
   await page.getByRole("button", { name: "对照编辑", exact: true }).click();
   const draft = page.getByRole("textbox", { name: "章节草稿" });
   await draft.fill("## 简介\n\n右侧未保存的人工修改。");
-  await page.getByRole("textbox", { name: "画布消息" }).fill("继续润色当前章节");
-  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await page.getByRole("textbox", { name: "消息" }).fill("继续润色当前章节");
+  await page.getByRole("button", { name: "发送消息" }).click();
   await expect(draft).toBeEnabled();
   await draft.fill("## 简介\n\n模型运行期间继续编辑。");
   await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
@@ -1710,7 +1710,7 @@ test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", as
       }),
     ],
   });
-  await page.goto("/canvas/unibot-documents");
+  await page.goto("/chat?aina=unibot-documents");
 
   await page.getByRole("button", { name: "任务 4", exact: true }).click();
   await expect(page.getByRole("button", { name: /^进行中\s*1$/ })).toBeVisible();
@@ -1861,7 +1861,7 @@ test("FE-E2E-002D 文件入口按用户和 Workspace 层级展示文件", async 
   await expect(workspaceBFiles.getByRole("link", { name: /guide\.md/ })).toBeVisible();
 
   await workspaceBFiles.getByRole("link", { name: /guide\.md/ }).click();
-  await expect(page).toHaveURL(/\/workspaces\/workspace-b\/canvas\/unibot-documents\?document=guide\.md$/);
+  await expect(page).toHaveURL(/\/workspaces\/workspace-b\/chat\?aina=unibot-documents&document=guide\.md$/);
   await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
 });
 
@@ -2169,7 +2169,7 @@ test("FE-E2E-004E 普通模式按设计稿展示并合并工具调用结果", as
   await expect(card.getByText("调用参数", { exact: true })).toBeVisible();
   await expect(card.getByText("返回结果", { exact: true })).toBeVisible();
 
-  await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
+  await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
   await expect(page.getByLabel("工具调用 browser.search 完成", { exact: true })).toBeVisible();
 });
 
@@ -2202,7 +2202,124 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("打开文档应用");
   await page.getByRole("button", { name: "发送消息" }).click();
 
-  await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-e2e-1$/);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+});
+
+test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存且对话保持不变", async ({ page }) => {
+  const app = (aina_id: string, name: string, description: string) => ({
+    aina_id, name, description, version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true,
+  });
+  const state = await installMockApi(page, {
+    conversations: [conversation()],
+    streamWidgets: [{
+      id: "unibot-aina-chooser",
+      kind: "aina_chooser",
+      title: "Suggested apps",
+      description: "整理纪要适合文档编辑器，结论可以存入记忆。",
+      markdown: null,
+      fields: [],
+      actions: [],
+      apps: [
+        app("unibot-documents", "文档编辑器", "管理 Markdown 文档。"),
+        app("unibot-memory", "Unibot Memory", "管理跨对话保留的长期记忆。"),
+      ],
+    }],
+  });
+  await page.goto("/chat/conv-e2e-1");
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  const chooser = page.getByRole("dialog", { name: "选择要打开的应用" });
+  const reply = page.locator("main").getByText("这是确定性的端到端回复。", { exact: true });
+
+  await input.fill("帮我整理会议纪要");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(chooser).toBeVisible();
+  await expect(chooser.getByText("整理纪要适合文档编辑器，结论可以存入记忆。")).toBeVisible();
+  await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeChecked();
+  await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).not.toBeChecked();
+  await chooser.getByRole("button", { name: "打开（1）", exact: true }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+  await expect(page.getByRole("tab", { name: "unibot-documents", selected: true })).toBeVisible();
+
+  // Suggestions skip open apps; declining one keeps it from being offered again in this conversation.
+  await input.fill("再记住这些决定");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect.poll(() => state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
+  await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeDisabled();
+  await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).toBeChecked();
+  await chooser.getByRole("button", { name: "暂不打开", exact: true }).last().click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+
+  await input.fill("继续整理");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(input).toHaveValue("");
+  await expect(reply.last()).toBeVisible();
+  await expect(chooser).toHaveCount(0);
+
+  // An explicit open adds a tab beside the ones already open.
+  state.streamWidgets = [{
+    id: "open-unibot-memory",
+    kind: "navigation",
+    title: "Open Unibot Memory",
+    description: "",
+    markdown: null,
+    fields: [],
+    apps: [],
+    actions: [{ id: "open", label: "Enter Canvas", kind: "open_aina", aina_id: "unibot-memory", style: "primary" }],
+  }];
+  await input.fill("打开记忆");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
+  await expect(page.locator("main p").filter({ hasText: "帮我整理会议纪要" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "unibot-documents" }).click();
+  await expect(page).toHaveURL(/\?aina=unibot-documents&aina=unibot-memory&active=unibot-documents$/);
+  await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeHidden();
+
+  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+  await page.getByRole("button", { name: "关闭 unibot-documents", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
+  await expect(page.locator("main p").filter({ hasText: "再记住这些决定" })).toBeVisible();
+});
+
+test("FE-E2E-004H 画布中用 + 在同一对话内切换和重新打开应用", async ({ page }) => {
+  const aina = (id: string, name: string) => ({
+    manifest: { aina: { id, name, version: "1.0.0", description: `${name} 的说明` }, runtime: { type: "builtin" }, permissions: [] },
+    status: "registered",
+  });
+  await installMockApi(page, {
+    conversations: [conversation({ active_aina_ids: ["unibot-documents", "unibot-memory"] })],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory"), aina("unibot-code-runner", "代码运行器")],
+  });
+  await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
+  const switcher = page.getByRole("button", { name: "打开其他应用", exact: true });
+  const menu = page.getByRole("menu", { name: "打开其他应用" });
+
+  await switcher.click();
+  await expect(menu.getByRole("group", { name: "本对话中的应用" }).getByRole("menuitem")).toHaveText([/Unibot Memory/]);
+  await expect(menu.getByRole("group", { name: "全部应用" }).getByRole("menuitem")).toHaveText([/代码运行器/]);
+  await expect(menu.getByRole("menuitem", { name: /文档编辑器/ })).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: /Unibot Memory/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+
+  // A closed app stays listed with this conversation's apps and reopens from the switcher.
+  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+  await switcher.click();
+  await menu.getByRole("group", { name: "本对话中的应用" }).getByRole("menuitem", { name: /Unibot Memory/ }).click();
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+
+  await switcher.click();
+  await menu.getByRole("menuitem", { name: /代码运行器/ }).click();
+  await expect(page).toHaveURL(/\?aina=unibot-documents&aina=unibot-memory&aina=unibot-code-runner$/);
+  await switcher.click();
+  await expect(menu.getByText("可用的应用都已打开。")).toBeVisible();
 });
 
 test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
@@ -2918,7 +3035,7 @@ test("FE-E2E-005B 流式回复进行中切换会话不会串线", async ({ page 
   await expect(main.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 });
 
-test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async ({ page }) => {
+test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 保持同一对话", async ({ page }) => {
   await installMockApi(page, {
     streamDelayMs: 300,
     conversations: [
@@ -2957,23 +3074,21 @@ test("FE-E2E-005C Canvas 流式回复进行中切换 AINA 不会串线", async (
       }),
     ],
   });
-  await page.goto("/canvas/unibot-documents?conversation=conv-canvas-streaming");
+  await page.goto("/chat/conv-canvas-streaming?aina=unibot-documents");
 
-  await page.getByRole("textbox", { name: "画布消息" }).fill("只属于文档 Canvas 的问题");
-  await page.getByRole("button", { name: "发送画布消息" }).click();
+  await page.getByRole("textbox", { name: "消息" }).fill("只属于文档 Canvas 的问题");
+  await page.getByRole("button", { name: "发送消息" }).click();
   await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
 
   await page.getByRole("button", { name: "切换到记忆", exact: true }).click();
-  await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-canvas-streaming$/);
-  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toHaveCount(0);
-
-  await page.waitForTimeout(450);
-  await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-canvas-streaming$/);
-  await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-canvas-streaming\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
+  await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
+  await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 
   await page.goBack();
-  await expect(page).toHaveURL(/\/canvas\/unibot-documents\?conversation=conv-canvas-streaming$/);
-  await expect(page.getByText("只属于文档 Canvas 的问题", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\/conv-canvas-streaming\?aina=unibot-documents$/);
+  await expect(page.getByRole("paragraph").filter({ hasText: "只属于文档 Canvas 的问题" })).toBeVisible();
   await expect(page.getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 });
 
@@ -3079,7 +3194,7 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
       }),
     ],
   });
-  await page.goto("/canvas/unibot-documents?conversation=conv-e2e-1");
+  await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
 
   const documentApp = page.getByRole("button", { name: "打开 文档编辑器" });
   const memoryApp = page.getByRole("button", { name: "打开 Unibot Memory" });
@@ -3092,8 +3207,8 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
 
   await memoryApp.click();
 
-  await expect(page).toHaveURL(/\/canvas\/unibot-memory\?conversation=conv-e2e-1$/);
-  await expect(page.getByRole("heading", { name: "Unibot Memory", exact: true }).first()).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "长期记忆", exact: true })).toBeVisible();
 });

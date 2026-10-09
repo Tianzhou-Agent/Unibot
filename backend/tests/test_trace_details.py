@@ -63,6 +63,7 @@ def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
         "list_app",
         "open_aina",
         "request_clarification",
+        "suggest_ainas",
         "task_create",
         "task_delete",
         "task_query",

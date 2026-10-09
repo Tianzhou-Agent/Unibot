@@ -3,7 +3,7 @@
 import hashlib
 import re
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import (
@@ -20,11 +20,13 @@ from tianzhou_agent_platform.tasks.service import TaskService
 LIST_APP_TOOL_ID = "list_app"
 DESCRIBE_AINA_TOOL_ID = "describe_aina"
 OPEN_AINA_TOOL_ID = "open_aina"
+SUGGEST_AINAS_TOOL_ID = "suggest_ainas"
 REQUEST_CLARIFICATION_TOOL_ID = "request_clarification"
 PLATFORM_TOOL_IDS = {
     LIST_APP_TOOL_ID,
     DESCRIBE_AINA_TOOL_ID,
     OPEN_AINA_TOOL_ID,
+    SUGGEST_AINAS_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
 } | TASK_TOOL_IDS
 
@@ -94,6 +96,45 @@ async def _available_apps(
     return apps
 
 
+async def suggest_ainas_widget(
+    repository: InMemoryRepository,
+    aina_ids: list[str],
+    reason: str,
+    *,
+    user_id: str,
+    tenant_id: str,
+) -> WidgetDefinition:
+    """A chooser of the requested AINAs, best match first; the user decides which to open."""
+    apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
+    by_id = {item.aina_id: item for item in apps}
+    by_name = {item.name.casefold(): item for item in apps}
+    # Models also pass a fragment of the entry function name they were shown (``…_<digest>``).
+    by_digest = {hashlib.sha1(f"aina:{item.aina_id}".encode()).hexdigest()[:8]: item for item in apps}
+    chosen: list[WidgetApp] = []
+    for requested in aina_ids:
+        digest = _ENTRY_DIGEST_SUFFIX.search(requested)
+        app = (
+            by_id.get(requested)
+            or by_name.get(requested.casefold())
+            or (by_digest.get(digest["digest"]) if digest else None)
+        )
+        if app is not None and app not in chosen:
+            chosen.append(app)
+    if not chosen:
+        raise PlatformError(
+            "INVALID_REQUEST",
+            "suggest_ainas found none of the requested AINAs. Available AINA ids: "
+            + ", ".join(item.aina_id for item in apps),
+        )
+    return WidgetDefinition(
+        id="unibot-aina-chooser",
+        kind="aina_chooser",
+        title="Suggested apps",
+        description=reason,
+        apps=chosen,
+    )
+
+
 async def open_aina(
     repository: InMemoryRepository,
     aina_id: str,
@@ -130,8 +171,9 @@ async def open_aina(
         await repository.bind_conversation_aina(conversation_id, aina_id, make_primary=True)
 
     main_widget = record.manifest.main_widget or _default_main_widget(record)
-    query = urlencode({"conversation": conversation_id}) if conversation_id else ""
-    route = f"/canvas/{aina_id}{f'?{query}' if query else ''}"
+    # The canvas opens beside the conversation's chat, not on a page of its own.
+    chat_path = f"/chat/{quote(conversation_id, safe='')}" if conversation_id else "/chat"
+    route = f"{chat_path}?{urlencode({'aina': aina_id})}"
     return AinaCanvasResponse(
         aina_id=aina_id,
         name=record.manifest.aina.name,
@@ -239,6 +281,19 @@ async def invoke_platform_tool(
             actions=[WidgetAction(id="open", label="Enter Canvas", kind="open_aina", aina_id=aina_id)],
         )
         return canvas.model_dump(mode="json"), [widget]
+    if tool_id == SUGGEST_AINAS_TOOL_ID:
+        raw_ids = arguments.get("aina_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise PlatformError("INVALID_REQUEST", "suggest_ainas requires aina_ids")
+        aina_ids = [_aina_id_argument({"aina_id": item}) for item in raw_ids]
+        widget = await suggest_ainas_widget(
+            repository,
+            aina_ids,
+            str(arguments.get("reason") or "").strip(),
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        return {"suggested_aina_ids": [item.aina_id for item in widget.apps]}, [widget]
     if tool_id == REQUEST_CLARIFICATION_TOOL_ID:
         raw_fields = arguments.get("fields")
         if not isinstance(raw_fields, list) or not raw_fields or len(raw_fields) > 6:
@@ -298,6 +353,7 @@ def _default_main_widget(record: AinaRecord) -> WidgetDefinition:
 
 
 _ENTRY_FUNCTION_NAME = re.compile(r"^aina_(?P<aina_id>.+)_(?P<digest>[0-9a-f]{8})$")
+_ENTRY_DIGEST_SUFFIX = re.compile(r"_(?P<digest>[0-9a-f]{8})$")
 
 
 def _aina_id_argument(arguments: dict[str, Any]) -> str:

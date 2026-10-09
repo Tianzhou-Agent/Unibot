@@ -99,18 +99,42 @@ export function workspaceChatPath(workspaceId: string | null | undefined, conver
   return conversationId ? `${root}/${encodeURIComponent(conversationId)}` : root;
 }
 
+/** The AINAs open beside a conversation, as tabs; the active one defaults to the last. */
+export interface CanvasRoute {
+  ainaIds: string[];
+  activeAinaId: string | null;
+  documentName: string | null;
+}
+
+export function readCanvasRoute(params: URLSearchParams): CanvasRoute {
+  const ainaIds = [...new Set(params.getAll("aina").filter(Boolean))];
+  const active = params.get("active");
+  return {
+    ainaIds,
+    activeAinaId: active && ainaIds.includes(active) ? active : ainaIds.at(-1) ?? null,
+    documentName: params.get("document"),
+  };
+}
+
+export function canvasQuery({ ainaIds, activeAinaId, documentName }: CanvasRoute): string {
+  const query = new URLSearchParams();
+  for (const id of ainaIds) query.append("aina", id);
+  if (activeAinaId && activeAinaId !== ainaIds.at(-1)) query.set("active", activeAinaId);
+  if (ainaIds.length && documentName) query.set("document", documentName);
+  return query.toString();
+}
+
+/** A canvas is an add-on of a conversation: the chat path with the AINA open beside it. */
 export function workspaceCanvasPath(
   workspaceId: string | null | undefined,
   ainaId: string,
   conversationId?: string | null,
+  documentName?: string | null,
 ): string {
-  const root = workspaceId
-    ? `${workspaceHomePath(workspaceId)}/canvas/${encodeURIComponent(ainaId)}`
-    : `/canvas/${encodeURIComponent(ainaId)}`;
-  return conversationId ? `${root}?conversation=${encodeURIComponent(conversationId)}` : root;
+  const query = canvasQuery({ ainaIds: [ainaId], activeAinaId: ainaId, documentName: documentName ?? null });
+  return `${workspaceChatPath(workspaceId, conversationId)}?${query}`;
 }
 
 export function documentCanvasPath(workspaceId: string | null | undefined, documentName?: string | null): string {
-  const root = workspaceCanvasPath(workspaceId, "unibot-documents");
-  return documentName ? `${root}?document=${encodeURIComponent(documentName)}` : root;
+  return workspaceCanvasPath(workspaceId, "unibot-documents", null, documentName);
 }

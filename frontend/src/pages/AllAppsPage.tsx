@@ -383,7 +383,7 @@ export default function AllAppsPage() {
         user_id: "anonymous",
         tenant_id: "default",
       });
-      navigate(canvas.route, { state: { canvas } });
+      navigate(canvas.route);
     } catch (openError) {
       setNotice({ tone: "error", text: apiErrorMessage(openError) });
     }
