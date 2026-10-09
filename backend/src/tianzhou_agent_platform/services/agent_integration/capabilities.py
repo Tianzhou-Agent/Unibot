@@ -508,10 +508,8 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
         SUGGEST_AINAS_TOOL_ID,
         "Suggest AINAs",
         (
-            "Offer a short, ranked list of AINA applications whose UI fits what the user is trying to do, when "
-            "the user has not explicitly named one to open. The host shows a chooser and the user decides which "
-            "to open; nothing is opened by this call. Use open_aina instead when the user explicitly asks to open "
-            "a specific AINA, and list_app when the user wants to browse all applications."
+            "Offer a ranked shortlist of AINAs whose UI fits the user's goal; the user picks which to open. "
+            "Never use it when the user asks to open a named app: call open_aina."
         ),
         {
             "type": "object",
@@ -521,11 +519,11 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
                     "minItems": 1,
                     "maxItems": 5,
                     "items": {"type": "string"},
-                    "description": "Exact AINA identifiers that fit the user's intent, best match first.",
+                    "description": "AINA ids, best match first.",
                 },
                 "reason": {
                     "type": "string",
-                    "description": "One short sentence, in the user's language, on why these apps fit the request.",
+                    "description": "Why they fit, in one sentence in the user's language.",
                 },
             },
             "required": ["aina_ids", "reason"],
