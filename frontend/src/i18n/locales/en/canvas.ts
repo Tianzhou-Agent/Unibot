@@ -6,6 +6,13 @@ export default {
   app: "App",
   close: "Close {{name}}",
   tabs: "Open apps",
+  switcher: {
+    open: "Open another app",
+    inConversation: "In this conversation",
+    allApps: "All apps",
+    loading: "Loading apps…",
+    empty: "Every available app is already open.",
+  },
   chooser: {
     title: "Choose apps to open",
     defaultReason: "This looks like work for an app. Open it beside the conversation?",

@@ -2286,6 +2286,42 @@ test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存�
   await expect(page.locator("main p").filter({ hasText: "再记住这些决定" })).toBeVisible();
 });
 
+test("FE-E2E-004H 画布中用 + 在同一对话内切换和重新打开应用", async ({ page }) => {
+  const aina = (id: string, name: string) => ({
+    manifest: { aina: { id, name, version: "1.0.0", description: `${name} 的说明` }, runtime: { type: "builtin" }, permissions: [] },
+    status: "registered",
+  });
+  await installMockApi(page, {
+    conversations: [conversation({ active_aina_ids: ["unibot-documents", "unibot-memory"] })],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory"), aina("unibot-code-runner", "代码运行器")],
+  });
+  await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
+  const switcher = page.getByRole("button", { name: "打开其他应用", exact: true });
+  const menu = page.getByRole("menu", { name: "打开其他应用" });
+
+  await switcher.click();
+  await expect(menu.getByRole("group", { name: "本对话中的应用" }).getByRole("menuitem")).toHaveText([/Unibot Memory/]);
+  await expect(menu.getByRole("group", { name: "全部应用" }).getByRole("menuitem")).toHaveText([/代码运行器/]);
+  await expect(menu.getByRole("menuitem", { name: /文档编辑器/ })).toHaveCount(0);
+  await menu.getByRole("menuitem", { name: /Unibot Memory/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+
+  // A closed app stays listed with this conversation's apps and reopens from the switcher.
+  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+  await switcher.click();
+  await menu.getByRole("group", { name: "本对话中的应用" }).getByRole("menuitem", { name: /Unibot Memory/ }).click();
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+
+  await switcher.click();
+  await menu.getByRole("menuitem", { name: /代码运行器/ }).click();
+  await expect(page).toHaveURL(/\?aina=unibot-documents&aina=unibot-memory&aina=unibot-code-runner$/);
+  await switcher.click();
+  await expect(menu.getByText("可用的应用都已打开。")).toBeVisible();
+});
+
 test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem("unibot:mock-role", "admin"));
   await installMockApi(page, {

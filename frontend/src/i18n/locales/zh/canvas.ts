@@ -6,6 +6,13 @@ export default {
   app: "应用",
   close: "关闭 {{name}}",
   tabs: "已打开的应用",
+  switcher: {
+    open: "打开其他应用",
+    inConversation: "本对话中的应用",
+    allApps: "全部应用",
+    loading: "正在加载应用…",
+    empty: "可用的应用都已打开。",
+  },
   chooser: {
     title: "选择要打开的应用",
     defaultReason: "这项工作适合在应用中完成，要在对话旁打开吗？",

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AinaChooserDialog } from "@/components/canvas/AinaChooserDialog";
+import { AinaSwitcher } from "@/components/canvas/AinaSwitcher";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
@@ -94,6 +95,8 @@ export default function ChatModePage() {
   const ainaKey = ainaIds.join("\n");
   const [canvases, setCanvases] = useState<Record<string, AinaCanvasResponse>>({});
   const [chooser, setChooser] = useState<WidgetDefinition | null>(null);
+  // AINAs opened in this conversation since it was loaded; the loaded record lists the earlier ones.
+  const [usedAinaIds, setUsedAinaIds] = useState<string[]>([]);
   // AINAs the user declined to open in this conversation; they are not offered again.
   const declinedAinaIdsRef = useRef(new Set<string>());
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
@@ -241,6 +244,7 @@ export default function ChatModePage() {
     setDeleted(false);
     setChooser(null);
     declinedAinaIdsRef.current = new Set();
+    setUsedAinaIds([]);
     if (conversationId) {
       void loadConversation(conversationId);
     } else {
@@ -326,6 +330,10 @@ export default function ChatModePage() {
       return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
     });
     if (!ainaIds.some((id) => canvasesRef.current[id]?.main_widget.kind === "document")) setDocumentTaskContext(null);
+    setUsedAinaIds((current) => {
+      const added = ainaIds.filter((id) => !current.includes(id));
+      return added.length ? [...current, ...added] : current;
+    });
     // Opening with the conversation binds each AINA to it; reopen any not yet bound to this conversation.
     const targetConversationId = conversationId ?? null;
     const pending = ainaIds.filter((id) => {
@@ -749,7 +757,8 @@ export default function ChatModePage() {
             mobilePane === "app" ? "flex" : "hidden",
           )}>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-soft">
-              <div role="tablist" aria-label={tCanvas("tabs")} className="flex h-10 shrink-0 items-end gap-1 overflow-x-auto border-b border-line bg-app-soft px-2">
+              <div className="flex h-10 shrink-0 items-end gap-1 border-b border-line bg-app-soft px-2">
+              <div role="tablist" aria-label={tCanvas("tabs")} className="flex h-full min-w-0 flex-1 items-end gap-1 overflow-x-auto">
                 {ainaIds.map((id) => {
                   const name = canvases[id]?.name ?? id;
                   const active = id === activeAinaId;
@@ -757,8 +766,8 @@ export default function ChatModePage() {
                     <div
                       key={id}
                       className={classNames(
-                        "-mb-px flex h-8 max-w-[220px] shrink-0 items-center gap-1 rounded-t-lg border pl-3 pr-1 text-[12px]",
-                        active ? "border-line border-b-white bg-white font-semibold text-ink" : "border-transparent text-ink-muted hover:bg-white/60",
+                        "flex h-8 max-w-[220px] shrink-0 items-center gap-1 rounded-t-lg border border-b-0 pl-3 pr-1 text-[12px]",
+                        active ? "border-line bg-white font-semibold text-ink" : "border-transparent text-ink-muted hover:bg-white/60",
                       )}
                     >
                       <button type="button" role="tab" aria-selected={active} onClick={() => selectAina(id)} className="min-w-0 truncate">
@@ -775,6 +784,12 @@ export default function ChatModePage() {
                     </div>
                   );
                 })}
+              </div>
+              <AinaSwitcher
+                conversationAinaIds={[...(conversation?.active_aina_ids ?? []), ...usedAinaIds]}
+                openAinaIds={ainaIds}
+                onSelect={(id) => openAinas([id])}
+              />
               </div>
               <div className="relative min-h-0 flex-1">
                 {ainaIds.map((id) => {
