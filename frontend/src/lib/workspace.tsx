@@ -99,18 +99,18 @@ export function workspaceChatPath(workspaceId: string | null | undefined, conver
   return conversationId ? `${root}/${encodeURIComponent(conversationId)}` : root;
 }
 
+/** A canvas is an add-on of a conversation: the chat path with the AINA open beside it. */
 export function workspaceCanvasPath(
   workspaceId: string | null | undefined,
   ainaId: string,
   conversationId?: string | null,
+  documentName?: string | null,
 ): string {
-  const root = workspaceId
-    ? `${workspaceHomePath(workspaceId)}/canvas/${encodeURIComponent(ainaId)}`
-    : `/canvas/${encodeURIComponent(ainaId)}`;
-  return conversationId ? `${root}?conversation=${encodeURIComponent(conversationId)}` : root;
+  const query = new URLSearchParams({ aina: ainaId });
+  if (documentName) query.set("document", documentName);
+  return `${workspaceChatPath(workspaceId, conversationId)}?${query}`;
 }
 
 export function documentCanvasPath(workspaceId: string | null | undefined, documentName?: string | null): string {
-  const root = workspaceCanvasPath(workspaceId, "unibot-documents");
-  return documentName ? `${root}?document=${encodeURIComponent(documentName)}` : root;
+  return workspaceCanvasPath(workspaceId, "unibot-documents", null, documentName);
 }

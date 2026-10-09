@@ -25,7 +25,7 @@ async function installVisionApi(page: Page) {
         description: "使用 YOLO26m 检测图片中的目标。",
         version: "1.0.0",
         conversation_id: null,
-        route: "/canvas/unibot-image-recognition",
+        route: "/chat?aina=unibot-image-recognition",
         main_widget: {
           id: "unibot-image-recognition-main",
           kind: "panel",
@@ -78,7 +78,7 @@ async function installVisionApi(page: Page) {
 
 test("FE-E2E-010 选择或粘贴图片后展示 YOLO 目标框和结构化结果", async ({ page }) => {
   const apiState = await installVisionApi(page);
-  await page.goto("/canvas/unibot-image-recognition");
+  await page.goto("/chat?aina=unibot-image-recognition");
 
   await expect(page.getByRole("heading", { name: "YOLO26m 目标检测" })).toBeVisible();
   await expect(page.getByText("yolo26m · NVIDIA GeForce RTX 3080 Ti", { exact: true })).toBeVisible();

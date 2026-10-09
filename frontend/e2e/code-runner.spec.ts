@@ -46,7 +46,7 @@ async function installSandboxApi(page: Page) {
         description: "在隔离沙箱中执行脚本。",
         version: "1.0.0",
         conversation_id: null,
-        route: "/canvas/unibot-code-runner",
+        route: "/chat?aina=unibot-code-runner",
         main_widget: {
           id: "unibot-code-runner-main",
           kind: "panel",
@@ -121,7 +121,7 @@ async function installSandboxApi(page: Page) {
 
 test("FE-E2E-009 在代码运行器中执行脚本并查看输入输出历史", async ({ page }) => {
   const state = await installSandboxApi(page);
-  await page.goto("/canvas/unibot-code-runner");
+  await page.goto("/chat?aina=unibot-code-runner");
 
   await expect(page.getByRole("heading", { name: "代码运行器", exact: true })).toBeVisible();
   await expect(page.getByText("Kubernetes · gVisor", { exact: true })).toBeVisible();

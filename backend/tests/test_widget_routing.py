@@ -310,7 +310,7 @@ def test_open_aina_returns_canvas_and_declared_main_widget() -> None:
         bound = client.get(f"/conversations/{conversation['id']}").json()
 
     assert response.status_code == 200
-    assert response.json()["route"] == f"/canvas/com.example.canvas?conversation={conversation['id']}"
+    assert response.json()["route"] == f"/chat/{conversation['id']}?aina=com.example.canvas"
     assert response.json()["main_widget"]["id"] == "report-main"
     assert response.json()["main_widget"]["actions"][0]["kind"] == "prompt"
     assert bound["active_aina_ids"] == ["com.example.canvas"]

@@ -1,7 +1,6 @@
-import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import ChatModePage from "@/pages/ChatModePage";
-import CanvasModePage from "@/pages/CanvasModePage";
 import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
@@ -14,6 +13,7 @@ import LoginPage from "@/pages/LoginPage";
 import WorkspacePage from "@/pages/WorkspacePage";
 import FilesPage from "@/pages/FilesPage";
 import { RequireAuth } from "@/lib/auth";
+import { workspaceCanvasPath } from "@/lib/workspace";
 
 export default function App() {
   return (
@@ -23,12 +23,12 @@ export default function App() {
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatModePage />} />
         <Route path="/chat/:conversationId" element={<ChatModePage />} />
-        <Route path="/canvas/:ainaId" element={<CanvasModePage />} />
+        <Route path="/canvas/:ainaId" element={<LegacyCanvasRedirect />} />
         <Route path="/files" element={<FilesPage />} />
         <Route path="/workspaces/:workspaceId" element={<WorkspacePage />} />
         <Route path="/workspaces/:workspaceId/chat" element={<ChatModePage />} />
         <Route path="/workspaces/:workspaceId/chat/:conversationId" element={<ChatModePage />} />
-        <Route path="/workspaces/:workspaceId/canvas/:ainaId" element={<CanvasModePage />} />
+        <Route path="/workspaces/:workspaceId/canvas/:ainaId" element={<LegacyCanvasRedirect />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/plugin" element={<AllAppsPage />} />
         <Route path="/apps" element={<Navigate to="/plugin" replace />} />
@@ -59,4 +59,11 @@ function PersonalObsRoute() {
 function LegacyDebugRedirect() {
   const { search } = useLocation();
   return <Navigate to={`/obs${search}`} replace />;
+}
+
+// Canvases now open beside their conversation; keep old /canvas links working.
+function LegacyCanvasRedirect() {
+  const { workspaceId, ainaId = "" } = useParams<{ workspaceId?: string; ainaId: string }>();
+  const [searchParams] = useSearchParams();
+  return <Navigate to={workspaceCanvasPath(workspaceId, ainaId, searchParams.get("conversation"), searchParams.get("document"))} replace />;
 }

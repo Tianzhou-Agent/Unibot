@@ -31,7 +31,7 @@ def test_memory_aina_is_builtin_and_opens_memory_widget() -> None:
     }
     assert opened.status_code == 200
     assert opened.json()["main_widget"]["kind"] == "memory"
-    assert opened.json()["route"] == "/canvas/unibot-memory"
+    assert opened.json()["route"] == "/chat?aina=unibot-memory"
 
 
 def test_memory_crud_deduplicates_searches_and_counts_categories() -> None:

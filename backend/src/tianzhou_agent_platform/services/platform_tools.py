@@ -3,7 +3,7 @@
 import hashlib
 import re
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import (
@@ -130,8 +130,9 @@ async def open_aina(
         await repository.bind_conversation_aina(conversation_id, aina_id, make_primary=True)
 
     main_widget = record.manifest.main_widget or _default_main_widget(record)
-    query = urlencode({"conversation": conversation_id}) if conversation_id else ""
-    route = f"/canvas/{aina_id}{f'?{query}' if query else ''}"
+    # The canvas opens beside the conversation's chat, not on a page of its own.
+    chat_path = f"/chat/{quote(conversation_id, safe='')}" if conversation_id else "/chat"
+    route = f"{chat_path}?{urlencode({'aina': aina_id})}"
     return AinaCanvasResponse(
         aina_id=aina_id,
         name=record.manifest.aina.name,

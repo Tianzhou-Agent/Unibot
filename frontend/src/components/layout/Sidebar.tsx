@@ -386,9 +386,7 @@ function isChatNavigationPath(pathname: string) {
 
 function isFileNavigationPath(pathname: string) {
   return /^\/files(?:\/|$)/.test(pathname)
-    || /^\/canvas(?:\/|$)/.test(pathname)
-    || /^\/workspaces\/[^/]+\/?$/.test(pathname)
-    || /^\/workspaces\/[^/]+\/canvas(?:\/|$)/.test(pathname);
+    || /^\/workspaces\/[^/]+\/?$/.test(pathname);
 }
 
 function RailLink({ to, label, icon, active }: { to: string; label: string; icon: React.ReactNode; active?: boolean }) {

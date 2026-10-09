@@ -7,13 +7,17 @@ import {
   Bot,
   Check,
   CirclePause,
+  MessageSquareText,
+  PanelRightOpen,
   Play,
   RotateCcw,
+  Sparkles,
   Square,
   Trash2,
   X,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { AinaPicker } from "@/components/canvas/AinaPicker";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
@@ -22,6 +26,7 @@ import { isToolSequenceContinuation, toolSequenceCallCount, ToolCallList, ToolRe
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
@@ -37,6 +42,7 @@ import type {
   BackendMessage,
   ChatResponse,
   ConversationRecord,
+  DocumentTaskContext,
   LLMCallRecord,
   TraceRecord,
   TraceSpan,
@@ -52,6 +58,7 @@ interface MessageFailure {
 
 export default function ChatModePage() {
   const { t } = useTranslation("chatPage");
+  const { t: tCanvas } = useTranslation("canvas");
   const { workspaceId, conversationId } = useParams<{ workspaceId?: string; conversationId?: string }>();
   const routeWorkspaceId = workspaceId ?? null;
   const navigate = useNavigate();
@@ -81,6 +88,14 @@ export default function ChatModePage() {
   const [deleted, setDeleted] = useState(false);
   const [obsOpen, setObsOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  // The canvas is an optional add-on of the conversation, opened via `?aina=`.
+  const ainaId = searchParams.get("aina");
+  const documentName = searchParams.get("document");
+  const [canvas, setCanvas] = useState<AinaCanvasResponse | null>(null);
+  const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
+  const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
+  const canvasRouteRef = useRef({ ainaId, documentName });
+  canvasRouteRef.current = { ainaId, documentName };
   const endRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
   const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
@@ -257,6 +272,52 @@ export default function ChatModePage() {
     return () => window.removeEventListener("unibot:new-conversation", reset);
   }, []);
 
+  const closeCanvas = useCallback((replace = false) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("aina");
+      next.delete("document");
+      return next;
+    }, { replace });
+  }, [setSearchParams]);
+
+  useEffect(() => {
+    setDocumentTaskContext(null);
+    if (ainaId) setMobilePane("app");
+  }, [ainaId]);
+
+  useEffect(() => {
+    if (!ainaId) {
+      setCanvas(null);
+      return;
+    }
+    let cancelled = false;
+    // Opening with the conversation binds the AINA to it, so its turns prefer this AINA.
+    api
+      .post<AinaCanvasResponse>(`/ainas/${encodeURIComponent(ainaId)}/open`, {
+        ...actor,
+        workspace_id: routeWorkspaceId,
+        conversation_id: conversationId ?? null,
+      })
+      .then((opened) => !cancelled && setCanvas(opened))
+      .catch((openError) => {
+        if (cancelled) return;
+        setError(apiErrorMessage(openError));
+        closeCanvas(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actor, ainaId, closeCanvas, conversationId, routeWorkspaceId]);
+
+  /** The chat path for `id`, keeping whichever canvas is open beside it. */
+  function conversationPath(id: string) {
+    const { ainaId: openAinaId, documentName: openDocument } = canvasRouteRef.current;
+    return openAinaId
+      ? workspaceCanvasPath(routeWorkspaceId, openAinaId, id, openDocument)
+      : workspaceChatPath(routeWorkspaceId, id);
+  }
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
   }, [conversation?.messages, optimisticUser, liveItems, activity, approval, sending, clarificationWidgets]);
@@ -304,6 +365,7 @@ export default function ChatModePage() {
           workspace_id: routeWorkspaceId,
           title: draftTitle,
           category: "general",
+          ...(ainaId ? { active_aina_ids: [ainaId], primary_aina_id: ainaId } : {}),
         });
         if (!isActiveRun()) return;
         setConversation(targetConversation);
@@ -314,7 +376,7 @@ export default function ChatModePage() {
         localRunWorkspaceIdRef.current = routeWorkspaceId;
         activeConversationIdRef.current = targetConversation.id;
         notifyConversationsChanged();
-        navigate(workspaceChatPath(routeWorkspaceId, targetConversation.id), { replace: true });
+        navigate(conversationPath(targetConversation.id), { replace: true });
       }
       runConversationId = targetConversation.id;
       localRunConversationIdRef.current = targetConversation.id;
@@ -338,6 +400,8 @@ export default function ChatModePage() {
             message: text,
             conversation_id: targetConversation.id,
             workspace_id: routeWorkspaceId,
+            preferred_aina_id: canvasRouteRef.current.ainaId ?? undefined,
+            ui_context: canvasRouteRef.current.ainaId && documentTaskContext ? documentTaskUiContext(documentTaskContext) : undefined,
             ...actor,
           },
           onEvent,
@@ -357,17 +421,14 @@ export default function ChatModePage() {
       setLastRun(completed);
       setClarificationWidgets(completed.widgets.filter(isClarificationWidget));
       setApproval(completed.approval ?? null);
+      if (conversationId !== completed.conversation_id) {
+        navigate(conversationPath(completed.conversation_id), { replace: true });
+      }
+      await loadConversation(completed.conversation_id);
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
-      if (openAction?.aina_id) {
-        await openAina(openAction.aina_id, completed.conversation_id);
-        return true;
-      }
-      if (conversationId !== completed.conversation_id) {
-        navigate(workspaceChatPath(routeWorkspaceId, completed.conversation_id), { replace: true });
-      }
-      await loadConversation(completed.conversation_id);
+      if (openAction?.aina_id && isActiveRun()) openAina(openAction.aina_id, completed.conversation_id);
       return true;
     } catch (sendError) {
       if (isActiveRun()) {
@@ -463,24 +524,11 @@ export default function ChatModePage() {
     }
   }
 
-  async function openAina(ainaId: string, targetConversationId = conversation?.id) {
-    const expectedWorkspaceId = routeWorkspaceId;
-    const expectedConversationId = targetConversationId ?? null;
-    const isCurrentRoute = () => mountedRef.current
-      && activeWorkspaceIdRef.current === expectedWorkspaceId
-      && activeConversationIdRef.current === expectedConversationId;
-    setError(null);
-    try {
-      const canvas = await api.post<AinaCanvasResponse>(`/ainas/${ainaId}/open`, {
-        ...actor,
-        workspace_id: routeWorkspaceId,
-        conversation_id: targetConversationId,
-      });
-      if (!isCurrentRoute()) return;
-      navigate(workspaceCanvasPath(routeWorkspaceId, ainaId, targetConversationId), { state: { canvas } });
-    } catch (openError) {
-      if (isCurrentRoute()) setError(apiErrorMessage(openError));
-    }
+  /** Opens `targetAinaId` beside the conversation; the conversation itself stays where it is. */
+  function openAina(targetAinaId: string, targetConversationId = conversation?.id) {
+    setMobilePane("app");
+    if (targetAinaId === canvasRouteRef.current.ainaId) return;
+    navigate(workspaceCanvasPath(routeWorkspaceId, targetAinaId, targetConversationId));
   }
 
   const initialPrompt = (location.state as { initialPrompt?: string } | null)?.initialPrompt?.trim()
@@ -517,22 +565,28 @@ export default function ChatModePage() {
       <Topbar
         title={title}
         badge={badge}
-        actions={conversation?.id && !deleted ? (
-          <button
-            type="button"
-            onClick={() => {
-              const next = new URLSearchParams(searchParams);
-              next.delete("tab");
-              next.delete("traceId");
-              next.delete("logId");
-              setSearchParams(next, { replace: true });
-              setObsOpen(true);
-            }}
-            className="btn-outline h-8"
-            aria-label={t("viewObsAria")}
-          >
-            <Activity className="h-3.5 w-3.5" />OBS
-          </button>
+        actions={!deleted ? (
+          <div className="flex items-center gap-2">
+            {ainaId ? <CanvasPaneToggle pane={mobilePane} onChange={setMobilePane} /> : null}
+            <AinaPicker activeAinaId={ainaId} onSelect={(id) => openAina(id)} />
+            {conversation?.id ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete("tab");
+                  next.delete("traceId");
+                  next.delete("logId");
+                  setSearchParams(next, { replace: true });
+                  setObsOpen(true);
+                }}
+                className="btn-outline h-8"
+                aria-label={t("viewObsAria")}
+              >
+                <Activity className="h-3.5 w-3.5" />OBS
+              </button>
+            ) : null}
+          </div>
         ) : null}
       />
 
@@ -568,7 +622,14 @@ export default function ChatModePage() {
         </div>
       ) : null}
 
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className={classNames(
+        "min-h-0 flex-1",
+        ainaId ? "grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)]" : "flex flex-col",
+      )}>
+      <div className={classNames(
+        "min-h-0 flex-1 flex-col overflow-hidden",
+        ainaId ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
+      )}>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
           <div className="mx-auto max-w-[760px] space-y-7">
               {loading ? <ChatSkeleton /> : null}
@@ -584,7 +645,7 @@ export default function ChatModePage() {
                       <div key={message.id} className={continuesToolSequence ? "!mt-2" : undefined}>
                         <ConversationMessage
                           message={message}
-                          onOpenAina={(ainaId) => void openAina(ainaId)}
+                          onOpenAina={(id) => openAina(id)}
                           onPrompt={sendMessage}
                           debugMode={debugMode}
                           conversationId={conversation?.id ?? ""}
@@ -604,7 +665,7 @@ export default function ChatModePage() {
                   key={widget.id}
                   widget={widget}
                   workspaceId={routeWorkspaceId}
-                  onOpenAina={(ainaId) => void openAina(ainaId)}
+                  onOpenAina={(id) => openAina(id)}
                   onPrompt={sendMessage}
                 />
               ))}
@@ -634,12 +695,53 @@ export default function ChatModePage() {
               running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
+              context={ainaId ? documentTaskContext : null}
               onSend={sendMessage}
               onStop={() => void stopRun()}
             />
           ) : null}
         </div>
+        {ainaId ? (
+          // Inset as a window inside the conversation, so it reads as a closable add-on.
+          <section className={classNames(
+            "min-h-0 flex-col p-1.5 lg:flex lg:py-2 lg:pl-0 lg:pr-2",
+            mobilePane === "app" ? "flex" : "hidden",
+          )}>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-soft">
+            {canvas?.aina_id === ainaId ? (
+              <>
+                <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-app-soft px-4">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-accent-soft text-accent">
+                    <Bot className="h-3.5 w-3.5" />
+                  </span>
+                  <h2 className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ink">{canvas.name}</h2>
+                  <button type="button" onClick={() => closeCanvas()} className="btn-ghost h-7 px-2" aria-label={tCanvas("close", { name: canvas.name })}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </header>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <MainWidgetRenderer
+                    key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${canvas.main_widget.id}`}
+                    ainaId={canvas.aina_id}
+                    widget={canvas.main_widget}
+                    workspaceId={routeWorkspaceId}
+                    documentName={documentName}
+                    disabled={false}
+                    refreshToken={lastRun?.trace_id}
+                    onOpenAina={(id) => openAina(id)}
+                    onPrompt={(prompt) => void sendMessage(prompt)}
+                    onDocumentTaskContextChange={setDocumentTaskContext}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="h-full animate-pulse bg-line/60" />
+            )}
+            </div>
+          </section>
+        ) : null}
       </div>
+    </div>
       {conversation?.id && obsOpen ? (
         <ConversationObsDrawer
           sessionId={conversation.id}
@@ -796,6 +898,7 @@ function ChatComposer({
   running,
   initialText,
   sessionId,
+  context,
   onSend,
   onStop,
 }: {
@@ -803,10 +906,12 @@ function ChatComposer({
   running: boolean;
   initialText: string;
   sessionId: string | null;
+  context: DocumentTaskContext | null;
   onSend: (text: string) => Promise<boolean | undefined>;
   onStop: () => void;
 }) {
   const { t } = useTranslation("chatPage");
+  const { t: tCanvas } = useTranslation("canvas");
   const [text, setText] = useState(initialText);
   const [sendFailed, setSendFailed] = useState(false);
   const composingRef = useRef(false);
@@ -830,6 +935,12 @@ function ChatComposer({
           onSubmit={submit}
           className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
         >
+          {context ? (
+            <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[10.5px] text-accent">
+              <Sparkles className="h-3 w-3 shrink-0" />
+              <span className="truncate">{tCanvas("context", { task: context.taskTitle, section: context.sectionHeading })}</span>
+            </div>
+          ) : null}
           <textarea
             value={text}
             onChange={(event) => { setText(event.target.value); setSendFailed(false); }}
@@ -844,7 +955,7 @@ function ChatComposer({
             }}
             disabled={disabled}
             rows={1}
-            placeholder={t("composerPlaceholder")}
+            placeholder={context ? tCanvas("placeholderEdit") : t("composerPlaceholder")}
             aria-label={t("messageAria")}
             className="w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
           />
@@ -924,6 +1035,46 @@ function DeletedConversation({ title, onRestore }: { title: string; onRestore: (
       </div>
     </div>
   );
+}
+
+function CanvasPaneToggle({ pane, onChange }: { pane: "chat" | "app"; onChange: (pane: "chat" | "app") => void }) {
+  const { t } = useTranslation("canvas");
+  const options = [
+    { value: "chat", label: t("chat"), aria: t("showChat"), Icon: MessageSquareText },
+    { value: "app", label: t("app"), aria: t("showApp"), Icon: PanelRightOpen },
+  ] as const;
+  return (
+    <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label={t("mobileView")}>
+      {options.map(({ value, label, aria, Icon }) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => onChange(value)}
+          className={classNames(
+            "flex h-6 items-center gap-1 rounded px-2 text-[10px] font-bold",
+            pane === value ? "bg-white text-accent shadow-sm" : "text-ink-muted",
+          )}
+          aria-label={aria}
+        >
+          <Icon className="h-3.5 w-3.5" />{label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function documentTaskUiContext(context: DocumentTaskContext): string {
+  return [
+    "The user is reviewing a section draft in the document editor. When the user says \"this task\" or \"this section\", use this exact context:",
+    `Document: ${context.documentName}`,
+    `Task title: ${context.taskTitle}`,
+    `Task id: ${context.taskId}`,
+    `Task status: ${context.taskStatus}`,
+    `Section: ${context.sectionHeading}`,
+    `Section id: ${context.sectionId}`,
+    `Current draft revision: ${context.draftRevision}`,
+    "To have the AI revise it further, call document.edit_task.ai_revise; never update the formal document directly.",
+  ].join("\n");
 }
 
 function ChatSkeleton() {
