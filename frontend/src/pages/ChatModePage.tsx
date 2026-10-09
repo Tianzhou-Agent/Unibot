@@ -94,6 +94,8 @@ export default function ChatModePage() {
   const ainaKey = ainaIds.join("\n");
   const [canvases, setCanvases] = useState<Record<string, AinaCanvasResponse>>({});
   const [chooser, setChooser] = useState<WidgetDefinition | null>(null);
+  // AINAs the user declined to open in this conversation; they are not offered again.
+  const declinedAinaIdsRef = useRef(new Set<string>());
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const canvasRouteRef = useRef(canvasRoute);
@@ -238,6 +240,7 @@ export default function ChatModePage() {
     setError(null);
     setDeleted(false);
     setChooser(null);
+    declinedAinaIdsRef.current = new Set();
     if (conversationId) {
       void loadConversation(conversationId);
     } else {
@@ -274,6 +277,7 @@ export default function ChatModePage() {
       setSending(false);
       setClarificationWidgets([]);
       setChooser(null);
+      declinedAinaIdsRef.current = new Set();
     };
     window.addEventListener("unibot:new-conversation", reset);
     return () => window.removeEventListener("unibot:new-conversation", reset);
@@ -464,7 +468,9 @@ export default function ChatModePage() {
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
-      const suggestion = completed.widgets.find((widget) => widget.kind === "aina_chooser" && widget.apps.length);
+      const suggestion = completed.widgets.find((widget) => widget.kind === "aina_chooser" && widget.apps.some(
+        (app) => !canvasRouteRef.current.ainaIds.includes(app.aina_id) && !declinedAinaIdsRef.current.has(app.aina_id),
+      ));
       if (openAction?.aina_id && isActiveRun()) openAinas([openAction.aina_id], completed.conversation_id);
       else if (suggestion && isActiveRun()) setChooser(suggestion);
       return true;
@@ -809,7 +815,10 @@ export default function ChatModePage() {
             setChooser(null);
             openAinas(ids);
           }}
-          onClose={() => setChooser(null)}
+          onClose={() => {
+            for (const app of chooser.apps) declinedAinaIdsRef.current.add(app.aina_id);
+            setChooser(null);
+          }}
         />
       ) : null}
       {conversation?.id && obsOpen ? (

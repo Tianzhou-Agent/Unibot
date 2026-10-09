@@ -51,7 +51,7 @@ export function AinaChooserDialog({ widget, openAinaIds, onOpen, onClose }: {
             <X className="h-3.5 w-3.5" />
           </button>
         </header>
-        {widget.description ? <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{widget.description}</p> : null}
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{widget.description || t("chooser.defaultReason")}</p>
         <ul className="mt-3 space-y-2">
           {widget.apps.map((app) => {
             const alreadyOpen = openAinaIds.includes(app.aina_id);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -633,3 +634,42 @@ def test_suggest_ainas_returns_a_ranked_chooser_without_opening_anything() -> No
     assert widget["actions"] == []
     assert bound["active_aina_ids"] == []
     assert "call suggest_ainas" in llm.calls[0]["messages"][0]["content"]
+
+
+def test_routing_into_an_aina_with_a_ui_offers_to_open_it() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_unibot-memory_"),
+            assistant("Tell me what to remember."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post("/chat", json={"message": "I want to keep track of my decisions"})
+
+    assert response.status_code == 200
+    choosers = [widget for widget in response.json()["widgets"] if widget["kind"] == "aina_chooser"]
+    assert [[app["aina_id"] for app in widget["apps"]] for widget in choosers] == [["unibot-memory"]]
+
+
+def test_suggest_ainas_accepts_entry_function_fragments_and_lists_ids_on_a_miss() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="builtin_suggest_ainas_", arguments=json.dumps({"aina_ids": ["nope"], "reason": "r"})),
+            call_first_tool(
+                prefix="builtin_suggest_ainas_",
+                arguments=json.dumps({"aina_ids": ["memory_" + _entry_digest("unibot-memory")], "reason": "r"}),
+            ),
+            assistant("Pick one."),
+        ]
+    )
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post("/chat", json={"message": "Keep my notes", "capability": "builtin:suggest_ainas"})
+        conversation = client.get(f"/conversations/{response.json()['conversation_id']}").json()
+
+    assert [app["aina_id"] for app in response.json()["widgets"][0]["apps"]] == ["unibot-memory"]
+    first_result = next(message["content"] for message in conversation["messages"] if message["role"] == "tool")
+    assert "Available AINA ids:" in first_result and "unibot-memory" in first_result
+
+
+def _entry_digest(aina_id: str) -> str:
+    return hashlib.sha1(f"aina:{aina_id}".encode()).hexdigest()[:8]

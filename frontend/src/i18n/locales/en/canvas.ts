@@ -8,6 +8,7 @@ export default {
   tabs: "Open apps",
   chooser: {
     title: "Choose apps to open",
+    defaultReason: "This looks like work for an app. Open it beside the conversation?",
     open: "Open ({{count}})",
     notNow: "Not now",
     alreadyOpen: "Open",

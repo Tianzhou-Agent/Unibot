@@ -108,13 +108,24 @@ async def suggest_ainas_widget(
     apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
     by_id = {item.aina_id: item for item in apps}
     by_name = {item.name.casefold(): item for item in apps}
+    # Models also pass a fragment of the entry function name they were shown (``…_<digest>``).
+    by_digest = {hashlib.sha1(f"aina:{item.aina_id}".encode()).hexdigest()[:8]: item for item in apps}
     chosen: list[WidgetApp] = []
     for requested in aina_ids:
-        app = by_id.get(requested) or by_name.get(requested.casefold())
+        digest = _ENTRY_DIGEST_SUFFIX.search(requested)
+        app = (
+            by_id.get(requested)
+            or by_name.get(requested.casefold())
+            or (by_digest.get(digest["digest"]) if digest else None)
+        )
         if app is not None and app not in chosen:
             chosen.append(app)
     if not chosen:
-        raise PlatformError("INVALID_REQUEST", "suggest_ainas found none of the requested AINAs among available apps")
+        raise PlatformError(
+            "INVALID_REQUEST",
+            "suggest_ainas found none of the requested AINAs. Available AINA ids: "
+            + ", ".join(item.aina_id for item in apps),
+        )
     return WidgetDefinition(
         id="unibot-aina-chooser",
         kind="aina_chooser",
@@ -342,6 +353,7 @@ def _default_main_widget(record: AinaRecord) -> WidgetDefinition:
 
 
 _ENTRY_FUNCTION_NAME = re.compile(r"^aina_(?P<aina_id>.+)_(?P<digest>[0-9a-f]{8})$")
+_ENTRY_DIGEST_SUFFIX = re.compile(r"_(?P<digest>[0-9a-f]{8})$")
 
 
 def _aina_id_argument(arguments: dict[str, Any]) -> str:

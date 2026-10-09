@@ -29,7 +29,9 @@ from tianzhou_agent_platform.services.platform_tools import (
     DESCRIBE_AINA_TOOL_ID,
     OPEN_AINA_TOOL_ID,
     PLATFORM_TOOL_IDS,
+    SUGGEST_AINAS_TOOL_ID,
     invoke_platform_tool,
+    suggest_ainas_widget,
 )
 
 
@@ -96,8 +98,11 @@ class CapabilityExecutor:
         """Perform one capability call; widgets and scope changes are applied to the run."""
         if capability.is_builtin_aina:
             return await self.activate_scope(run, capability, call_id, arguments)
-        if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_AINA_TOOL_ID}:
+        if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_AINA_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
             run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "app_list"]
+        if capability.capability_id == SUGGEST_AINAS_TOOL_ID:
+            # The model's ranked suggestion replaces the one offered when the turn was routed into an AINA.
+            run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "aina_chooser"]
         if capability.kind == "tool":
             result, _duration_ms = await self.gateway.invoke_tool(
                 cast(ToolRecord, capability.value),
@@ -193,12 +198,31 @@ class CapabilityExecutor:
             },
         )
         await run.scope_resolved(conversation, selected=capability, source="model_selection")
+        await self._offer_aina_ui(run, capability.capability_id)
         return {
             "activated": True,
             "aina_id": capability.capability_id,
             "available_capability_ids": sorted(item.capability_id for item in scoped.values()),
             "note": "Only this AINA's capabilities were activated for this turn; its application UI was not opened.",
         }
+
+
+    async def _offer_aina_ui(self, run: AgentRun, aina_id: str) -> None:
+        """Suggest the routed AINA's application UI; the host lets the user choose whether to open it."""
+        if any(widget.kind == "aina_chooser" for widget in run.scope.widgets):
+            return
+        try:
+            widget = await suggest_ainas_widget(
+                self.repository,
+                [aina_id],
+                "",
+                user_id=run.user_id,
+                tenant_id=run.tenant_id,
+            )
+        except PlatformError:
+            return
+        if widget.apps[0].has_main_widget:
+            run.scope.widgets.append(widget)
 
 
 def _edit_task_reply(result: Any) -> str | None:

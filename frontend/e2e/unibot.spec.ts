@@ -2228,6 +2228,7 @@ test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存�
   await page.goto("/chat/conv-e2e-1");
   const input = page.getByRole("textbox", { name: "消息", exact: true });
   const chooser = page.getByRole("dialog", { name: "选择要打开的应用" });
+  const reply = page.locator("main").getByText("这是确定性的端到端回复。", { exact: true });
 
   await input.fill("帮我整理会议纪要");
   await page.getByRole("button", { name: "发送消息" }).click();
@@ -2235,22 +2236,40 @@ test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存�
   await expect(chooser.getByText("整理纪要适合文档编辑器，结论可以存入记忆。")).toBeVisible();
   await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeChecked();
   await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).not.toBeChecked();
-  await chooser.getByRole("button", { name: "暂不打开", exact: true }).last().click();
-  await expect(chooser).toHaveCount(0);
-  await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
-
-  await input.fill("还是打开文档吧");
-  await page.getByRole("button", { name: "发送消息" }).click();
   await chooser.getByRole("button", { name: "打开（1）", exact: true }).click();
+  await expect(chooser).toHaveCount(0);
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
   await expect(page.getByRole("tab", { name: "unibot-documents", selected: true })).toBeVisible();
 
+  // Suggestions skip open apps; declining one keeps it from being offered again in this conversation.
   await input.fill("再记住这些决定");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
   await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeDisabled();
   await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).toBeChecked();
-  await chooser.getByRole("button", { name: "打开（1）", exact: true }).click();
+  await chooser.getByRole("button", { name: "暂不打开", exact: true }).last().click();
+  await expect(chooser).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+
+  await input.fill("继续整理");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(input).toHaveValue("");
+  await expect(reply.last()).toBeVisible();
+  await expect(chooser).toHaveCount(0);
+
+  // An explicit open adds a tab beside the ones already open.
+  state.streamWidgets = [{
+    id: "open-unibot-memory",
+    kind: "navigation",
+    title: "Open Unibot Memory",
+    description: "",
+    markdown: null,
+    fields: [],
+    apps: [],
+    actions: [{ id: "open", label: "Enter Canvas", kind: "open_aina", aina_id: "unibot-memory", style: "primary" }],
+  }];
+  await input.fill("打开记忆");
+  await page.getByRole("button", { name: "发送消息" }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
   await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();

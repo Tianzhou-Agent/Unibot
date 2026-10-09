@@ -8,6 +8,7 @@ export default {
   tabs: "已打开的应用",
   chooser: {
     title: "选择要打开的应用",
+    defaultReason: "这项工作适合在应用中完成，要在对话旁打开吗？",
     open: "打开（{{count}}）",
     notNow: "暂不打开",
     alreadyOpen: "已打开",
