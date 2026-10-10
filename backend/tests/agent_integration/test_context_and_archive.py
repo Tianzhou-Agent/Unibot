@@ -68,6 +68,22 @@ async def test_archiver_appends_each_message_once_in_the_archive_format() -> Non
     assert result.role == "tool" and result.content_type == "tool" and result.tool_call_id == "c1"
     assert answer.widgets == [widget] and answer.content_type == "widget"
     assert all(record.trace_id == "trace_1" for record in conversations.archived)
+    assert all(record.reasoning is None for record in conversations.archived)
+
+
+async def test_archiver_keeps_the_model_reasoning() -> None:
+    conversations = RecordingConversations()
+    messages = [
+        AIMessage(content="", id="a1", tool_calls=[{"id": "c1", "name": "demo", "args": {}}],
+                  additional_kwargs={"reasoning_content": "Look it up first."}),
+        ToolMessage(content="{}", tool_call_id="c1", name="demo", id="t1"),
+        AIMessage(content="done", id="a2", additional_kwargs={"reasoning_content": "Enough."}),
+    ]
+
+    await _archiver(conversations).archive(messages)
+
+    assert [record.reasoning for record in conversations.archived] == ["Look it up first.", None, "Enough."]
+    assert "reasoning" not in conversations.archived[0].provider_message()
 
 
 async def test_originals_are_archived_before_summarization_replaces_them() -> None:

@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.core.agent_runtime.middleware.summarization import is_summary_message
 from tianzhou_agent_platform.conversations.models import Message
+from tianzhou_agent_platform.model_providers.factory import REASONING_KEY
 from tianzhou_agent_platform.services.agent_integration.capabilities import provider_messages_for_scope
 
 
@@ -148,11 +149,13 @@ class TranscriptArchiver:
             if wire is None:
                 continue
             attached = (widgets or {}).get(message.id) or []
+            reasoning = message.additional_kwargs.get(REASONING_KEY) if isinstance(message, AIMessage) else None
             records.append(
                 Message(
                     id=message.id,
                     role=wire["role"],
                     content=wire.get("content") or "",
+                    reasoning=reasoning if isinstance(reasoning, str) and reasoning else None,
                     tool_calls=wire.get("tool_calls"),
                     tool_call_id=wire.get("tool_call_id"),
                     name=wire.get("name"),

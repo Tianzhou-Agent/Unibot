@@ -40,7 +40,8 @@ def task_tool_specs() -> list[dict[str, Any]]:
             "description": (
                 "Create one task or a batch of up to 20 tasks in the current session's three-level task tree. "
                 "Use tasks only for meaningful deliverables or phases, not for individual file reads, searches, "
-                "or tool calls. Prefer progressive planning. In a batch, connect items with client_ref/parent_ref."
+                "or tool calls. Prefer progressive planning. Send either the single-task fields or tasks, not both; "
+                "link batch items with client_ref/parent_ref."
             ),
             "input_schema": {
                 "type": "object",
@@ -56,7 +57,8 @@ def task_tool_specs() -> list[dict[str, Any]]:
             "display_name": "Update structured task",
             "description": (
                 "Update a current-session task using expected_version. Only leaf task status is writable. Set "
-                "status=verifying to request completion; the runtime Completion Gate alone can write completed. "
+                "status=in_progress, then verifying to request completion (never pending to verifying); the runtime "
+                "Completion Gate alone can write completed. "
                 "A normal tool error or failed test should stay in_progress unless the task is unrecoverable."
             ),
             "input_schema": {

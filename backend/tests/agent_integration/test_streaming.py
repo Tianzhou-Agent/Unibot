@@ -48,3 +48,22 @@ async def test_final_answer_is_sent_once() -> None:
     await unstreamed.finish("Direct reply")
 
     assert [event["delta"] for event in events] == ["Partial", "\n\n[notice]", "Direct reply"]
+
+
+async def test_model_reasoning_is_streamed_as_reasoning_deltas() -> None:
+    events: list[dict[str, Any]] = []
+
+    async def sink(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    relay = StreamRelay(sink)
+    await relay.relay(
+        _stream(
+            (AIMessageChunk(content="", id="run-1", additional_kwargs={"reasoning_content": "Plan."}), {"langgraph_node": "model"}),
+            (AIMessageChunk(content="", id="run-2", additional_kwargs={"reasoning_content": "hidden"}), {"langgraph_node": "TurnSummarizationMiddleware.before_model"}),
+            (AIMessageChunk(content="Done", id="run-1"), {"langgraph_node": "model"}),
+        )
+    )
+
+    assert events == [{"type": "reasoning.delta", "delta": "Plan."}, {"type": "message.delta", "delta": "Done"}]
+    assert relay.streamed == "Done"
