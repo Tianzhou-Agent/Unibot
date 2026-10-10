@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { ReasoningBlock } from "@/components/chat/ReasoningBlock";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import type { StreamEvent } from "@/lib/api";
 import { classNames } from "@/lib/utils";
@@ -9,6 +10,7 @@ import { classNames } from "@/lib/utils";
 // The in-flight turn, in arrival order, until the persisted conversation replaces it.
 export type LiveItem =
   | { kind: "text"; key: string; text: string }
+  | { kind: "reasoning"; key: string; text: string }
   | {
       kind: "tool";
       key: string;
@@ -20,6 +22,11 @@ export type LiveItem =
     };
 
 export function applyLiveEvent(items: LiveItem[], event: StreamEvent): LiveItem[] {
+  if (event.type === "reasoning.delta") {
+    const last = items[items.length - 1];
+    if (last?.kind === "reasoning") return [...items.slice(0, -1), { ...last, text: last.text + event.delta }];
+    return [...items, { kind: "reasoning", key: `reasoning-${items.length}`, text: event.delta }];
+  }
   if (event.type === "message.delta") {
     const last = items[items.length - 1];
     if (last?.kind === "text") return [...items.slice(0, -1), { ...last, text: last.text + event.delta }];
@@ -55,7 +62,9 @@ export function LiveTurn({ items, compact = false, debugMode = false }: {
 }) {
   return (
     <>
-      {items.map((item) => item.kind === "text" ? (
+      {items.map((item, index) => item.kind === "reasoning" ? (
+        <ReasoningBlock key={item.key} text={item.text} active={index === items.length - 1} compact={compact} />
+      ) : item.kind === "text" ? (
         // No copy/feedback actions yet: the persisted message that replaces this carries them.
         <div key={item.key} className="py-0.5">
           <MarkdownContent content={item.text} />

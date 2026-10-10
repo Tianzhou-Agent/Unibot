@@ -1,0 +1,264 @@
+# A single long scenario that walks through most of what the agent can do in one session: durable memory, a
+# planned task list, needle search across documents, Python in the sandbox, a deep document-building turn that is
+# stopped and resumed, a reviewed edit with background AI drafts, an approval-gated merge and delete, closing the
+# plan, and recalling preferences from a new conversation.
+#
+# Every step is checked against the state read back through the API, not only against the agent's answer.
+#
+# Needs a backend with the Code Runner enabled (UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL=true on a trusted dev machine,
+# or the Kubernetes sandbox) and the documents AINA. Watch it in the UI:
+#
+#   python -m unibot_eval run --enable code_runner --case "showcase.*" --show-in-ui --no-judge --out reports/showcase
+
+cases:
+  - id: showcase.launch_analyst
+    description: >-
+      A launch lead works through a whole day's job with the agent: remember preferences, plan five steps, find the
+      right sales data among decoys, compute the figures in Python, write a five-section report (stopped and
+      resumed half-way), have the Risks section drafted, revised and merged after approval, delete the old draft,
+      close the plan, and later recall the preferences from a new conversation.
+    tags: [showcase, long_run]
+    requires: [code_runner]
+    turns:
+      # ---- Seed: the user's existing documents, including decoys --------------------------------------------------
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "sales-{{marker}}-2026"
+            content: |
+              # Regional revenue, project {{marker}}, 2026
+
+              | Region | Q2 2026 revenue (EUR) | Q3 2026 revenue (EUR) |
+              |---|---|---|
+              | North | 182400 | 211560 |
+              | South | 140250 | 133980 |
+              | East | 96700 | 128611 |
+              | West | 205130 | 219489 |
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "sales-{{marker}}-2025-archive"
+            content: |
+              # Archived regional revenue, project {{marker}}, 2025 (superseded, do not use)
+
+              | Region | Q2 2025 revenue (EUR) | Q3 2025 revenue (EUR) |
+              |---|---|---|
+              | North | 150000 | 151000 |
+              | South | 120000 | 125000 |
+              | East | 80000 | 81000 |
+              | West | 190000 | 188000 |
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "feedback-{{marker}}"
+            content: |
+              # Customer feedback, project {{marker}}
+
+              1. Onboarding emails arrive in English only; customers in the South region ask for Spanish.
+              2. The mobile checkout times out on slow networks.
+              3. Invoices show prices without VAT.
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "standup-{{marker}}"
+            content: "# Stand-up notes\n\nNothing about sales here. Coffee machine is fixed.\n"
+      - action: http
+        request:
+          path: /documents
+          body:
+            user_id: "{{user_id}}"
+            name: "report-{{marker}}-old-draft"
+            content: "# Old launch report draft\n\nObsolete. Replace with the new report.\n"
+
+      # ---- 1. Durable memory ---------------------------------------------------------------------------------------
+      - user: >-
+          Before we start, remember these working preferences for all my future sessions: I am the launch lead for
+          project {{marker}}, project {{marker}} launches on 2027-03-15, and I want money reported in EUR.
+        timeout_s: 180
+        expect:
+          tools: {expected: [memory.remember], mode: superset, forbidden: [memory.forget]}
+      - action: http
+        request:
+          method: GET
+          path: /memories
+          params: {user_id: "{{user_id}}"}
+          verify: [{contains: ["{{marker}}", "2027-03-15"]}]
+
+      # ---- 2. Planning + needle search ---------------------------------------------------------------------------
+      - user: >-
+          Here is today's job for project {{marker}}, in five steps: (1) find my 2026 regional sales data,
+          (2) compute the quarter-over-quarter figures with Python, (3) write a launch readiness report,
+          (4) get its Risks section drafted for my review, (5) delete the old report draft. Put these five steps on
+          the task list of this conversation, then do step 1: find the right sales document among my documents and
+          show me its table. Ignore archived data.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools:
+            expected: [task_create, document.read]
+            mode: superset
+            forbidden: [document.delete, document.create, document.update_section]
+          tool_args: [{tool: document.read, args: {name: "re:sales-{{marker}}-2026(\\.md)?$"}}]
+          output: {regex: "211[,. ]?560.*128[,. ]?611", not_contains: ["188000", "188,000"]}
+      - action: http
+        request:
+          method: GET
+          path: /tasks
+          params: {session_id: "{{conversation_id}}"}
+          verify: [{field: tasks, regex: "(\"title\".*){5}"}]
+
+      # ---- 3. Python in the sandbox (every sandbox run needs the user's approval) --------------------------------
+      - user: >-
+          Step 2: run Python in the code runner on exactly those 2026 numbers. Compute each region's
+          quarter-over-quarter growth in percent, the Q2 and Q3 totals, and the overall growth. Show the results
+          with two decimals and tell me which region grew fastest and which one shrank.
+        timeout_s: 300
+        expect:
+          status: approval_required
+          trace: {events_include: [approval.required]}
+      - action: confirm_approval
+        max_confirmations: 3
+        timeout_s: 300
+        expect:
+          tools: {expected: [sandbox.run_python], mode: superset, forbidden: [sandbox.run_bash]}
+          output:
+            regex: "693[,. ]?640"
+            contains: ["11.07", "33.00", "4.47", "East", "South"]
+
+      # ---- 4. Deep turn, stopped half-way and resumed ------------------------------------------------------------
+      - user: >-
+          Step 3: create a document named launch-report-{{marker}} with exactly these level-2 sections, in this
+          order: Summary, Regional performance (a markdown table with all four regions, both quarters and the
+          growth figures you computed), Customer feedback (taken from my feedback document), Risks (one line
+          saying "To be drafted."), and Next steps (must mention the launch date from my preferences). Then read it
+          back and confirm every section is there.
+        preferred_aina_id: unibot-documents
+        stop_after: {tool_calls: 2}
+        timeout_s: 300
+        expect:
+          status: stopped
+      - action: resume
+        timeout_s: 300
+        expect:
+          status: completed
+          tools: {forbidden: [document.delete]}
+      - action: http
+        request:
+          method: GET
+          path: "/documents/launch-report-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify:
+            - field: content
+              contains: ["## Summary", "## Regional performance", "## Customer feedback", "## Risks",
+                         "## Next steps", "2027-03-15", "33.00", "checkout"]
+              regex: "Summary.*Regional performance.*Customer feedback.*Risks.*Next steps"
+
+      # ---- 5. Reviewed edit: AI draft, AI revision, both as background jobs --------------------------------------
+      - user: >-
+          Step 4: use task mode to draft a rewrite of the Risks section of launch-report-{{marker}}. It should
+          turn each of the three customer feedback issues into a launch risk with a mitigation. I will review it
+          before anything is merged.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools:
+            expected: [document.edit_task.create]
+            mode: superset
+            forbidden: [document.update_section, document.edit_task.merge_section]
+      - &draft_ready
+        action: poll
+        poll:
+          path: "/documents/launch-report-{{marker}}.md/edit-tasks"
+          params: {user_id: "{{user_id}}"}
+          field: items.0.sections.0.ai_status
+          until: [ready, failed]
+          equals: ready
+          timeout_s: 240
+      - user: "Ask the AI to revise that Risks draft so every mitigation has an owner: Priya Raman."
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          tools:
+            expected: [document.edit_task.ai_revise]
+            mode: superset
+            forbidden: [document.update_section, document.edit_task.merge_section]
+      - *draft_ready
+      - action: http  # nothing is merged yet
+        request:
+          method: GET
+          path: "/documents/launch-report-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["To be drafted."], not_contains: ["Priya Raman"]}]
+
+      # ---- 6. Approval-gated merge and delete ---------------------------------------------------------------------
+      - user: >-
+          The draft looks good. Merge the Risks section into the report, then do step 5: delete
+          report-{{marker}}-old-draft.
+        preferred_aina_id: unibot-documents
+        timeout_s: 300
+        expect:
+          status: approval_required
+          trace: {events_include: [approval.required]}
+      - action: confirm_approval
+        max_confirmations: 3
+        timeout_s: 300
+        expect:
+          status: completed
+          tools:
+            expected: [document.edit_task.merge_section, document.delete]
+            mode: superset
+      - action: http
+        request:
+          method: GET
+          path: "/documents/report-{{marker}}-old-draft.md"
+          params: {user_id: "{{user_id}}"}
+          expect_status: 404
+      - action: http
+        request:
+          method: GET
+          path: "/documents/launch-report-{{marker}}.md"
+          params: {user_id: "{{user_id}}"}
+          verify:
+            - field: content
+              contains: ["Priya Raman", "## Regional performance", "## Next steps", "2027-03-15"]
+              not_contains: ["To be drafted."]
+      - action: http  # the decoys and sources are untouched
+        request:
+          method: GET
+          path: "/documents/sales-{{marker}}-2025-archive.md"
+          params: {user_id: "{{user_id}}"}
+          verify: [{field: content, contains: ["| West | 190000 | 188000 |"]}]
+
+      # ---- 7. Close the plan -------------------------------------------------------------------------------------
+      # The agent usually closes each step as it goes, so a query alone can be the right answer here; the
+      # state check below is what matters.
+      - user: "Update the task list: mark every step we finished as done, then tell me in one line what is left."
+        timeout_s: 300
+        expect:
+          tools: {forbidden: [task_delete]}
+      - action: http
+        request:
+          method: GET
+          path: /tasks
+          params: {session_id: "{{conversation_id}}"}
+          verify: [{field: tasks, not_contains: ["\"status\": \"pending\"", "\"status\": \"in_progress\""]}]
+
+      # ---- 8. A new conversation recalls the preferences ----------------------------------------------------------
+      - user: "Quick check: when does project {{marker}} launch, and in which currency do I want money reported?"
+        new_conversation: true
+        timeout_s: 180
+        expect:
+          output: {contains: ["2027", "EUR"], regex: "(2027-03-15|15 March 2027|March 15, 2027)"}
+          tools: {forbidden: [document.create, document.delete]}
+    final:
+      tools: {counts: {document.create: 1, document.delete: 1, document.edit_task.create: 1,
+                       document.edit_task.merge_section: 1}}
+      budget: {max_duplicate_calls: 1}  # re-reading the edit task after the AI revision changed it is legitimate

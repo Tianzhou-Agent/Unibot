@@ -25,6 +25,7 @@ import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/components/chat/LiveTurn";
 import { isToolSequenceContinuation, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
+import { ReasoningBlock } from "@/components/chat/ReasoningBlock";
 import { finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { announceConversationRunning, notifyConversationsChanged } from "@/components/layout/Sidebar";
@@ -633,12 +634,16 @@ export default function ChatModePage() {
 
   const messages = useMemo(() => {
     const archived = conversation?.messages ?? [];
-    // The run archives the user message when it starts, so a reload during the run already contains it.
-    const echoed = optimisticUser !== null && archived
-      .slice(optimisticBaselineRef.current)
-      .some((message) => message.role === "user" && message.content === optimisticUser.content);
-    return optimisticUser && !echoed ? [...archived, optimisticUser] : archived;
-  }, [conversation?.messages, optimisticUser]);
+    if (!sending) return archived;
+    // The run archives its messages as it goes and the page reloads the conversation meanwhile, but the live turn
+    // already shows those steps: until it ends, show the archive only up to the turn and its user message.
+    const baseline = optimisticBaselineRef.current;
+    const echoed = archived
+      .slice(baseline)
+      .find((message) => message.role === "user" && message.content === optimisticUser?.content);
+    const user = echoed ?? optimisticUser;
+    return user ? [...archived.slice(0, baseline), user] : archived.slice(0, baseline);
+  }, [conversation?.messages, optimisticUser, sending]);
   const toolResultsByCallId = useMemo(() => new Map(
     messages
       .filter((message) => message.role === "tool" && message.tool_call_id)
@@ -655,6 +660,9 @@ export default function ChatModePage() {
   const [openTurnIds, setOpenTurnIds] = useState<ReadonlySet<string>>(() => new Set());
   const foldedStepIds = useMemo(() => new Set(
     [...turnProcesses].flatMap(([turnId, process]) => openTurnIds.has(turnId) ? [] : [...process.stepIds]),
+  ), [turnProcesses, openTurnIds]);
+  const foldedReasoningIds = useMemo(() => new Set(
+    [...turnProcesses].flatMap(([turnId, process]) => openTurnIds.has(turnId) ? [] : [process.answerId]),
   ), [turnProcesses, openTurnIds]);
   function toggleTurn(turnId: string) {
     setOpenTurnIds((current) => {
@@ -773,6 +781,7 @@ export default function ChatModePage() {
                             failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
                             toolResultsByCallId={toolResultsByCallId}
                             requestedToolCallIds={requestedToolCallIds}
+                            showReasoning={!foldedReasoningIds.has(message.id)}
                           />
                         </div>
                         {process ? (
@@ -930,6 +939,7 @@ function ConversationMessage({
   failures,
   toolResultsByCallId,
   requestedToolCallIds,
+  showReasoning = true,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
@@ -940,6 +950,7 @@ function ConversationMessage({
   failures: MessageFailure[];
   toolResultsByCallId: ReadonlyMap<string, BackendMessage>;
   requestedToolCallIds: ReadonlySet<string>;
+  showReasoning?: boolean;
 }) {
   const failure = failures[0] ?? null;
   if (message.role === "system") return null;
@@ -960,6 +971,7 @@ function ConversationMessage({
   const hasToolCalls = Boolean(message.tool_calls?.length);
   return (
     <div className="space-y-2">
+      {showReasoning && message.reasoning ? <ReasoningBlock text={message.reasoning} /> : null}
       {message.content ? (
         <AssistantMessage
           conversationId={conversationId}

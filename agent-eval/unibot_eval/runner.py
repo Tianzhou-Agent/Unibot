@@ -200,7 +200,9 @@ class EvalRunner:
                             title = f"[eval] {case.id} #{number}" + (f" · conversation {opened}" if opened > 1 else "")
                         step_checks: list[CheckResult] = []
                         if turn.action in {"http", "poll"}:
-                            observation, step_checks = await self._run_step(client, index, turn, user_id, saved)
+                            observation, step_checks = await self._run_step(
+                                client, index, turn, user_id, saved, conversations.get(turn.actor)
+                            )
                         else:
                             try:
                                 observation = await self._run_turn(
@@ -263,9 +265,12 @@ class EvalRunner:
         turn: Turn,
         user_id: str,
         saved: dict[str, str],
+        conversation_id: str | None = None,
     ) -> tuple[TurnObservation, list[CheckResult]]:
         """Run an API setup (``http``) or background-job (``poll``) step and check its outcome."""
         variables = {**saved, "user_id": user_id, "tenant_id": self.settings.tenant_id}
+        if conversation_id:
+            variables["conversation_id"] = conversation_id  # the actor's current conversation, e.g. for /tasks
         checks: list[CheckResult] = []
         started = time.perf_counter()
         with tracer().start_as_current_span("eval.step") as span:

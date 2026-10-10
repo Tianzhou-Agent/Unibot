@@ -166,7 +166,7 @@ cases:
           judge: {rubric: groundedness, criteria: "...", reference: "...", threshold: 0.7}
       - action: confirm_approval   # or deny_approval; acts on this actor's last pending approval
         max_confirmations: 3       # keep confirming while the continuation pauses for the next gated call
-      - action: http               # API setup step; {{user_id}}/{{tenant_id}} are this actor's ids
+      - action: http               # API setup step; {{user_id}}/{{tenant_id}} are this actor's ids, {{conversation_id}} its conversation
         request: {method: POST, path: /model-settings/providers, body: {user_id: "{{user_id}}"},
                   save: {provider_id: id}}   # saved values are available to later steps as {{provider_id}}
       - action: poll               # wait for a background job to settle

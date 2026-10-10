@@ -6,6 +6,8 @@ import type { BackendMessage } from "@/types";
 export type TurnProcess = {
   /** Everything between the user message and the final answer. */
   stepIds: ReadonlySet<string>;
+  /** The final answer, whose own thinking is a step too: it folds with the rest. */
+  answerId: string;
   durationMs: number | null;
 };
 
@@ -21,11 +23,13 @@ export function finishedTurnProcesses(messages: BackendMessage[], lastTurnFinish
     if (last && !lastTurnFinished) return;
     const turn = messages.slice(start + 1, last ? messages.length : starts[turnIndex + 1]).filter((message) => message.role !== "system");
     const answer = turn[turn.length - 1];
-    if (turn.length < 2 || answer.role !== "assistant" || !answer.content || answer.tool_calls?.length) return;
+    if (!answer || answer.role !== "assistant" || !answer.content || answer.tool_calls?.length) return;
+    if (turn.length < 2 && !answer.reasoning) return;
     // The user message is saved when the run starts and the rest when it ends, so this spans the whole run.
     const elapsed = Date.parse(answer.created_at) - Date.parse(messages[start].created_at);
     processes.set(messages[start].id, {
       stepIds: new Set(turn.slice(0, -1).map((message) => message.id)),
+      answerId: answer.id,
       durationMs: Number.isFinite(elapsed) ? Math.max(1000, elapsed) : null,
     });
   });

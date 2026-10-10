@@ -1,7 +1,7 @@
-"""Native agent streams → the public ``message.delta`` application events (plan §6.8).
+"""Native agent streams → the public ``message.delta`` and ``reasoning.delta`` application events (plan §6.8).
 
-Only the answering model's text is public: tool output, middleware-internal generations (e.g. summaries) and
-other nodes are never streamed. The API layer formats the SSE envelope.
+Only the answering model's text and its thinking are public: tool output, middleware-internal generations (e.g.
+summaries) and other nodes are never streamed. The API layer formats the SSE envelope.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk
+
+from tianzhou_agent_platform.model_providers.factory import REASONING_KEY
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -32,6 +34,9 @@ class StreamRelay:
                 continue
             if chunk.id != self._message_id:
                 self._message_id, self.streamed = chunk.id, ""
+            reasoning = chunk.additional_kwargs.get(REASONING_KEY)
+            if isinstance(reasoning, str) and reasoning:
+                await self._event_sink({"type": "reasoning.delta", "delta": reasoning})
             text = chunk.content if isinstance(chunk.content, str) else ""
             if text:
                 self.streamed += text
