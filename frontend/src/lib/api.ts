@@ -69,6 +69,7 @@ export function apiErrorMessage(error: unknown): string {
 
 export type StreamEvent =
   | { type: "message.delta"; delta: string }
+  | { type: "reasoning.delta"; delta: string }
   | { type: "tool.requested"; kind: "tool" | "aina" | "builtin"; id: string; call_id: string; name: string; arguments: string }
   | {
       type: "tool.completed";

@@ -152,6 +152,7 @@ export interface BackendMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   content_type: string;
+  reasoning?: string | null;
   tool_calls?: Array<{
     id: string;
     type: "function";

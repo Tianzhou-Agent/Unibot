@@ -9,6 +9,11 @@ export default {
     joiner: "、",
   },
   thinkingNow: "正在思考",
+  reasoning: {
+    aria: "模型思考过程",
+    active: "思考中",
+    done: "已思考",
+  },
   process: {
     completed: "已完成",
     completedIn: "已完成，用时 {{duration}}",
