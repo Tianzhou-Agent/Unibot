@@ -1,4 +1,9 @@
 export default {
+  runStatus: {
+    running: "Running",
+    approval_required: "Waiting for your approval",
+    failed: "Last run failed",
+  },
   closeNav: "Close navigation",
   collapseNav: "Collapse navigation",
   expandNav: "Expand navigation",

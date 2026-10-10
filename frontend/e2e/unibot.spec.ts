@@ -518,7 +518,11 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       const messages = record.messages as JsonObject[];
       messages.push(
         { id: "msg-user", role: "user", content: payload.message, content_type: "text", widgets: [], created_at: NOW },
-        { id: "msg-assistant", role: "assistant", content: reply, content_type: "text", widgets: [], created_at: NOW },
+        // Like the backend, the reply keeps the run's widgets except the transient clarification one.
+        {
+          id: "msg-assistant", role: "assistant", content: reply, content_type: "text", created_at: NOW,
+          widgets: state.streamWidgets.filter((widget) => !String(widget.id).startsWith("clarification-")),
+        },
       );
       const response = {
         conversation_id: record.id,
@@ -1279,8 +1283,11 @@ test("FE-E2E-REGISTRY-001 ordinary authenticated users can browse but cannot man
     is_admin: false, providers: ["password"], avatar_url: null,
   } }));
   await page.goto("/plugin");
-  await expect(page.getByText("注册和删除能力定义需要管理员权限。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^注册/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  const addMenu = page.getByRole("menu", { name: "添加", exact: true });
+  await expect(addMenu.getByText("注册和删除能力定义需要管理员权限。", { exact: true })).toBeVisible();
+  await expect(addMenu.getByRole("menuitem", { name: /^注册/ })).toHaveCount(0);
+  await expect(addMenu.getByRole("menuitem", { name: "项目模板", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^删除 / })).toHaveCount(0);
 });
 
@@ -1873,14 +1880,23 @@ test("FE-E2E-003 在插件页面注册 Tool", async ({ page }) => {
   await page.getByRole("link", { name: "插件", exact: true }).click();
 
   await expect(page).toHaveURL(/\/plugin$/);
-  await expect(page.getByRole("heading", { name: "插件", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /工具/ }).click();
-  await page.getByRole("button", { name: "注册工具" }).click();
+  await expect(page.getByRole("heading", { name: "插件", exact: true, level: 1 })).toBeVisible();
+  const registerTool = async () => {
+    await page.getByRole("button", { name: "添加", exact: true }).click();
+    await page.getByRole("menuitem", { name: "注册工具", exact: true }).click();
+  };
+  await registerTool();
+  await expect(page.getByRole("tab", { name: "开发者", selected: true })).toBeVisible();
   await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.add/);
   await page.getByRole("button", { name: "提交注册" }).click();
 
   await expect(page.getByText("工具注册成功。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "浏览器加法工具" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "工具", exact: true }).getByRole("article", { name: "浏览器加法工具" })).toBeVisible();
+
+  // The high-risk preset lives inside the editor rather than on the page toolbar.
+  await registerTool();
+  await page.getByRole("button", { name: "载入高风险示例", exact: true }).click();
+  await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.risky-add/);
 });
 
 test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page }) => {
@@ -1946,29 +1962,35 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
     ],
   });
   await page.goto("/plugin");
+  await page.getByRole("link", { name: /文档编辑器/ }).click();
+  await expect(page).toHaveURL(/\/plugin\/unibot-documents$/);
+  await expect(page.getByRole("heading", { name: "文档编辑器", exact: true })).toBeVisible();
 
   const openAppButton = page.getByRole("button", { name: "打开应用", exact: true });
   await expect(openAppButton).toBeVisible();
   await expect(openAppButton.locator("svg")).toHaveClass(/lucide-app-window/);
   await expect(openAppButton).toHaveCSS("background-color", "rgb(15, 17, 21)");
   await expect(page.getByRole("button", { name: "打开画布", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "查看能力", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "文档编辑器 能力详情" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("局部修改时先读取章节，再只更新目标章节。", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("只读取指定章节，不读取全文。", { exact: true })).toBeVisible();
-  await expect(dialog.getByRole("cell", { name: "name", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("cell", { name: "heading", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("cell", { name: "必填", exact: true })).toHaveCount(2);
-  await dialog.getByRole("button", { name: "关闭能力详情" }).click();
-  await expect(dialog).toBeHidden();
+  // A built-in app has nothing to uninstall or delete, so it offers no "more" menu.
+  await expect(page.getByRole("button", { name: "文档编辑器 更多操作", exact: true })).toHaveCount(0);
+
+  await page.getByText("Markdown 文档管理", { exact: true }).click();
+  await expect(page.getByText("局部修改时先读取章节，再只更新目标章节。", { exact: true })).toBeVisible();
+  await page.getByText("读取文档章节", { exact: true }).click();
+  await expect(page.getByText("只读取指定章节，不读取全文。", { exact: true }).last()).toBeVisible();
+  await expect(page.getByRole("cell", { name: "name", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "heading", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "必填", exact: true })).toHaveCount(2);
+
+  await page.getByRole("navigation", { name: "面包屑导航" }).getByRole("link", { name: "插件", exact: true }).click();
+  await expect(page).toHaveURL(/\/plugin$/);
 });
 
 test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭环", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/plugin");
-
-  await page.getByRole("button", { name: "项目模板", exact: true }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await page.getByRole("menuitem", { name: "项目模板", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生成 AINA Project 模板", exact: true })).toBeVisible();
   const scaffoldDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 ZIP 模板", exact: true }).click();
@@ -1982,21 +2004,78 @@ test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭�
   });
 
   const projectSection = page.getByRole("region", { name: "AINA Projects", exact: true });
-  await expect(projectSection.getByRole("heading", { name: "Managed Demo", exact: true })).toBeVisible();
+  const projectRow = projectSection.getByRole("article", { name: "Managed Demo", exact: true });
+  await expect(projectRow).toBeVisible();
   await expect(projectSection.getByText("已校验·待部署", { exact: true })).toBeVisible();
-  await expect(page.getByText("尚未注册 AINA", { exact: true })).toBeVisible();
   expect(state.lastProjectImportContentType).toContain("multipart/form-data; boundary=");
   expect(state.ainas).toHaveLength(0);
+  // An imported project is not a callable app until deployed.
+  await page.getByRole("tab", { name: "应用", exact: true }).click();
+  await expect(page.getByText("尚未注册 AINA", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "开发者", exact: true }).click();
 
   const archiveDownload = page.waitForEvent("download");
-  await projectSection.getByRole("button", { name: "下载项目 Managed Demo", exact: true }).click();
+  await projectRow.getByRole("button", { name: "Managed Demo 更多操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "下载", exact: true }).click();
   await expect((await archiveDownload).suggestedFilename()).toBe("managed-demo.aina.zip");
 
   page.once("dialog", (dialog) => dialog.accept());
-  await projectSection.getByRole("button", { name: "删除项目 Managed Demo", exact: true }).click();
-  await expect(projectSection.getByRole("heading", { name: "Managed Demo", exact: true })).toHaveCount(0);
+  await projectRow.getByRole("button", { name: "Managed Demo 更多操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+  await expect(projectRow).toHaveCount(0);
   await expect(page.getByText("Managed Demo 项目已删除。", { exact: true })).toBeVisible();
   expect(state.ainaProjects).toHaveLength(0);
+});
+
+test("FE-E2E-003D 应用行安装前提示权限，安装后在更多操作和插件页管理", async ({ page }) => {
+  const ainaId = "com.example.remote-notes";
+  await installMockApi(page, {
+    ainas: [{
+      manifest: {
+        protocol_version: "1.0",
+        aina: { id: ainaId, name: "远程笔记", version: "1.2.0", description: "同步团队笔记。", publisher: { id: "example", name: "Example" } },
+        runtime: { type: "remote", endpoint: "https://notes.example.com/aina", streaming: false, async_tasks: false },
+        capabilities: { skills: [], tools: [], ui: [], events: [] },
+        main_widget: null,
+        permissions: ["notes.read"],
+        authentication: { type: "none", header_name: "Authorization" },
+        health_check: null,
+      },
+      status: "registered",
+      registered_at: NOW,
+      last_health: { status: "healthy" },
+    }],
+  });
+  let installed = false;
+  await page.route("**/api/installations*", (route) => json(route, installed
+    ? [{ aina_id: ainaId, user_id: "anonymous", tenant_id: "default", status: "active", granted_permissions: ["notes.read"], configuration: {}, installed_at: NOW }]
+    : []));
+  await page.route(`**/api/ainas/${ainaId}/install*`, (route) => {
+    installed = route.request().method() === "POST";
+    return json(route, {});
+  });
+  await page.goto("/plugin");
+
+  const available = page.getByRole("region", { name: "可安装", exact: true });
+  const row = available.getByRole("article", { name: "远程笔记" });
+  await expect(row.getByText("需要 1 项权限", { exact: true })).toBeVisible();
+  await expect(page.getByText("https://notes.example.com/aina")).toHaveCount(0);
+  await row.getByRole("button", { name: "安装 远程笔记", exact: true }).click();
+  await expect(page.getByText("远程笔记 已安装并完成权限授权。", { exact: true })).toBeVisible();
+
+  const installedRow = page.getByRole("region", { name: "已安装", exact: true }).getByRole("article", { name: "远程笔记" });
+  await expect(installedRow.getByText("需要 1 项权限", { exact: true })).toHaveCount(0);
+  await installedRow.getByRole("button", { name: "远程笔记 更多操作", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "卸载", exact: true })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "删除", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await installedRow.getByRole("link", { name: /远程笔记/ }).click();
+  await expect(page.getByRole("region", { name: "所需权限", exact: true }).getByText("notes.read", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "信息", exact: true }).getByText("https://notes.example.com/aina", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "远程笔记 更多操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "卸载", exact: true }).click();
+  await expect(page.getByRole("button", { name: "安装并授权", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-004 管理员按用户查看运行摘要及 Trace I/O", async ({ page }) => {
@@ -2256,7 +2335,7 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
 });
 
-test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存且对话保持不变", async ({ page }) => {
+test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不打断对话", async ({ page }) => {
   const app = (aina_id: string, name: string, description: string) => ({
     aina_id, name, description, version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true,
   });
@@ -2278,35 +2357,29 @@ test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存�
   });
   await page.goto("/chat/conv-e2e-1");
   const input = page.getByRole("textbox", { name: "消息", exact: true });
-  const chooser = page.getByRole("dialog", { name: "选择要打开的应用" });
   const reply = page.locator("main").getByText("这是确定性的端到端回复。", { exact: true });
+  const suggestions = page.getByRole("group", { name: "推荐应用", exact: true });
 
   await input.fill("帮我整理会议纪要");
   await page.getByRole("button", { name: "发送消息" }).click();
-  await expect(chooser).toBeVisible();
-  await expect(chooser.getByText("整理纪要适合文档编辑器，结论可以存入记忆。")).toBeVisible();
-  await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeChecked();
-  await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).not.toBeChecked();
-  await chooser.getByRole("button", { name: "打开（1）", exact: true }).click();
-  await expect(chooser).toHaveCount(0);
+  await expect(reply.last()).toBeVisible();
+  // Nothing interrupts: no dialog, nothing opens, and the composer is free for the next message.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
+  await expect(input).toBeEnabled();
+  await expect(suggestions.last().getByRole("button", { name: "打开 Unibot Memory", exact: true })).toBeVisible();
+
+  await suggestions.last().getByRole("button", { name: "打开 文档编辑器", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
   await expect(page.getByRole("tab", { name: "unibot-documents", selected: true })).toBeVisible();
 
-  // Suggestions skip open apps; declining one keeps it from being offered again in this conversation.
+  // Later turns keep suggesting quietly and keep the open app as the preferred one.
   await input.fill("再记住这些决定");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect.poll(() => state.lastStreamPayload?.preferred_aina_id).toBe("unibot-documents");
-  await expect(chooser.getByRole("checkbox", { name: /文档编辑器/ })).toBeDisabled();
-  await expect(chooser.getByRole("checkbox", { name: /Unibot Memory/ })).toBeChecked();
-  await chooser.getByRole("button", { name: "暂不打开", exact: true }).last().click();
-  await expect(chooser).toHaveCount(0);
-  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
-
-  await input.fill("继续整理");
-  await page.getByRole("button", { name: "发送消息" }).click();
   await expect(input).toHaveValue("");
-  await expect(reply.last()).toBeVisible();
-  await expect(chooser).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
 
   // An explicit open adds a tab beside the ones already open.
   state.streamWidgets = [{
@@ -2337,7 +2410,7 @@ test("FE-E2E-004G 按意图弹出应用选择，多个应用以标签页并存�
   await expect(page.locator("main p").filter({ hasText: "再记住这些决定" })).toBeVisible();
 });
 
-test("FE-E2E-004H 画布中用 + 在同一对话内切换和重新打开应用", async ({ page }) => {
+test("FE-E2E-004H 画布 + 像浏览器一样新建标签页，在标签页内选择应用", async ({ page }) => {
   const aina = (id: string, name: string) => ({
     manifest: { aina: { id, name, version: "1.0.0", description: `${name} 的说明` }, runtime: { type: "builtin" }, permissions: [] },
     status: "registered",
@@ -2347,30 +2420,59 @@ test("FE-E2E-004H 画布中用 + 在同一对话内切换和重新打开应用",
     ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory"), aina("unibot-code-runner", "代码运行器")],
   });
   await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
-  const switcher = page.getByRole("button", { name: "打开其他应用", exact: true });
-  const menu = page.getByRole("menu", { name: "打开其他应用" });
+  const plus = page.getByRole("button", { name: "新标签页", exact: true });
+  const newTab = page.getByRole("tab", { name: "新标签页", exact: true });
+  const launcher = page.getByRole("tabpanel", { name: "新标签页" });
 
-  await switcher.click();
-  await expect(menu.getByRole("group", { name: "本对话中的应用" }).getByRole("menuitem")).toHaveText([/Unibot Memory/]);
-  await expect(menu.getByRole("group", { name: "全部应用" }).getByRole("menuitem")).toHaveText([/代码运行器/]);
-  await expect(menu.getByRole("menuitem", { name: /文档编辑器/ })).toHaveCount(0);
-  await menu.getByRole("menuitem", { name: /Unibot Memory/ }).click();
-  await expect(menu).toHaveCount(0);
+  // "+" adds a tab right away; the app is chosen inside it.
+  await plus.click();
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
+  const inConversation = launcher.getByRole("group", { name: "本对话中的应用" });
+  await expect(inConversation.getByRole("button")).toHaveText([/文档编辑器.*已打开/, /Unibot Memory/]);
+  await expect(launcher.getByRole("group", { name: "全部应用" }).getByRole("button")).toHaveText([/代码运行器/]);
+  await inConversation.getByRole("button", { name: /^Unibot Memory/ }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
   await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(newTab).toHaveCount(0);
 
-  // A closed app stays listed with this conversation's apps and reopens from the switcher.
+  // Like a browser tab, the new tab can be left and come back to, or closed.
+  await plus.click();
+  await page.getByRole("tab", { name: "unibot-documents", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "unibot-documents", selected: true })).toBeVisible();
+  await expect(newTab).toHaveAttribute("aria-selected", "false");
+  await newTab.click();
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "关闭 新标签页", exact: true }).click();
+  await expect(newTab).toHaveCount(0);
+
+  // An app that is already open switches to its tab instead of opening twice.
+  await plus.click();
+  await launcher.getByRole("button", { name: /^文档编辑器/ }).click();
+  await expect(page.getByRole("tab", { name: "unibot-documents", selected: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory(&active=unibot-documents)?$/);
+
+  // A closed app stays listed with this conversation's apps and reopens from a new tab.
   await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
-  await switcher.click();
-  await menu.getByRole("group", { name: "本对话中的应用" }).getByRole("menuitem", { name: /Unibot Memory/ }).click();
+  await plus.click();
+  await launcher.getByRole("group", { name: "本对话中的应用" }).getByRole("button", { name: /^Unibot Memory/ }).click();
   await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
 
-  await switcher.click();
-  await menu.getByRole("menuitem", { name: /代码运行器/ }).click();
+  await plus.click();
+  await launcher.getByRole("searchbox", { name: "搜索应用" }).fill("代码");
+  await expect(launcher.getByRole("button")).toHaveText([/代码运行器/]);
+  await launcher.getByRole("button", { name: /^代码运行器/ }).click();
   await expect(page).toHaveURL(/\?aina=unibot-documents&aina=unibot-memory&aina=unibot-code-runner$/);
-  await switcher.click();
-  await expect(menu.getByText("可用的应用都已打开。")).toBeVisible();
+
+  // With every app closed, the new tab keeps the canvas open; closing it too closes the canvas.
+  await plus.click();
+  for (const name of ["unibot-documents", "Unibot Memory", "unibot-code-runner"]) {
+    await page.getByRole("button", { name: `关闭 ${name}`, exact: true }).click();
+  }
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
+  await expect(launcher.getByRole("heading", { name: "打开应用" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭 新标签页", exact: true }).click();
+  await expect(page.getByRole("tablist", { name: "已打开的应用" })).toHaveCount(0);
 });
 
 test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {
@@ -3361,4 +3463,83 @@ test("FE-E2E-005D 长对话发送消息时输入框保持在底部", async ({ pa
   await expect(page.getByRole("button", { name: "停止生成" })).toBeVisible();
   expect(await page.evaluate(() => document.scrollingElement?.scrollTop)).toBe(0);
   expect((await composer.boundingBox())?.y).toBe(before?.y);
+});
+
+test("FE-E2E-005E 点击推荐应用打开画布后对话仍停在底部", async ({ page }) => {
+  const messages = Array.from({ length: 24 }, (_, i) => ({
+    id: `msg-pin-${i}`, role: i % 2 ? "assistant" : "user", content: `第 ${i} 条消息 `.repeat(30), content_type: "text", widgets: [], created_at: NOW,
+  }));
+  messages.push({
+    id: "msg-pin-suggest", role: "assistant", content: "已经记录好了。", content_type: "text", created_at: NOW,
+    widgets: [{
+      id: "unibot-aina-chooser", kind: "aina_chooser", title: "Suggested apps", description: "", markdown: null, fields: [], actions: [],
+      apps: [{ aina_id: "unibot-memory", name: "Unibot Memory", description: "管理长期记忆。", version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true }],
+    }],
+  } as (typeof messages)[number]);
+  await installMockApi(page, { conversations: [conversation({ messages })] });
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText("已经记录好了。", { exact: true })).toBeVisible();
+  const scroller = page.locator("[aria-live=polite]").first();
+  const distanceFromBottom = () => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+
+  // Opening the canvas narrows the chat column and re-wraps the text; the view must stay at the latest message.
+  await page.getByRole("button", { name: "打开 Unibot Memory", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+  await expect(page.getByText("已经记录好了。", { exact: true })).toBeInViewport();
+
+  // Someone reading older messages is left where they are when the layout changes back.
+  await scroller.evaluate((el) => { el.scrollTop = 0; });
+  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Unibot Memory" })).toHaveCount(0);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+});
+
+test("FE-E2E-004J 标题栏精简：状态移到侧栏，OBS 为图标，应用面板可切换", async ({ page }) => {
+  const aina = (id: string, name: string) => ({
+    manifest: { aina: { id, name, version: "1.0.0", description: `${name} 的说明` }, runtime: { type: "builtin" }, permissions: [] },
+    status: "registered",
+  });
+  await installMockApi(page, {
+    conversations: [
+      conversation(),
+      conversation({ id: "conv-approval", title: "待确认会话", run_status: "approval_required", active_aina_ids: ["unibot-memory"] }),
+    ],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory")],
+    streamDelayMs: 1200,
+  });
+  await page.goto("/chat/conv-e2e-1");
+  const topbar = page.locator("main > div > div").first();
+  await expect(topbar.getByText("已就绪")).toHaveCount(0);
+  const obs = page.getByRole("button", { name: "查看当前对话观测数据", exact: true });
+  await expect(obs).toBeVisible();
+  await expect(obs).toHaveText("");
+
+  // The sidebar row carries the run status: a stored approval wait, and a live run.
+  await expect(page.getByTestId("conversation-row-conv-approval").getByRole("img", { name: "等待你的确认" })).toBeVisible();
+  const row = page.getByTestId("conversation-row-conv-e2e-1");
+  await expect(row.getByRole("img", { name: /运行中|等待你的确认|上次运行失败/ })).toHaveCount(0);
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("你好");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(row.getByRole("img", { name: "运行中" })).toBeVisible();
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  await expect(row.getByRole("img", { name: "运行中" })).toHaveCount(0);
+
+  // No app used yet: the panel toggle opens a new tab; hiding keeps the tab for later.
+  const show = page.getByRole("button", { name: "显示应用面板", exact: true });
+  const hide = page.getByRole("button", { name: "隐藏应用面板", exact: true });
+  const newTab = page.getByRole("tab", { name: "新标签页", exact: true });
+  await show.click();
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
+  await hide.click();
+  await expect(newTab).toBeHidden();
+  await show.click();
+  await expect(newTab).toBeVisible();
+
+  // A conversation that used an app reopens it from the toggle.
+  await page.goto("/chat/conv-approval");
+  await page.getByRole("button", { name: "显示应用面板", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat\/conv-approval\?aina=unibot-memory$/);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
 });

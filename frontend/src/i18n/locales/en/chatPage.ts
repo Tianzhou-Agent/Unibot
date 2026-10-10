@@ -13,11 +13,8 @@ export default {
     cancelling: "Cancelling the call…",
   },
   newConversation: "New conversation",
-  badge: {
-    deleted: "Deleted",
-    running: "Running",
-    ready: "Ready",
-  },
+  canvasShow: "Show app panel",
+  canvasHide: "Hide app panel",
   viewObsAria: "View observability data for this conversation",
   titleAria: "Conversation title",
   save: "Save",

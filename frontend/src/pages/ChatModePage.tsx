@@ -8,8 +8,10 @@ import {
   Check,
   CirclePause,
   MessageSquareText,
+  PanelRightClose,
   PanelRightOpen,
   Play,
+  Plus,
   RotateCcw,
   Sparkles,
   Square,
@@ -17,8 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { AinaChooserDialog } from "@/components/canvas/AinaChooserDialog";
-import { AinaSwitcher } from "@/components/canvas/AinaSwitcher";
+import { AinaLauncher } from "@/components/canvas/AinaLauncher";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
@@ -26,7 +27,7 @@ import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/co
 import { isToolSequenceContinuation, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
-import { notifyConversationsChanged } from "@/components/layout/Sidebar";
+import { announceConversationRunning, notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
@@ -95,11 +96,8 @@ export default function ChatModePage() {
   const { ainaIds, activeAinaId, documentName } = canvasRoute;
   const ainaKey = ainaIds.join("\n");
   const [canvases, setCanvases] = useState<Record<string, AinaCanvasResponse>>({});
-  const [chooser, setChooser] = useState<WidgetDefinition | null>(null);
   // AINAs opened in this conversation since it was loaded; the loaded record lists the earlier ones.
   const [usedAinaIds, setUsedAinaIds] = useState<string[]>([]);
-  // AINAs the user declined to open in this conversation; they are not offered again.
-  const declinedAinaIdsRef = useRef(new Set<string>());
   const [mobilePane, setMobilePane] = useState<"chat" | "app">("app");
   const [documentTaskContext, setDocumentTaskContext] = useState<DocumentTaskContext | null>(null);
   const canvasRouteRef = useRef(canvasRoute);
@@ -107,7 +105,15 @@ export default function ChatModePage() {
   const canvasesRef = useRef(canvases);
   canvasesRef.current = canvases;
   const activeCanvas = activeAinaId ? canvases[activeAinaId] : undefined;
+  // A browser-style "new tab" in the canvas: it shows the app launcher until the user picks an app.
+  const [newTab, setNewTab] = useState<"active" | "background" | null>(null);
+  const canvasOpen = ainaIds.length > 0 || newTab !== null;
+  // The title-bar toggle hides the canvas without closing its tabs, so their state survives.
+  const [canvasHidden, setCanvasHidden] = useState(false);
+  const canvasVisible = canvasOpen && !canvasHidden;
+  const newTabShown = newTab === "active" || (newTab !== null && !activeAinaId);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
   const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const localRunConversationIdRef = useRef<string | null>(null);
@@ -243,9 +249,9 @@ export default function ChatModePage() {
     setLastRun(null);
     setError(null);
     setDeleted(false);
-    setChooser(null);
-    declinedAinaIdsRef.current = new Set();
     setUsedAinaIds([]);
+    setNewTab(null);
+    setCanvasHidden(false);
     if (conversationId) {
       void loadConversation(conversationId);
     } else {
@@ -281,8 +287,6 @@ export default function ChatModePage() {
       setActivity(null);
       setSending(false);
       setClarificationWidgets([]);
-      setChooser(null);
-      declinedAinaIdsRef.current = new Set();
     };
     window.addEventListener("unibot:new-conversation", reset);
     return () => window.removeEventListener("unibot:new-conversation", reset);
@@ -298,6 +302,8 @@ export default function ChatModePage() {
   function openAinas(ids: string[], targetConversationId = conversation?.id ?? conversationId ?? null) {
     if (!ids.length) return;
     setMobilePane("app");
+    setCanvasHidden(false);
+    setNewTab((current) => current === "active" ? "background" : current);
     const route = canvasRouteRef.current;
     navigateCanvas({
       ...route,
@@ -306,7 +312,22 @@ export default function ChatModePage() {
     }, targetConversationId);
   }
 
+  /** Hides or shows the canvas; with nothing open it brings back this conversation's apps, or a new tab if it has none. */
+  function toggleCanvas() {
+    if (canvasVisible) {
+      setCanvasHidden(true);
+      return;
+    }
+    setCanvasHidden(false);
+    setMobilePane("app");
+    if (canvasOpen) return;
+    const previous = [...new Set([...(conversation?.active_aina_ids ?? []), ...usedAinaIds])];
+    if (previous.length) openAinas(previous);
+    else setNewTab("active");
+  }
+
   function selectAina(id: string) {
+    setNewTab((current) => current === "active" ? "background" : current);
     navigateCanvas({ ...canvasRouteRef.current, activeAinaId: id }, conversation?.id ?? conversationId ?? null, true);
   }
 
@@ -370,6 +391,33 @@ export default function ChatModePage() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
   }, [conversation?.messages, optimisticUser, liveItems, activity, approval, sending, clarificationWidgets]);
+
+  useEffect(() => {
+    const id = conversation?.id;
+    if (!id || !sending) return;
+    announceConversationRunning(id, true);
+    return () => announceConversationRunning(id, false);
+  }, [conversation?.id, sending]);
+
+  // Opening or closing a canvas resizes the message list and re-wraps its text, which leaves the old
+  // scroll offset short of the bottom. Stay pinned to the latest message if the user was already there.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    let pinned = true;
+    const onScroll = () => {
+      pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+    };
+    const observer = new ResizeObserver(() => {
+      if (pinned) scroller.scrollTop = scroller.scrollHeight;
+    });
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    observer.observe(scroller);
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+    };
+  }, []);
 
   const sendMessage = (text: string) => runTurn(text);
 
@@ -477,11 +525,8 @@ export default function ChatModePage() {
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
-      const suggestion = completed.widgets.find((widget) => widget.kind === "aina_chooser" && widget.apps.some(
-        (app) => !canvasRouteRef.current.ainaIds.includes(app.aina_id) && !declinedAinaIdsRef.current.has(app.aina_id),
-      ));
+      // Suggested apps (aina_chooser) stay as chips under the reply; only an explicit open acts on its own.
       if (openAction?.aina_id && isActiveRun()) openAinas([openAction.aina_id], completed.conversation_id);
-      else if (suggestion && isActiveRun()) setChooser(suggestion);
       return true;
     } catch (sendError) {
       if (isActiveRun()) {
@@ -620,21 +665,14 @@ export default function ChatModePage() {
   }
 
   const title = conversation?.title === "New conversation" ? t("newConversation") : conversation?.title ?? t("newConversation");
-  const badge = deleted
-    ? ({ label: t("badge.deleted"), tone: "warning" } as const)
-    : sending
-      ? ({ label: t("badge.running"), tone: "thinking" } as const)
-      : ({ label: t("badge.ready"), tone: "success" } as const);
-
   return (
     <>
     <div className="flex h-full flex-col bg-app-bg">
       <Topbar
         title={title}
-        badge={badge}
-        actions={!deleted && (ainaIds.length || conversation?.id) ? (
-          <div className="flex items-center gap-2">
-            {ainaIds.length ? <CanvasPaneToggle pane={mobilePane} onChange={setMobilePane} /> : null}
+        actions={!deleted ? (
+          <div className="flex items-center gap-1">
+            {canvasVisible ? <CanvasPaneToggle pane={mobilePane} onChange={setMobilePane} /> : null}
             {conversation?.id ? (
               <button
                 type="button"
@@ -646,12 +684,23 @@ export default function ChatModePage() {
                   setSearchParams(next, { replace: true });
                   setObsOpen(true);
                 }}
-                className="btn-outline h-8"
+                className={TITLE_ICON_BUTTON}
                 aria-label={t("viewObsAria")}
+                title={t("viewObsAria")}
               >
-                <Activity className="h-3.5 w-3.5" />OBS
+                <Activity className="h-4 w-4" />
               </button>
             ) : null}
+            <button
+              type="button"
+              onClick={toggleCanvas}
+              className={classNames(TITLE_ICON_BUTTON, canvasVisible && "bg-app-soft text-ink")}
+              aria-label={canvasVisible ? t("canvasHide") : t("canvasShow")}
+              aria-pressed={canvasVisible}
+              title={canvasVisible ? t("canvasHide") : t("canvasShow")}
+            >
+              {canvasVisible ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+            </button>
           </div>
         ) : null}
       />
@@ -690,15 +739,15 @@ export default function ChatModePage() {
 
       <div className={classNames(
         "min-h-0 flex-1",
-        ainaIds.length ? "grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)]" : "flex flex-col",
+        canvasVisible ? "grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)]" : "flex flex-col",
       )}>
       <div className={classNames(
         "min-h-0 flex-1 flex-col overflow-hidden",
-        ainaIds.length ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
+        canvasVisible ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
       )}>
         {/* `relative` keeps absolutely positioned descendants (sr-only labels) inside this scroller; otherwise they
             stretch the document and scrollIntoView scrolls the whole page, dragging the composer up. */}
-        <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
+        <div ref={scrollerRef} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
           <div className="mx-auto max-w-[760px] space-y-7">
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
@@ -778,53 +827,52 @@ export default function ChatModePage() {
             />
           ) : null}
         </div>
-        {ainaIds.length ? (
+        {canvasOpen ? (
           // Inset as a window inside the conversation, so it reads as a closable add-on; one tab per open AINA.
           <section className={classNames(
-            "min-h-0 flex-col p-1.5 lg:flex lg:py-2 lg:pl-0 lg:pr-2",
-            mobilePane === "app" ? "flex" : "hidden",
+            "min-h-0 flex-col p-1.5 lg:py-2 lg:pl-0 lg:pr-2",
+            canvasHidden ? "hidden" : classNames("lg:flex", mobilePane === "app" ? "flex" : "hidden"),
           )}>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-soft">
               <div className="flex h-10 shrink-0 items-end gap-1 border-b border-line bg-app-soft px-2">
               <div role="tablist" aria-label={tCanvas("tabs")} className="flex h-full min-w-0 flex-1 items-end gap-1 overflow-x-auto">
                 {ainaIds.map((id) => {
                   const name = canvases[id]?.name ?? id;
-                  const active = id === activeAinaId;
                   return (
-                    <div
+                    <CanvasTab
                       key={id}
-                      className={classNames(
-                        "flex h-8 max-w-[220px] shrink-0 items-center gap-1 rounded-t-lg border border-b-0 pl-3 pr-1 text-[12px]",
-                        active ? "border-line bg-white font-semibold text-ink" : "border-transparent text-ink-muted hover:bg-white/60",
-                      )}
-                    >
-                      <button type="button" role="tab" aria-selected={active} onClick={() => selectAina(id)} className="min-w-0 truncate">
-                        {name}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => closeAinas([id])}
-                        className="rounded p-1 text-ink-subtle hover:bg-line/60 hover:text-ink"
-                        aria-label={tCanvas("close", { name })}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
+                      label={name}
+                      active={!newTabShown && id === activeAinaId}
+                      onSelect={() => selectAina(id)}
+                      onClose={() => closeAinas([id])}
+                    />
                   );
                 })}
+                {newTab ? (
+                  <CanvasTab
+                    label={tCanvas("launcher.newTab")}
+                    active={newTabShown}
+                    onSelect={() => setNewTab("active")}
+                    onClose={() => setNewTab(null)}
+                  />
+                ) : null}
               </div>
-              <AinaSwitcher
-                conversationAinaIds={[...(conversation?.active_aina_ids ?? []), ...usedAinaIds]}
-                openAinaIds={ainaIds}
-                onSelect={(id) => openAinas([id])}
-              />
+              <button
+                type="button"
+                onClick={() => setNewTab("active")}
+                aria-label={tCanvas("launcher.newTab")}
+                title={tCanvas("launcher.newTab")}
+                className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-muted hover:bg-white hover:text-ink"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
               </div>
               <div className="relative min-h-0 flex-1">
                 {ainaIds.map((id) => {
                   const opened = canvases[id];
                   // Inactive tabs stay mounted so switching back keeps their state.
                   return (
-                    <div key={id} role="tabpanel" className={classNames("absolute inset-0 overflow-hidden", id !== activeAinaId && "hidden")}>
+                    <div key={id} role="tabpanel" className={classNames("absolute inset-0 overflow-hidden", (newTabShown || id !== activeAinaId) && "hidden")}>
                       {opened ? (
                         <MainWidgetRenderer
                           key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${opened.main_widget.id}`}
@@ -844,26 +892,24 @@ export default function ChatModePage() {
                     </div>
                   );
                 })}
+                {newTab ? (
+                  <div role="tabpanel" aria-label={tCanvas("launcher.newTab")} className={classNames("absolute inset-0 overflow-y-auto", !newTabShown && "hidden")}>
+                    <AinaLauncher
+                      conversationAinaIds={[...(conversation?.active_aina_ids ?? []), ...usedAinaIds]}
+                      openAinaIds={ainaIds}
+                      onSelect={(id) => {
+                        openAinas([id]);
+                        setNewTab(null);
+                      }}
+                    />
+                  </div>
+                ) : null}
               </div>
             </div>
           </section>
         ) : null}
       </div>
     </div>
-      {chooser ? (
-        <AinaChooserDialog
-          widget={chooser}
-          openAinaIds={ainaIds}
-          onOpen={(ids) => {
-            setChooser(null);
-            openAinas(ids);
-          }}
-          onClose={() => {
-            for (const app of chooser.apps) declinedAinaIdsRef.current.add(app.aina_id);
-            setChooser(null);
-          }}
-        />
-      ) : null}
       {conversation?.id && obsOpen ? (
         <ConversationObsDrawer
           sessionId={conversation.id}
@@ -1145,6 +1191,32 @@ function DeletedConversation({ title, onRestore }: { title: string; onRestore: (
           <RotateCcw className="w-4 h-4" />{t("deleted.restore")}
         </button>
       </div>
+    </div>
+  );
+}
+
+const TITLE_ICON_BUTTON = "flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-app-soft hover:text-ink";
+
+function CanvasTab({ label, active, onSelect, onClose }: { label: string; active: boolean; onSelect: () => void; onClose: () => void }) {
+  const { t } = useTranslation("canvas");
+  return (
+    <div
+      className={classNames(
+        "flex h-8 max-w-[220px] shrink-0 items-center gap-1 rounded-t-lg border border-b-0 pl-3 pr-1 text-[12px]",
+        active ? "border-line bg-white font-semibold text-ink" : "border-transparent text-ink-muted hover:bg-white/60",
+      )}
+    >
+      <button type="button" role="tab" aria-selected={active} onClick={onSelect} className="min-w-0 truncate">
+        {label}
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded p-1 text-ink-subtle hover:bg-line/60 hover:text-ink"
+        aria-label={t("close", { name: label })}
+      >
+        <X className="h-3 w-3" />
+      </button>
     </div>
   );
 }

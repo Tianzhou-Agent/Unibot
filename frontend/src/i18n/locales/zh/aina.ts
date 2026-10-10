@@ -1,12 +1,11 @@
 export default {
-  details: "{{name}} 能力详情",
-  close: "关闭能力详情",
   runtimeLabel: "运行方式",
   runtime: {
     builtin: "系统内置",
     managed: "本地托管",
     remote: "远程服务",
   },
+  endpoint: "服务地址",
   publisher: "发布者",
   permissions: "所需权限",
   skillsEmpty: "该 AINA 没有声明 Skill。",

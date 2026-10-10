@@ -59,6 +59,7 @@ export default {
     inProgress: "Task in progress",
   },
   widget: {
+    suggestedApps: "Suggested apps",
     openApp: "Open {{name}}",
     noApps: "No AINA apps are currently available.",
     loadingEditor: "Loading code editor…",

@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useState } from "react";
-import { AppWindow, ArrowRight, Boxes, Play, Send } from "lucide-react";
+import { AppWindow, ArrowRight, Boxes, Play, Send, Sparkles } from "lucide-react";
+import { AppIcon } from "@/components/apps/PluginUi";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
 import type { WidgetActionDefinition, WidgetDefinition } from "@/types";
@@ -23,7 +24,44 @@ export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
   if (props.widget.kind === "document_outline") {
     return <DocumentOutlineWidget widget={props.widget} workspaceId={props.workspaceId} />;
   }
+  if (props.widget.kind === "aina_chooser") {
+    return <AppSuggestions widget={props.widget} disabled={props.disabled} onOpenAina={props.onOpenAina} />;
+  }
   return <DeclarativeSessionWidgetRenderer {...props} />;
+}
+
+/**
+ * The agent's suggested apps as one quiet line under its reply: a chip opens the app beside the
+ * conversation (or switches to it), and ignoring the line costs nothing.
+ */
+function AppSuggestions({ widget, disabled = false, onOpenAina }: {
+  widget: WidgetDefinition;
+  disabled?: boolean;
+  onOpenAina?: (ainaId: string) => void;
+}) {
+  const { t } = useTranslation("common");
+  if (!widget.apps.length) return null;
+  return (
+    <div role="group" aria-label={t("widget.suggestedApps")} className="flex flex-wrap items-center gap-1.5">
+      <span className="inline-flex items-center gap-1 text-[12px] text-ink-subtle" title={widget.description || undefined}>
+        <Sparkles className="h-3.5 w-3.5" />{t("widget.suggestedApps")}
+      </span>
+      {widget.apps.map((app) => (
+        <button
+          key={app.aina_id}
+          type="button"
+          disabled={disabled}
+          onClick={() => onOpenAina?.(app.aina_id)}
+          title={app.description}
+          aria-label={t("widget.openApp", { name: app.name })}
+          className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-line bg-white pl-1 pr-2.5 text-[12.5px] text-ink transition-colors hover:border-accent-ring hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <AppIcon id={app.aina_id} name={app.name} size="sm" />
+          <span className="truncate">{app.name}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function DeclarativeSessionWidgetRenderer({
@@ -67,7 +105,7 @@ function DeclarativeSessionWidgetRenderer({
 
       <div className="mt-3">
         {widget.markdown ? <MarkdownContent content={widget.markdown} className="mb-3" /> : null}
-        {widget.kind === "app_list" || widget.kind === "aina_chooser" ? (
+        {widget.kind === "app_list" ? (
           <SessionAppList widget={widget} disabled={disabled} onOpenAina={onOpenAina} />
         ) : (
           <WidgetFormFields widget={widget} disabled={disabled} values={values} setValues={setValues} />

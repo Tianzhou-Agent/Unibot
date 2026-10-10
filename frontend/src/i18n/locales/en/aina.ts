@@ -1,12 +1,11 @@
 export default {
-  details: "{{name}} capability details",
-  close: "Close capability details",
   runtimeLabel: "Runtime",
   runtime: {
     builtin: "Built-in",
     managed: "Locally managed",
     remote: "Remote service",
   },
+  endpoint: "Endpoint",
   publisher: "Publisher",
   permissions: "Required permissions",
   skillsEmpty: "This AINA declares no Skill.",
