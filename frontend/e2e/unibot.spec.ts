@@ -3343,3 +3343,22 @@ test("FE-E2E-008 在章节 Widget 中选择并查看文档内容", async ({ page
   await expect(widget.getByRole("cell", { name: "Agent 调试", exact: true })).toHaveCSS("border-bottom-width", "1px");
   await expect(widget.getByRole("cell", { name: "流畅交互", exact: true })).toHaveCSS("border-bottom-width", "0px");
 });
+
+test("FE-E2E-005D 长对话发送消息时输入框保持在底部", async ({ page }) => {
+  const messages = Array.from({ length: 30 }, (_, i) => ({
+    id: `msg-long-${i}`, role: i % 2 ? "assistant" : "user", content: `第 ${i} 条消息 `.repeat(20), content_type: "text", widgets: [], created_at: NOW,
+  }));
+  await installMockApi(page, { conversations: [conversation({ messages })], streamDelayMs: 1500 });
+  await page.goto("/chat/conv-e2e-1");
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  const composer = page.locator("form").filter({ has: input });
+  await expect(page.getByText("第 29 条消息", { exact: false }).first()).toBeVisible();
+  const before = await composer.boundingBox();
+
+  await input.fill("你好");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  // While the reply streams, the thinking indicator's sr-only label must not make the whole page scrollable.
+  await expect(page.getByRole("button", { name: "停止生成" })).toBeVisible();
+  expect(await page.evaluate(() => document.scrollingElement?.scrollTop)).toBe(0);
+  expect((await composer.boundingBox())?.y).toBe(before?.y);
+});

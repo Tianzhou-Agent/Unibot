@@ -696,7 +696,9 @@ export default function ChatModePage() {
         "min-h-0 flex-1 flex-col overflow-hidden",
         ainaIds.length ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
       )}>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
+        {/* `relative` keeps absolutely positioned descendants (sr-only labels) inside this scroller; otherwise they
+            stretch the document and scrollIntoView scrolls the whole page, dragging the composer up. */}
+        <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
           <div className="mx-auto max-w-[760px] space-y-7">
               {loading ? <ChatSkeleton /> : null}
               {!loading && deleted ? (
