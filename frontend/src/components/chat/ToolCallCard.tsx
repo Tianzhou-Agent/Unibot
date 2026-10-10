@@ -21,43 +21,30 @@ export function ToolCallList({
   resultsByCallId,
   compact = false,
   debugMode = false,
-  showHeader = true,
-  headerCount,
 }: {
   calls: ToolCall[];
   resultsByCallId: ReadonlyMap<string, BackendMessage>;
   compact?: boolean;
   debugMode?: boolean;
-  showHeader?: boolean;
-  headerCount?: number;
 }) {
   const { t } = useTranslation("chat");
   if (!calls.length) return null;
   return (
-    <section className="space-y-2" aria-label={t("tool.aria")}>
-      {showHeader ? (
-        <div className="flex items-center gap-1.5 text-[11px] text-ink-subtle">
-          <Wrench className="h-3 w-3" />
-          <span>{t("tool.header")}</span>
-          <span className="font-mono">{headerCount ?? calls.length}</span>
-        </div>
-      ) : null}
-      <div className="space-y-2">
-        {calls.map((call) => {
-          const result = resultsByCallId.get(call.id);
-          return (
-            <ToolCallCard
-              key={call.id}
-              name={call.function.name}
-              argumentsText={call.function.arguments}
-              resultText={result?.content}
-              state={result ? (toolResultIsError(result.content) ? "error" : "success") : "running"}
-              compact={compact}
-              debugMode={debugMode}
-            />
-          );
-        })}
-      </div>
+    <section className="space-y-0.5" aria-label={t("tool.aria")}>
+      {calls.map((call) => {
+        const result = resultsByCallId.get(call.id);
+        return (
+          <ToolCallCard
+            key={call.id}
+            name={call.function.name}
+            argumentsText={call.function.arguments}
+            resultText={result?.content}
+            state={result ? (toolResultIsError(result.content) ? "error" : "success") : "running"}
+            compact={compact}
+            debugMode={debugMode}
+          />
+        );
+      })}
     </section>
   );
 }
@@ -80,6 +67,8 @@ export function ToolResultCard({ message, compact = false, debugMode = false }: 
   );
 }
 
+// One borderless line per call: icon, label and a short summary. Running shimmers, a failure turns the
+// summary red with its error, and the status itself is only announced to screen readers.
 export function ToolCallCard({
   name,
   argumentsText,
@@ -97,42 +86,53 @@ export function ToolCallCard({
 }) {
   const { t } = useTranslation("chat");
   const label = toolLabel(name);
-  const summary = summarizeArguments(argumentsText) || summarizeResult(resultText) || statusLabel(state);
+  const summary = state === "error"
+    ? summarizeResult(resultText) || statusLabel(state)
+    : summarizeArguments(argumentsText) || summarizeResult(resultText);
   const Icon = toolIcon(name);
   const hasDetails = Boolean(argumentsText || resultText);
+  const running = state === "running" || state === "queued";
 
   return (
-    <details
-      className="group overflow-hidden rounded-xl border border-line bg-white"
-      aria-label={t("tool.callAria", { name, status: statusLabel(state) })}
-      open={state === "running" || state === "error"}
-    >
+    <details className="group" aria-label={t("tool.callAria", { name, status: statusLabel(state) })}>
       <summary className={classNames(
-        "flex cursor-pointer list-none items-center gap-2.5 px-3.5 marker:hidden hover:bg-app-soft/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden",
-        compact ? "min-h-9" : "min-h-10",
+        "flex max-w-full cursor-pointer list-none items-center gap-1.5 rounded-md text-ink-muted marker:hidden hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden",
+        compact ? "min-h-6 text-[12px]" : "min-h-7 text-[13px]",
       )}>
         <Icon className={classNames("shrink-0", compact ? "h-3.5 w-3.5" : "h-4 w-4", iconTone(state))} />
-        <span className={classNames("shrink-0 font-medium text-ink", compact ? "text-[12px]" : "text-[13px]")}>{label}</span>
-        <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-ink-subtle" />
-        <span className={classNames("min-w-0 flex-1 truncate text-ink-subtle", compact ? "text-[10.5px]" : "text-[12px]")} title={summary}>
-          {summary}
-        </span>
-        <span className={classNames("h-1.5 w-1.5 shrink-0 rounded-full", statusDot(state), state === "running" && "animate-pulse")} />
-        <span className={classNames("shrink-0 font-mono", compact ? "text-[9.5px]" : "text-[10.5px]", statusTone(state))}>
-          {statusLabel(state)}
-        </span>
-        {hasDetails ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform group-open:rotate-90" /> : null}
+        <span className={classNames("shrink-0", running && "thinking-shimmer")}>{label}</span>
+        {summary ? (
+          <>
+            <span className="mx-1 h-0.5 w-0.5 shrink-0 rounded-full bg-ink-subtle" />
+            <span
+              className={classNames("min-w-0 truncate", state === "error" ? "text-danger" : "text-ink-subtle", running && "thinking-shimmer")}
+              title={summary}
+            >
+              {summary}
+            </span>
+          </>
+        ) : null}
+        {hasDetails ? (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle opacity-0 transition group-open:rotate-90 group-open:opacity-100 group-hover:opacity-100" />
+        ) : null}
+        {state !== "success" ? <span className="sr-only">{statusLabel(state)}</span> : null}
       </summary>
 
       {hasDetails ? (
-        <div className={classNames("border-t border-line bg-app-soft", compact ? "px-3 py-2.5" : "px-4 py-3")}>
+        <div className={classNames("mb-1.5 mt-1 overflow-hidden rounded-lg border border-line bg-app-soft", compact ? "px-3 py-2.5" : "px-4 py-3")}>
           {argumentsText ? <ToolPayload label={t("tool.args")} value={argumentsText} compact={compact} /> : null}
           {resultText ? <ToolPayload label={state === "error" ? t("tool.error") : t("tool.result")} value={resultText} compact={compact} separated={Boolean(argumentsText)} /> : null}
           {debugMode ? (
             <details className="mt-3 border-t border-line pt-2.5">
               <summary className="cursor-pointer text-[10px] text-ink-subtle focus:outline-none">{t("tool.viewRaw")}</summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[9.5px] leading-[1.6] text-ink-muted">
-                {name}{argumentsText ? `\n\n${t("tool.args")}\n${formatJson(argumentsText)}` : ""}{resultText ? `\n\n${t("tool.result")}\n${formatJson(resultText)}` : ""}
+                {name}{argumentsText ? `
+
+${t("tool.args")}
+${formatJson(argumentsText)}` : ""}{resultText ? `
+
+${t("tool.result")}
+${formatJson(resultText)}` : ""}
               </pre>
             </details>
           ) : null}
@@ -160,20 +160,6 @@ export function isToolSequenceContinuation(messages: BackendMessage[], index: nu
     return previous.role === "assistant" && Boolean(previous.tool_calls?.length);
   }
   return false;
-}
-
-export function toolSequenceCallCount(messages: BackendMessage[], index: number): number {
-  let count = 0;
-  for (let currentIndex = index; currentIndex < messages.length; currentIndex += 1) {
-    const message = messages[currentIndex];
-    if (message.role === "tool") continue;
-    if (message.role === "assistant" && message.tool_calls?.length) {
-      count += message.tool_calls.length;
-      continue;
-    }
-    break;
-  }
-  return count;
 }
 
 function ToolPayload({ label, value, compact, separated = false }: { label: string; value: string; compact: boolean; separated?: boolean }) {
@@ -288,13 +274,7 @@ function statusLabel(state: ToolCallState) {
   return i18n.t(`chat:tool.status.${state}`);
 }
 
-function statusDot(state: ToolCallState) {
-  return { queued: "bg-ink-subtle", running: "bg-accent", success: "bg-success", error: "bg-danger" }[state];
-}
 
-function statusTone(state: ToolCallState) {
-  return { queued: "text-ink-subtle", running: "text-accent", success: "text-ink-subtle", error: "text-danger" }[state];
-}
 
 function iconTone(state: ToolCallState) {
   if (state === "running") return "text-accent";

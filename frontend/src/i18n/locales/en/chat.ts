@@ -9,6 +9,13 @@ export default {
     joiner: ", ",
   },
   thinkingNow: "Thinking",
+  process: {
+    completed: "Completed",
+    completedIn: "Completed in {{duration}}",
+    seconds: "{{s}}s",
+    minutes: "{{m}}m {{s}}s",
+    hours: "{{h}}h {{m}}m {{s}}s",
+  },
   thinking: {
     w0: "Thinking",
     w1: "Pondering",
@@ -50,7 +57,6 @@ export default {
   },
   tool: {
     aria: "Tool calls",
-    header: "Tool calls",
     capabilityCall: "Capability call",
     callAria: "Tool call {{name}} {{status}}",
     args: "Call arguments",

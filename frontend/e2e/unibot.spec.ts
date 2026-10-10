@@ -2173,6 +2173,57 @@ test("FE-E2E-004E 普通模式按设计稿展示并合并工具调用结果", as
   await expect(page.getByLabel("工具调用 browser.search 完成", { exact: true })).toBeVisible();
 });
 
+test("FE-E2E-004I 已完成的轮次折叠中间步骤并显示用时，停止的轮次保持展开", async ({ page }) => {
+  const at = (seconds: number) => new Date(Date.parse(NOW) + seconds * 1000).toISOString();
+  const call = (id: string, name: string, args: JsonObject) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  const message = (id: string, role: string, content: string, seconds: number, extra: JsonObject = {}) => ({
+    id, role, content, content_type: "text", widgets: [], created_at: at(seconds), ...extra,
+  });
+  const result = (id: string, name: string, content: JsonObject, seconds: number) =>
+    message(`msg-${id}`, "tool", JSON.stringify(content), seconds, { name, tool_call_id: id });
+  await installMockApi(page, {
+    conversations: [
+      conversation({
+        run_status: "stopped",
+        messages: [
+          message("msg-user-1", "user", "帮我查资料", 0),
+          message("msg-step-1", "assistant", "我先查资料。", 83, { tool_calls: [call("call-search", "browser.search", { query: "CNCF survey 2025" })] }),
+          result("call-search", "browser.search", { status: "ok" }, 83),
+          message("msg-step-2", "assistant", "", 83, { tool_calls: [call("call-read", "document.read", { document_name: "notes.md" })] }),
+          result("call-read", "document.read", { status: "ok" }, 83),
+          message("msg-answer-1", "assistant", "资料已整理。", 83),
+          message("msg-user-2", "user", "再写入文档", 100),
+          message("msg-step-3", "assistant", "再写入文档。", 110, { tool_calls: [call("call-write", "document.write", { path: "a.md" })] }),
+          result("call-write", "document.write", { error: { code: "CONFLICT", message: "Write conflict" } }, 110),
+          message("msg-answer-2", "assistant", "写入被中断。", 110),
+        ],
+      }),
+    ],
+  });
+
+  await page.goto("/chat/conv-e2e-1");
+  const toggle = page.getByRole("button", { name: "已完成，用时 1 分 23 秒", exact: true });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("资料已整理。", { exact: true })).toBeVisible();
+  await expect(page.getByText("我先查资料。", { exact: true })).toBeHidden();
+  const searchRow = page.getByLabel("工具调用 browser.search 完成", { exact: true });
+  await expect(searchRow).toBeHidden();
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("我先查资料。", { exact: true })).toBeVisible();
+  await expect(searchRow.getByText("CNCF survey 2025", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 document.read 完成", { exact: true })).toBeVisible();
+  await toggle.click();
+  await expect(searchRow).toBeHidden();
+
+  // The stopped last turn has no toggle; its failed call shows the error on its collapsed row.
+  await expect(page.getByRole("button", { name: /^已完成/ })).toHaveCount(1);
+  const failedRow = page.getByLabel("工具调用 document.write 失败", { exact: true });
+  await expect(failedRow.getByText("Write conflict", { exact: true })).toBeVisible();
+  await expect(failedRow.getByText("调用参数", { exact: true })).toBeHidden();
+});
+
 test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
   await installMockApi(page, {
     conversations: [conversation()],

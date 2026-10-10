@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -23,7 +23,8 @@ import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/components/chat/LiveTurn";
-import { isToolSequenceContinuation, toolSequenceCallCount, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
+import { isToolSequenceContinuation, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
+import { finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -601,6 +602,22 @@ export default function ChatModePage() {
   const requestedToolCallIds = useMemo(() => new Set(
     messages.flatMap((message) => message.tool_calls?.map((call) => call.id) ?? []),
   ), [messages]);
+  // Finished turns fold their intermediate steps behind one "Completed in …" toggle; stopped or failed turns stay open.
+  const turnProcesses = useMemo(
+    () => finishedTurnProcesses(messages, !sending && conversation?.run_status === "idle"),
+    [messages, sending, conversation?.run_status],
+  );
+  const [openTurnIds, setOpenTurnIds] = useState<ReadonlySet<string>>(() => new Set());
+  const foldedStepIds = useMemo(() => new Set(
+    [...turnProcesses].flatMap(([turnId, process]) => openTurnIds.has(turnId) ? [] : [...process.stepIds]),
+  ), [turnProcesses, openTurnIds]);
+  function toggleTurn(turnId: string) {
+    setOpenTurnIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(turnId)) next.add(turnId);
+      return next;
+    });
+  }
 
   const title = conversation?.title === "New conversation" ? t("newConversation") : conversation?.title ?? t("newConversation");
   const badge = deleted
@@ -689,23 +706,32 @@ export default function ChatModePage() {
               {!deleted
                 ? messages.map((message, index) => {
                     if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
+                    if (foldedStepIds.has(message.id)) return null;
                     const continuesToolSequence = isToolSequenceContinuation(messages, index);
+                    const process = turnProcesses.get(message.id);
                     return (
-                      <div key={message.id} className={continuesToolSequence ? "!mt-2" : undefined}>
-                        <ConversationMessage
-                          message={message}
-                          onOpenAina={(id) => openAinas([id])}
-                          onPrompt={sendMessage}
-                          debugMode={debugMode}
-                          conversationId={conversation?.id ?? ""}
-                          workspaceId={routeWorkspaceId}
-                          failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
-                          toolResultsByCallId={toolResultsByCallId}
-                          requestedToolCallIds={requestedToolCallIds}
-                          showToolHeader={!continuesToolSequence}
-                          toolHeaderCount={toolSequenceCallCount(messages, index)}
-                        />
-                      </div>
+                      <Fragment key={message.id}>
+                        <div className={continuesToolSequence ? "!mt-2" : undefined}>
+                          <ConversationMessage
+                            message={message}
+                            onOpenAina={(id) => openAinas([id])}
+                            onPrompt={sendMessage}
+                            debugMode={debugMode}
+                            conversationId={conversation?.id ?? ""}
+                            workspaceId={routeWorkspaceId}
+                            failures={message.trace_id ? failuresByTrace.get(message.trace_id) ?? [] : []}
+                            toolResultsByCallId={toolResultsByCallId}
+                            requestedToolCallIds={requestedToolCallIds}
+                          />
+                        </div>
+                        {process ? (
+                          <TurnProcessToggle
+                            durationMs={process.durationMs}
+                            open={openTurnIds.has(message.id)}
+                            onToggle={() => toggleTurn(message.id)}
+                          />
+                        ) : null}
+                      </Fragment>
                     );
                   })
                 : null}
@@ -856,8 +882,6 @@ function ConversationMessage({
   failures,
   toolResultsByCallId,
   requestedToolCallIds,
-  showToolHeader,
-  toolHeaderCount,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
@@ -868,8 +892,6 @@ function ConversationMessage({
   failures: MessageFailure[];
   toolResultsByCallId: ReadonlyMap<string, BackendMessage>;
   requestedToolCallIds: ReadonlySet<string>;
-  showToolHeader: boolean;
-  toolHeaderCount: number;
 }) {
   const failure = failures[0] ?? null;
   if (message.role === "system") return null;
@@ -903,13 +925,7 @@ function ConversationMessage({
         />
       ) : null}
       {hasToolCalls ? (
-        <ToolCallList
-          calls={message.tool_calls ?? []}
-          resultsByCallId={toolResultsByCallId}
-          debugMode={debugMode}
-          showHeader={showToolHeader}
-          headerCount={toolHeaderCount}
-        />
+        <ToolCallList calls={message.tool_calls ?? []} resultsByCallId={toolResultsByCallId} debugMode={debugMode} />
       ) : null}
       {message.widgets?.filter((widget) => !isClarificationWidget(widget)).map((widget) => (
         <SessionWidgetRenderer
