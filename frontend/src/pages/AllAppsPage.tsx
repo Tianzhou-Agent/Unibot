@@ -1,20 +1,20 @@
 import { useTranslation } from "react-i18next";
-import i18n, { currentLocale } from "@/i18n";
+import i18n from "@/i18n";
 import { type ChangeEvent, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
-  Box,
   CheckCircle2,
+  ChevronDown,
   Code2,
   Download,
-  ExternalLink,
   FileArchive,
-  ListTree,
+  Info,
   Loader2,
   PackageCheck,
   Plus,
   RefreshCw,
   Rocket,
+  Search,
   ShieldAlert,
   Trash2,
   Unplug,
@@ -23,13 +23,13 @@ import {
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { AinaCapabilityDialog } from "@/components/apps/AinaCapabilityDialog";
+import { ActionMenu, AppIcon, PluginChip, PluginRow, PluginSection, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { ACTOR_QUERY, deleteAina, installAina, openAina, uninstallAina } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type {
-  AinaCanvasResponse,
   AinaInstallation,
   AinaProjectRecord,
   AinaProjectScaffoldRequest,
@@ -38,9 +38,8 @@ import type {
   ToolRecord,
 } from "@/types";
 
-type Tab = "aina" | "tools" | "skills";
-
-const ACTOR_QUERY = "user_id=anonymous&tenant_id=default";
+type View = "apps" | "developer";
+type Kind = "aina" | "tools" | "skills";
 
 const DEFAULT_PROJECT_SCAFFOLD: AinaProjectScaffoldRequest = {
   aina_id: "com.example.my-aina",
@@ -149,7 +148,8 @@ export default function AllAppsPage() {
   const navigate = useNavigate();
   const { user, config } = useAuth();
   const canManageRegistry = !config.auth_required || Boolean(user?.is_admin);
-  const [tab, setTab] = useState<Tab>("aina");
+  const [view, setView] = useState<View>("apps");
+  const [query, setQuery] = useState("");
   const [ainas, setAinas] = useState<AinaRecord[]>([]);
   const [projects, setProjects] = useState<AinaProjectRecord[]>([]);
   const [installations, setInstallations] = useState<AinaInstallation[]>([]);
@@ -157,6 +157,7 @@ export default function AllAppsPage() {
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editorKind, setEditorKind] = useState<Kind>("aina");
   const [editorText, setEditorText] = useState("");
   const [saving, setSaving] = useState(false);
   const [projectAction, setProjectAction] = useState<string | null>(null);
@@ -199,16 +200,10 @@ export default function AllAppsPage() {
     [installations],
   );
 
-  function openEditor(targetTab: Tab = tab, preset?: "default" | "risky") {
-    setTab(targetTab);
-    const sample =
-      targetTab === "aina"
-        ? SAMPLE_AINA
-        : targetTab === "tools"
-          ? preset === "risky"
-            ? SAMPLE_RISKY_TOOL
-            : SAMPLE_TOOL
-          : SAMPLE_SKILL;
+  function openEditor(kind: Kind) {
+    setView("developer");
+    setEditorKind(kind);
+    const sample = kind === "aina" ? SAMPLE_AINA : kind === "tools" ? SAMPLE_TOOL : SAMPLE_SKILL;
     setEditorText(JSON.stringify(sample, null, 2));
     setEditorOpen(true);
     setScaffoldOpen(false);
@@ -327,9 +322,9 @@ export default function AllAppsPage() {
     setNotice(null);
     try {
       const payload = JSON.parse(editorText) as unknown;
-      const path = tab === "aina" ? "/ainas" : tab === "tools" ? "/tools" : "/skills";
+      const path = editorKind === "aina" ? "/ainas" : editorKind === "tools" ? "/tools" : "/skills";
       await api.post(path, payload);
-      setNotice({ tone: "success", text: t("notice.registered", { label: tabLabel(tab) }) });
+      setNotice({ tone: "success", text: t("notice.registered", { label: kindLabel(editorKind) }) });
       setEditorOpen(false);
       await load();
     } catch (registerError) {
@@ -341,12 +336,7 @@ export default function AllAppsPage() {
 
   async function install(aina: AinaRecord) {
     try {
-      await api.post(`/ainas/${aina.manifest.aina.id}/install`, {
-        user_id: "anonymous",
-        tenant_id: "default",
-        granted_permissions: aina.manifest.permissions,
-        configuration: {},
-      });
+      await installAina(aina);
       setNotice({ tone: "success", text: t("notice.installed", { name: aina.manifest.aina.name }) });
       await load();
     } catch (installError) {
@@ -356,9 +346,7 @@ export default function AllAppsPage() {
 
   async function uninstall(aina: AinaRecord) {
     try {
-      await api.delete(
-        `/ainas/${aina.manifest.aina.id}/install?user_id=anonymous&tenant_id=default`,
-      );
+      await uninstallAina(aina.manifest.aina.id);
       setNotice({ tone: "success", text: t("notice.uninstalled", { name: aina.manifest.aina.name }) });
       await load();
     } catch (uninstallError) {
@@ -366,10 +354,10 @@ export default function AllAppsPage() {
     }
   }
 
-  async function remove(kind: Tab, id: string) {
-    const path = kind === "aina" ? `/ainas/${id}` : kind === "tools" ? `/tools/${id}` : `/skills/${id}`;
+  async function remove(kind: Kind, id: string) {
     try {
-      await api.delete(path);
+      if (kind === "aina") await deleteAina(id);
+      else await api.delete(kind === "tools" ? `/tools/${id}` : `/skills/${id}`);
       setNotice({ tone: "success", text: t("notice.definitionDeleted") });
       await load();
     } catch (removeError) {
@@ -379,136 +367,223 @@ export default function AllAppsPage() {
 
   async function open(aina: AinaRecord) {
     try {
-      const canvas = await api.post<AinaCanvasResponse>(`/ainas/${aina.manifest.aina.id}/open`, {
-        user_id: "anonymous",
-        tenant_id: "default",
-      });
-      navigate(canvas.route);
+      navigate(await openAina(aina.manifest.aina.id));
     } catch (openError) {
       setNotice({ tone: "error", text: apiErrorMessage(openError) });
     }
   }
 
-  const total = ainas.length + tools.length + skills.length;
+  const matches = (...fields: string[]) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || fields.some((field) => field.toLowerCase().includes(needle));
+  };
+  const visibleAinas = ainas.filter(({ manifest }) => matches(manifest.aina.name, manifest.aina.description, manifest.aina.id));
+  const usable = (record: AinaRecord) => record.manifest.runtime.type === "builtin" || installedIds.has(record.manifest.aina.id);
+  const visibleProjects = projects.filter(({ manifest }) => matches(manifest.aina.name, manifest.aina.description, manifest.aina.id));
+  const visibleTools = tools.filter((tool) => matches(tool.name, tool.description, tool.tool_id));
+  const visibleSkills = skills.filter((skill) => matches(skill.name, skill.description, skill.skill_id));
+
+  const addItems: MenuItem[] = [
+    ...(canManageRegistry
+      ? (["aina", "tools", "skills"] as const).map((kind) => ({
+        label: t("register", { label: kindLabel(kind) }),
+        icon: <Plus className="h-4 w-4" />,
+        onSelect: () => openEditor(kind),
+      }))
+      : []),
+    {
+      label: t("template"),
+      icon: <FileArchive className="h-4 w-4" />,
+      onSelect: () => {
+        setView("developer");
+        setScaffoldOpen(true);
+        setEditorOpen(false);
+        setNotice(null);
+      },
+    },
+    {
+      label: projectAction === "import" ? t("importing") : t("importZip"),
+      icon: <Upload className="h-4 w-4" />,
+      onSelect: () => {
+        setView("developer");
+        projectFileInput.current?.click();
+      },
+    },
+  ];
+
   return (
     <div className="flex h-full flex-col bg-app-bg">
-      <Topbar
-        title={t("title")}
-        badge={{ label: t("badge", { count: total }), tone: "neutral" }}
-        actions={
-          <button type="button" onClick={() => void load()} className="btn-outline h-8" aria-label={t("refreshAria")}>
-            <RefreshCw className="w-3.5 h-3.5" />{t("refresh")}
-          </button>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mx-auto max-w-6xl space-y-4">
-          <section className="rounded-xl border border-line bg-white p-4 shadow-soft">
-            <div className="flex flex-wrap items-center gap-2">
-              <TabButton active={tab === "aina"} onClick={() => setTab("aina")} icon={<AppWindow className="w-4 h-4" />}>
-                {t("tab.aina")} <Count value={ainas.length} />
-              </TabButton>
-              <TabButton active={tab === "tools"} onClick={() => setTab("tools")} icon={<Wrench className="w-4 h-4" />}>
-                {t("tab.tools")} <Count value={tools.length} />
-              </TabButton>
-              <TabButton active={tab === "skills"} onClick={() => setTab("skills")} icon={<Code2 className="w-4 h-4" />}>
-                {t("tab.skills")} <Count value={skills.length} />
-              </TabButton>
-              <span className="flex-1" />
-              {tab === "tools" ? (
-                <button type="button" onClick={() => openEditor("tools", "risky")} className="btn-outline">
-                  <ShieldAlert className="w-4 h-4 text-warning" />{t("riskySample")}
-                </button>
-              ) : null}
-              {tab === "aina" ? (
-                <>
-                  <input
-                    ref={projectFileInput}
-                    type="file"
-                    accept=".zip,.aina.zip,application/zip"
-                    className="hidden"
-                    aria-label={t("zipAria")}
-                    onChange={(event) => void importProject(event)}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setScaffoldOpen((open) => !open);
-                      setEditorOpen(false);
-                      setNotice(null);
-                    }}
-                    className="btn-outline"
-                    aria-expanded={scaffoldOpen}
-                  >
-                    <FileArchive className="w-4 h-4" />{t("template")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={projectAction !== null}
-                    onClick={() => projectFileInput.current?.click()}
-                    className="btn-outline"
-                  >
-                    {projectAction === "import" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                    {projectAction === "import" ? t("importing") : t("importZip")}
-                  </button>
-                </>
-              ) : null}
-              {canManageRegistry ? <button type="button" onClick={() => openEditor()} className="btn bg-ink text-white hover:bg-black">
-                <Plus className="w-4 h-4" />{t("register", { label: tabLabel(tab) })}
-              </button> : <p className="text-xs text-ink-muted">{t("adminOnly")}</p>}
+      <Topbar title={t("title")} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl px-5 py-7 md:px-8 md:py-9">
+          <header className="flex flex-wrap items-start gap-4">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-[26px] font-semibold text-ink">{t("title")}</h2>
+              <p className="mt-1 text-[14px] text-ink-muted">{t("subtitle")}</p>
             </div>
-          </section>
-
-          {notice ? <Notice {...notice} onClose={() => setNotice(null)} /> : null}
-
-          {editorOpen ? (
-            <DefinitionEditor
-              tab={tab}
-              text={editorText}
-              saving={saving}
-              onChange={setEditorText}
-              onClose={() => setEditorOpen(false)}
-              onSave={() => void registerDefinition()}
-            />
-          ) : null}
-
-          {tab === "aina" && scaffoldOpen ? (
-            <ProjectScaffoldForm
-              value={scaffold}
-              downloading={projectAction === "scaffold"}
-              onChange={setScaffold}
-              onCancel={() => setScaffoldOpen(false)}
-              onSubmit={(event) => void downloadScaffold(event)}
-            />
-          ) : null}
-
-          {loading ? <LoadingCards /> : null}
-          {!loading && tab === "aina" ? (
-            <>
-              <ProjectSection
-                projects={projects}
-                busyProjectId={projectAction}
-                onDownload={(project) => void downloadProject(project)}
-                onDelete={(project) => void deleteProject(project)}
-                onDeploy={(project) => void deployProject(project)}
-                onUndeploy={(project) => void undeployProject(project)}
+            <div className="flex w-full items-center gap-2 sm:w-auto">
+              <label className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t("search")}
+                  aria-label={t("search")}
+                  className="h-10 w-full rounded-full border border-line bg-white pl-10 pr-4 text-[13.5px] text-ink outline-none transition placeholder:text-ink-subtle focus:border-accent"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink-muted transition-colors hover:bg-app-soft hover:text-ink"
+                aria-label={t("refreshAria")}
+                title={t("refreshAria")}
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+              <ActionMenu
+                label={t("add")}
+                trigger={<>{t("add")}<ChevronDown className="h-4 w-4" /></>}
+                triggerClassName="btn h-10 shrink-0 gap-1.5 rounded-full bg-ink px-4 text-white hover:bg-black"
+                items={addItems}
+                note={canManageRegistry ? undefined : t("adminOnly")}
               />
-              <AinaGrid
-                ainas={ainas}
-                installedIds={installedIds}
-                onInstall={(aina) => void install(aina)}
-                onUninstall={(aina) => void uninstall(aina)}
-                onOpen={(aina) => void open(aina)}
-                onDelete={canManageRegistry ? (id) => void remove("aina", id) : undefined}
+              <input
+                ref={projectFileInput}
+                type="file"
+                accept=".zip,.aina.zip,application/zip"
+                className="hidden"
+                aria-label={t("zipAria")}
+                onChange={(event) => void importProject(event)}
               />
-            </>
-          ) : null}
-          {!loading && tab === "tools" ? (
-            <ToolGrid tools={tools} onDelete={canManageRegistry ? (id) => void remove("tools", id) : undefined} />
-          ) : null}
-          {!loading && tab === "skills" ? (
-            <SkillGrid skills={skills} onDelete={canManageRegistry ? (id) => void remove("skills", id) : undefined} />
-          ) : null}
+            </div>
+          </header>
+
+          <div className="mt-6 flex items-center gap-1" role="tablist" aria-label={t("title")}>
+            <PillTab active={view === "apps"} onClick={() => setView("apps")}>{t("tab.apps")}</PillTab>
+            <PillTab active={view === "developer"} onClick={() => setView("developer")}>{t("tab.developer")}</PillTab>
+          </div>
+
+          <div className="mt-8 space-y-10">
+            {notice ? <Notice {...notice} onClose={() => setNotice(null)} /> : null}
+            {loading ? <LoadingRows /> : null}
+
+            {!loading && view === "apps" ? (
+              ainas.length ? (
+                visibleAinas.length ? (
+                  <>
+                    {[
+                      [t("section.installed"), visibleAinas.filter(usable)] as const,
+                      [t("section.available"), visibleAinas.filter((record) => !usable(record))] as const,
+                    ].map(([title, records]) => records.length ? (
+                      <PluginSection key={title} title={title}>
+                        <RowGrid>
+                          {records.map((record) => (
+                            <AinaRow
+                              key={record.manifest.aina.id}
+                              record={record}
+                              installed={installedIds.has(record.manifest.aina.id)}
+                              canDelete={canManageRegistry}
+                              onInstall={() => void install(record)}
+                              onUninstall={() => void uninstall(record)}
+                              onOpen={() => void open(record)}
+                              onDelete={() => void remove("aina", record.manifest.aina.id)}
+                            />
+                          ))}
+                        </RowGrid>
+                      </PluginSection>
+                    ) : null)}
+                  </>
+                ) : <NoMatches query={query} />
+              ) : <EmptyState title={t("aina.emptyTitle")} detail={t("aina.emptyDetail")} />
+            ) : null}
+
+            {!loading && view === "developer" ? (
+              <>
+                {editorOpen ? (
+                  <DefinitionEditor
+                    kind={editorKind}
+                    text={editorText}
+                    saving={saving}
+                    onChange={setEditorText}
+                    onLoadRiskySample={editorKind === "tools" ? () => setEditorText(JSON.stringify(SAMPLE_RISKY_TOOL, null, 2)) : undefined}
+                    onClose={() => setEditorOpen(false)}
+                    onSave={() => void registerDefinition()}
+                  />
+                ) : null}
+                {scaffoldOpen ? (
+                  <ProjectScaffoldForm
+                    value={scaffold}
+                    downloading={projectAction === "scaffold"}
+                    onChange={setScaffold}
+                    onCancel={() => setScaffoldOpen(false)}
+                    onSubmit={(event) => void downloadScaffold(event)}
+                  />
+                ) : null}
+                <PluginSection title="AINA Projects" count={projects.length}>
+                  {visibleProjects.length ? (
+                    <RowGrid>
+                      {visibleProjects.map((project) => (
+                        <ProjectRow
+                          key={project.id}
+                          project={project}
+                          busy={projectAction === project.id}
+                          disabled={projectAction !== null}
+                          onDeploy={() => void deployProject(project)}
+                          onUndeploy={() => void undeployProject(project)}
+                          onDownload={() => void downloadProject(project)}
+                          onDelete={() => void deleteProject(project)}
+                        />
+                      ))}
+                    </RowGrid>
+                  ) : <SectionEmpty text={projects.length ? t("noMatches", { query }) : t("projects.emptyBody")} />}
+                </PluginSection>
+                <PluginSection title={t("section.tools")} count={tools.length}>
+                  {visibleTools.length ? (
+                    <RowGrid>
+                      {visibleTools.map((tool) => (
+                        <PluginRow
+                          key={tool.tool_id}
+                          icon={<AppIcon id={tool.tool_id} name={tool.name} icon={tool.side_effect_level === "high" ? <ShieldAlert className="h-5 w-5 text-warning" /> : <Wrench className="h-5 w-5" />} />}
+                          name={tool.name}
+                          description={tool.description}
+                          badge={tool.side_effect_level === "high" ? <PluginChip tone="warning">{t("tool.needsApproval")}</PluginChip> : null}
+                          actions={canManageRegistry ? (
+                            <ActionMenu
+                              label={t("more", { name: tool.name })}
+                              items={[{ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => void remove("tools", tool.tool_id) }]}
+                            />
+                          ) : null}
+                        />
+                      ))}
+                    </RowGrid>
+                  ) : <SectionEmpty text={tools.length ? t("noMatches", { query }) : t("tool.emptyDetail")} />}
+                </PluginSection>
+                <PluginSection title={t("section.skills")} count={skills.length}>
+                  {visibleSkills.length ? (
+                    <RowGrid>
+                      {visibleSkills.map((skill) => (
+                        <PluginRow
+                          key={skill.skill_id}
+                          icon={<AppIcon id={skill.skill_id} name={skill.name} icon={<Code2 className="h-5 w-5" />} />}
+                          name={skill.name}
+                          description={skill.description}
+                          badge={skill.status !== "published" ? <PluginChip>{skill.status}</PluginChip> : null}
+                          actions={canManageRegistry ? (
+                            <ActionMenu
+                              label={t("more", { name: skill.name })}
+                              items={[{ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => void remove("skills", skill.skill_id) }]}
+                            />
+                          ) : null}
+                        />
+                      ))}
+                    </RowGrid>
+                  ) : <SectionEmpty text={skills.length ? t("noMatches", { query }) : t("skill.emptyDetail")} />}
+                </PluginSection>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
@@ -530,15 +605,13 @@ function ProjectScaffoldForm({
 }) {
   const { t } = useTranslation("apps");
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-line bg-white p-4 shadow-soft">
-      <div className="flex items-start gap-3">
+    <form onSubmit={onSubmit} className="rounded-2xl border border-line bg-white p-4">
+      <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-app-soft text-ink-muted">
           <FileArchive className="h-5 w-5" />
         </div>
-        <div>
-          <h2 className="text-[14px] font-extrabold text-ink">{t("scaffold.title")}</h2>
-          <p className="mt-0.5 text-[11.5px] text-ink-muted">{t("scaffold.desc")}</p>
-        </div>
+        <h2 className="text-[14px] font-semibold text-ink">{t("scaffold.title")}</h2>
+        <InfoHint text={t("scaffold.desc")} />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <ProjectField label="AINA ID">
@@ -592,8 +665,8 @@ function ProjectScaffoldForm({
         </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="btn-outline">{t("scaffold.cancel")}</button>
-        <button type="submit" disabled={downloading} className="btn bg-ink text-white hover:bg-black">
+        <button type="button" onClick={onCancel} className="btn-outline rounded-full">{t("scaffold.cancel")}</button>
+        <button type="submit" disabled={downloading} className="btn rounded-full bg-ink text-white hover:bg-black">
           {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           {downloading ? t("scaffold.generating") : t("scaffold.download")}
         </button>
@@ -611,295 +684,126 @@ function ProjectField({ label, children }: { label: string; children: React.Reac
   );
 }
 
-function ProjectSection({
-  projects,
-  busyProjectId,
-  onDownload,
-  onDelete,
-  onDeploy,
-  onUndeploy,
-}: {
-  projects: AinaProjectRecord[];
-  busyProjectId: string | null;
-  onDownload: (project: AinaProjectRecord) => void;
-  onDelete: (project: AinaProjectRecord) => void;
-  onDeploy: (project: AinaProjectRecord) => void;
-  onUndeploy: (project: AinaProjectRecord) => void;
+function AinaRow({ record, installed, canDelete, onInstall, onUninstall, onOpen, onDelete }: {
+  record: AinaRecord;
+  installed: boolean;
+  canDelete: boolean;
+  onInstall: () => void;
+  onUninstall: () => void;
+  onOpen: () => void;
+  onDelete: () => void;
 }) {
   const { t } = useTranslation("apps");
+  const { aina, runtime, permissions, main_widget } = record.manifest;
+  const builtin = runtime.type === "builtin";
+  const items: MenuItem[] = [];
+  if (builtin || (installed && main_widget)) {
+    items.push({ label: aina.id === "unibot-scheduler" ? t("aina.manageTasks") : t("aina.open"), icon: <AppWindow className="h-4 w-4" />, onSelect: onOpen });
+  }
+  if (installed && !builtin) items.push({ label: t("aina.uninstall"), icon: <Unplug className="h-4 w-4" />, onSelect: onUninstall });
+  if (canDelete && !builtin && runtime.type !== "managed") {
+    items.push({ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: onDelete });
+  }
   return (
-    <section aria-label="AINA Projects" className="mb-4 rounded-xl border border-line bg-white p-4 shadow-soft">
-      <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-success-soft text-success-deep">
-          <PackageCheck className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h2 className="text-[14px] font-extrabold text-ink">AINA Projects</h2>
-            <Count value={projects.length} />
-          </div>
-          <p className="mt-0.5 text-[11.5px] text-ink-muted">{t("projects.desc")}</p>
-        </div>
-      </div>
-      {projects.length ? (
-        <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {projects.map((project) => {
-            const runtime = project.manifest.runtime;
-            const managed = runtime.type === "managed";
-            const runtimeLabel = managed
-              ? `${runtime.language === "python" ? "Python" : "Node.js"} · ${runtime.entrypoint}`
-              : runtime.type === "remote"
-                ? runtime.endpoint
-                : "platform://builtin";
-            const busy = busyProjectId === project.id;
-            return (
-              <article key={project.id} className="rounded-lg border border-line bg-app-soft/50 p-3.5">
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate text-[13.5px] font-extrabold text-ink">{project.manifest.aina.name}</h3>
-                      <StatusChip tone={project.status === "deployed" || project.status === "validated" ? "success" : "warning"}>
-                        {project.status === "deployed"
-                          ? t("project.deployed")
-                          : project.status === "validated"
-                            ? managed ? t("project.validatedManaged") : t("project.validated")
-                            : t("project.incomplete")}
-                      </StatusChip>
-                    </div>
-                    <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-subtle">
-                      {project.manifest.aina.id} · v{project.manifest.aina.version}
-                    </p>
-                  </div>
-                </div>
-                <p className="mt-2 line-clamp-2 text-[11.5px] leading-relaxed text-ink-muted">{project.manifest.aina.description}</p>
-                <div className="mt-3 space-y-1 rounded-lg bg-white px-2.5 py-2 text-[10.5px] text-ink-muted">
-                  <p className="truncate font-mono">{runtimeLabel}</p>
-                  <p className="truncate">{t("project.files", { filename: project.source_filename, count: project.file_count, size: formatBytes(project.size_bytes) })}</p>
-                  <p className="truncate font-mono" title={project.archive_sha256}>SHA-256 {project.archive_sha256.slice(0, 12)}…</p>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <span className="text-[10px] text-ink-subtle">{t("project.updated", { date: formatDate(project.updated_at) })}</span>
-                  <span className="flex-1" />
-                  {project.status === "validated" ? (
-                    <button
-                      type="button"
-                      disabled={busyProjectId !== null}
-                      onClick={() => onDeploy(project)}
-                      className="btn h-8 bg-ink text-white hover:bg-black"
-                      aria-label={t("project.deployAria", { name: project.manifest.aina.name })}
-                    >
-                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
-                      {busy ? t("project.deploying") : t("project.deploy")}
-                    </button>
-                  ) : project.status === "deployed" ? (
-                    <button
-                      type="button"
-                      disabled={busyProjectId !== null}
-                      onClick={() => onUndeploy(project)}
-                      className="btn-outline h-8"
-                      aria-label={t("project.undeployAria", { name: project.manifest.aina.name })}
-                    >
-                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
-                      {t("project.undeploy")}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={busyProjectId !== null || project.status === "importing"}
-                    onClick={() => onDownload(project)}
-                    className="btn-outline h-8"
-                    aria-label={t("project.downloadAria", { name: project.manifest.aina.name })}
-                  >
-                    {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                    {t("project.download")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busyProjectId !== null || project.status === "deployed"}
-                    onClick={() => onDelete(project)}
-                    className="btn-ghost h-8 text-danger"
-                    aria-label={t("project.deleteAria", { name: project.manifest.aina.name })}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+    <PluginRow
+      icon={<AppIcon id={aina.id} name={aina.name} />}
+      name={aina.name}
+      description={aina.description}
+      to={`/plugin/${encodeURIComponent(aina.id)}`}
+      // What installing grants, flagged while it is still a choice.
+      badge={!builtin && !installed && permissions.length ? (
+        <span title={permissions.join(", ")}><PluginChip tone="warning">{t("permissionCount", { count: permissions.length })}</PluginChip></span>
+      ) : null}
+      actions={builtin || installed ? (
+        <ActionMenu label={t("more", { name: aina.name })} items={items} />
       ) : (
-        <div className="mt-4 rounded-lg border border-dashed border-line-strong bg-app-soft/40 px-4 py-5 text-center">
-          <p className="text-[12px] font-bold text-ink">{t("projects.emptyTitle")}</p>
-          <p className="mt-1 text-[11px] text-ink-muted">{t("projects.emptyBody")}</p>
-        </div>
+        <button
+          type="button"
+          onClick={onInstall}
+          className="flex h-9 w-9 items-center justify-center rounded-full text-ink transition-colors hover:bg-white"
+          aria-label={t("installNamed", { name: aina.name })}
+          title={t("aina.install")}
+        >
+          <Plus className="h-5 w-5" />
+        </button>
       )}
-    </section>
+    />
   );
 }
 
-function AinaGrid({
-  ainas,
-  installedIds,
-  onInstall,
-  onUninstall,
-  onOpen,
-  onDelete,
-}: {
-  ainas: AinaRecord[];
-  installedIds: Set<string>;
-  onInstall: (aina: AinaRecord) => void;
-  onUninstall: (aina: AinaRecord) => void;
-  onOpen: (aina: AinaRecord) => void;
-  onDelete?: (id: string) => void;
+function ProjectRow({ project, busy, disabled, onDeploy, onUndeploy, onDownload, onDelete }: {
+  project: AinaProjectRecord;
+  busy: boolean;
+  disabled: boolean;
+  onDeploy: () => void;
+  onUndeploy: () => void;
+  onDownload: () => void;
+  onDelete: () => void;
 }) {
   const { t } = useTranslation("apps");
-  const [selectedAina, setSelectedAina] = useState<AinaRecord | null>(null);
-  if (!ainas.length) return <EmptyState icon={<AppWindow />} title={t("aina.emptyTitle")} detail={t("aina.emptyDetail")} />;
+  const { aina, runtime } = project.manifest;
+  const managed = runtime.type === "managed";
+  const items: MenuItem[] = [];
+  if (project.status === "validated") items.push({ label: t("project.deploy"), icon: <Rocket className="h-4 w-4" />, onSelect: onDeploy });
+  if (project.status === "deployed") items.push({ label: t("project.undeploy"), icon: <Unplug className="h-4 w-4" />, onSelect: onUndeploy });
+  if (project.status !== "importing") items.push({ label: t("project.download"), icon: <Download className="h-4 w-4" />, onSelect: onDownload });
+  if (project.status !== "deployed") items.push({ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: onDelete });
+  const status = project.status === "deployed"
+    ? t("project.deployed")
+    : project.status === "validated"
+      ? managed ? t("project.validatedManaged") : t("project.validated")
+      : t("project.incomplete");
   return (
-    <>
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {ainas.map((record) => {
-          const manifest = record.manifest;
-          const builtin = manifest.runtime.type === "builtin";
-          const managed = manifest.runtime.type === "managed";
-          const installed = builtin || installedIds.has(manifest.aina.id);
-          return (
-            <article key={manifest.aina.id} className="rounded-xl border border-line bg-white p-4 shadow-soft">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-app-soft text-ink-muted">
-                <Box className="w-5 h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="truncate text-[15px] font-extrabold text-ink">{manifest.aina.name}</h2>
-                  {builtin ? <StatusChip tone="success">{t("aina.builtin")}</StatusChip> : installed ? <StatusChip tone="success">{t("aina.installed")}</StatusChip> : <StatusChip>{managed ? t("aina.deployed") : t("aina.registered")}</StatusChip>}
-                </div>
-                <p className="mt-0.5 font-mono text-[10.5px] text-ink-muted">{manifest.aina.id} · v{manifest.aina.version}</p>
-              </div>
-            </div>
-            <p className="mt-3 min-h-[40px] text-[12.5px] leading-relaxed text-ink-muted">{manifest.aina.description}</p>
-            <div className="mt-3 rounded-lg bg-app-soft p-2.5 space-y-1.5">
-              <div className="flex items-center gap-1.5 text-[11px] text-ink-muted">
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span className="truncate font-mono">
-                  {manifest.runtime.type === "remote"
-                    ? manifest.runtime.endpoint
-                    : manifest.runtime.type === "managed"
-                      ? t("aina.managed", { lang: manifest.runtime.language === "python" ? "Python" : "Node.js" })
-                      : "platform://builtin"}
-                </span>
-              </div>
-              <div className="text-[11px] text-ink-muted">
-                {t("aina.counts", { skills: manifest.capabilities.skills.length, tools: manifest.capabilities.tools.length, perms: manifest.permissions.length })}
-              </div>
-            </div>
-            {manifest.permissions.length ? (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {manifest.permissions.map((permission) => <span key={permission} className="rounded-md bg-warning-soft px-2 py-1 text-[10px] font-bold text-warning-deep">{permission}</span>)}
-              </div>
-            ) : null}
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => setSelectedAina(record)} className="btn-outline">
-                <ListTree className="h-4 w-4" />{t("aina.viewCaps")}
-              </button>
-              {builtin ? (
-                <button type="button" onClick={() => onOpen(record)} className="btn bg-ink text-white hover:bg-black">
-                  <AppWindow className="h-4 w-4" />
-                  {manifest.aina.id === "unibot-scheduler" ? t("aina.manageTasks") : t("aina.open")}
-                </button>
-              ) : installed ? (
-                <>
-                  {manifest.main_widget ? (
-                    <button type="button" onClick={() => onOpen(record)} className="btn bg-ink text-white hover:bg-black">
-                      <AppWindow className="h-4 w-4" />{t("aina.open")}
-                    </button>
-                  ) : null}
-                  <button type="button" onClick={() => onUninstall(record)} className="btn-outline">
-                    <Unplug className="w-4 h-4" />{t("aina.uninstall")}
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={() => onInstall(record)} className="btn bg-ink text-white hover:bg-black">
-                  <Download className="w-4 h-4" />{t("aina.install")}
-                </button>
-              )}
-              <span className="flex-1" />
-              {!builtin && !managed && onDelete ? (
-                <button type="button" onClick={() => onDelete(manifest.aina.id)} className="btn-ghost text-danger" aria-label={t("aina.deleteAria", { name: manifest.aina.name })}>
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              ) : null}
-            </div>
-            </article>
-          );
-        })}
-      </div>
-      {selectedAina ? <AinaCapabilityDialog record={selectedAina} onClose={() => setSelectedAina(null)} /> : null}
-    </>
+    <PluginRow
+      icon={<AppIcon id={aina.id} name={aina.name} icon={<PackageCheck className="h-5 w-5" />} />}
+      name={aina.name}
+      description={`${aina.id} · v${aina.version} · ${t("project.files", { filename: project.source_filename, count: project.file_count, size: formatBytes(project.size_bytes) })}`}
+      badge={<PluginChip tone={project.status === "deployed" || project.status === "validated" ? "success" : "warning"}>{status}</PluginChip>}
+      actions={busy ? (
+        <span className="flex h-9 w-9 items-center justify-center text-ink-muted"><Loader2 className="h-4 w-4 animate-spin" /></span>
+      ) : disabled ? null : (
+        <ActionMenu label={t("more", { name: aina.name })} items={items} />
+      )}
+    />
   );
 }
 
-function ToolGrid({ tools, onDelete }: { tools: ToolRecord[]; onDelete?: (id: string) => void }) {
-  const { t } = useTranslation("apps");
-  if (!tools.length) return <EmptyState icon={<Wrench />} title={t("tool.emptyTitle")} detail={t("tool.emptyDetail")} />;
+function RowGrid({ children }: { children: React.ReactNode }) {
+  return <div className="grid grid-cols-1 gap-x-10 gap-y-1 md:grid-cols-2">{children}</div>;
+}
+
+function PillTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <div className="space-y-2.5">
-      {tools.map((tool) => (
-        <article key={tool.tool_id} className="flex items-center gap-4 rounded-xl border border-line bg-white p-4 shadow-soft">
-          <div className={classNames("flex h-10 w-10 items-center justify-center rounded-xl", tool.side_effect_level === "high" ? "bg-warning-soft text-warning" : "bg-app-soft text-ink-muted")}>
-            {tool.side_effect_level === "high" ? <ShieldAlert className="w-5 h-5" /> : <Wrench className="w-5 h-5" />}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h2 className="text-[14px] font-extrabold text-ink">{tool.name}</h2>
-              <StatusChip tone={tool.side_effect_level === "high" ? "warning" : "neutral"}>
-                {tool.side_effect_level === "high" ? t("tool.needsApproval") : t("tool.noSideEffects")}
-              </StatusChip>
-            </div>
-            <p className="mt-1 text-[12px] text-ink-muted">{tool.description}</p>
-            <p className="mt-1 truncate font-mono text-[10.5px] text-ink-subtle">{tool.tool_id} · {tool.endpoint}</p>
-          </div>
-          {onDelete ? <button type="button" onClick={() => onDelete(tool.tool_id)} className="btn-danger-outline" aria-label={t("tool.deleteAria", { name: tool.name })}>
-            <Trash2 className="w-4 h-4" />{t("tool.delete")}
-          </button> : null}
-        </article>
-      ))}
-    </div>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={classNames(
+        "h-9 rounded-full px-4 text-[13.5px] transition-colors",
+        active ? "bg-sidebar-active font-medium text-ink" : "text-ink-muted hover:bg-app-soft hover:text-ink",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
-function SkillGrid({ skills, onDelete }: { skills: SkillRecord[]; onDelete?: (id: string) => void }) {
-  const { t } = useTranslation("apps");
-  if (!skills.length) return <EmptyState icon={<Code2 />} title={t("skill.emptyTitle")} detail={t("skill.emptyDetail")} />;
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      {skills.map((skill) => (
-        <article key={skill.skill_id} className="rounded-xl border border-line bg-white p-4 shadow-soft">
-          <div className="flex items-center gap-2">
-            <Code2 className="h-5 w-5 text-ink-muted" />
-            <h2 className="text-[14px] font-extrabold text-ink">{skill.name}</h2>
-            <StatusChip tone={skill.status === "published" ? "success" : "neutral"}>{skill.status}</StatusChip>
-          </div>
-          <p className="mt-2 text-[12px] leading-relaxed text-ink-muted">{skill.description}</p>
-          <div className="mt-3 rounded-lg bg-app-soft p-2.5 text-[11px] leading-relaxed text-ink-muted">{skill.instructions}</div>
-          <div className="mt-3 flex items-center gap-2">
-            <span className="font-mono text-[10.5px] text-ink-subtle">{skill.skill_id}</span>
-            <span className="flex-1" />
-            {onDelete ? <button type="button" onClick={() => onDelete(skill.skill_id)} className="btn-ghost text-danger" aria-label={t("skill.deleteAria", { name: skill.name })}><Trash2 className="w-4 h-4" /></button> : null}
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { tab: Tab; text: string; saving: boolean; onChange: (text: string) => void; onClose: () => void; onSave: () => void }) {
+function DefinitionEditor({ kind, text, saving, onChange, onLoadRiskySample, onClose, onSave }: {
+  kind: Kind;
+  text: string;
+  saving: boolean;
+  onChange: (text: string) => void;
+  onLoadRiskySample?: () => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
   const { t } = useTranslation("apps");
   return (
-    <section className="overflow-hidden rounded-xl border border-line bg-white shadow-soft">
-      <div className="flex h-12 items-center gap-2 border-b border-line bg-app-soft px-4">
-        <Code2 className="h-4 w-4 text-ink-muted" />
-        <h2 className="text-[13px] font-extrabold text-ink">{t("editor.title", { label: tabLabel(tab) })}</h2>
+    <section className="overflow-hidden rounded-2xl border border-line bg-white">
+      <div className="flex h-12 items-center gap-2 border-b border-line px-4">
+        <h2 className="text-[14px] font-semibold text-ink">{t("editor.title", { label: kindLabel(kind) })}</h2>
+        <InfoHint text={t("editor.hint")} />
         <span className="flex-1" />
         <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label={t("editor.close")}><X className="w-4 h-4" /></button>
       </div>
@@ -909,72 +813,79 @@ function DefinitionEditor({ tab, text, saving, onChange, onClose, onSave }: { ta
           onChange={(event) => onChange(event.target.value)}
           rows={18}
           spellCheck={false}
-          aria-label={`${tabLabel(tab)} JSON`}
-          className="w-full rounded-lg border border-line-strong bg-slate-950 p-3 font-mono text-[11.5px] leading-relaxed text-slate-100 outline-none focus:border-accent"
+          aria-label={`${kindLabel(kind)} JSON`}
+          className="w-full rounded-xl border border-line-strong bg-slate-950 p-3 font-mono text-[11.5px] leading-relaxed text-slate-100 outline-none focus:border-accent"
         />
-        <div className="mt-3 flex items-center gap-2">
-          <p className="text-[11px] text-ink-muted">{t("editor.hint")}</p>
-          <span className="flex-1" />
-          <button type="button" onClick={onClose} className="btn-outline">{t("editor.cancel")}</button>
-          <button type="button" disabled={saving} onClick={onSave} className="btn bg-ink text-white hover:bg-black">{saving ? t("editor.registering") : t("editor.submit")}</button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {onLoadRiskySample ? (
+            <button type="button" onClick={onLoadRiskySample} className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-warning-deep hover:underline">
+              <ShieldAlert className="h-3.5 w-3.5" />{t("loadRiskySample")}
+            </button>
+          ) : null}
+          <div className="ml-auto flex gap-2 whitespace-nowrap">
+            <button type="button" onClick={onClose} className="btn-outline rounded-full">{t("editor.cancel")}</button>
+            <button type="button" disabled={saving} onClick={onSave} className="btn rounded-full bg-ink text-white hover:bg-black">{saving ? t("editor.registering") : t("editor.submit")}</button>
+          </div>
         </div>
       </div>
     </section>
   );
 }
 
-function TabButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
+// Explanatory copy sits behind an icon instead of a paragraph: hover shows it, screen readers read it.
+function InfoHint({ text }: { text: string }) {
   return (
-    <button type="button" onClick={onClick} className={classNames("inline-flex h-8 items-center gap-2 rounded-lg px-2.5 text-[12.5px] transition-colors", active ? "bg-sidebar-active font-medium text-ink" : "font-normal text-ink-muted hover:bg-sidebar-hover hover:text-ink")}>{icon}{children}</button>
+    <span role="img" aria-label={text} title={text} className="inline-flex cursor-help text-ink-subtle hover:text-ink-muted">
+      <Info className="h-3.5 w-3.5" />
+    </span>
   );
 }
 
-function Count({ value }: { value: number }) {
-  return <span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[9.5px]">{value}</span>;
+function SectionEmpty({ text }: { text: string }) {
+  return <p className="px-2 py-3 text-[13px] text-ink-subtle">{text}</p>;
 }
 
-function StatusChip({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "success" | "warning" }) {
-  return <span className={classNames("rounded-md px-1.5 py-0.5 text-[9.5px] font-bold", tone === "success" ? "bg-success-soft text-success-deep" : tone === "warning" ? "bg-warning-soft text-warning-deep" : "bg-app-soft text-ink-muted")}>{children}</span>;
+function NoMatches({ query }: { query: string }) {
+  const { t } = useTranslation("apps");
+  return <p className="py-16 text-center text-[14px] text-ink-muted">{t("noMatches", { query })}</p>;
 }
 
 function Notice({ tone, text, onClose }: { tone: "success" | "error"; text: string; onClose: () => void }) {
   const { t } = useTranslation("apps");
   return (
-    <div className={classNames("rounded-lg border p-3 flex items-center gap-2.5", tone === "success" ? "border-success/20 bg-success-soft text-success-deep" : "border-danger-ring bg-danger-soft text-danger-deep")}>
+    <div className={classNames("flex items-center gap-2.5 rounded-xl px-3.5 py-2.5", tone === "success" ? "bg-success-soft text-success-deep" : "bg-danger-soft text-danger-deep")}>
       {tone === "success" ? <CheckCircle2 className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
-      <span className="flex-1 text-[12.5px] font-semibold">{text}</span>
+      <span className="flex-1 text-[13px] font-medium">{text}</span>
       <button type="button" onClick={onClose} aria-label={t("dismiss")}><X className="w-4 h-4" /></button>
     </div>
   );
 }
 
-function EmptyState({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
+function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-line-strong bg-white py-20 text-center">
-      <div className="mx-auto w-10 h-10 text-ink-subtle">{icon}</div>
-      <h2 className="mt-3 text-[15px] font-bold text-ink">{title}</h2>
-      <p className="mt-1 text-[12px] text-ink-muted">{detail}</p>
+    <div className="py-20 text-center">
+      <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
+      <p className="mt-1 text-[13px] text-ink-muted">{detail}</p>
     </div>
   );
 }
 
-function LoadingCards() {
-  return <div className="grid grid-cols-2 gap-3">{[0, 1, 2, 3].map((item) => <div key={item} className="h-48 animate-pulse rounded-xl bg-line/60" />)}</div>;
+function LoadingRows() {
+  return (
+    <div className="grid grid-cols-1 gap-x-10 gap-y-3 md:grid-cols-2">
+      {[0, 1, 2, 3].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-line/60" />)}
+    </div>
+  );
 }
 
-function tabLabel(tab: Tab): string {
-  return tab === "aina" ? "AINA" : i18n.t(`apps:label.${tab}`);
+function kindLabel(kind: Kind): string {
+  return kind === "aina" ? "AINA" : i18n.t(`apps:label.${kind}`);
 }
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(currentLocale());
 }
 
 function downloadBlob(blob: Blob, filename: string) {

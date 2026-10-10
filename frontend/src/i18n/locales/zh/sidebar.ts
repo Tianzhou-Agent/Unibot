@@ -1,4 +1,9 @@
 export default {
+  runStatus: {
+    running: "运行中",
+    approval_required: "等待你的确认",
+    failed: "上次运行失败",
+  },
   closeNav: "关闭导航",
   collapseNav: "收起导航",
   expandNav: "展开导航",

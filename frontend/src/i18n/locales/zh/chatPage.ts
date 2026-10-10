@@ -13,11 +13,8 @@ export default {
     cancelling: "正在取消调用…",
   },
   newConversation: "新对话",
-  badge: {
-    deleted: "已删除",
-    running: "运行中",
-    ready: "已就绪",
-  },
+  canvasShow: "显示应用面板",
+  canvasHide: "隐藏应用面板",
   viewObsAria: "查看当前对话观测数据",
   titleAria: "对话标题",
   save: "保存",

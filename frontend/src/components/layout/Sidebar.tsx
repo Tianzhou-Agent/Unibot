@@ -17,6 +17,28 @@ export function notifyConversationsChanged() {
   window.dispatchEvent(new Event(CONVERSATIONS_CHANGED_EVENT));
 }
 
+const RUN_STATUS_EVENT = "unibot:run-status";
+// Conversations whose turn is streaming in this tab right now; the stored run_status lags behind it.
+const runningConversationIds = new Set<string>();
+
+/** Marks a conversation as running (or not) for its sidebar row while the chat page streams a turn. */
+export function announceConversationRunning(conversationId: string, running: boolean) {
+  if (running) runningConversationIds.add(conversationId);
+  else runningConversationIds.delete(conversationId);
+  window.dispatchEvent(new Event(RUN_STATUS_EVENT));
+}
+
+function useConversationRunning(conversationId: string) {
+  const [running, setRunning] = useState(() => runningConversationIds.has(conversationId));
+  useEffect(() => {
+    const update = () => setRunning(runningConversationIds.has(conversationId));
+    update();
+    window.addEventListener(RUN_STATUS_EVENT, update);
+    return () => window.removeEventListener(RUN_STATUS_EVENT, update);
+  }, [conversationId]);
+  return running;
+}
+
 export function Sidebar() {
   const { t } = useTranslation("sidebar");
   const { profile, toggleRole } = useMockSession();
@@ -620,6 +642,20 @@ function ConversationDeleteDialog({
   );
 }
 
+/** Only states that need attention get a dot; an idle conversation shows nothing. */
+function RunStatusDot({ status }: { status: ConversationRecord["run_status"] }) {
+  const { t } = useTranslation("sidebar");
+  if (status !== "running" && status !== "approval_required" && status !== "failed") return null;
+  const label = t(`runStatus.${status}`);
+  const color = status === "running" ? "bg-accent" : status === "approval_required" ? "bg-warning" : "bg-danger";
+  return (
+    <span role="img" aria-label={label} title={label} className="relative ml-2 flex h-2 w-2 shrink-0">
+      {status === "running" ? <span className={classNames("absolute inset-0 animate-ping rounded-full opacity-60", color)} /> : null}
+      <span className={classNames("relative h-2 w-2 rounded-full", color)} />
+    </span>
+  );
+}
+
 function ConversationLink({
   conversation,
   onRequestDelete,
@@ -636,6 +672,7 @@ function ConversationLink({
   const [titleDraft, setTitleDraft] = useState(title);
   const menuBtnRef = useRef<HTMLButtonElement | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const status = useConversationRunning(conversation.id) ? "running" : conversation.run_status;
 
   function openMenu(e: React.MouseEvent) {
     e.preventDefault();
@@ -686,7 +723,10 @@ function ConversationLink({
           )}
         >
           {({ isActive }) => (
-            <span className={classNames("min-w-0 flex-1 truncate text-[13px]", isActive ? "font-medium text-ink" : "font-normal text-ink-muted")}>{title}</span>
+            <>
+              <span className={classNames("min-w-0 flex-1 truncate text-[13px]", isActive ? "font-medium text-ink" : "font-normal text-ink-muted")}>{title}</span>
+              <RunStatusDot status={status} />
+            </>
           )}
         </NavLink>
       )}

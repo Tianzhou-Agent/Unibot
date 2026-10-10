@@ -59,6 +59,7 @@ export default {
     inProgress: "任务进行中",
   },
   widget: {
+    suggestedApps: "推荐应用",
     openApp: "打开 {{name}}",
     noApps: "当前没有可用的 AINA 应用。",
     loadingEditor: "正在加载代码编辑器…",

@@ -4,6 +4,7 @@ import ChatModePage from "@/pages/ChatModePage";
 import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
 import AllAppsPage from "@/pages/AllAppsPage";
+import PluginDetailPage from "@/pages/PluginDetailPage";
 import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
 import FeedbackAdminPage from "@/pages/FeedbackAdminPage";
 import OperationsAnalyticsPage from "@/pages/OperationsAnalyticsPage";
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/workspaces/:workspaceId/canvas/:ainaId" element={<LegacyCanvasRedirect />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/plugin" element={<AllAppsPage />} />
+        <Route path="/plugin/:ainaId" element={<PluginDetailPage />} />
         <Route path="/apps" element={<Navigate to="/plugin" replace />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />
         <Route path="/obs" element={<PersonalObsRoute />} />

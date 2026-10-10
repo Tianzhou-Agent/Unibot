@@ -9,6 +9,13 @@ export default {
     joiner: "、",
   },
   thinkingNow: "正在思考",
+  process: {
+    completed: "已完成",
+    completedIn: "已完成，用时 {{duration}}",
+    seconds: "{{s}} 秒",
+    minutes: "{{m}} 分 {{s}} 秒",
+    hours: "{{h}} 小时 {{m}} 分 {{s}} 秒",
+  },
   thinking: {
     w0: "思考中",
     w1: "琢磨中",
@@ -50,7 +57,6 @@ export default {
   },
   tool: {
     aria: "工具调用",
-    header: "工具调用",
     capabilityCall: "能力调用",
     callAria: "工具调用 {{name}} {{status}}",
     args: "调用参数",
