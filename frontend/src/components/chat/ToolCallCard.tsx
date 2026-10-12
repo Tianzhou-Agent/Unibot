@@ -178,16 +178,18 @@ function toolLabel(name: string): string {
   if (value.startsWith("aina_") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
   if (value.includes("list_app")) return i18n.t("chat:tool.label.listApps");
   if (value.includes("suggest_ainas")) return i18n.t("chat:tool.label.suggestApps");
-  if (value.includes("search")) return i18n.t("chat:tool.label.webSearch");
+  if (value.includes("search")) {
+    return i18n.t(value.includes("document") || value.includes("file") ? "chat:tool.label.searchDocs" : "chat:tool.label.webSearch");
+  }
   if (value.includes("browser") || value.includes("fetch") || value.includes("open_url")) return i18n.t("chat:tool.label.openWeb");
   if (value.includes("code") || value.includes("runner") || value.includes("execute") || value.includes("terminal")) return i18n.t("chat:tool.label.runCode");
   if (value.includes("document") || value.includes("file")) {
     if (value.includes("read") || value.includes("list") || value.includes("tree")) return i18n.t("chat:tool.label.readDoc");
-    return i18n.t("chat:tool.label.writeDoc");
+    if (["write", "create", "update", "append", "save"].some((verb) => value.includes(verb))) return i18n.t("chat:tool.label.writeDoc");
   }
   if (value.includes("memory")) return i18n.t("chat:tool.label.memory");
   if (value.includes("schedule")) return i18n.t("chat:tool.label.schedule");
-  return name;
+  return i18n.t("chat:tool.label.generic");
 }
 
 function toolIcon(name: string) {

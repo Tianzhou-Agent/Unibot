@@ -79,7 +79,8 @@ export default function ChatModePage() {
   const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
   // Archived message count when the optimistic message was sent; a later archived copy replaces it.
-  const optimisticBaselineRef = useRef(0);
+  // Archive length when the local streamed turn began; null when no such turn is running.
+  const optimisticBaselineRef = useRef<number | null>(null);
   const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -238,6 +239,7 @@ export default function ChatModePage() {
       runGenerationRef.current += 1;
       streamAbortRef.current?.abort();
       streamAbortRef.current = null;
+      optimisticBaselineRef.current = null;
       localRunConversationIdRef.current = null;
       localRunWorkspaceIdRef.current = null;
       setOptimisticUser(null);
@@ -276,6 +278,7 @@ export default function ChatModePage() {
       runGenerationRef.current += 1;
       streamAbortRef.current?.abort();
       streamAbortRef.current = null;
+      optimisticBaselineRef.current = null;
       localRunConversationIdRef.current = null;
       localRunWorkspaceIdRef.current = null;
       setConversation(null);
@@ -538,6 +541,7 @@ export default function ChatModePage() {
     } finally {
       const activeRun = isActiveRun();
       if (runGenerationRef.current === runGeneration) {
+        optimisticBaselineRef.current = null;
         localRunConversationIdRef.current = null;
         localRunWorkspaceIdRef.current = null;
         if (streamAbortRef.current === streamController) streamAbortRef.current = null;
@@ -564,20 +568,24 @@ export default function ChatModePage() {
 
   async function resolveApproval(action: "confirm" | "deny") {
     if (!approval) return;
+    const decided = approval;
+    // The decision is made: drop the card now rather than after the approved calls finish running.
+    setApproval(null);
     setSending(true);
     setError(null);
     setActivity(action === "confirm" ? t("activity.runningApproved") : t("activity.cancelling"));
     try {
       if (action === "confirm") {
-        const response = await api.post<ChatResponse>(`/approvals/${approval.id}/confirm`, actor);
+        const response = await api.post<ChatResponse>(`/approvals/${decided.id}/confirm`, actor);
         setLastRun(response);
       } else {
-        await api.post(`/approvals/${approval.id}/deny`, actor);
+        await api.post(`/approvals/${decided.id}/deny`, actor);
       }
-      setApproval(null);
-      await loadConversation(approval.conversation_id);
+      await loadConversation(decided.conversation_id);
       notifyConversationsChanged();
     } catch (approvalError) {
+      // Reload so a still-pending approval comes back to be decided again.
+      await loadConversation(decided.conversation_id, true);
       setError(apiErrorMessage(approvalError));
     } finally {
       setSending(false);
@@ -634,10 +642,10 @@ export default function ChatModePage() {
 
   const messages = useMemo(() => {
     const archived = conversation?.messages ?? [];
-    if (!sending) return archived;
+    const baseline = optimisticBaselineRef.current;
+    if (!sending || baseline === null) return archived;
     // The run archives its messages as it goes and the page reloads the conversation meanwhile, but the live turn
     // already shows those steps: until it ends, show the archive only up to the turn and its user message.
-    const baseline = optimisticBaselineRef.current;
     const echoed = archived
       .slice(baseline)
       .find((message) => message.role === "user" && message.content === optimisticUser?.content);

@@ -1,0 +1,5 @@
+services:
+  backend:
+    environment:
+      UNIBOT_OBS_RAW_ROOT: /data/nas/observability/raw
+      UNIBOT_OBS_WAL_ROOT: /data/nas/observability/wal

@@ -270,6 +270,44 @@ async def test_recent_obs_miss_keeps_running_state_and_run_lock() -> None:
 
 
 @pytest.mark.asyncio
+async def test_approved_continuation_keeps_running_while_obs_trace_says_paused() -> None:
+    # Confirming an approval resumes the paused run under the same trace, which still reads approval_required.
+    stores = _stores()
+
+    async def paused(trace_id: str) -> str:
+        del trace_id
+        return "approval_required"
+
+    repository = PersistentRepository(stores, obs_trace_status_resolver=paused)
+    await repository.initialize()
+    conversation = await repository.create_conversation(ConversationCreate(user_id="u1", tenant_id="t1"))
+    await repository.start_conversation_run(conversation.id, "trace_paused")
+    try:
+        reconciled = await repository.reconcile_conversation_run(conversation.id)
+        assert reconciled.run_status == "running"
+        assert reconciled.active_trace_id == "trace_paused"
+        assert await stores.redis.get("conversation-run", conversation.id) is not None
+    finally:
+        await repository.finish_conversation_run(conversation.id)
+
+
+@pytest.mark.asyncio
+async def test_approved_continuation_keeps_running_while_legacy_trace_says_paused() -> None:
+    stores = _stores()
+    repository = PersistentRepository(stores, persist_observability=True)
+    await repository.initialize()
+    conversation = await repository.create_conversation(ConversationCreate(user_id="u1", tenant_id="t1"))
+    await repository.create_trace(_trace("trace_paused").model_copy(update={"status": "approval_required"}))
+    await repository.start_conversation_run(conversation.id, "trace_paused")
+    try:
+        reconciled = await repository.reconcile_conversation_run(conversation.id)
+        assert reconciled.run_status == "running"
+        assert reconciled.active_trace_id == "trace_paused"
+    finally:
+        await repository.finish_conversation_run(conversation.id)
+
+
+@pytest.mark.asyncio
 async def test_expired_run_recovers_even_when_obs_still_says_running() -> None:
     stores = _stores()
 
