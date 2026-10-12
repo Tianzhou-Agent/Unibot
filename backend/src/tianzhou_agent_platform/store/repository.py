@@ -50,7 +50,7 @@ from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.models import StoreQuery
 from tianzhou_agent_platform.store.repository_schema import (
     model_from_row,
-    repository_metadata,
+    repository_metadata as repository_metadata,
     repository_tables as repository_tables,
     row_values,
 )
@@ -90,7 +90,6 @@ class PersistentRepository(InMemoryRepository):
         self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
 
     async def initialize(self) -> None:
-        await self.stores.mysql.create_tables(repository_metadata)
         workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
         conversations = await self._load_models(CONVERSATIONS_RESOURCE, Conversation)
         memories = await self._load_models(MEMORIES_RESOURCE, MemoryRecord)

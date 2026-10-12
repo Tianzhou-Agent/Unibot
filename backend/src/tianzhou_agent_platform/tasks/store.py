@@ -21,7 +21,6 @@ from sqlalchemy import (
     delete,
     insert,
     select,
-    text,
     update,
 )
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -88,8 +87,6 @@ TaskMutator = Callable[[list[SessionTask]], MutationDecision[T]]
 
 
 class SessionTaskStore(Protocol):
-    async def initialize(self) -> None: ...
-
     async def read(self, session_id: str) -> tuple[list[SessionTask], int]: ...
 
     async def revision(self, session_id: str) -> int: ...
@@ -107,9 +104,6 @@ class InMemorySessionTaskStore:
         self._tasks: dict[str, list[SessionTask]] = {}
         self._revisions: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-
-    async def initialize(self) -> None:
-        return None
 
     async def read(self, session_id: str) -> tuple[list[SessionTask], int]:
         lock = self._locks.setdefault(session_id, asyncio.Lock())
@@ -157,10 +151,6 @@ class MySqlSessionTaskStore:
         self._mysql = mysql
         self._redis = redis
         self._session_factory: async_sessionmaker[Any] = mysql.session_factory
-
-    async def initialize(self) -> None:
-        await self._mysql.create_tables(task_metadata)
-        await self._upgrade_session_id_columns()
 
     async def read(self, session_id: str) -> tuple[list[SessionTask], int]:
         async with self._session_factory() as session:
@@ -275,20 +265,3 @@ class MySqlSessionTaskStore:
             await self._redis.set_max_int("task:revision", session_id, revision)
         except StorageError:
             pass
-
-    async def _upgrade_session_id_columns(self) -> None:
-        table_names = {"session_tasks", "session_task_meta"}
-        async with self._mysql.engine.begin() as connection:
-            result = await connection.execute(
-                text(
-                    "SELECT table_name, character_maximum_length "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema = DATABASE() AND column_name = 'session_id' "
-                    "AND table_name IN ('session_tasks', 'session_task_meta')"
-                )
-            )
-            for table_name, length in result:
-                if table_name in table_names and int(length or 0) < 64:
-                    await connection.execute(
-                        text(f"ALTER TABLE {table_name} MODIFY session_id VARCHAR(64) NOT NULL")
-                    )

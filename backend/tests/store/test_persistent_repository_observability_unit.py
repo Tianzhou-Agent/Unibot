@@ -29,9 +29,6 @@ class FakeMySqlStore:
         self.records: dict[str, dict[str, StoreRecord]] = {}
         self.queries: list[str] = []
 
-    async def create_tables(self, metadata: Any) -> None:
-        del metadata
-
     async def read(self, resource: str, record_id: str) -> StoreRecord | None:
         return self.records.get(resource, {}).get(record_id)
 
