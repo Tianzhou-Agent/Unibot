@@ -2,7 +2,7 @@
 
 Date: 2026-10-01 (scope revised 2026-10-13)
 
-Status: Step 1 (Alembic) implemented. Steps 2–7 proposed.
+Status: Steps 1 (Alembic) and 2 (conversations, messages, approvals) implemented. Steps 3–7 proposed.
 
 Target: a public multi-tenant service running several backend replicas against one MySQL database. Every replica must see every other replica's writes immediately, so no business table may be served from a process-local copy.
 
@@ -45,7 +45,7 @@ Rules:
 | Table | Columns | JSON | Keys and indexes |
 | --- | --- | --- | --- |
 | `unibot_conversations` | `id`, `user_id`, `tenant_id`, `workspace_id`, `title`, `category`, `status`, `run_status`, `active_trace_id`, `run_error`, `run_started_at`, `primary_aina_id`, `last_aina_id`, `next_message_sequence`, `created_at`, `updated_at` | `config`, `enabled_ainas`, `active_aina_ids` | `(tenant_id, user_id, updated_at, id)` |
-| **New** `unibot_messages` | `conversation_id`, `id`, `sequence_no`, `role`, `content`, `content_type`, `tool_call_id`, `name`, `trace_id`, `created_at` | `tool_calls`, `widgets` | PK `(conversation_id, id)`; unique `(conversation_id, sequence_no)`; FK to conversations |
+| **New** `unibot_messages` | `conversation_id`, `id`, `sequence_no`, `role`, `content`, `content_type`, `reasoning`, `tool_call_id`, `name`, `trace_id`, `created_at` | `tool_calls`, `widgets` | PK `(conversation_id, id)`; unique `(conversation_id, sequence_no)`; FK to conversations |
 | `unibot_users` | `id`, `email`, `email_normalized`, `name`, `password_hash`, `github_id`, `github_login`, `avatar_url`, `tenant_id`, `created_at`, `updated_at` | — | Unique `email_normalized` (global, as today); unique nullable `github_id`; `(created_at, id)` |
 | `unibot_scheduled_aina_executions` | `id`, `task_id`, `aina_id`, `user_id`, `tenant_id`, `trigger`, `scheduled_for`, `call_id`, `node_id`, `status`, `error`, `started_at`, `finished_at`, `duration_ms` | `input`, `result` | `(task_id, started_at, id)` |
 | `unibot_sandbox_executions` | `id`, `sandbox_id`, `user_id`, `tenant_id`, `workspace_id`, `language`, `script`, `working_directory`, `status`, `stdout`, `stderr`, `exit_code`, `duration_ms`, `truncated`, `started_at`, `finished_at` | — | `(tenant_id, user_id, started_at, id)`; `sandbox_id` |
@@ -81,14 +81,16 @@ Adding Alembic now costs little and becomes expensive once production data exist
 | Step | Deliverable | Done when |
 | --- | --- | --- |
 | 1 ✅ | Alembic setup, baseline revision, startup revision check | A fresh database reaches `head`, the app starts on it, and it refuses to start on a database with the wrong revision. |
-| 2 | Conversations, messages and approvals | Chat, approval resume, and archive tests pass. Concurrent and retried appends neither duplicate nor lose messages. Appends insert only new rows. |
+| 2 ✅ | Conversations, messages and approvals | Chat, approval resume, and archive tests pass. Concurrent and retried appends neither duplicate nor lose messages. Appends insert only new rows. |
 | 3 | Users | Concurrent registration or GitHub linking with the same email gives one user and one conflict error. The Redis lease is removed. |
 | 4 | Sandboxes, scheduled tasks and their execution history | History is filtered, ordered, and limited in SQL. Deleting a task or sandbox removes its executions. The scheduler reads tasks from SQL instead of reloading the table. |
 | 5 | Per-user records: workspaces, memories, model providers, installations, feedbacks, document edit tasks, AINA projects | Owner/tenant filters run in SQL. Read-modify-write updates use a row lock or version check instead of a Redis lease. |
-| 6 | Shared registry: tools, skills, AINAs; legacy traces and LLM calls | Discovery and registration read SQL. `initialize` loads nothing. |
+| 6 | Shared registry: tools, skills, AINAs; legacy traces and LLM calls | Discovery and registration read SQL. `initialize` loads nothing. Two replicas cold-starting on an empty database both start: registering the built-in AINAs is idempotent (today the second replica fails with a duplicate key). |
 | 7 | Remove the in-memory state from `PersistentRepository` | It no longer inherits `InMemoryRepository` dictionaries. A two-replica test on one database shows every resource's writes on the other replica immediately. |
 
 Each step is its own PR, with an Alembic revision when the schema changes.
+
+Follow-up outside this plan: `GET /conversations` and the admin conversation endpoints return every conversation with its full message history. Step 2 loads those messages in one batched query, but the endpoints should page and return summaries without messages.
 
 ## 7. Testing
 
