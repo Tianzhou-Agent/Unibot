@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, Select, Table, delete, insert, update
+from sqlalchemy import ColumnElement, Select, Table, delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tianzhou_agent_platform.store.repository_schema import model_from_mapping
+from tianzhou_agent_platform.store.repository_schema import model_from_mapping, table_values
 
 
 class SessionSource(Protocol):
@@ -33,6 +34,32 @@ class SqlStore:
         async with self._session() as session:
             rows = (await session.execute(statement)).mappings().all()
         return [model_from_mapping(model, row) for row in rows]
+
+    async def _update_locked[ModelT: BaseModel](
+        self,
+        table: Table,
+        model: type[ModelT],
+        record_id: str,
+        change: Callable[[ModelT], ModelT | None],
+    ) -> ModelT | None:
+        """Apply ``change`` to the row ``record_id`` under a row lock; None when there is no such row.
+
+        ``change`` returns the updated record, or None to leave the row as it is (the current record is returned).
+        """
+        async with self._session() as session, session.begin():
+            row = (
+                (await session.execute(select(table).where(table.c.id == record_id).with_for_update()))
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return None
+            current = model_from_mapping(model, row)
+            updated = change(current)
+            if updated is None:
+                return current
+            await session.execute(update(table).where(table.c.id == record_id).values(table_values(table, updated)))
+        return updated
 
     async def _put(self, table: Table, row: dict[str, Any]) -> None:
         """Insert ``row``, or replace the row with the same id.

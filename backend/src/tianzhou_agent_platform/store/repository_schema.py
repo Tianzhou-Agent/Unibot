@@ -106,6 +106,7 @@ workspaces_table = _table(
     Column("storage_key", String(160), nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_workspaces_owner_updated", "tenant_id", "user_id", "updated_at"),
 )
 
 conversations_table = _table(
@@ -183,6 +184,7 @@ memories_table = _table(
     Column("metadata", JSON, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_memories_owner_updated", "tenant_id", "user_id", "updated_at"),
 )
 
 feedbacks_table = _table(
@@ -207,6 +209,9 @@ feedbacks_table = _table(
     Column("history", JSON, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    # One feedback per actor and answer; resubmitting updates it.
+    UniqueConstraint("tenant_id", "user_id", "message_id", name="uq_unibot_feedbacks_message"),
+    Index("ix_unibot_feedbacks_created", "created_at"),
 )
 
 model_providers_table = _table(
@@ -222,6 +227,7 @@ model_providers_table = _table(
     Column("models", JSON, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_model_providers_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
 tools_table = _table(
@@ -290,6 +296,7 @@ aina_projects_table = _table(
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
     Column("deployed_at", TIMESTAMP, nullable=True),
+    Index("ix_unibot_aina_projects_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
 installations_table = _table(
@@ -303,6 +310,8 @@ installations_table = _table(
     Column("installed_version", String(255), nullable=False),
     Column("status", STATUS, nullable=False),
     Column("installed_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_installations_owner", "tenant_id", "user_id"),
+    Index("ix_unibot_installations_aina", "aina_id"),
 )
 
 scheduled_aina_tasks_table = _table(
@@ -373,6 +382,7 @@ document_edit_tasks_table = _table(
     Column("abandoned_at", TIMESTAMP, nullable=True),
     Column("completed_at", TIMESTAMP, nullable=True),
     Column("deleted_at", TIMESTAMP, nullable=True),
+    Index("ix_unibot_document_edit_tasks_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
 sandboxes_table = _table(
