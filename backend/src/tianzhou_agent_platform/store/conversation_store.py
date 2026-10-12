@@ -9,10 +9,10 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 
 from sqlalchemy import ColumnElement, insert, select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tianzhou_agent_platform.conversations.models import Conversation, Message
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
@@ -24,23 +24,13 @@ from tianzhou_agent_platform.store.repository_schema import (
     model_from_mapping,
     table_values,
 )
+from tianzhou_agent_platform.store.sql import SqlStore
 
 # Bounds the IN list when loading the messages of many conversations at once.
 _MESSAGE_BATCH = 500
 
 
-class SessionSource(Protocol):
-    @property
-    def session_factory(self) -> async_sessionmaker[AsyncSession]: ...
-
-
-class ConversationStore:
-    def __init__(self, database: SessionSource) -> None:
-        self._database = database
-
-    def _session(self) -> AsyncSession:
-        return self._database.session_factory()
-
+class ConversationStore(SqlStore):
     async def create(self, conversation: Conversation) -> None:
         async with self._session() as session, session.begin():
             await session.execute(insert(conversations_table).values(_conversation_row(conversation)))

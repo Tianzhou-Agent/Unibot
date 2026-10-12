@@ -327,6 +327,8 @@ scheduled_aina_tasks_table = _table(
     Column("last_result", NULLABLE_JSON, nullable=True),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_scheduled_aina_tasks_due", "enabled", "next_run_at"),
+    Index("ix_unibot_scheduled_aina_tasks_owner", "tenant_id", "user_id"),
 )
 
 scheduled_aina_executions_table = _table(
@@ -347,6 +349,7 @@ scheduled_aina_executions_table = _table(
     Column("started_at", TIMESTAMP, nullable=False),
     Column("finished_at", TIMESTAMP, nullable=True),
     Column("duration_ms", Double, nullable=True),
+    Index("ix_unibot_scheduled_aina_executions_task_started", "task_id", "started_at"),
 )
 
 document_edit_tasks_table = _table(
@@ -389,6 +392,7 @@ sandboxes_table = _table(
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
     Column("last_activity_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_sandboxes_scope", "tenant_id", "user_id", "workspace_id"),
 )
 
 sandbox_executions_table = _table(
@@ -409,6 +413,8 @@ sandbox_executions_table = _table(
     Column("truncated", Boolean, nullable=False),
     Column("started_at", TIMESTAMP, nullable=False),
     Column("finished_at", TIMESTAMP, nullable=True),
+    Index("ix_unibot_sandbox_executions_owner_started", "tenant_id", "user_id", "started_at"),
+    Index("ix_unibot_sandbox_executions_sandbox", "sandbox_id"),
 )
 
 # Legacy observability records, written only while the OBS pipeline is disabled.

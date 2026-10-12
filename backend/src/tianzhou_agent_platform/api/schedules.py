@@ -30,11 +30,10 @@ def create_schedule_router() -> APIRouter:
 
     @router.get("", response_model=list[ScheduledAinaTask])
     async def list_schedules(request: Request) -> list[ScheduledAinaTask]:
-        tasks = await repository(request).list_scheduled_aina_tasks()
         if getattr(request.state, "actor", None) is None:
-            return tasks
+            return await repository(request).list_scheduled_aina_tasks()
         actor = request_actor(request)
-        return [item for item in tasks if item.user_id == actor.user_id and item.tenant_id == actor.tenant_id]
+        return await repository(request).list_scheduled_aina_tasks(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.get("/{task_id}/executions", response_model=list[ScheduledAinaExecution])
     async def list_schedule_executions(
