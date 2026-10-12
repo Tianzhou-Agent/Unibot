@@ -209,9 +209,7 @@ class AinaScheduler:
 
     async def tick(self, *, now: datetime | None = None) -> None:
         current = now or datetime.now(UTC)
-        for task in await self.repository.list_scheduled_aina_tasks():
-            if not task.enabled or task.next_run_at > current:
-                continue
+        for task in await self.repository.list_due_scheduled_aina_tasks(current):
             claim_id = f"{task.id}:{task.next_run_at.isoformat()}"
             async with self._lease(
                 "aina-schedule-lease",

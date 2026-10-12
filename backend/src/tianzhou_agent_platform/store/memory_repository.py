@@ -565,12 +565,7 @@ class InMemoryRepository:
         return None
 
     async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
-        now = datetime.now(UTC)
-        values = data.model_dump()
-        if data.prompt is not None:
-            values["input"] = {"message": data.prompt}
-        task = ScheduledAinaTask(**values, created_at=now, updated_at=now)
-        task = task.model_copy(update={"next_run_at": next_scheduled_run(task, after=now)})
+        task = new_scheduled_aina_task(data)
         async with self._lock:
             self._scheduled_aina_tasks[task.id] = task
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
@@ -725,9 +720,24 @@ class InMemoryRepository:
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
         return self._copy(task)
 
-    async def list_scheduled_aina_tasks(self) -> list[ScheduledAinaTask]:
+    async def list_scheduled_aina_tasks(
+        self, *, user_id: str | None = None, tenant_id: str | None = None
+    ) -> list[ScheduledAinaTask]:
         async with self._lock:
-            return [self._copy(item) for item in self._scheduled_aina_tasks.values()]
+            return [
+                self._copy(item)
+                for item in self._scheduled_aina_tasks.values()
+                if (user_id is None or item.user_id == user_id) and (tenant_id is None or item.tenant_id == tenant_id)
+            ]
+
+    async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]:
+        """Enabled tasks whose next run is at or before ``now``."""
+        async with self._lock:
+            return [
+                self._copy(item)
+                for item in self._scheduled_aina_tasks.values()
+                if item.enabled and item.next_run_at <= now
+            ]
 
     async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask:
         async with self._lock:
@@ -766,16 +776,7 @@ class InMemoryRepository:
             task = self._scheduled_aina_tasks.get(task_id)
             if task is None:
                 raise not_found("Scheduled AINA task", task_id)
-            changes = data.model_dump(exclude_none=True)
-            if data.prompt is not None:
-                changes["input"] = {"message": data.prompt}
-            now = datetime.now(UTC)
-            changes["updated_at"] = now
-            updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
-            schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
-            reenabled = data.enabled is True and not task.enabled
-            if schedule_fields.intersection(changes) or reenabled:
-                updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
+            updated = updated_scheduled_aina_task(task, data)
             self._scheduled_aina_tasks[task_id] = updated
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
             return self._copy(updated)
@@ -1709,6 +1710,29 @@ class InMemoryRepository:
                     if approval.trace_id in self._traces:
                         cancelled.append(approval)
         return [self._copy(approval) for approval in cancelled]
+
+
+def new_scheduled_aina_task(data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
+    now = datetime.now(UTC)
+    values = data.model_dump()
+    if data.prompt is not None:
+        values["input"] = {"message": data.prompt}
+    task = ScheduledAinaTask(**values, created_at=now, updated_at=now)
+    return task.model_copy(update={"next_run_at": next_scheduled_run(task, after=now)})
+
+
+def updated_scheduled_aina_task(task: ScheduledAinaTask, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
+    changes = data.model_dump(exclude_none=True)
+    if data.prompt is not None:
+        changes["input"] = {"message": data.prompt}
+    now = datetime.now(UTC)
+    changes["updated_at"] = now
+    updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
+    schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
+    reenabled = data.enabled is True and not task.enabled
+    if schedule_fields.intersection(changes) or reenabled:
+        updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
+    return updated
 
 
 def normalized_email(email: str) -> str:

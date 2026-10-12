@@ -10,11 +10,9 @@ from typing import Any
 
 from sqlalchemy import ColumnElement, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
-from tianzhou_agent_platform.store.conversation_store import SessionSource
 from tianzhou_agent_platform.store.memory_repository import (
     email_registered,
     github_already_linked,
@@ -24,15 +22,10 @@ from tianzhou_agent_platform.store.memory_repository import (
     relinked_github_user,
 )
 from tianzhou_agent_platform.store.repository_schema import model_from_mapping, table_values, users_table
+from tianzhou_agent_platform.store.sql import SqlStore
 
 
-class UserStore:
-    def __init__(self, database: SessionSource) -> None:
-        self._database = database
-
-    def _session(self) -> AsyncSession:
-        return self._database.session_factory()
-
+class UserStore(SqlStore):
     async def create(self, user: UserRecord) -> None:
         try:
             async with self._session() as session, session.begin():

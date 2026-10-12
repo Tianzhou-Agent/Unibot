@@ -21,7 +21,12 @@ from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceUpdate
 from tianzhou_agent_platform.model_providers.models import ModelProviderRecord
 from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
-from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
+from tianzhou_agent_platform.aina.scheduler import (
+    ScheduledAinaExecution,
+    ScheduledAinaTask,
+    ScheduledAinaTaskCreate,
+    ScheduledAinaTaskUpdate,
+)
 from tianzhou_agent_platform.store.memory_repository import (
     AINA_PROJECTS_RESOURCE,
     AINAS_RESOURCE,
@@ -30,10 +35,6 @@ from tianzhou_agent_platform.store.memory_repository import (
     LLM_CALLS_RESOURCE,
     MEMORIES_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
-    SANDBOXES_RESOURCE,
-    SANDBOX_EXECUTIONS_RESOURCE,
-    SCHEDULED_AINA_TASKS_RESOURCE,
-    SCHEDULED_AINA_EXECUTIONS_RESOURCE,
     SKILLS_RESOURCE,
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
@@ -44,6 +45,7 @@ from tianzhou_agent_platform.store.memory_repository import (
     conversation_with_status,
     finished_run,
     message_from_provider,
+    new_scheduled_aina_task,
     new_conversation,
     started_run,
     updated_conversation,
@@ -51,6 +53,8 @@ from tianzhou_agent_platform.store.memory_repository import (
 )
 from tianzhou_agent_platform.store.conversation_store import ConversationStore
 from tianzhou_agent_platform.store.user_store import UserStore
+from tianzhou_agent_platform.store.schedule_store import ScheduleStore
+from tianzhou_agent_platform.store.sandbox_store import SandboxStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.models import StoreQuery
@@ -96,6 +100,8 @@ class PersistentRepository(InMemoryRepository):
         self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._conversation_store = ConversationStore(stores.mysql)
         self._user_store = UserStore(stores.mysql)
+        self._schedule_store = ScheduleStore(stores.mysql)
+        self._sandbox_store = SandboxStore(stores.mysql)
 
     async def initialize(self) -> None:
         workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
@@ -106,14 +112,7 @@ class PersistentRepository(InMemoryRepository):
         aina_projects = await self._load_models(AINA_PROJECTS_RESOURCE, AinaProjectRecord)
         installations = await self._load_models(INSTALLATIONS_RESOURCE, AinaInstallation)
         model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
-        scheduled_tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
-        scheduled_executions = await self._load_models(
-            SCHEDULED_AINA_EXECUTIONS_RESOURCE,
-            ScheduledAinaExecution,
-        )
         document_edit_tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
-        sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
-        sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
         feedbacks = await self._load_models(FEEDBACKS_RESOURCE, FeedbackRecord)
         traces = (
             await self._load_models(TRACES_RESOURCE, TraceRecord)
@@ -144,13 +143,7 @@ class PersistentRepository(InMemoryRepository):
             self._legacy_traces_loaded = self.persist_observability
             self._legacy_llm_calls_loaded = self.persist_observability
             self._model_providers = {item.id: item for item in model_providers}
-            self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}
-            self._scheduled_aina_executions = {
-                item.id: item for item in scheduled_executions
-            }
             self._document_edit_tasks = {item.id: item for item in document_edit_tasks}
-            self._sandboxes = {item.id: item for item in sandboxes}
-            self._sandbox_executions = {item.id: item for item in sandbox_executions}
             self._feedbacks = {item.id: item for item in feedbacks}
 
     async def create_user(self, user: UserRecord) -> UserRecord:
@@ -384,6 +377,10 @@ class PersistentRepository(InMemoryRepository):
             return None
         return model_from_row(AinaProjectRecord, record)
 
+    async def put_sandbox(self, sandbox: SandboxRecord) -> SandboxRecord:
+        await self._sandbox_store.put(sandbox)
+        return self._copy(sandbox)
+
     async def get_sandbox_for_actor(
         self,
         *,
@@ -391,14 +388,16 @@ class PersistentRepository(InMemoryRepository):
         tenant_id: str,
         workspace_id: str | None = None,
     ) -> SandboxRecord:
-        sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
-        async with self._lock:
-            self._sandboxes = {item.id: item for item in sandboxes}
-        return await super().get_sandbox_for_actor(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
+        sandbox = await self._sandbox_store.get_for_actor(
+            user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id
         )
+        if sandbox is None:
+            raise not_found("Sandbox", f"{tenant_id}/{user_id}/{workspace_id or 'standalone'}")
+        return sandbox
+
+    async def put_sandbox_execution(self, execution: SandboxExecution) -> SandboxExecution:
+        await self._sandbox_store.put_execution(execution)
+        return self._copy(execution)
 
     async def list_sandbox_executions(
         self,
@@ -408,23 +407,13 @@ class PersistentRepository(InMemoryRepository):
         workspace_id: str | None = None,
         limit: int = 50,
     ) -> list[SandboxExecution]:
-        executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
-        async with self._lock:
-            self._sandbox_executions = {item.id: item for item in executions}
-        return await super().list_sandbox_executions(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            limit=limit,
+        return await self._sandbox_store.list_executions(
+            user_id=user_id, tenant_id=tenant_id, workspace_id=workspace_id, limit=limit
         )
 
     async def remove_sandbox(self, sandbox_id: str) -> None:
-        sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
-        executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
-        async with self._lock:
-            self._sandboxes = {item.id: item for item in sandboxes}
-            self._sandbox_executions = {item.id: item for item in executions}
-        await super().remove_sandbox(sandbox_id)
+        if not await self._sandbox_store.remove(sandbox_id):
+            raise not_found("Sandbox", sandbox_id)
 
     async def get_document_edit_task(
         self,
@@ -482,25 +471,42 @@ class PersistentRepository(InMemoryRepository):
         finally:
             await self.stores.redis.delete("document-edit-task-write", task.id)
 
-    async def list_scheduled_aina_tasks(self) -> list[ScheduledAinaTask]:
-        # Every node refreshes from MySQL so updates made by the elected node
-        # become visible to all schedulers without process-local cache drift.
-        tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
-        async with self._lock:
-            self._scheduled_aina_tasks = {item.id: item for item in tasks}
-        return [self._copy(item) for item in tasks]
+    async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
+        task = new_scheduled_aina_task(data)
+        await self._schedule_store.create_task(task)
+        return task
 
-    async def list_scheduled_aina_executions(
-        self, task_id: str, *, limit: int = 50
-    ) -> list[ScheduledAinaExecution]:
-        executions = await self._load_models(
-            SCHEDULED_AINA_EXECUTIONS_RESOURCE,
-            ScheduledAinaExecution,
-        )
-        async with self._lock:
-            self._scheduled_aina_executions = {item.id: item for item in executions}
-        matching = [item for item in executions if item.task_id == task_id]
-        return sorted(matching, key=lambda item: item.started_at, reverse=True)[:limit]
+    async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask:
+        await self._schedule_store.put_task(task)
+        return self._copy(task)
+
+    async def list_scheduled_aina_tasks(
+        self, *, user_id: str | None = None, tenant_id: str | None = None
+    ) -> list[ScheduledAinaTask]:
+        return await self._schedule_store.list_tasks(user_id=user_id, tenant_id=tenant_id)
+
+    async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]:
+        return await self._schedule_store.list_due_tasks(now)
+
+    async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask:
+        task = await self._schedule_store.get_task(task_id)
+        if task is None:
+            raise not_found("Scheduled AINA task", task_id)
+        return task
+
+    async def update_scheduled_aina_task(self, task_id: str, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
+        return await self._schedule_store.update_task(task_id, data)
+
+    async def remove_scheduled_aina_task(self, task_id: str) -> None:
+        if not await self._schedule_store.remove_task(task_id):
+            raise not_found("Scheduled AINA task", task_id)
+
+    async def put_scheduled_aina_execution(self, execution: ScheduledAinaExecution) -> ScheduledAinaExecution:
+        await self._schedule_store.put_execution(execution)
+        return self._copy(execution)
+
+    async def list_scheduled_aina_executions(self, task_id: str, *, limit: int = 50) -> list[ScheduledAinaExecution]:
+        return await self._schedule_store.list_executions(task_id, limit=limit)
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
         async with self.stores.redis.lease(
