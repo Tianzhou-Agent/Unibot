@@ -75,14 +75,25 @@ users_table = _table(
     USERS_RESOURCE,
     Column("id", ID, primary_key=True),
     Column("email", String(320), nullable=False),
+    # normalized_email(email). Binary collation: uniqueness and lookup match exactly what the application normalized,
+    # without the accent-insensitive comparison of MySQL's default collation.
+    Column(
+        "email_normalized",
+        String(320).with_variant(mysql.VARCHAR(320, collation="utf8mb4_bin"), "mysql"),
+        nullable=False,
+    ),
     Column("name", String(80), nullable=False),
     Column("password_hash", String(255), nullable=True),
+    # NULL when unlinked, so the unique key only covers linked accounts.
     Column("github_id", String(64), nullable=True),
     Column("github_login", String(255), nullable=True),
     Column("avatar_url", URL, nullable=True),
     Column("tenant_id", ACTOR, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    UniqueConstraint("email_normalized", name="uq_unibot_users_email_normalized"),
+    UniqueConstraint("github_id", name="uq_unibot_users_github_id"),
+    Index("ix_unibot_users_created", "created_at", "id"),
 )
 
 workspaces_table = _table(

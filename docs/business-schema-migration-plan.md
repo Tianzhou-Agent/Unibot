@@ -2,7 +2,7 @@
 
 Date: 2026-10-01 (scope revised 2026-10-13)
 
-Status: Steps 1 (Alembic) and 2 (conversations, messages, approvals) implemented. Steps 3–7 proposed.
+Status: Steps 1 (Alembic), 2 (conversations, messages, approvals) and 3 (users) implemented. Steps 4–7 proposed.
 
 Target: a public multi-tenant service running several backend replicas against one MySQL database. Every replica must see every other replica's writes immediately, so no business table may be served from a process-local copy.
 
@@ -82,7 +82,7 @@ Adding Alembic now costs little and becomes expensive once production data exist
 | --- | --- | --- |
 | 1 ✅ | Alembic setup, baseline revision, startup revision check | A fresh database reaches `head`, the app starts on it, and it refuses to start on a database with the wrong revision. |
 | 2 ✅ | Conversations, messages and approvals | Chat, approval resume, and archive tests pass. Concurrent and retried appends neither duplicate nor lose messages. Appends insert only new rows. |
-| 3 | Users | Concurrent registration or GitHub linking with the same email gives one user and one conflict error. The Redis lease is removed. |
+| 3 ✅ | Users | Concurrent registration or GitHub linking with the same email gives one user and one conflict error. The Redis lease is removed. |
 | 4 | Sandboxes, scheduled tasks and their execution history | History is filtered, ordered, and limited in SQL. Deleting a task or sandbox removes its executions. The scheduler reads tasks from SQL instead of reloading the table. |
 | 5 | Per-user records: workspaces, memories, model providers, installations, feedbacks, document edit tasks, AINA projects | Owner/tenant filters run in SQL. Read-modify-write updates use a row lock or version check instead of a Redis lease. |
 | 6 | Shared registry: tools, skills, AINAs; legacy traces and LLM calls | Discovery and registration read SQL. `initialize` loads nothing. Two replicas cold-starting on an empty database both start: registering the built-in AINAs is idempotent (today the second replica fails with a duplicate key). |
@@ -96,6 +96,8 @@ Follow-up outside this plan: `GET /conversations` and the admin conversation end
 
 - Extend the existing opt-in real-MySQL storage tests (`backend/docker-compose.storage.yml`, `backend/tests/store/test_storage_e2e.py`). Constraints, collation, and row locking need real MySQL 8.0.
 - Round-trip every model field through the converters: null vs empty values, Unicode, microsecond timestamps, long content, and widgets/tool calls.
+- Locking reads (`SELECT … FOR UPDATE`) only on rows known to exist. On a missing row InnoDB takes a gap lock, and two transactions that both insert into that gap deadlock; let a unique key decide insert races instead (found by the step 3 GitHub sign-in race test).
+- A migration validates existing data before its first DDL statement. MySQL cannot roll DDL back, so a check that fails after `ALTER TABLE` leaves a half-applied revision that cannot be rerun.
 - Run concurrency tests with two repository instances on one database: same-email registration, simultaneous message appends, a stale run-finish call, and a write on one instance read back on the other for every resource.
 - `backend/tests/store/conftest.py` migrates each opted-in live database to head; `test_migrations.py` covers the baseline on a disposable database.
 - Run the existing repository behavior tests against both the in-memory and persistent repositories.

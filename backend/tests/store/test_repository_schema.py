@@ -76,7 +76,10 @@ def test_every_repository_table_has_a_record_model() -> None:
 
 # Fields kept in their own table, and bookkeeping columns that no model field holds.
 SEPARATE_FIELDS: dict[str, set[str]] = {CONVERSATIONS_RESOURCE: {"messages"}}
-EXTRA_COLUMNS: dict[str, set[str]] = {CONVERSATIONS_RESOURCE: {"next_message_sequence"}}
+EXTRA_COLUMNS: dict[str, set[str]] = {
+    CONVERSATIONS_RESOURCE: {"next_message_sequence"},
+    USERS_RESOURCE: {"email_normalized"},
+}
 
 
 @pytest.mark.parametrize(("resource", "model"), RECORD_MODELS.items())

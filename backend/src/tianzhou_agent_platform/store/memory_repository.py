@@ -116,23 +116,11 @@ class InMemoryRepository:
 
     async def create_user(self, user: UserRecord) -> UserRecord:
         async with self._lock:
-            normalized_email = str(user.email).lower()
-            if any(str(item.email).lower() == normalized_email for item in self._users.values()):
-                raise PlatformError(
-                    "CONFLICT",
-                    "A user with this email already exists",
-                    status_code=409,
-                    source="auth",
-                    user_message="该邮箱已注册。",
-                )
+            email = normalized_email(str(user.email))
+            if any(normalized_email(str(item.email)) == email for item in self._users.values()):
+                raise email_registered()
             if user.github_id and any(item.github_id == user.github_id for item in self._users.values()):
-                raise PlatformError(
-                    "CONFLICT",
-                    "This GitHub account is already linked",
-                    status_code=409,
-                    source="auth",
-                    user_message="该 GitHub 账号已绑定其他用户。",
-                )
+                raise github_already_linked()
             self._users[user.id] = user
             await self._save_record(USERS_RESOURCE, user.id, user)
             return self._copy(user)
@@ -143,10 +131,10 @@ class InMemoryRepository:
             return self._copy(user) if user else None
 
     async def find_user_by_email(self, email: str) -> UserRecord | None:
-        normalized = email.strip().lower()
+        normalized = normalized_email(email)
         async with self._lock:
             user = next(
-                (item for item in self._users.values() if str(item.email).lower() == normalized),
+                (item for item in self._users.values() if normalized_email(str(item.email)) == normalized),
                 None,
             )
             return self._copy(user) if user else None
@@ -370,42 +358,17 @@ class InMemoryRepository:
         name: str,
         avatar_url: str | None,
     ) -> UserRecord:
-        normalized_email = email.strip().lower()
+        email = normalized_email(email)
         async with self._lock:
             user = next((item for item in self._users.values() if item.github_id == github_id), None)
             if user is None:
-                email_owner = next(
-                    (item for item in self._users.values() if str(item.email).lower() == normalized_email),
-                    None,
-                )
-                if email_owner is not None:
-                    raise PlatformError(
-                        "CONFLICT",
-                        "The verified GitHub email already belongs to a local account",
-                        status_code=409,
-                        source="auth",
-                        user_message="该邮箱已有账户，请先使用邮箱登录。",
-                    )
-            if user is None:
-                user = UserRecord(
-                    id=f"user_{uuid4().hex}",
-                    email=normalized_email,
-                    name=name,
-                    github_id=github_id,
-                    github_login=github_login,
-                    avatar_url=avatar_url,
+                if any(normalized_email(str(item.email)) == email for item in self._users.values()):
+                    raise github_email_registered()
+                user = new_github_user(
+                    github_id=github_id, github_login=github_login, email=email, name=name, avatar_url=avatar_url
                 )
             else:
-                user = user.model_copy(
-                    update={
-                        "github_id": github_id,
-                        "github_login": github_login,
-                        "name": name or user.name,
-                        "avatar_url": avatar_url or user.avatar_url,
-                        "updated_at": datetime.now(UTC),
-                    },
-                    deep=True,
-                )
+                user = relinked_github_user(user, github_login=github_login, name=name, avatar_url=avatar_url)
             self._users[user.id] = user
             await self._save_record(USERS_RESOURCE, user.id, user)
             return self._copy(user)
@@ -1746,6 +1709,66 @@ class InMemoryRepository:
                     if approval.trace_id in self._traces:
                         cancelled.append(approval)
         return [self._copy(approval) for approval in cancelled]
+
+
+def normalized_email(email: str) -> str:
+    """Account emails compare case-insensitively; this is the form stored and indexed for uniqueness."""
+    return email.strip().lower()
+
+
+def email_registered() -> PlatformError:
+    return PlatformError(
+        "CONFLICT",
+        "A user with this email already exists",
+        status_code=409,
+        source="auth",
+        user_message="该邮箱已注册。",
+    )
+
+
+def github_already_linked() -> PlatformError:
+    return PlatformError(
+        "CONFLICT",
+        "This GitHub account is already linked",
+        status_code=409,
+        source="auth",
+        user_message="该 GitHub 账号已绑定其他用户。",
+    )
+
+
+def github_email_registered() -> PlatformError:
+    return PlatformError(
+        "CONFLICT",
+        "The verified GitHub email already belongs to a local account",
+        status_code=409,
+        source="auth",
+        user_message="该邮箱已有账户，请先使用邮箱登录。",
+    )
+
+
+def new_github_user(
+    *, github_id: str, github_login: str, email: str, name: str, avatar_url: str | None
+) -> UserRecord:
+    return UserRecord(
+        id=f"user_{uuid4().hex}",
+        email=email,
+        name=name,
+        github_id=github_id,
+        github_login=github_login,
+        avatar_url=avatar_url,
+    )
+
+
+def relinked_github_user(user: UserRecord, *, github_login: str, name: str, avatar_url: str | None) -> UserRecord:
+    return user.model_copy(
+        update={
+            "github_login": github_login,
+            "name": name or user.name,
+            "avatar_url": avatar_url or user.avatar_url,
+            "updated_at": datetime.now(UTC),
+        },
+        deep=True,
+    )
 
 
 def new_conversation(data: ConversationCreate) -> Conversation:
