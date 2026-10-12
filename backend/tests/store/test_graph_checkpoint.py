@@ -12,11 +12,6 @@ from tianzhou_agent_platform.store.models import DeleteResult, StorePage, StoreQ
 class FakeCheckpointDatabase:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, StoreRecord]] = {}
-        self.initialized = False
-
-    async def create_tables(self, metadata: Any) -> None:
-        del metadata
-        self.initialized = True
 
     async def create(self, resource: str, values: dict[str, Any]) -> StoreRecord:
         record_id = str(values["id"])
@@ -70,7 +65,6 @@ def _counter_graph(saver: MySqlCheckpointSaver):  # type: ignore[no-untyped-def]
 async def test_mysql_checkpointer_restores_graph_state_after_recreation() -> None:
     database = FakeCheckpointDatabase()
     saver = MySqlCheckpointSaver(database)
-    await saver.initialize()
     graph = _counter_graph(saver)
     config = {"configurable": {"thread_id": "trace-1"}}
 
@@ -81,7 +75,6 @@ async def test_mysql_checkpointer_restores_graph_state_after_recreation() -> Non
     restored = await restored_graph.aget_state(config)
     history = [snapshot async for snapshot in restored_graph.aget_state_history(config)]
 
-    assert database.initialized is True
     assert restored.values == {"count": 5}
     assert len(history) >= 2
     assert history[0].values == {"count": 5}

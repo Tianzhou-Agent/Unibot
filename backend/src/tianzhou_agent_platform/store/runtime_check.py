@@ -31,8 +31,6 @@ class StoreRuntimeCheckResult(BaseModel):
 
 
 async def run_storage_runtime_check(stores: StorageStores, nas_scope: str = "runtime") -> StoreRuntimeCheckResult:
-    await stores.mysql.create_tables(runtime_check_metadata)
-
     suffix = uuid4().hex
     name = f"runtime-{suffix}"
     redis_key = f"runtime-{suffix}"
