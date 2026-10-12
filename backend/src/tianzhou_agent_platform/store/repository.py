@@ -37,7 +37,6 @@ from tianzhou_agent_platform.store.memory_repository import (
     SKILLS_RESOURCE,
     TOOLS_RESOURCE,
     TRACES_RESOURCE,
-    USERS_RESOURCE,
     WORKSPACES_RESOURCE,
     FEEDBACKS_RESOURCE,
     InMemoryRepository,
@@ -51,6 +50,7 @@ from tianzhou_agent_platform.store.memory_repository import (
     with_bound_aina,
 )
 from tianzhou_agent_platform.store.conversation_store import ConversationStore
+from tianzhou_agent_platform.store.user_store import UserStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.models import StoreQuery
@@ -95,6 +95,7 @@ class PersistentRepository(InMemoryRepository):
         self.obs_trace_status_resolver = obs_trace_status_resolver
         self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._conversation_store = ConversationStore(stores.mysql)
+        self._user_store = UserStore(stores.mysql)
 
     async def initialize(self) -> None:
         workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
@@ -113,7 +114,6 @@ class PersistentRepository(InMemoryRepository):
         document_edit_tasks = await self._load_models(DOCUMENT_EDIT_TASKS_RESOURCE, DocumentEditTask)
         sandboxes = await self._load_models(SANDBOXES_RESOURCE, SandboxRecord)
         sandbox_executions = await self._load_models(SANDBOX_EXECUTIONS_RESOURCE, SandboxExecution)
-        users = await self._load_models(USERS_RESOURCE, UserRecord)
         feedbacks = await self._load_models(FEEDBACKS_RESOURCE, FeedbackRecord)
         traces = (
             await self._load_models(TRACES_RESOURCE, TraceRecord)
@@ -151,30 +151,17 @@ class PersistentRepository(InMemoryRepository):
             self._document_edit_tasks = {item.id: item for item in document_edit_tasks}
             self._sandboxes = {item.id: item for item in sandboxes}
             self._sandbox_executions = {item.id: item for item in sandbox_executions}
-            self._users = {item.id: item for item in users}
             self._feedbacks = {item.id: item for item in feedbacks}
 
     async def create_user(self, user: UserRecord) -> UserRecord:
-        async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:
-            if not acquired:
-                raise conflict("User registration is already in progress")
-            await self._refresh_users()
-            return await super().create_user(user)
-
-    async def find_user_by_id(self, user_id: str) -> UserRecord | None:
-        record = await self.stores.mysql.read(USERS_RESOURCE, user_id)
-        if record is None:
-            async with self._lock:
-                self._users.pop(user_id, None)
-            return None
-        user = model_from_row(UserRecord, record)
-        async with self._lock:
-            self._users[user.id] = user
+        await self._user_store.create(user)
         return self._copy(user)
 
+    async def find_user_by_id(self, user_id: str) -> UserRecord | None:
+        return await self._user_store.get(user_id)
+
     async def find_user_by_email(self, email: str) -> UserRecord | None:
-        await self._refresh_users()
-        return await super().find_user_by_email(email)
+        return await self._user_store.find_by_email(email)
 
     async def list_users(
         self,
@@ -183,8 +170,7 @@ class PersistentRepository(InMemoryRepository):
         limit: int = 100,
         offset: int = 0,
     ) -> list[UserRecord]:
-        await self._refresh_users()
-        return await super().list_users(query=query, limit=limit, offset=offset)
+        return await self._user_store.list_users(query=query, limit=limit, offset=offset)
 
     async def upsert_github_user(
         self,
@@ -195,23 +181,13 @@ class PersistentRepository(InMemoryRepository):
         name: str,
         avatar_url: str | None,
     ) -> UserRecord:
-        async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:
-            if not acquired:
-                raise conflict("GitHub sign-in is already in progress")
-            await self._refresh_users()
-            return await super().upsert_github_user(
-                github_id=github_id,
-                github_login=github_login,
-                email=email,
-                name=name,
-                avatar_url=avatar_url,
-            )
-
-    async def _refresh_users(self) -> list[UserRecord]:
-        users = await self._load_models(USERS_RESOURCE, UserRecord)
-        async with self._lock:
-            self._users = {item.id: item for item in users}
-        return users
+        return await self._user_store.upsert_github(
+            github_id=github_id,
+            github_login=github_login,
+            email=email,
+            name=name,
+            avatar_url=avatar_url,
+        )
 
     async def get_workspace(self, workspace_id: str) -> Workspace:
         record = await self.stores.mysql.read(WORKSPACES_RESOURCE, workspace_id)
