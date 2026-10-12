@@ -48,6 +48,7 @@ dev = [
     "black>=24.10.0",
     "ruff>=0.7.0",
     "mypy>=1.13.0",
+    "aiosqlite>=0.20",
 ]
 
 [build-system]

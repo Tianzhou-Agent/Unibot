@@ -11,7 +11,7 @@ from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, Sched
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.auth.models import UserRecord
-from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.conversations.models import Conversation, Message
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
 from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.workspace import Workspace
@@ -40,7 +40,12 @@ from tianzhou_agent_platform.store.memory_repository import (
     WORKSPACES_RESOURCE,
 )
 from tianzhou_agent_platform.store.models import StoreRecord
-from tianzhou_agent_platform.store.repository_schema import model_from_row, repository_tables, row_values
+from tianzhou_agent_platform.store.repository_schema import (
+    messages_table,
+    model_from_row,
+    repository_tables,
+    row_values,
+)
 
 RECORD_MODELS: dict[str, type[BaseModel]] = {
     USERS_RESOURCE: UserRecord,
@@ -69,11 +74,22 @@ def test_every_repository_table_has_a_record_model() -> None:
     assert RECORD_MODELS.keys() == repository_tables.keys()
 
 
+# Fields kept in their own table, and bookkeeping columns that no model field holds.
+SEPARATE_FIELDS: dict[str, set[str]] = {CONVERSATIONS_RESOURCE: {"messages"}}
+EXTRA_COLUMNS: dict[str, set[str]] = {CONVERSATIONS_RESOURCE: {"next_message_sequence"}}
+
+
 @pytest.mark.parametrize(("resource", "model"), RECORD_MODELS.items())
 def test_table_has_one_column_per_model_field(resource: str, model: type[BaseModel]) -> None:
     columns = set(repository_tables[resource].c.keys())
 
-    assert columns - {"id"} == set(model.model_fields) - {"id"}
+    assert columns - {"id"} - EXTRA_COLUMNS.get(resource, set()) == (
+        set(model.model_fields) - {"id"} - SEPARATE_FIELDS.get(resource, set())
+    )
+
+
+def test_message_table_has_one_column_per_message_field() -> None:
+    assert set(messages_table.c.keys()) - {"conversation_id", "sequence_no"} == set(Message.model_fields)
 
 
 def test_row_round_trip_keeps_omitted_defaults_and_utc_datetimes() -> None:

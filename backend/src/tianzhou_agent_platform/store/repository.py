@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,7 +14,7 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate, ConversationUpdate, Message
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.feedback import FeedbackRecord
@@ -25,8 +25,6 @@ from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, Sched
 from tianzhou_agent_platform.store.memory_repository import (
     AINA_PROJECTS_RESOURCE,
     AINAS_RESOURCE,
-    APPROVALS_RESOURCE,
-    CONVERSATIONS_RESOURCE,
     DOCUMENT_EDIT_TASKS_RESOURCE,
     INSTALLATIONS_RESOURCE,
     LLM_CALLS_RESOURCE,
@@ -44,7 +42,15 @@ from tianzhou_agent_platform.store.memory_repository import (
     FEEDBACKS_RESOURCE,
     InMemoryRepository,
     INTERRUPTED_RUN_ERROR,
+    conversation_with_status,
+    finished_run,
+    message_from_provider,
+    new_conversation,
+    started_run,
+    updated_conversation,
+    with_bound_aina,
 )
+from tianzhou_agent_platform.store.conversation_store import ConversationStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.models import StoreQuery
@@ -88,17 +94,16 @@ class PersistentRepository(InMemoryRepository):
         # pipeline when a trace is no longer in the in-memory repository.
         self.obs_trace_status_resolver = obs_trace_status_resolver
         self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._conversation_store = ConversationStore(stores.mysql)
 
     async def initialize(self) -> None:
         workspaces = await self._load_models(WORKSPACES_RESOURCE, Workspace)
-        conversations = await self._load_models(CONVERSATIONS_RESOURCE, Conversation)
         memories = await self._load_models(MEMORIES_RESOURCE, MemoryRecord)
         tools = await self._load_models(TOOLS_RESOURCE, ToolRecord)
         skills = await self._load_models(SKILLS_RESOURCE, SkillRecord)
         ainas = await self._load_models(AINAS_RESOURCE, AinaRecord)
         aina_projects = await self._load_models(AINA_PROJECTS_RESOURCE, AinaProjectRecord)
         installations = await self._load_models(INSTALLATIONS_RESOURCE, AinaInstallation)
-        approvals = await self._load_models(APPROVALS_RESOURCE, ApprovalRecord)
         model_providers = await self._load_models(MODEL_PROVIDERS_RESOURCE, ModelProviderRecord)
         scheduled_tasks = await self._load_models(SCHEDULED_AINA_TASKS_RESOURCE, ScheduledAinaTask)
         scheduled_executions = await self._load_models(
@@ -123,7 +128,6 @@ class PersistentRepository(InMemoryRepository):
 
         async with self._lock:
             self._workspaces = {item.id: item for item in workspaces}
-            self._conversations = {item.id: item for item in conversations}
             self._memories = {item.id: item for item in memories}
             self._tools = {item.tool_id: item for item in tools}
             self._skills = {item.skill_id: item for item in skills}
@@ -139,7 +143,6 @@ class PersistentRepository(InMemoryRepository):
             self._llm_calls = {item.call_id: item for item in llm_calls}
             self._legacy_traces_loaded = self.persist_observability
             self._legacy_llm_calls_loaded = self.persist_observability
-            self._approvals = {item.id: item for item in approvals}
             self._model_providers = {item.id: item for item in model_providers}
             self._scheduled_aina_tasks = {item.id: item for item in scheduled_tasks}
             self._scheduled_aina_executions = {
@@ -539,10 +542,10 @@ class PersistentRepository(InMemoryRepository):
             try:
                 # Owning the lease proves the previous worker no longer owns this run.
                 if conversation.run_status == "running":
-                    await super().finish_conversation_run(
-                        conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR,
-                    )
-                conversation = await super().start_conversation_run(conversation_id, trace_id)
+                    await self._finish_run_row(conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR)
+                conversation = await self._conversation_store.mutate(
+                    conversation_id, lambda current: started_run(current, trace_id)
+                )
             except BaseException:
                 await self.stores.redis.delete_if_value("conversation-run", conversation_id, {"trace_id": trace_id})
                 raise
@@ -582,9 +585,7 @@ class PersistentRepository(InMemoryRepository):
             if conversation.run_status == "running":
                 entry = await self.stores.redis.get("conversation-run", conversation_id)
                 if entry is None:
-                    return await super().finish_conversation_run(
-                        conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR,
-                    )
+                    return await self._finish_run_row(conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR)
         return await super().reconcile_conversation_run(conversation_id)
 
     async def _has_live_conversation_run(self, conversation: Conversation) -> bool:
@@ -612,7 +613,7 @@ class PersistentRepository(InMemoryRepository):
                 if trace_id is not None and current.active_trace_id != trace_id:
                     return current
                 trace_id = trace_id or current.active_trace_id
-                conversation = await super().finish_conversation_run(
+                conversation = await self._finish_run_row(
                     conversation_id, status=status, error=error, expected_trace_id=trace_id,
                 )
                 if trace_id is not None:
@@ -623,6 +624,125 @@ class PersistentRepository(InMemoryRepository):
                 self._conversation_run_tasks.pop((conversation_id, trace_id), None)
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _finish_run_row(
+        self,
+        conversation_id: str,
+        *,
+        status: str,
+        error: str | None,
+        expected_trace_id: str | None = None,
+    ) -> Conversation:
+        def change(conversation: Conversation) -> Conversation | None:
+            if expected_trace_id is not None and conversation.active_trace_id != expected_trace_id:
+                return None
+            return finished_run(conversation, status=status, error=error)
+
+        return await self._conversation_store.mutate(conversation_id, change, include_deleted=True)
+
+    async def create_conversation(self, data: ConversationCreate) -> Conversation:
+        if data.workspace_id is not None:
+            await self.require_workspace_actor(data.workspace_id, user_id=data.user_id, tenant_id=data.tenant_id)
+        conversation = new_conversation(data)
+        await self._conversation_store.create(conversation)
+        return conversation
+
+    async def get_conversation(self, conversation_id: str, *, include_deleted: bool = False) -> Conversation:
+        conversation = await self._conversation_store.get(conversation_id, include_deleted=include_deleted)
+        if conversation is None:
+            raise not_found("Conversation", conversation_id)
+        return conversation
+
+    async def list_conversations(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        category: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[Conversation]:
+        return await self._conversation_store.list_conversations(
+            user_id=user_id, tenant_id=tenant_id, category=category, workspace_id=workspace_id
+        )
+
+    async def update_conversation(self, conversation_id: str, data: ConversationUpdate) -> Conversation:
+        return await self._conversation_store.mutate(
+            conversation_id, lambda conversation: updated_conversation(conversation, data)
+        )
+
+    async def set_conversation_status(self, conversation_id: str, status: str) -> Conversation:
+        return await self._conversation_store.mutate(
+            conversation_id, lambda conversation: conversation_with_status(conversation, status), include_deleted=True
+        )
+
+    async def bind_conversation_aina(
+        self,
+        conversation_id: str,
+        aina_id: str,
+        *,
+        make_primary: bool = False,
+        mark_used: bool = False,
+    ) -> Conversation:
+        return await self._conversation_store.mutate(
+            conversation_id,
+            lambda conversation: with_bound_aina(
+                conversation, aina_id, make_primary=make_primary, mark_used=mark_used
+            ),
+        )
+
+    async def append_provider_messages(
+        self,
+        conversation_id: str,
+        messages: Iterable[dict[str, Any]],
+        *,
+        trace_id: str,
+    ) -> list[Message]:
+        appended = await self._conversation_store.append(
+            conversation_id,
+            [message_from_provider(raw, trace_id=trace_id) for raw in messages],
+            require_active=True,
+        )
+        if appended is None:
+            raise not_found("Conversation", conversation_id)
+        return appended
+
+    async def append_messages(self, conversation_id: str, messages: Iterable[Message]) -> Conversation | None:
+        if await self._conversation_store.append(conversation_id, messages, require_active=False) is None:
+            return None
+        return await self.get_conversation(conversation_id, include_deleted=True)
+
+    async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
+        await self._conversation_store.create_approval(approval)
+        return self._copy(approval)
+
+    async def get_approval(self, approval_id: str) -> ApprovalRecord:
+        approval = await self._conversation_store.get_approval(approval_id)
+        if approval is None:
+            raise not_found("Approval", approval_id)
+        return approval
+
+    async def list_approvals(
+        self,
+        *,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        status: str | None = None,
+    ) -> list[ApprovalRecord]:
+        return await self._conversation_store.list_approvals(
+            conversation_id=conversation_id, user_id=user_id, tenant_id=tenant_id, status=status
+        )
+
+    async def set_approval_status(self, approval_id: str, status: str) -> ApprovalRecord:
+        approval = await self._conversation_store.set_approval_status(approval_id, status)
+        if approval is None:
+            raise not_found("Approval", approval_id)
+        return approval
+
+    async def cancel_pending_approvals(self, conversation_id: str) -> list[ApprovalRecord]:
+        denied = await self._conversation_store.deny_pending_approvals(conversation_id)
+        # As in InMemoryRepository: only approvals whose trace this process holds are reported for closing.
+        return [approval for approval in denied if approval.trace_id in self._traces]
 
     async def get_trace(self, trace_id: str) -> TraceRecord:
         try:

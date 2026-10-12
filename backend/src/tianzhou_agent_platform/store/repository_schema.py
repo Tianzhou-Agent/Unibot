@@ -11,7 +11,24 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Double, Integer, MetaData, String, Table, Text
+from collections.abc import Mapping
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Double,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects import mysql
 
 from tianzhou_agent_platform.store.memory_repository import (
@@ -98,9 +115,32 @@ conversations_table = _table(
     Column("active_aina_ids", JSON, nullable=False),
     Column("primary_aina_id", ID, nullable=True),
     Column("last_aina_id", ID, nullable=True),
-    Column("messages", JSON, nullable=False),
+    # Sequence number the next appended message receives; advanced under the conversation's row lock.
+    Column("next_message_sequence", Integer, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_conversations_owner_updated", "tenant_id", "user_id", "updated_at", "id"),
+)
+
+# Conversation.messages, one row per message. Not a repository resource: rows are only reached through their
+# conversation.
+messages_table = Table(
+    "unibot_messages",
+    repository_metadata,
+    Column("conversation_id", ID, ForeignKey("unibot_conversations.id", ondelete="CASCADE"), primary_key=True),
+    Column("id", ID, primary_key=True),
+    Column("sequence_no", Integer, nullable=False),
+    Column("role", STATUS, nullable=False),
+    Column("content", LONG_TEXT, nullable=False),
+    Column("content_type", STATUS, nullable=False),
+    Column("reasoning", LONG_TEXT, nullable=True),
+    Column("tool_calls", NULLABLE_JSON, nullable=True),
+    Column("tool_call_id", ID, nullable=True),
+    Column("name", String(255), nullable=True),
+    Column("widgets", JSON, nullable=False),
+    Column("trace_id", ID, nullable=True),
+    Column("created_at", TIMESTAMP, nullable=False),
+    UniqueConstraint("conversation_id", "sequence_no", name="uq_unibot_messages_sequence"),
 )
 
 approvals_table = _table(
@@ -117,6 +157,8 @@ approvals_table = _table(
     Column("resolved_at", TIMESTAMP, nullable=True),
     Column("runtime_ref", NULLABLE_JSON, nullable=True),
     Column("run_generation", Integer, nullable=False),
+    Index("ix_unibot_approvals_conversation_status", "conversation_id", "status"),
+    Index("ix_unibot_approvals_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
 memories_table = _table(
@@ -420,10 +462,15 @@ repository_tables: dict[str, Table] = {
 
 def row_values(resource: str, record_id: str, value: BaseModel) -> dict[str, Any]:
     """Column values for ``value``; datetimes are stored as UTC because MySQL DATETIME keeps no offset."""
+    return table_values(repository_tables[resource], value, id=record_id)
+
+
+def table_values(table: Table, value: BaseModel, **columns: Any) -> dict[str, Any]:
+    """Row for ``table``: the given ``columns`` as passed, every other column from the field of the same name."""
     data = value.model_dump(mode="json")
-    row: dict[str, Any] = {"id": record_id}
-    for column in repository_tables[resource].columns:
-        if column.name == "id":
+    row: dict[str, Any] = dict(columns)
+    for column in table.columns:
+        if column.name in columns:
             continue
         # Fields serialized with exclude_if are omitted at their defaults; store the default itself.
         field_value = data[column.name] if column.name in data else getattr(value, column.name)
@@ -435,9 +482,14 @@ def row_values(resource: str, record_id: str, value: BaseModel) -> dict[str, Any
 
 def model_from_row[ModelT: BaseModel](model: type[ModelT], record: StoreRecord) -> ModelT:
     """Rebuild a record model from its row, restoring the UTC offset MySQL drops from datetimes."""
+    return model_from_mapping(model, {"id": record.id, **record.values})
+
+
+def model_from_mapping[ModelT: BaseModel](model: type[ModelT], row: Mapping[Any, Any], **fields: Any) -> ModelT:
+    """Rebuild ``model`` from a result row plus ``fields``; columns the model does not define are ignored."""
     data = {
         name: value.replace(tzinfo=UTC) if isinstance(value, datetime) and value.tzinfo is None else value
-        for name, value in {"id": record.id, **record.values}.items()
+        for name, value in row.items()
         if name in model.model_fields
     }
-    return model.model_validate(data)
+    return model.model_validate({**data, **fields})

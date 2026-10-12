@@ -903,7 +903,7 @@ class InMemoryRepository:
                 user_id=data.user_id,
                 tenant_id=data.tenant_id,
             )
-        conversation = Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())
+        conversation = new_conversation(data)
         async with self._lock:
             self._conversations[conversation.id] = conversation
             await self._save_record(CONVERSATIONS_RESOURCE, conversation.id, conversation)
@@ -954,12 +954,11 @@ class InMemoryRepository:
         return sorted(values, key=lambda item: item.updated_at, reverse=True)
 
     async def update_conversation(self, conversation_id: str, data: ConversationUpdate) -> Conversation:
-        changes = data.model_dump(exclude_none=True)
         async with self._lock:
             conversation = self._conversations.get(conversation_id)
             if conversation is None or conversation.status == "deleted":
                 raise not_found("Conversation", conversation_id)
-            updated = conversation.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+            updated = updated_conversation(conversation, data)
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
@@ -969,7 +968,7 @@ class InMemoryRepository:
             conversation = self._conversations.get(conversation_id)
             if conversation is None:
                 raise not_found("Conversation", conversation_id)
-            updated = conversation.model_copy(update={"status": status, "updated_at": datetime.now(UTC)}, deep=True)
+            updated = conversation_with_status(conversation, status)
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
@@ -979,18 +978,7 @@ class InMemoryRepository:
             conversation = self._conversations.get(conversation_id)
             if conversation is None or conversation.status == "deleted":
                 raise not_found("Conversation", conversation_id)
-            if conversation.run_status == "running":
-                raise conflict("This conversation already has a running request")
-            updated = conversation.model_copy(
-                update={
-                    "run_status": "running",
-                    "active_trace_id": trace_id,
-                    "run_error": None,
-                    "run_started_at": datetime.now(UTC),
-                    "updated_at": datetime.now(UTC),
-                },
-                deep=True,
-            )
+            updated = started_run(conversation, trace_id)
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
@@ -1009,16 +997,7 @@ class InMemoryRepository:
                 raise not_found("Conversation", conversation_id)
             if expected_trace_id is not None and conversation.active_trace_id != expected_trace_id:
                 return self._copy(conversation)
-            updated = conversation.model_copy(
-                update={
-                    "run_status": status,
-                    "active_trace_id": None,
-                    "run_error": error,
-                    "run_started_at": None,
-                    "updated_at": datetime.now(UTC),
-                },
-                deep=True,
-            )
+            updated = finished_run(conversation, status=status, error=error)
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
@@ -1035,18 +1014,7 @@ class InMemoryRepository:
             conversation = self._conversations.get(conversation_id)
             if conversation is None or conversation.status == "deleted":
                 raise not_found("Conversation", conversation_id)
-            active_aina_ids = list(conversation.active_aina_ids)
-            if aina_id not in active_aina_ids:
-                active_aina_ids.append(aina_id)
-            changes: dict[str, Any] = {
-                "active_aina_ids": active_aina_ids,
-                "updated_at": datetime.now(UTC),
-            }
-            if make_primary or conversation.primary_aina_id is None:
-                changes["primary_aina_id"] = aina_id
-            if mark_used:
-                changes["last_aina_id"] = aina_id
-            updated = conversation.model_copy(update=changes, deep=True)
+            updated = with_bound_aina(conversation, aina_id, make_primary=make_primary, mark_used=mark_used)
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
@@ -1234,19 +1202,7 @@ class InMemoryRepository:
             if conversation is None or conversation.status != "active":
                 raise not_found("Conversation", conversation_id)
             for raw in messages:
-                message = Message(
-                    id=f"msg_{uuid4().hex}",
-                    role=raw["role"],
-                    content=raw.get("content") or "",
-                    tool_calls=raw.get("tool_calls"),
-                    tool_call_id=raw.get("tool_call_id"),
-                    name=raw.get("name"),
-                    widgets=raw.get("widgets") or [],
-                    content_type=(
-                        "tool" if raw["role"] == "tool" else "widget" if raw.get("widgets") else "text"
-                    ),
-                    trace_id=trace_id,
-                )
+                message = message_from_provider(raw, trace_id=trace_id)
                 conversation.messages.append(message)
                 appended.append(self._copy(message))
             conversation.updated_at = datetime.now(UTC)
@@ -1790,6 +1746,82 @@ class InMemoryRepository:
                     if approval.trace_id in self._traces:
                         cancelled.append(approval)
         return [self._copy(approval) for approval in cancelled]
+
+
+def new_conversation(data: ConversationCreate) -> Conversation:
+    return Conversation(id=f"conv_{uuid4().hex}", **data.model_dump())
+
+
+# Conversation state transitions shared by every repository implementation. Each takes the current record and
+# returns the updated copy; callers own locking, existence checks and persistence.
+
+
+def updated_conversation(conversation: Conversation, data: ConversationUpdate) -> Conversation:
+    changes = data.model_dump(exclude_none=True)
+    return conversation.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def conversation_with_status(conversation: Conversation, status: str) -> Conversation:
+    return conversation.model_copy(update={"status": status, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def started_run(conversation: Conversation, trace_id: str) -> Conversation:
+    if conversation.run_status == "running":
+        raise conflict("This conversation already has a running request")
+    return conversation.model_copy(
+        update={
+            "run_status": "running",
+            "active_trace_id": trace_id,
+            "run_error": None,
+            "run_started_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        },
+        deep=True,
+    )
+
+
+def finished_run(conversation: Conversation, *, status: str, error: str | None) -> Conversation:
+    return conversation.model_copy(
+        update={
+            "run_status": status,
+            "active_trace_id": None,
+            "run_error": error,
+            "run_started_at": None,
+            "updated_at": datetime.now(UTC),
+        },
+        deep=True,
+    )
+
+
+def with_bound_aina(
+    conversation: Conversation, aina_id: str, *, make_primary: bool, mark_used: bool
+) -> Conversation:
+    active_aina_ids = list(conversation.active_aina_ids)
+    if aina_id not in active_aina_ids:
+        active_aina_ids.append(aina_id)
+    changes: dict[str, Any] = {
+        "active_aina_ids": active_aina_ids,
+        "updated_at": datetime.now(UTC),
+    }
+    if make_primary or conversation.primary_aina_id is None:
+        changes["primary_aina_id"] = aina_id
+    if mark_used:
+        changes["last_aina_id"] = aina_id
+    return conversation.model_copy(update=changes, deep=True)
+
+
+def message_from_provider(raw: dict[str, Any], *, trace_id: str) -> Message:
+    return Message(
+        id=f"msg_{uuid4().hex}",
+        role=raw["role"],
+        content=raw.get("content") or "",
+        tool_calls=raw.get("tool_calls"),
+        tool_call_id=raw.get("tool_call_id"),
+        name=raw.get("name"),
+        widgets=raw.get("widgets") or [],
+        content_type="tool" if raw["role"] == "tool" else "widget" if raw.get("widgets") else "text",
+        trace_id=trace_id,
+    )
 
 
 def _installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
