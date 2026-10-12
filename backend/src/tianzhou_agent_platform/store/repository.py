@@ -33,10 +33,7 @@ from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaTaskUpdate,
 )
 from tianzhou_agent_platform.store.memory_repository import (
-    AINAS_RESOURCE,
     LLM_CALLS_RESOURCE,
-    SKILLS_RESOURCE,
-    TOOLS_RESOURCE,
     TRACES_RESOURCE,
     InMemoryRepository,
     INTERRUPTED_RUN_ERROR,
@@ -63,6 +60,7 @@ from tianzhou_agent_platform.store.model_provider_store import ModelProviderStor
 from tianzhou_agent_platform.store.feedback_store import FeedbackStore
 from tianzhou_agent_platform.store.document_task_store import DocumentTaskStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
+from tianzhou_agent_platform.store.registry_store import RegistryStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.models import StoreQuery
 from tianzhou_agent_platform.store.repository_schema import (
@@ -115,11 +113,9 @@ class PersistentRepository(InMemoryRepository):
         self._feedback_store = FeedbackStore(stores.mysql)
         self._document_task_store = DocumentTaskStore(stores.mysql)
         self._aina_project_store = AinaProjectStore(stores.mysql)
+        self._registry_store = RegistryStore(stores.mysql)
 
     async def initialize(self) -> None:
-        tools = await self._load_models(TOOLS_RESOURCE, ToolRecord)
-        skills = await self._load_models(SKILLS_RESOURCE, SkillRecord)
-        ainas = await self._load_models(AINAS_RESOURCE, AinaRecord)
         traces = (
             await self._load_models(TRACES_RESOURCE, TraceRecord)
             if self.persist_observability
@@ -132,9 +128,6 @@ class PersistentRepository(InMemoryRepository):
         )
 
         async with self._lock:
-            self._tools = {item.tool_id: item for item in tools}
-            self._skills = {item.skill_id: item for item in skills}
-            self._ainas = {item.manifest.aina.id: item for item in ainas}
             # The normal OBS path does not load historical Trace/LLMCall rows
             # at startup. The rollback switch restores the complete legacy
             # behavior, including restart recovery.
@@ -412,9 +405,60 @@ class PersistentRepository(InMemoryRepository):
         await self.get_aina_project(project_id, user_id=user_id, tenant_id=tenant_id)
         await self._aina_project_store.remove_project(project_id)
 
+    async def register_tool(self, tool: ToolRecord) -> ToolRecord:
+        await self._registry_store.register_tool(tool)
+        return self._copy(tool)
+
+    async def get_tool(self, tool_id: str) -> ToolRecord:
+        tool = await self._registry_store.get_tool(tool_id)
+        if tool is None:
+            raise not_found("Tool", tool_id)
+        return tool
+
+    async def list_tools(self) -> list[ToolRecord]:
+        return await self._registry_store.list_tools()
+
+    async def remove_tool(self, tool_id: str) -> None:
+        if not await self._registry_store.remove_tool(tool_id):
+            raise not_found("Tool", tool_id)
+
+    async def register_skill(self, skill: SkillRecord) -> SkillRecord:
+        await self._registry_store.register_skill(skill)
+        return self._copy(skill)
+
+    async def get_skill(self, skill_id: str) -> SkillRecord:
+        skill = await self._registry_store.get_skill(skill_id)
+        if skill is None:
+            raise not_found("Skill", skill_id)
+        return skill
+
+    async def list_skills(self) -> list[SkillRecord]:
+        return await self._registry_store.list_skills()
+
+    async def remove_skill(self, skill_id: str) -> None:
+        if not await self._registry_store.remove_skill(skill_id):
+            raise not_found("Skill", skill_id)
+
+    async def register_aina(self, aina: AinaRecord) -> AinaRecord:
+        await self._registry_store.register_aina(aina)
+        return self._copy(aina)
+
+    async def upsert_aina(self, aina: AinaRecord) -> AinaRecord:
+        await self._registry_store.put_aina(aina)
+        return self._copy(aina)
+
+    async def get_aina(self, aina_id: str) -> AinaRecord:
+        aina = await self._registry_store.get_aina(aina_id)
+        if aina is None:
+            raise not_found("AINA", aina_id)
+        return aina
+
+    async def list_ainas(self) -> list[AinaRecord]:
+        return await self._registry_store.list_ainas()
+
     async def remove_aina(self, aina_id: str) -> None:
-        await super().remove_aina(aina_id)
-        await self._aina_project_store.remove_installations_of(aina_id)
+        if not await self._registry_store.remove_aina(aina_id):
+            raise not_found("AINA", aina_id)
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation:
         await self._aina_project_store.put_installation(installation)

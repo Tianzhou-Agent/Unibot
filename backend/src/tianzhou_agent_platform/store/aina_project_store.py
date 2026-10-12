@@ -70,6 +70,3 @@ class AinaProjectStore(SqlStore):
     async def remove_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> bool:
         record_id = installation_record_id(tenant_id, user_id, aina_id)
         return await self._delete(installations, installations.c.id == record_id) > 0
-
-    async def remove_installations_of(self, aina_id: str) -> None:
-        await self._delete(installations, installations.c.aina_id == aina_id)

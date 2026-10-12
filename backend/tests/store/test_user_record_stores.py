@@ -1,6 +1,6 @@
 """Per-user records in SQL, shared by several repository instances (replicas).
 
-Workspaces, memories, model providers, feedback, document edit tasks and installations. AINA projects are covered by
+Workspaces, memories, model providers, feedback, document edit tasks and installations (removed with their AINA). AINA projects are covered by
 ``tests/test_aina_projects.py``. Runs on SQLite; concurrent writes are covered by ``test_user_record_stores_mysql.py``.
 """
 
@@ -10,7 +10,7 @@ import pytest
 
 from tianzhou_agent_platform.aina.document.task_models import DocumentDraftSection, DocumentEditTask
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryUpdate
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaManifest, AinaRecord
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.feedback import FeedbackRecord
 from tianzhou_agent_platform.core.workspace import WorkspaceCreate, WorkspaceUpdate
@@ -198,6 +198,28 @@ async def test_document_task_saves_are_rejected_after_another_replica_saved() ->
     assert await _denied(first.get_document_edit_task(task.id, user_id="u2", tenant_id="t1")) == "PERMISSION_DENIED"
 
 
+def _manifest(aina_id: str) -> dict[str, object]:
+    return {
+        "protocol_version": "1.0",
+        "aina": {
+            "id": aina_id,
+            "name": "Remote",
+            "version": "1.0.0",
+            "description": "A remote AINA.",
+            "publisher": {"id": "tests", "name": "Tests"},
+        },
+        "runtime": {
+            "type": "remote",
+            "endpoint": "https://aina.invalid/runtime",
+            "streaming": False,
+            "async_tasks": False,
+        },
+        "capabilities": {"skills": [], "tools": [], "ui": [], "events": []},
+        "permissions": [],
+        "authentication": {"type": "none"},
+    }
+
+
 async def test_installations_are_shared_and_removed_with_their_aina() -> None:
     first, second = _replicas()
     for user_id, aina_id in (("u1", "aina.a"), ("u2", "aina.a"), ("u1", "aina.b")):
@@ -211,8 +233,8 @@ async def test_installations_are_shared_and_removed_with_their_aina() -> None:
     assert await first.get_installation(tenant_id="t1", user_id="u1", aina_id="aina.b") == disabled
     assert len(await first.list_installations(tenant_id="t1", user_id="u1")) == 2
 
-    # The SQL half of remove_aina; the AINA registry itself is still per process until it moves to SQL.
-    await second._aina_project_store.remove_installations_of("aina.a")  # noqa: SLF001
+    await first.register_aina(AinaRecord(manifest=AinaManifest.model_validate(_manifest("aina.a"))))
+    await second.remove_aina("aina.a")
     assert [item.aina_id for item in await first.list_installations()] == ["aina.b"]
     await first.remove_installation(tenant_id="t1", user_id="u1", aina_id="aina.b")
     assert (
