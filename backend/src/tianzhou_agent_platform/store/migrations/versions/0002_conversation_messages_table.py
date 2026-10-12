@@ -49,6 +49,18 @@ messages = sa.table(
 
 
 def upgrade() -> None:
+    connection = op.get_bind()
+    # Every stored message is converted once before any DDL: MySQL cannot roll schema changes back, so a message
+    # that fails to convert halfway through would leave a half-applied revision that cannot be rerun.
+    unreadable = []
+    for conversation_id, stored in _batches(connection, conversations.c.messages):
+        try:
+            _message_rows(conversation_id, stored or [])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            unreadable.append(conversation_id)
+    if unreadable:
+        raise RuntimeError(f"Conversations with unreadable messages; repair or delete them first: {unreadable}")
+
     op.create_table(
         "unibot_messages",
         sa.Column("conversation_id", sa.String(length=255), nullable=False),
@@ -85,7 +97,6 @@ def upgrade() -> None:
         unique=False,
     )
 
-    connection = op.get_bind()
     for conversation_id, stored in _batches(connection, conversations.c.messages):
         rows = _message_rows(conversation_id, stored or [])
         if rows:
