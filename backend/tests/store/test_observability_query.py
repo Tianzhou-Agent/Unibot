@@ -59,7 +59,7 @@ def make_trace(
         sequence_no=sequence_no,
         trace_id=trace_id,
         payload={
-            "legacy_trace_id": f"trace_{trace_id[-8:]}",
+            "legacy_trace_id": f"legacy_{trace_id}",
             "root_span_id": "span_root",
             "session_id": session_id,
             "user_id": user_id,
@@ -78,7 +78,15 @@ def make_trace(
     )
 
 
-def make_span(sequence_no: int, trace_id: str, span_id: str, *, kind: str = "model", model: str = "gpt-test") -> ObsRecord:
+def make_span(
+    sequence_no: int,
+    trace_id: str,
+    span_id: str,
+    *,
+    kind: str = "model",
+    model: str = "gpt-test",
+    started_at: str = "2026-08-06T10:00:01Z",
+) -> ObsRecord:
     return ObsRecord(
         record_type="span_finished",
         producer_instance_id="node-1-abc",
@@ -96,7 +104,7 @@ def make_span(sequence_no: int, trace_id: str, span_id: str, *, kind: str = "mod
             "name": "chat.completions",
             "model": model,
             "status": "completed",
-            "started_at": "2026-08-06T10:00:01Z",
+            "started_at": started_at,
             "completed_at": "2026-08-06T10:00:03Z",
             "duration_ms": 2000.0,
             "ttft_ms": 150.0,
@@ -135,8 +143,8 @@ async def _seed(store: ObservabilityStore) -> None:
             make_trace(2, "trace_bbb", started_at=(now - timedelta(hours=6)).isoformat(), input_tokens=250),
             make_trace(3, "trace_ccc", user_id="user_2", session_id="conv_ccc", started_at=day(3), input_tokens=999),
             make_trace(4, "trace_ddd", session_id="conv_other", started_at=day(1), input_tokens=5),
-            make_span(5, "trace_aaa", "span_aaa"),
-            make_span(6, "trace_bbb", "span_bbb", model="gpt-other"),
+            make_span(5, "trace_aaa", "span_aaa", started_at=day(1)),
+            make_span(6, "trace_bbb", "span_bbb", model="gpt-other", started_at=(now - timedelta(hours=6)).isoformat()),
         ]
     )
 
@@ -191,11 +199,28 @@ async def test_session_detail_denied_for_other_user(obs_ctx) -> None:
 
 async def test_raw_log_ownership_enforced(obs_ctx) -> None:
     await _seed(obs_ctx["store"])
-    raw_root = obs_ctx["raw_root"]
-    payload = gzip.compress(json.dumps({"kind": "model", "request": {"model": "gpt"}}).encode())
-    target = raw_root / "tenant_1" / "user_1" / "trace_aaa" / "span_aaa.json.gz"
-    target.parent.mkdir(parents=True)
-    target.write_bytes(payload)
+    ref = await RawIoWriter(obs_ctx["raw_root"]).write(
+        kind="model",
+        trace_id="trace_aaa",
+        span_id="span_aaa",
+        tenant_id="tenant_1",
+        user_id="user_1",
+        data={"request": {"model": "gpt"}},
+    )
+    span = await obs_ctx["store"].get_span("span_aaa")
+    assert span is not None
+    await obs_ctx["store"].bulk_upsert(
+        [
+            ObsRecord(
+                record_type="span_finished",
+                producer_instance_id="node-1-abc",
+                sequence_no=99,
+                trace_id="trace_aaa",
+                span_id="span_aaa",
+                payload={**span, "raw_io_sha256": ref.sha256, "raw_io_size_bytes": ref.size_bytes},
+            )
+        ]
+    )
 
     # wrong user cannot read
     denied = await obs_ctx["query"].raw_log(
@@ -229,7 +254,7 @@ async def test_feedback_context_excludes_later_traces(obs_ctx) -> None:
         before=feedback_time,
     )
     assert len(context) == 1
-    assert context[0]["trace_id"] == "trace_aaa"
+    assert context[0]["trace_id"] == "legacy_trace_aaa"
     assert "spans" in context[0] and "events" in context[0]
 
 
