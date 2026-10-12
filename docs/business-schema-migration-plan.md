@@ -2,7 +2,7 @@
 
 Date: 2026-10-01 (scope revised 2026-10-13)
 
-Status: Steps 1 (Alembic), 2 (conversations, messages, approvals), 3 (users), 4 (schedules, sandboxes) and 5 (per-user records) implemented. Steps 6–7 proposed.
+Status: Steps 1 (Alembic), 2 (conversations, messages, approvals), 3 (users), 4 (schedules, sandboxes), 5 (per-user records) and 6 (registry) implemented. Step 7 and the trace follow-up proposed.
 
 Target: a public multi-tenant service running several backend replicas against one MySQL database. Every replica must see every other replica's writes immediately, so no business table may be served from a process-local copy.
 
@@ -85,8 +85,9 @@ Adding Alembic now costs little and becomes expensive once production data exist
 | 3 ✅ | Users | Concurrent registration or GitHub linking with the same email gives one user and one conflict error. The Redis lease is removed. |
 | 4 ✅ | Sandboxes, scheduled tasks and their execution history | History is filtered, ordered, and limited in SQL. Deleting a task or sandbox removes its executions. The scheduler reads tasks from SQL instead of reloading the table. |
 | 5 ✅ | Per-user records: workspaces, memories, model providers, installations, feedbacks, document edit tasks, AINA projects | Owner/tenant filters run in SQL. Read-modify-write updates use a row lock or version check instead of a Redis lease. The scheduler records a run by updating only its run-state fields, so a user's edit made while the task runs is not overwritten (today it writes back the whole task as read at the start of the tick, on one node as well as several). |
-| 6 | Shared registry: tools, skills, AINAs; legacy traces and LLM calls | Discovery and registration read SQL. `initialize` loads nothing. Two replicas cold-starting on an empty database both start: registering the built-in AINAs is idempotent (today the second replica fails with a duplicate key). |
-| 7 | Remove the in-memory state from `PersistentRepository` | It no longer inherits `InMemoryRepository` dictionaries. A two-replica test on one database shows every resource's writes on the other replica immediately. |
+| 6 ✅ | Shared registry: tools, skills, AINAs | Discovery and registration read SQL. Two replicas cold-starting on an empty database both start: registering the built-in AINAs is idempotent (it used to fail the second replica with a duplicate key). |
+| 6b | Per-process traces (observability follow-up) | With OBS on, legacy `TraceRecord`s and LLM calls live only in a per-process dictionary that is never trimmed, so memory grows with every turn, and the legacy admin trace endpoints see only the answering node. Drop each trace from memory once it finishes (OBS holds it durably), and serve the legacy trace endpoints from the OBS store. Done when memory stays flat over many turns and the endpoints agree across nodes. |
+| 7 | Remove the in-memory state from `PersistentRepository` | It no longer inherits `InMemoryRepository` dictionaries other than the run-scoped traces handled by 6b. A two-replica test on one database shows every resource's writes on the other replica immediately. |
 
 Each step is its own PR, with an Alembic revision when the schema changes.
 

@@ -78,11 +78,17 @@ async def ensure_builtin_ainas(
         except PlatformError as exc:
             if exc.code != "RESOURCE_NOT_FOUND":
                 raise
-            await repository.register_aina(definition)
-        else:
-            await repository.upsert_aina(
-                definition.model_copy(update={"registered_at": current.registered_at}, deep=True)
-            )
+            try:
+                await repository.register_aina(definition)
+                continue
+            except PlatformError as registered:
+                # Another replica starting at the same time registered it first.
+                if registered.code != "CONFLICT":
+                    raise
+                current = await repository.get_aina(aina_id)
+        await repository.upsert_aina(
+            definition.model_copy(update={"registered_at": current.registered_at}, deep=True)
+        )
 
 
 async def invoke_builtin(
