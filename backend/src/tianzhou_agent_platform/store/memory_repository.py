@@ -63,6 +63,8 @@ SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
 SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
 OBS_TRACE_VISIBILITY_GRACE = timedelta(minutes=15)
+# A confirmed approval resumes its paused run under the same trace, which keeps reading approval_required.
+RUN_IN_PROGRESS_TRACE_STATUSES = frozenset({"running", "approval_required"})
 DOCUMENT_EDIT_TASKS_RESOURCE = "document_edit_tasks"
 SANDBOXES_RESOURCE = "sandboxes"
 SANDBOX_EXECUTIONS_RESOURCE = "sandbox_executions"
@@ -1076,7 +1078,7 @@ class InMemoryRepository:
                 except Exception:  # noqa: BLE001 - resolver must not break reconciliation
                     status = None
                 if status is not None:
-                    if status == "running":
+                    if status in RUN_IN_PROGRESS_TRACE_STATUSES:
                         return conversation
                     resolved = "idle" if status == "completed" else status
                     return await self.finish_conversation_run(
@@ -1103,7 +1105,7 @@ class InMemoryRepository:
                 error=INTERRUPTED_RUN_ERROR,
                 expected_trace_id=conversation.active_trace_id,
             )
-        if trace.status == "running":
+        if trace.status in RUN_IN_PROGRESS_TRACE_STATUSES:
             return conversation
         status = "idle" if trace.status == "completed" else trace.status
         return await self.finish_conversation_run(
