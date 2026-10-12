@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, select
 
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask, ScheduledAinaTaskUpdate
 from tianzhou_agent_platform.core.errors import not_found
 from tianzhou_agent_platform.store.memory_repository import updated_scheduled_aina_task
 from tianzhou_agent_platform.store.repository_schema import (
-    model_from_mapping,
     scheduled_aina_executions_table,
     scheduled_aina_tasks_table,
     table_values,
@@ -49,15 +49,15 @@ class ScheduleStore(SqlStore):
         return await self._all(ScheduledAinaTask, statement)
 
     async def update_task(self, task_id: str, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
-        async with self._session() as session, session.begin():
-            row = (
-                (await session.execute(select(tasks).where(tasks.c.id == task_id).with_for_update())).mappings().first()
-            )
-            if row is None:
-                raise not_found("Scheduled AINA task", task_id)
-            updated = updated_scheduled_aina_task(model_from_mapping(ScheduledAinaTask, row), data)
-            await session.execute(update(tasks).where(tasks.c.id == task_id).values(table_values(tasks, updated)))
+        updated = await self.change_task(task_id, lambda task: updated_scheduled_aina_task(task, data))
+        if updated is None:
+            raise not_found("Scheduled AINA task", task_id)
         return updated
+
+    async def change_task(
+        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask | None]
+    ) -> ScheduledAinaTask | None:
+        return await self._update_locked(tasks, ScheduledAinaTask, task_id, change)
 
     async def remove_task(self, task_id: str) -> bool:
         return await self._delete(tasks, tasks.c.id == task_id, (executions, executions.c.task_id == task_id)) > 0

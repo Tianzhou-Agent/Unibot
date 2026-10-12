@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from collections.abc import Callable
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -174,38 +175,7 @@ class InMemoryRepository:
                 ),
                 None,
             )
-            now = datetime.now(UTC)
-            if existing is None:
-                stored = feedback
-            else:
-                reactivated = not existing.active
-                action = "重新提交反馈" if reactivated else "修改反馈"
-                stored = existing.model_copy(
-                    update={
-                        "user_name": feedback.user_name,
-                        "user_email": feedback.user_email,
-                        "conversation_id": feedback.conversation_id,
-                        "trace_id": feedback.trace_id,
-                        "agent_name": feedback.agent_name,
-                        "agent_version": feedback.agent_version,
-                        "rating": feedback.rating,
-                        "reason": feedback.reason,
-                        "comment": feedback.comment,
-                        "active": True,
-                        "case_status": "pending" if feedback.rating == "down" else existing.case_status,
-                        "created_at": now if reactivated else existing.created_at,
-                        "updated_at": now,
-                        "history": [
-                            *existing.history,
-                            FeedbackHistoryItem(
-                                actor_id=feedback.user_id,
-                                actor_name=feedback.user_name,
-                                action=action,
-                            ),
-                        ],
-                    },
-                    deep=True,
-                )
+            stored = feedback if existing is None else resubmitted_feedback(existing, feedback)
             self._feedbacks[stored.id] = stored
             await self._save_record(FEEDBACKS_RESOURCE, stored.id, stored)
             return self._copy(stored)
@@ -285,21 +255,7 @@ class InMemoryRepository:
             )
             if item is None:
                 return
-            updated = item.model_copy(
-                update={
-                    "active": False,
-                    "updated_at": datetime.now(UTC),
-                    "history": [
-                        *item.history,
-                        FeedbackHistoryItem(
-                            actor_id=user_id,
-                            actor_name=actor_name,
-                            action="取消反馈",
-                        ),
-                    ],
-                },
-                deep=True,
-            )
+            updated = cancelled_feedback(item, user_id=user_id, actor_name=actor_name)
             self._feedbacks[item.id] = updated
             await self._save_record(FEEDBACKS_RESOURCE, item.id, updated)
 
@@ -317,33 +273,8 @@ class InMemoryRepository:
             item = self._feedbacks.get(feedback_id)
             if item is None or not item.active:
                 raise not_found("Feedback", feedback_id)
-            updated = item.model_copy(
-                update={
-                    "case_status": status,
-                    "assignee": assignee,
-                    "conclusion": conclusion,
-                    "updated_at": datetime.now(UTC),
-                    "history": [
-                        *item.history,
-                        FeedbackHistoryItem(
-                            actor_id=actor_id,
-                            actor_name=actor_name,
-                            action=f"状态更新为 {status}，负责人：{assignee or '未分配'}",
-                        ),
-                        *(
-                            [
-                                FeedbackHistoryItem(
-                                    actor_id=actor_id,
-                                    actor_name=actor_name,
-                                    action=f"处理结论：{conclusion}",
-                                )
-                            ]
-                            if conclusion
-                            else []
-                        ),
-                    ],
-                },
-                deep=True,
+            updated = updated_feedback_case(
+                item, status=status, assignee=assignee, conclusion=conclusion, actor_id=actor_id, actor_name=actor_name
             )
             self._feedbacks[item.id] = updated
             await self._save_record(FEEDBACKS_RESOURCE, item.id, updated)
@@ -379,28 +310,7 @@ class InMemoryRepository:
                 item.user_id == data.user_id and item.tenant_id == data.tenant_id
                 for item in self._model_providers.values()
             )
-            if actor_count >= 20:
-                raise conflict("Model provider limit reached")
-            provider = ModelProviderRecord(
-                id=f"provider_{uuid4().hex}",
-                user_id=data.user_id,
-                tenant_id=data.tenant_id,
-                provider_type=data.provider_type,
-                name=data.name,
-                base_url=data.base_url,
-                api_key=data.api_key or "",
-                timeout_seconds=data.timeout_seconds,
-                models=[
-                    ModelDefinition(
-                        id=f"model_{uuid4().hex}",
-                        name=model.name,
-                        model=model.model,
-                        enabled=model.enabled,
-                        context_window_tokens=model.context_window_tokens,
-                    )
-                    for model in data.models
-                ],
-            )
+            provider = new_model_provider(data, existing_count=actor_count)
             self._model_providers[provider.id] = provider
             await self._save_record(MODEL_PROVIDERS_RESOURCE, provider.id, provider)
             return self._copy(provider)
@@ -416,12 +326,7 @@ class InMemoryRepository:
             provider = self._model_providers.get(provider_id)
             if provider is None:
                 raise not_found("Model provider", provider_id)
-            if provider.user_id != user_id or provider.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "Model provider ownership does not match the caller",
-                    status_code=403,
-                )
+            require_owner(provider, user_id=user_id, tenant_id=tenant_id, label="Model provider")
             return self._copy(provider)
 
     async def list_model_providers(self, *, user_id: str, tenant_id: str) -> list[ModelProviderRecord]:
@@ -442,42 +347,7 @@ class InMemoryRepository:
             provider = self._model_providers.get(provider_id)
             if provider is None:
                 raise not_found("Model provider", provider_id)
-            if provider.user_id != data.user_id or provider.tenant_id != data.tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "Model provider ownership does not match the caller",
-                    status_code=403,
-                )
-            current_models = {item.id: item for item in provider.models}
-            submitted_ids = [item.id for item in data.models if item.id is not None]
-            if len(submitted_ids) != len(set(submitted_ids)):
-                raise conflict("Model identifiers must be unique")
-            unknown_ids = set(submitted_ids) - set(current_models)
-            if unknown_ids:
-                raise conflict("A submitted model does not belong to this provider")
-            models = [
-                ModelDefinition(
-                    id=model.id or f"model_{uuid4().hex}",
-                    name=model.name,
-                    model=model.model,
-                    enabled=model.enabled,
-                    is_default=(current_models[model.id].is_default and model.enabled if model.id else False),
-                    context_window_tokens=model.context_window_tokens,
-                )
-                for model in data.models
-            ]
-            updated = provider.model_copy(
-                update={
-                    "provider_type": data.provider_type,
-                    "name": data.name,
-                    "base_url": data.base_url,
-                    "api_key": provider.api_key if data.api_key is None or data.api_key == "" else data.api_key,
-                    "timeout_seconds": data.timeout_seconds,
-                    "models": models,
-                    "updated_at": datetime.now(UTC),
-                },
-                deep=True,
-            )
+            updated = updated_model_provider(provider, data)
             self._model_providers[provider_id] = updated
             await self._save_record(MODEL_PROVIDERS_RESOURCE, provider_id, updated)
             return self._copy(updated)
@@ -487,12 +357,7 @@ class InMemoryRepository:
             provider = self._model_providers.get(provider_id)
             if provider is None:
                 raise not_found("Model provider", provider_id)
-            if provider.user_id != user_id or provider.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "Model provider ownership does not match the caller",
-                    status_code=403,
-                )
+            require_owner(provider, user_id=user_id, tenant_id=tenant_id, label="Model provider")
             del self._model_providers[provider_id]
             await self._delete_record(MODEL_PROVIDERS_RESOURCE, provider_id)
 
@@ -508,33 +373,15 @@ class InMemoryRepository:
             provider = self._model_providers.get(provider_id)
             if provider is None:
                 raise not_found("Model provider", provider_id)
-            if provider.user_id != user_id or provider.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "Model provider ownership does not match the caller",
-                    status_code=403,
-                )
-            selected = next((item for item in provider.models if item.id == model_id), None)
-            if selected is None:
-                raise not_found("Model", model_id)
-            if not selected.enabled:
-                raise conflict("A disabled model cannot be selected as default")
-
-            changed: list[ModelProviderRecord] = []
-            now = datetime.now(UTC)
-            for item in list(self._model_providers.values()):
-                if item.user_id != user_id or item.tenant_id != tenant_id:
-                    continue
-                models = [
-                    model.model_copy(
-                        update={"is_default": item.id == provider_id and model.id == model_id},
-                    )
-                    for model in item.models
-                ]
-                if models != item.models:
-                    updated = item.model_copy(update={"models": models, "updated_at": now}, deep=True)
-                    self._model_providers[item.id] = updated
-                    changed.append(updated)
+            require_owner(provider, user_id=user_id, tenant_id=tenant_id, label="Model provider")
+            actor_providers = [
+                item
+                for item in self._model_providers.values()
+                if item.user_id == user_id and item.tenant_id == tenant_id
+            ]
+            changed = providers_with_default_model(actor_providers, provider_id, model_id)
+            for item in changed:
+                self._model_providers[item.id] = item
             for item in changed:
                 await self._save_record(MODEL_PROVIDERS_RESOURCE, item.id, item)
             return self._copy(self._model_providers[provider_id])
@@ -546,23 +393,11 @@ class InMemoryRepository:
         tenant_id: str,
     ) -> ModelRuntimeConfig | None:
         async with self._lock:
-            for provider in self._model_providers.values():
-                if provider.user_id != user_id or provider.tenant_id != tenant_id:
-                    continue
-                model = next((item for item in provider.models if item.is_default and item.enabled), None)
-                if model is not None:
-                    return ModelRuntimeConfig(
-                        provider_id=provider.id,
-                        provider_name=provider.name,
-                        base_url=provider.base_url,
-                        api_key=provider.api_key,
-                        model_id=model.id,
-                        model_name=model.name,
-                        model=model.model,
-                        context_window_tokens=model.context_window_tokens,
-                        timeout_seconds=provider.timeout_seconds,
-                    )
-        return None
+            return default_model_runtime(
+                item
+                for item in self._model_providers.values()
+                if item.user_id == user_id and item.tenant_id == tenant_id
+            )
 
     async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
         task = new_scheduled_aina_task(data)
@@ -667,13 +502,7 @@ class InMemoryRepository:
             task = self._document_edit_tasks.get(task_id)
             if task is None:
                 raise not_found("Document edit task", task_id)
-            if task.user_id != user_id or task.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "Document edit task ownership does not match the caller",
-                    status_code=403,
-                )
-            return self._copy(task)
+            return self._copy(require_owner(task, user_id=user_id, tenant_id=tenant_id, label="Document edit task"))
 
     async def list_document_edit_tasks(
         self,
@@ -705,11 +534,8 @@ class InMemoryRepository:
             if current is None:
                 raise not_found("Document edit task", task.id)
             if current.version != expected_version:
-                raise conflict("Document edit task changed. Reload it before retrying.")
-            updated = task.model_copy(
-                update={"version": expected_version + 1, "updated_at": datetime.now(UTC)},
-                deep=True,
-            )
+                raise document_edit_task_changed()
+            updated = next_document_edit_task_version(task, expected_version)
             self._document_edit_tasks[task.id] = updated
             await self._save_record(DOCUMENT_EDIT_TASKS_RESOURCE, task.id, updated)
         return self._copy(updated)
@@ -745,6 +571,49 @@ class InMemoryRepository:
             if task is None:
                 raise not_found("Scheduled AINA task", task_id)
             return self._copy(task)
+
+    async def start_scheduled_aina_run(
+        self, task_id: str, *, node_id: str, started_at: datetime
+    ) -> ScheduledAinaTask | None:
+        """Mark the task running, changing only run-state fields; None when the task was deleted."""
+        return await self._record_scheduled_aina_run(
+            task_id, lambda task: started_scheduled_aina_run(task, node_id=node_id, started_at=started_at)
+        )
+
+    async def finish_scheduled_aina_run(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        error: str | None,
+        result: dict[str, Any] | None,
+        finished_at: datetime,
+        advance_schedule: bool,
+    ) -> ScheduledAinaTask | None:
+        """Record a finished run, changing only run-state fields; None when the task was deleted."""
+        return await self._record_scheduled_aina_run(
+            task_id,
+            lambda task: finished_scheduled_aina_run(
+                task,
+                status=status,
+                error=error,
+                result=result,
+                finished_at=finished_at,
+                advance_schedule=advance_schedule,
+            ),
+        )
+
+    async def _record_scheduled_aina_run(
+        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask]
+    ) -> ScheduledAinaTask | None:
+        async with self._lock:
+            task = self._scheduled_aina_tasks.get(task_id)
+            if task is None:
+                return None
+            updated = change(task)
+            self._scheduled_aina_tasks[task_id] = updated
+            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
+            return self._copy(updated)
 
     async def put_scheduled_aina_execution(
         self, execution: ScheduledAinaExecution
@@ -796,13 +665,7 @@ class InMemoryRepository:
                 await self._delete_record(SCHEDULED_AINA_EXECUTIONS_RESOURCE, execution_id)
 
     async def create_workspace(self, data: WorkspaceCreate) -> Workspace:
-        workspace_suffix = uuid4().hex
-        workspace_id = f"workspace_{workspace_suffix}"
-        workspace = Workspace(
-            id=workspace_id,
-            storage_key=f"ws_{workspace_suffix}",
-            **data.model_dump(),
-        )
+        workspace = new_workspace(data)
         async with self._lock:
             self._workspaces[workspace.id] = workspace
             await self._save_record(WORKSPACES_RESOURCE, workspace.id, workspace)
@@ -847,15 +710,11 @@ class InMemoryRepository:
         return sorted(values, key=lambda item: item.updated_at, reverse=True)
 
     async def update_workspace(self, workspace_id: str, data: WorkspaceUpdate) -> Workspace:
-        changes = data.model_dump(exclude_none=True)
         async with self._lock:
             workspace = self._workspaces.get(workspace_id)
             if workspace is None:
                 raise not_found("Workspace", workspace_id)
-            updated = workspace.model_copy(
-                update={**changes, "updated_at": datetime.now(UTC)},
-                deep=True,
-            )
+            updated = updated_workspace(workspace, data)
             self._workspaces[workspace_id] = updated
             await self._save_record(WORKSPACES_RESOURCE, workspace_id, updated)
             return self._copy(updated)
@@ -1061,9 +920,7 @@ class InMemoryRepository:
                 item.user_id == data.user_id and item.tenant_id == data.tenant_id
                 for item in self._memories.values()
             )
-            if actor_count >= 500:
-                raise conflict("Memory limit reached; remove or consolidate an existing memory")
-            memory = MemoryRecord(id=f"mem_{uuid4().hex}", **data.model_dump())
+            memory = new_memory(data, existing_count=actor_count)
             self._memories[memory.id] = memory
             await self._save_record(MEMORIES_RESOURCE, memory.id, memory)
             return self._copy(memory)
@@ -1073,9 +930,7 @@ class InMemoryRepository:
             memory = self._memories.get(memory_id)
             if memory is None:
                 raise not_found("Memory", memory_id)
-            if memory.user_id != user_id or memory.tenant_id != tenant_id:
-                raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
-            return self._copy(memory)
+            return self._copy(require_owner(memory, user_id=user_id, tenant_id=tenant_id, label="Memory"))
 
     async def list_memories(
         self,
@@ -1105,33 +960,14 @@ class InMemoryRepository:
         tenant_id: str,
         limit: int = 8,
     ) -> list[MemoryRecord]:
-        candidates = await self.list_memories(user_id=user_id, tenant_id=tenant_id)
-        query_terms = _memory_terms(query)
-        normalized_query = query.casefold().strip()
-        scored: list[tuple[float, MemoryRecord]] = []
-        for memory in candidates:
-            normalized_content = memory.content.casefold()
-            content_terms = _memory_terms(memory.content)
-            overlap = len(query_terms & content_terms)
-            score = overlap / max(len(query_terms), 1)
-            if normalized_query and (
-                normalized_query in normalized_content or normalized_content in normalized_query
-            ):
-                score += 2.0
-            if score > 0:
-                scored.append((score, memory))
-        scored.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
-        return [memory for _score, memory in scored[:limit]]
+        return ranked_memories(query, await self.list_memories(user_id=user_id, tenant_id=tenant_id), limit=limit)
 
     async def update_memory(self, memory_id: str, data: MemoryUpdate) -> MemoryRecord:
         async with self._lock:
             memory = self._memories.get(memory_id)
             if memory is None:
                 raise not_found("Memory", memory_id)
-            if memory.user_id != data.user_id or memory.tenant_id != data.tenant_id:
-                raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
-            changes = data.model_dump(exclude_none=True, exclude={"user_id", "tenant_id"})
-            updated = memory.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+            updated = updated_memory(memory, data)
             self._memories[memory_id] = updated
             await self._save_record(MEMORIES_RESOURCE, memory_id, updated)
             return self._copy(updated)
@@ -1141,17 +977,12 @@ class InMemoryRepository:
             memory = self._memories.get(memory_id)
             if memory is None:
                 raise not_found("Memory", memory_id)
-            if memory.user_id != user_id or memory.tenant_id != tenant_id:
-                raise PlatformError("PERMISSION_DENIED", "Memory ownership does not match the caller", status_code=403)
+            require_owner(memory, user_id=user_id, tenant_id=tenant_id, label="Memory")
             del self._memories[memory_id]
             await self._delete_record(MEMORIES_RESOURCE, memory_id)
 
     async def memory_stats(self, *, user_id: str, tenant_id: str) -> MemoryStats:
-        memories = await self.list_memories(user_id=user_id, tenant_id=tenant_id)
-        counts = {category: 0 for category in ("fact", "preference", "goal", "instruction")}
-        for memory in memories:
-            counts[memory.category] += 1
-        return MemoryStats(total=len(memories), **counts)
+        return memory_stats_of(await self.list_memories(user_id=user_id, tenant_id=tenant_id))
 
     async def append_provider_messages(
         self,
@@ -1299,23 +1130,10 @@ class InMemoryRepository:
             project = self._aina_projects.get(project_id)
             if project is None:
                 raise not_found("AINA project", project_id)
-            if project.user_id != user_id or project.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "AINA project ownership does not match the caller",
-                    status_code=403,
-                )
-            if project.archive_sha256 != archive_sha256:
-                raise conflict("AINA project archive changed while it was being imported")
-            if project.status in {"validated", "deployed"}:
+            require_owner(project, user_id=user_id, tenant_id=tenant_id, label="AINA project")
+            updated = validated_aina_project(project, archive_sha256)
+            if updated is None:
                 return self._copy(project)
-            updated = project.model_copy(
-                update={
-                    "status": "validated",
-                    "updated_at": datetime.now(UTC),
-                },
-                deep=True,
-            )
             await self._save_record(AINA_PROJECTS_RESOURCE, project_id, updated)
             self._aina_projects[project_id] = updated
             return self._copy(updated)
@@ -1332,26 +1150,10 @@ class InMemoryRepository:
             project = self._aina_projects.get(project_id)
             if project is None:
                 raise not_found("AINA project", project_id)
-            if project.user_id != user_id or project.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "AINA project ownership does not match the caller",
-                    status_code=403,
-                )
-            target_status = "deployed" if deployed else "validated"
-            if project.status == target_status:
+            require_owner(project, user_id=user_id, tenant_id=tenant_id, label="AINA project")
+            updated = deployed_aina_project(project, deployed)
+            if updated is None:
                 return self._copy(project)
-            if project.status == "importing":
-                raise conflict("AINA project import has not completed")
-            now = datetime.now(UTC)
-            updated = project.model_copy(
-                update={
-                    "status": target_status,
-                    "deployed_at": now if deployed else None,
-                    "updated_at": now,
-                },
-                deep=True,
-            )
             await self._save_record(AINA_PROJECTS_RESOURCE, project_id, updated)
             self._aina_projects[project_id] = updated
             return self._copy(updated)
@@ -1367,13 +1169,7 @@ class InMemoryRepository:
             project = self._aina_projects.get(project_id)
             if project is None:
                 raise not_found("AINA project", project_id)
-            if project.user_id != user_id or project.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "AINA project ownership does not match the caller",
-                    status_code=403,
-                )
-            return self._copy(project)
+            return self._copy(require_owner(project, user_id=user_id, tenant_id=tenant_id, label="AINA project"))
 
     async def list_aina_projects(self, *, user_id: str, tenant_id: str) -> list[AinaProjectRecord]:
         async with self._lock:
@@ -1395,12 +1191,7 @@ class InMemoryRepository:
             project = self._aina_projects.get(project_id)
             if project is None:
                 raise not_found("AINA project", project_id)
-            if project.user_id != user_id or project.tenant_id != tenant_id:
-                raise PlatformError(
-                    "PERMISSION_DENIED",
-                    "AINA project ownership does not match the caller",
-                    status_code=403,
-                )
+            require_owner(project, user_id=user_id, tenant_id=tenant_id, label="AINA project")
             await self._delete_record(AINA_PROJECTS_RESOURCE, project_id)
             del self._aina_projects[project_id]
 
@@ -1438,13 +1229,13 @@ class InMemoryRepository:
             await self._delete_record(AINAS_RESOURCE, aina_id)
             for key in [key for key in self._installations if key[2] == aina_id]:
                 del self._installations[key]
-                await self._delete_record(INSTALLATIONS_RESOURCE, _installation_record_id(*key))
+                await self._delete_record(INSTALLATIONS_RESOURCE, installation_record_id(*key))
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation:
         key = (installation.tenant_id, installation.user_id, installation.aina_id)
         async with self._lock:
             self._installations[key] = installation
-            await self._save_record(INSTALLATIONS_RESOURCE, _installation_record_id(*key), installation)
+            await self._save_record(INSTALLATIONS_RESOURCE, installation_record_id(*key), installation)
         return self._copy(installation)
 
     async def get_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> AinaInstallation:
@@ -1473,7 +1264,7 @@ class InMemoryRepository:
                 raise not_found("AINA installation", aina_id)
             await self._delete_record(
                 INSTALLATIONS_RESOURCE,
-                _installation_record_id(tenant_id, user_id, aina_id),
+                installation_record_id(tenant_id, user_id, aina_id),
             )
 
     async def create_trace(self, trace: TraceRecord) -> TraceRecord:
@@ -1712,6 +1503,292 @@ class InMemoryRepository:
         return [self._copy(approval) for approval in cancelled]
 
 
+def require_owner[RecordT: Any](record: RecordT, *, user_id: str, tenant_id: str, label: str) -> RecordT:
+    if record.user_id != user_id or record.tenant_id != tenant_id:  # type: ignore[attr-defined]
+        raise PlatformError("PERMISSION_DENIED", f"{label} ownership does not match the caller", status_code=403)
+    return record
+
+
+def resubmitted_feedback(existing: FeedbackRecord, feedback: FeedbackRecord) -> FeedbackRecord:
+    now = datetime.now(UTC)
+    reactivated = not existing.active
+    action = "重新提交反馈" if reactivated else "修改反馈"
+    return existing.model_copy(
+        update={
+            "user_name": feedback.user_name,
+            "user_email": feedback.user_email,
+            "conversation_id": feedback.conversation_id,
+            "trace_id": feedback.trace_id,
+            "agent_name": feedback.agent_name,
+            "agent_version": feedback.agent_version,
+            "rating": feedback.rating,
+            "reason": feedback.reason,
+            "comment": feedback.comment,
+            "active": True,
+            "case_status": "pending" if feedback.rating == "down" else existing.case_status,
+            "created_at": now if reactivated else existing.created_at,
+            "updated_at": now,
+            "history": [
+                *existing.history,
+                FeedbackHistoryItem(actor_id=feedback.user_id, actor_name=feedback.user_name, action=action),
+            ],
+        },
+        deep=True,
+    )
+
+
+def cancelled_feedback(item: FeedbackRecord, *, user_id: str, actor_name: str) -> FeedbackRecord:
+    return item.model_copy(
+        update={
+            "active": False,
+            "updated_at": datetime.now(UTC),
+            "history": [*item.history, FeedbackHistoryItem(actor_id=user_id, actor_name=actor_name, action="取消反馈")],
+        },
+        deep=True,
+    )
+
+
+def updated_feedback_case(
+    item: FeedbackRecord, *, status: str, assignee: str, conclusion: str, actor_id: str, actor_name: str
+) -> FeedbackRecord:
+    return item.model_copy(
+        update={
+            "case_status": status,
+            "assignee": assignee,
+            "conclusion": conclusion,
+            "updated_at": datetime.now(UTC),
+            "history": [
+                *item.history,
+                FeedbackHistoryItem(
+                    actor_id=actor_id,
+                    actor_name=actor_name,
+                    action=f"状态更新为 {status}，负责人：{assignee or '未分配'}",
+                ),
+                *(
+                    [FeedbackHistoryItem(actor_id=actor_id, actor_name=actor_name, action=f"处理结论：{conclusion}")]
+                    if conclusion
+                    else []
+                ),
+            ],
+        },
+        deep=True,
+    )
+
+
+MODEL_PROVIDER_LIMIT = 20
+
+
+def new_model_provider(data: ModelProviderCreate, *, existing_count: int) -> ModelProviderRecord:
+    if existing_count >= MODEL_PROVIDER_LIMIT:
+        raise conflict("Model provider limit reached")
+    return ModelProviderRecord(
+        id=f"provider_{uuid4().hex}",
+        user_id=data.user_id,
+        tenant_id=data.tenant_id,
+        provider_type=data.provider_type,
+        name=data.name,
+        base_url=data.base_url,
+        api_key=data.api_key or "",
+        timeout_seconds=data.timeout_seconds,
+        models=[
+            ModelDefinition(
+                id=f"model_{uuid4().hex}",
+                name=model.name,
+                model=model.model,
+                enabled=model.enabled,
+                context_window_tokens=model.context_window_tokens,
+            )
+            for model in data.models
+        ],
+    )
+
+
+def updated_model_provider(provider: ModelProviderRecord, data: ModelProviderUpdate) -> ModelProviderRecord:
+    require_owner(provider, user_id=data.user_id, tenant_id=data.tenant_id, label="Model provider")
+    current_models = {item.id: item for item in provider.models}
+    submitted_ids = [item.id for item in data.models if item.id is not None]
+    if len(submitted_ids) != len(set(submitted_ids)):
+        raise conflict("Model identifiers must be unique")
+    unknown_ids = set(submitted_ids) - set(current_models)
+    if unknown_ids:
+        raise conflict("A submitted model does not belong to this provider")
+    models = [
+        ModelDefinition(
+            id=model.id or f"model_{uuid4().hex}",
+            name=model.name,
+            model=model.model,
+            enabled=model.enabled,
+            is_default=(current_models[model.id].is_default and model.enabled if model.id else False),
+            context_window_tokens=model.context_window_tokens,
+        )
+        for model in data.models
+    ]
+    return provider.model_copy(
+        update={
+            "provider_type": data.provider_type,
+            "name": data.name,
+            "base_url": data.base_url,
+            "api_key": provider.api_key if data.api_key is None or data.api_key == "" else data.api_key,
+            "timeout_seconds": data.timeout_seconds,
+            "models": models,
+            "updated_at": datetime.now(UTC),
+        },
+        deep=True,
+    )
+
+
+def providers_with_default_model(
+    providers: Iterable[ModelProviderRecord], provider_id: str, model_id: str
+) -> list[ModelProviderRecord]:
+    """The providers of one actor whose models change when ``model_id`` of ``provider_id`` becomes the default."""
+    providers = list(providers)
+    provider = next((item for item in providers if item.id == provider_id), None)
+    if provider is None:
+        raise not_found("Model provider", provider_id)
+    selected = next((item for item in provider.models if item.id == model_id), None)
+    if selected is None:
+        raise not_found("Model", model_id)
+    if not selected.enabled:
+        raise conflict("A disabled model cannot be selected as default")
+    changed: list[ModelProviderRecord] = []
+    now = datetime.now(UTC)
+    for item in providers:
+        models = [
+            model.model_copy(update={"is_default": item.id == provider_id and model.id == model_id})
+            for model in item.models
+        ]
+        if models != item.models:
+            changed.append(item.model_copy(update={"models": models, "updated_at": now}, deep=True))
+    return changed
+
+
+def default_model_runtime(providers: Iterable[ModelProviderRecord]) -> ModelRuntimeConfig | None:
+    """The enabled default model of the first of one actor's providers that has one."""
+    for provider in providers:
+        model = next((item for item in provider.models if item.is_default and item.enabled), None)
+        if model is not None:
+            return ModelRuntimeConfig(
+                provider_id=provider.id,
+                provider_name=provider.name,
+                base_url=provider.base_url,
+                api_key=provider.api_key,
+                model_id=model.id,
+                model_name=model.name,
+                model=model.model,
+                context_window_tokens=model.context_window_tokens,
+                timeout_seconds=provider.timeout_seconds,
+            )
+    return None
+
+
+MEMORY_LIMIT = 500
+
+
+def new_memory(data: MemoryCreate, *, existing_count: int) -> MemoryRecord:
+    if existing_count >= MEMORY_LIMIT:
+        raise conflict("Memory limit reached; remove or consolidate an existing memory")
+    return MemoryRecord(id=f"mem_{uuid4().hex}", **data.model_dump())
+
+
+def updated_memory(memory: MemoryRecord, data: MemoryUpdate) -> MemoryRecord:
+    require_owner(memory, user_id=data.user_id, tenant_id=data.tenant_id, label="Memory")
+    changes = data.model_dump(exclude_none=True, exclude={"user_id", "tenant_id"})
+    return memory.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def ranked_memories(query: str, candidates: Iterable[MemoryRecord], *, limit: int) -> list[MemoryRecord]:
+    query_terms = _memory_terms(query)
+    normalized_query = query.casefold().strip()
+    scored: list[tuple[float, MemoryRecord]] = []
+    for memory in candidates:
+        normalized_content = memory.content.casefold()
+        content_terms = _memory_terms(memory.content)
+        overlap = len(query_terms & content_terms)
+        score = overlap / max(len(query_terms), 1)
+        if normalized_query and (normalized_query in normalized_content or normalized_content in normalized_query):
+            score += 2.0
+        if score > 0:
+            scored.append((score, memory))
+    scored.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
+    return [memory for _score, memory in scored[:limit]]
+
+
+def memory_stats_of(memories: Iterable[MemoryRecord]) -> MemoryStats:
+    counts = {category: 0 for category in ("fact", "preference", "goal", "instruction")}
+    total = 0
+    for memory in memories:
+        counts[memory.category] += 1
+        total += 1
+    return MemoryStats(total=total, **counts)
+
+
+def new_workspace(data: WorkspaceCreate) -> Workspace:
+    suffix = uuid4().hex
+    return Workspace(id=f"workspace_{suffix}", storage_key=f"ws_{suffix}", **data.model_dump())
+
+
+def updated_workspace(workspace: Workspace, data: WorkspaceUpdate) -> Workspace:
+    changes = data.model_dump(exclude_none=True)
+    return workspace.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def document_edit_task_changed() -> PlatformError:
+    return conflict("Document edit task changed. Reload it before retrying.")
+
+
+def next_document_edit_task_version(task: DocumentEditTask, expected_version: int) -> DocumentEditTask:
+    return task.model_copy(update={"version": expected_version + 1, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def validated_aina_project(project: AinaProjectRecord, archive_sha256: str) -> AinaProjectRecord | None:
+    """The project marked validated, or None when it already is (or is deployed)."""
+    if project.archive_sha256 != archive_sha256:
+        raise conflict("AINA project archive changed while it was being imported")
+    if project.status in {"validated", "deployed"}:
+        return None
+    return project.model_copy(update={"status": "validated", "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def deployed_aina_project(project: AinaProjectRecord, deployed: bool) -> AinaProjectRecord | None:
+    """The project moved to deployed or back to validated, or None when it already has that status."""
+    target_status = "deployed" if deployed else "validated"
+    if project.status == target_status:
+        return None
+    if project.status == "importing":
+        raise conflict("AINA project import has not completed")
+    now = datetime.now(UTC)
+    return project.model_copy(
+        update={"status": target_status, "deployed_at": now if deployed else None, "updated_at": now}, deep=True
+    )
+
+
+def started_scheduled_aina_run(task: ScheduledAinaTask, *, node_id: str, started_at: datetime) -> ScheduledAinaTask:
+    return task.model_copy(update={"last_status": "running", "last_node_id": node_id, "updated_at": started_at})
+
+
+def finished_scheduled_aina_run(
+    task: ScheduledAinaTask,
+    *,
+    status: str,
+    error: str | None,
+    result: dict[str, Any] | None,
+    finished_at: datetime,
+    advance_schedule: bool,
+) -> ScheduledAinaTask:
+    """Record a finished run on the task as it is now, so edits made while it ran are kept."""
+    return task.model_copy(
+        update={
+            "next_run_at": next_scheduled_run(task, after=finished_at) if advance_schedule else task.next_run_at,
+            "last_run_at": finished_at,
+            "last_status": status,
+            "last_error": error,
+            "last_result": result,
+            "updated_at": finished_at,
+        },
+        deep=True,
+    )
+
+
 def new_scheduled_aina_task(data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
     now = datetime.now(UTC)
     values = data.model_dump()
@@ -1871,7 +1948,7 @@ def message_from_provider(raw: dict[str, Any], *, trace_id: str) -> Message:
     )
 
 
-def _installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
+def installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
     raw = json.dumps([tenant_id, user_id, aina_id], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

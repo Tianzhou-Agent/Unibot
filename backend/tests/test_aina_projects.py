@@ -5,8 +5,6 @@ import hashlib
 import io
 import json
 import zipfile
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -33,6 +31,7 @@ from tianzhou_agent_platform.store.models import StoragePath, StorePage, StoreQu
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
 from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
+from tests.support.sqlite_store import sqlite_session_factory
 
 
 class InspectableArtifactStore(AinaProjectArtifactStore):
@@ -94,6 +93,8 @@ class FailingValidationOnceRepository(InMemoryRepository):
 class FakeRepositoryMySqlStore:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, StoreRecord]] = {}
+        # Records that moved to SQL (projects, workspaces, ...) are queried there instead of the methods below.
+        self.session_factory = sqlite_session_factory()
 
     async def read(self, resource: str, record_id: str) -> StoreRecord | None:
         return self.records.get(resource, {}).get(record_id)
@@ -126,19 +127,11 @@ class FakeRepositoryMySqlStore:
 
 
 class FakeRepositoryRedisStore:
-    def __init__(self) -> None:
-        self.acquire_lease = True
-
     async def set(self, namespace: str, key: str, value: Any) -> None:
         del namespace, key, value
 
     async def delete(self, namespace: str, key: str) -> None:
         del namespace, key
-
-    @asynccontextmanager
-    async def lease(self, namespace: str, key: str, *, ttl_seconds: int) -> AsyncIterator[bool]:
-        del namespace, key, ttl_seconds
-        yield self.acquire_lease
 
 
 def _settings() -> AgentSettings:
@@ -557,39 +550,17 @@ async def test_persistent_repository_restores_aina_project_metadata() -> None:
     )
 
     assert AINA_PROJECTS_RESOURCE in repository_tables
-    assert imported.id in mysql.records[AINA_PROJECTS_RESOURCE]
     assert listed == [imported]
     assert restored == imported
-
-    redis.acquire_lease = False
-    contended_result = await second_repository.mark_aina_project_validated(
-        imported.id,
-        archive_sha256=imported.archive_sha256,
-        user_id="user-a",
-        tenant_id="tenant-a",
-    )
-    assert contended_result == imported
-    redis.acquire_lease = True
-
-    next_identity = imported.manifest.aina.model_copy(update={"version": "0.2.0"})
-    pending = imported.model_copy(
-        update={
-            "id": f"aina_project_{'1' * 32}",
-            "manifest": imported.manifest.model_copy(update={"aina": next_identity}),
-            "status": "importing",
-        }
-    )
-    await second_repository.create_aina_project(pending)
-    redis.acquire_lease = False
-    with pytest.raises(PlatformError, match="being imported") as busy:
-        await first_repository.mark_aina_project_validated(
-            pending.id,
-            archive_sha256=pending.archive_sha256,
+    assert (
+        await second_repository.mark_aina_project_validated(
+            imported.id,
+            archive_sha256=imported.archive_sha256,
             user_id="user-a",
             tenant_id="tenant-a",
         )
-    assert busy.value.retryable is True
-    redis.acquire_lease = True
+        == imported
+    )
 
     repeated = await AinaProjectService(second_repository, artifacts).import_project(
         archive,
