@@ -231,9 +231,6 @@ class DurableBufferSpanProcessor(SpanProcessor):
         return True
 
 
-DurableWalSpanProcessor = DurableBufferSpanProcessor
-
-
 def setup_tracer_provider(
     processor: DurableBufferSpanProcessor,
     *,

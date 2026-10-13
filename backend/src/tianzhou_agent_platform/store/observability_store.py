@@ -11,8 +11,7 @@ default) so OBS batches cannot exhaust the business connection pool.
 
 from __future__ import annotations
 
-import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -27,7 +26,6 @@ from sqlalchemy import (
     String,
     Table,
     Text,
-    and_,
     or_,
     delete as sa_delete,
     func,
@@ -39,7 +37,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from tianzhou_agent_platform.store.observability_buffer import ObsRecord, RecordType
 
-logger = logging.getLogger(__name__)
 
 OBS_METADATA = MetaData()
 
@@ -418,87 +415,6 @@ def _first_use_upsert_statement(table: Table, rows: list[dict[str, Any]]) -> Any
     )
 
 
-def _record_time(row: dict[str, Any]) -> datetime:
-    version = int(row.get("record_version") or 0)
-    if version > 0:
-        return datetime.fromtimestamp(version / 1_000_000, tz=timezone.utc)
-    return _as_datetime(row.get("completed_at")) or _as_datetime(row.get("started_at")) or datetime.now(timezone.utc)
-
-
-def _trace_record_from_row(row: dict[str, Any]) -> ObsRecord:
-    return ObsRecord(
-        record_type="trace_finished",
-        producer_instance_id=row.get("producer_instance_id") or "operations-backfill",
-        sequence_no=0,
-        occurred_at=_record_time(row),
-        trace_id=row["trace_id"],
-        payload={
-            "legacy_trace_id": row.get("legacy_trace_id"),
-            "root_span_id": row.get("root_span_id"),
-            "session_id": row.get("session_id"),
-            "user_id": row.get("user_id"),
-            "tenant_id": row.get("tenant_id"),
-            "status": row.get("status"),
-            "started_at": row.get("started_at"),
-            "completed_at": row.get("completed_at"),
-            "duration_ms": row.get("duration_ms"),
-            "input_tokens": row.get("input_tokens"),
-            "output_tokens": row.get("output_tokens"),
-            "cache_read_tokens": row.get("cache_read_tokens"),
-            "message_count": row.get("message_count"),
-            "compression_count": row.get("compression_count"),
-            "error_count": row.get("error_count"),
-            "attributes": row.get("attributes"),
-            "request_source": "chat",
-            "metric_version": "v1",
-        },
-    )
-
-
-def _span_record_from_row(row: dict[str, Any]) -> ObsRecord:
-    return ObsRecord(
-        record_type="span_finished",
-        producer_instance_id="operations-backfill",
-        sequence_no=0,
-        occurred_at=_record_time(row),
-        trace_id=row["trace_id"],
-        span_id=row["span_id"],
-        payload={
-            key: row.get(key)
-            for key in (
-                "legacy_span_id",
-                "parent_span_id",
-                "sequence_no",
-                "session_id",
-                "user_id",
-                "tenant_id",
-                "kind",
-                "name",
-                "target_id",
-                "target_version",
-                "model",
-                "status",
-                "started_at",
-                "first_output_at",
-                "completed_at",
-                "duration_ms",
-                "ttft_ms",
-                "input_tokens",
-                "output_tokens",
-                "cache_read_tokens",
-                "input_preview",
-                "output_preview",
-                "attributes",
-                "error",
-                "raw_io_path",
-                "raw_io_sha256",
-                "raw_io_size_bytes",
-                "raw_io_status",
-            )
-        },
-    )
-
-
 class ObservabilityStore:
     """Dedicated OBS tables, independent pool, batch UPSERT and queries."""
 
@@ -579,58 +495,6 @@ class ObservabilityStore:
                     )
                     total += result.rowcount or 0
         return total
-
-    async def backfill_operations(self, *, batch_size: int = 500) -> dict[str, int]:
-        """Project terminal OBS history into the operations facts after upgrade."""
-        traces = self.tables[TRACES_TABLE]
-        spans = self.tables[SPANS_TABLE]
-        operation_events = self.tables[OPS_USER_EVENTS_TABLE]
-        request_agents = self.tables[OPS_REQUEST_AGENTS_TABLE]
-        counts = {"events": 0, "agents": 0}
-
-        while True:
-            statement = (
-                select(traces)
-                .select_from(traces.outerjoin(operation_events, traces.c.trace_id == operation_events.c.trace_id))
-                .where(operation_events.c.trace_id.is_(None))
-                .where(traces.c.status != "running")
-                .order_by(traces.c.started_at.asc(), traces.c.trace_id.asc())
-                .limit(batch_size)
-            )
-            async with self._session_factory() as session:
-                rows = [dict(row) for row in (await session.execute(statement)).mappings().all()]
-            if not rows:
-                break
-            records = [_trace_record_from_row(row) for row in rows]
-            await self.bulk_upsert(records)
-            counts["events"] += len(records)
-
-        while True:
-            join_condition = and_(
-                spans.c.trace_id == request_agents.c.trace_id,
-                spans.c.target_id == request_agents.c.agent_id,
-            )
-            statement = (
-                select(spans)
-                .select_from(spans.outerjoin(request_agents, join_condition))
-                .where(request_agents.c.trace_id.is_(None))
-                .where(spans.c.kind == "aina")
-                .where(spans.c.target_id.is_not(None))
-                .where(spans.c.target_id != "")
-                .order_by(spans.c.started_at.asc(), spans.c.span_id.asc())
-                .limit(batch_size)
-            )
-            async with self._session_factory() as session:
-                rows = [dict(row) for row in (await session.execute(statement)).mappings().all()]
-            if not rows:
-                break
-            records = [_span_record_from_row(row) for row in rows]
-            await self.bulk_upsert(records)
-            counts["agents"] += len(records)
-
-        if sum(counts.values()):
-            logger.info("Backfilled operations facts from OBS history: %s", counts)
-        return counts
 
     async def list_operation_events(
         self,

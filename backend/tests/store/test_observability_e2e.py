@@ -84,7 +84,6 @@ async def test_chat_to_obs_query_end_to_end(
         llm_api_key=None,
         llm_model="test-model",
         node_id="e2e-node",
-        obs_wal_root=tmp_path / "wal",
         obs_raw_root=tmp_path / "raw",
         obs_enabled=True,
         obs_redis_stream_key=redis_keys[0],

@@ -23,7 +23,7 @@ from tianzhou_agent_platform.store.observability_store import (
     TRACES_TABLE,
     ObservabilityStore,
 )
-from tianzhou_agent_platform.store.observability_wal import ObsRecord
+from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
 DSN = os.getenv("OBS_TEST_MYSQL_DSN", "")
 

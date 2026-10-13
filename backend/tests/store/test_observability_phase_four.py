@@ -136,7 +136,7 @@ async def test_obs_resolver_queries_obs_store() -> None:
     async with obs._engine.begin() as connection:  # noqa: SLF001
         await connection.run_sync(OBS_METADATA.drop_all)
         await connection.run_sync(OBS_METADATA.create_all)
-    from tianzhou_agent_platform.store.observability_wal import ObsRecord
+    from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
     await obs.bulk_upsert(
         [

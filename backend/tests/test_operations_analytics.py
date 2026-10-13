@@ -16,7 +16,7 @@ from tianzhou_agent_platform.store.observability_store import (
     _platform_first_use_values,
     _request_agent_values,
 )
-from tianzhou_agent_platform.store.observability_wal import ObsRecord
+from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
 
 class FakeOperationsStore:

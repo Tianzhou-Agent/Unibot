@@ -64,8 +64,3 @@ def build_producer_instance_id(
     startup = startup_uuid if startup_uuid is not None else uuid.uuid4().hex
     return f"{node_id}-{process}-{startup}"
 
-
-# Compatibility aliases for the legacy file-WAL implementation and tests.
-WalError = ObsBufferError
-WalFlushTimeoutError = ObsBufferFlushTimeoutError
-WalGapError = ObsBufferGapError

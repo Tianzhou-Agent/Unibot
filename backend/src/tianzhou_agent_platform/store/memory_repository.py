@@ -915,7 +915,7 @@ class InMemoryRepository:
                         error=INTERRUPTED_RUN_ERROR if resolved == "failed" else None,
                         expected_trace_id=conversation.active_trace_id,
                     )
-                # A WAL-fsynced trace may not be queryable from OBS MySQL yet,
+                # A durably buffered trace may not be queryable from OBS MySQL yet,
                 # especially from another node. Keep the business run and its
                 # Redis lock intact for the same window as the run-lock TTL;
                 # absence is not proof that the producer was interrupted.

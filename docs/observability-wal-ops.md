@@ -1,6 +1,6 @@
 # 可观测性可靠存储（OTel + Redis Streams）运维手册
 
-文件名为兼容已有链接而保留。当前链路不再写入自研文件 WAL；旧目录仅在升级后作为一次性迁移源读取。
+文件名为兼容已有链接而保留。自研文件 WAL 及其遗留数据读取器已移除。
 
 ## 1. 架构
 
@@ -14,7 +14,6 @@ AgentRuntime / LLM / Tool
   -> /obs 与 /admin/obs
 
 脱敏后的完整模型/工具 IO -> NAS raw/<tenant>/<user>/<trace>/<span>.json.gz
-旧 WAL 文件 -> 兼容读取器 -> MySQL（迁移完成后不再产生新文件）
 ```
 
 交付语义是至少一次：Redis 消息可能因进程在 MySQL 提交后、确认前退出而重放，OBS 表以
@@ -47,15 +46,13 @@ AgentRuntime / LLM / Tool
 | `UNIBOT_OBS_REDIS_PRODUCER_STALE_SECONDS` | `120` | 判定异常退出生产者的心跳阈值 |
 | `UNIBOT_OBS_RAW_ROOT` | `data/nas/observability/raw` | 原始 IO 目录 |
 | `UNIBOT_OBS_RETENTION_DAYS` | `90` | OBS 明细与原始 IO 保留期 |
-| `UNIBOT_OBS_WAL_ROOT` | `data/nas/observability/wal` | 仅用于读取升级前遗留 WAL |
 
 同一套 MySQL 投影只能使用一个消费者组名；修改组名会从头建立另一套消费进度，依赖 UPSERT 幂等，
 但会造成额外重放负载。
 
 ## 4. 启停与确认顺序
 
-启动顺序：创建 OBS 表和回填数据，验证 Redis/AOF，创建 Consumer Group，启动 Redis producer 和
-consumer；如果旧 WAL 根目录存在，再启动只读迁移 worker。
+启动顺序：创建 OBS 表，验证 Redis/AOF，创建 Consumer Group，启动 Redis producer 和 consumer。
 
 正常请求结束前，终态记录会等待 `XADD + WAITAOF` 完成，但不等待 MySQL。关闭时先停止新增记录并
 刷新 producer，再停止 consumer，最后关闭 OBS MySQL 连接池。
@@ -93,11 +90,6 @@ redis-cli XPENDING unibot:obs:records:v1 unibot-obs-mysql-v1
 redis-cli XLEN unibot:obs:records:dlq:v1
 ```
 
-## 7. 升级与回滚
+## 7. 升级
 
-升级前不要删除 `UNIBOT_OBS_WAL_ROOT`。新版本发现该目录时会继续读取 `.sealed`、崩溃遗留的
-`.ingesting`，以及达到安全年龄的孤儿 `.active` 文件；成功写入 MySQL 后按旧规则回收。确认目录无
-待处理 segment 后可以归档目录。新链路不会再创建 WAL 文件。
-
-回滚到仍写文件 WAL 的旧版本前，先正常关闭新版本，并确保 Redis Stream 的 pending 和 lag 均为 0；
-否则旧版本无法消费仍留在 Redis 中的记录。
+升级不会读取旧版本留下的文件 WAL（`data/nas/observability/wal`），其中未入库的记录不会导入，可以直接删除该目录。

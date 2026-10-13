@@ -163,15 +163,12 @@ class ObservabilityAspect:
         repository: InMemoryRepository,
         *,
         buffer: DurableObsBuffer | None = None,
-        wal_writer: DurableObsBuffer | None = None,
         tracer: Any | None = None,
         raw_io_writer: RawIoWriter | None = None,
         obs_store: Any | None = None,
     ) -> None:
-        if buffer is not None and wal_writer is not None:
-            raise ValueError("provide either buffer or legacy wal_writer, not both")
         self._repository = repository
-        self._buffer = buffer or wal_writer
+        self._buffer = buffer
         self._tracer = tracer
         self._raw_io_writer = raw_io_writer
         # Direct-write fallback when the durable buffer is unavailable but

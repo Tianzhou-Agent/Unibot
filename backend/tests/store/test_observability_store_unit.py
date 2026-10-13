@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from tianzhou_agent_platform.store.observability_store import _event_values
-from tianzhou_agent_platform.store.observability_wal import ObsRecord
+from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
 
 def test_event_values_keep_microsecond_and_wal_order() -> None:
