@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request, Response, status
+from typing import Literal
+
+from fastapi import APIRouter, Form, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from tianzhou_agent_platform.api.dependencies import auth, current_user, settings
@@ -11,11 +13,15 @@ from tianzhou_agent_platform.auth.models import (
     RegisterRequest,
     UserRecord,
     UserView,
+    OidcProvider,
 )
+from tianzhou_agent_platform.auth.oidc import DISPLAY_NAMES
+from tianzhou_agent_platform.auth.service import _safe_next_path
 from tianzhou_agent_platform.core.errors import PlatformError
 
 SESSION_COOKIE = "unibot_session"
 OAUTH_COOKIE = "unibot_github_oauth"
+HUAWEI_OAUTH_COOKIE = "unibot_huawei_oauth"
 
 
 def create_auth_router() -> APIRouter:
@@ -28,6 +34,10 @@ def create_auth_router() -> APIRouter:
             auth_required=bool(request.app.state.auth_enforced),
             registration_enabled=app_settings.auth_registration_enabled,
             github_enabled=app_settings.github_oauth_enabled,
+            huawei_enabled=app_settings.huawei_oauth_enabled,
+            google_enabled=app_settings.google_oauth_enabled,
+            microsoft_enabled=app_settings.microsoft_oauth_enabled,
+            apple_enabled=app_settings.apple_oauth_enabled,
         )
 
     @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
@@ -105,7 +115,125 @@ def create_auth_router() -> APIRouter:
         _set_session_cookie(request, response, auth(request).issue_session(user))
         return response
 
+    @router.get("/huawei")
+    async def huawei_login(request: Request, next_path: str = Query(default="/chat", alias="next")) -> Response:
+        authorization_url, oauth_cookie = auth(request).create_huawei_authorization(next_path=next_path)
+        response = RedirectResponse(authorization_url, status_code=status.HTTP_302_FOUND)
+        response.set_cookie(
+            HUAWEI_OAUTH_COOKIE,
+            oauth_cookie,
+            max_age=600,
+            path="/",
+            secure=settings(request).auth_cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
+    @router.get("/huawei/callback")
+    async def huawei_callback(
+        request: Request,
+        code: str | None = None,
+        state_value: str | None = Query(default=None, alias="state"),
+        error: str | None = None,
+    ) -> Response:
+        if error or not code or not state_value:
+            raise PlatformError(
+                "AUTHENTICATION_FAILED",
+                f"Huawei OAuth was not completed: {error or 'missing callback parameters'}",
+                status_code=401,
+                source="auth",
+                user_message="华为登录未完成。",
+            )
+        user, next_path = await auth(request).authenticate_huawei(
+            code=code,
+            state=state_value,
+            oauth_cookie=request.cookies.get(HUAWEI_OAUTH_COOKIE),
+        )
+        response = RedirectResponse(
+            f"{settings(request).frontend_base_url.rstrip('/')}{next_path}",
+            status_code=status.HTTP_302_FOUND,
+        )
+        response.delete_cookie(HUAWEI_OAUTH_COOKIE, path="/")
+        _set_session_cookie(request, response, auth(request).issue_session(user))
+        return response
+
+    @router.get("/{provider}")
+    async def oidc_login(
+        provider: OidcProvider, request: Request, next_path: str = Query(default="/chat", alias="next")
+    ) -> Response:
+        authorization_url, oauth_cookie = auth(request).oidc.create_authorization(
+            provider, next_path=_safe_next_path(next_path)
+        )
+        response = RedirectResponse(authorization_url, status_code=status.HTTP_302_FOUND)
+        response.set_cookie(
+            f"unibot_{provider}_oauth",
+            oauth_cookie,
+            max_age=600,
+            path="/",
+            secure=settings(request).auth_cookie_secure,
+            httponly=True,
+            samesite="none" if provider == "apple" else "lax",
+        )
+        return response
+
+    @router.get("/{provider}/callback")
+    async def oidc_callback(
+        provider: Literal["google", "microsoft"],
+        request: Request,
+        code: str | None = None,
+        state_value: str | None = Query(default=None, alias="state"),
+        error: str | None = None,
+    ) -> Response:
+        return await _complete_oidc_login(request, provider, code, state_value, error)
+
+    @router.post("/apple/callback")
+    async def apple_callback(
+        request: Request,
+        code: str | None = Form(default=None),
+        state_value: str | None = Form(default=None, alias="state"),
+        error: str | None = Form(default=None),
+        user: str | None = Form(default=None),
+    ) -> Response:
+        return await _complete_oidc_login(request, "apple", code, state_value, error, apple_user=user)
+
     return router
+
+
+async def _complete_oidc_login(
+    request: Request,
+    provider: OidcProvider,
+    code: str | None,
+    state_value: str | None,
+    error: str | None,
+    *,
+    apple_user: str | None = None,
+) -> Response:
+    if error or not code or not state_value:
+        raise PlatformError(
+            "AUTHENTICATION_FAILED",
+            f"{provider} OAuth was not completed",
+            status_code=401,
+            source="auth",
+            user_message=f"{DISPLAY_NAMES[provider]} 登录未完成。",
+        )
+    cookie_name = f"unibot_{provider}_oauth"
+    user, next_path = await auth(request).oidc.authenticate(
+        provider, code=code, state=state_value, oauth_cookie=request.cookies.get(cookie_name), apple_user=apple_user
+    )
+    response = RedirectResponse(
+        f"{settings(request).frontend_base_url.rstrip('/')}{_safe_next_path(next_path)}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    response.delete_cookie(
+        cookie_name,
+        path="/",
+        secure=settings(request).auth_cookie_secure,
+        httponly=True,
+        samesite="none" if provider == "apple" else "lax",
+    )
+    _set_session_cookie(request, response, auth(request).issue_session(user))
+    return response
 
 
 def _user_view(request: Request, user: UserRecord) -> UserView:

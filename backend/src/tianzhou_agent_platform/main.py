@@ -83,6 +83,8 @@ def create_app(
     sandbox_service: SandboxService | None = None,
     vision_http_client: httpx.AsyncClient | None = None,
     github_auth_http_client: httpx.AsyncClient | None = None,
+    huawei_auth_http_client: httpx.AsyncClient | None = None,
+    oidc_auth_http_client: httpx.AsyncClient | None = None,
     enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -263,6 +265,8 @@ def create_app(
         settings=resolved_settings,
         repository=resolved_repository,
         github_http_client=github_auth_http_client,
+        huawei_http_client=huawei_auth_http_client,
+        oidc_http_client=oidc_auth_http_client,
     )
     task_store = (
         MySqlSessionTaskStore(storage_stores.mysql, storage_stores.redis)

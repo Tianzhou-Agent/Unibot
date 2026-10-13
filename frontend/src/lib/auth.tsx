@@ -10,7 +10,7 @@ export interface AuthUser {
   name: string;
   avatar_url: string | null;
   tenant_id: string;
-  providers: Array<"password" | "github">;
+  providers: Array<"password" | "github" | "huawei" | "google" | "microsoft" | "apple">;
   is_admin: boolean;
 }
 
@@ -18,6 +18,10 @@ interface AuthConfig {
   auth_required: boolean;
   registration_enabled: boolean;
   github_enabled: boolean;
+  huawei_enabled: boolean;
+  google_enabled: boolean;
+  microsoft_enabled: boolean;
+  apple_enabled: boolean;
 }
 
 interface AuthResponse {
@@ -37,6 +41,10 @@ const DEFAULT_CONFIG: AuthConfig = {
   auth_required: false,
   registration_enabled: true,
   github_enabled: false,
+  huawei_enabled: false,
+  google_enabled: false,
+  microsoft_enabled: false,
+  apple_enabled: false,
 };
 
 const LEGACY_USER: AuthUser = {

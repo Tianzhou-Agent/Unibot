@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any, Iterable
 from uuid import uuid4
 
-from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -122,6 +122,11 @@ class InMemoryRepository:
                 raise email_registered()
             if user.github_id and any(item.github_id == user.github_id for item in self._users.values()):
                 raise github_already_linked()
+            if user.huawei_id and any(item.huawei_id == user.huawei_id for item in self._users.values()):
+                raise huawei_already_linked()
+            for provider, identity in user.oidc_identities.items():
+                if any(item.oidc_identities.get(provider) == identity for item in self._users.values()):
+                    raise oidc_already_linked(provider)
             self._users[user.id] = user
             await self._save_record(USERS_RESOURCE, user.id, user)
             return self._copy(user)
@@ -300,6 +305,38 @@ class InMemoryRepository:
                 )
             else:
                 user = relinked_github_user(user, github_login=github_login, name=name, avatar_url=avatar_url)
+            self._users[user.id] = user
+            await self._save_record(USERS_RESOURCE, user.id, user)
+            return self._copy(user)
+
+    async def upsert_huawei_user(self, *, huawei_id: str, email: str, name: str) -> UserRecord:
+        email = normalized_email(email)
+        async with self._lock:
+            user = next((item for item in self._users.values() if item.huawei_id == huawei_id), None)
+            if user is None:
+                if any(normalized_email(str(item.email)) == email for item in self._users.values()):
+                    raise linked_email_registered("Huawei")
+                user = new_huawei_user(huawei_id=huawei_id, email=email, name=name)
+            else:
+                user = relinked_huawei_user(user, name=name)
+            self._users[user.id] = user
+            await self._save_record(USERS_RESOURCE, user.id, user)
+            return self._copy(user)
+
+    async def upsert_oidc_user(
+        self, *, provider: OidcProvider, identity: str, email: str, name: str | None, avatar_url: str | None
+    ) -> UserRecord:
+        email = normalized_email(email)
+        async with self._lock:
+            user = next(
+                (item for item in self._users.values() if item.oidc_identities.get(provider) == identity), None
+            )
+            if user is None:
+                if any(normalized_email(str(item.email)) == email for item in self._users.values()):
+                    raise linked_email_registered(provider)
+                user = new_oidc_user(provider=provider, identity=identity, email=email, name=name, avatar_url=avatar_url)
+            else:
+                user = relinked_oidc_user(user, name=name, avatar_url=avatar_url)
             self._users[user.id] = user
             await self._save_record(USERS_RESOURCE, user.id, user)
             return self._copy(user)
@@ -1844,6 +1881,58 @@ def github_email_registered() -> PlatformError:
         status_code=409,
         source="auth",
         user_message="该邮箱已有账户，请先使用邮箱登录。",
+    )
+
+
+def huawei_already_linked() -> PlatformError:
+    return PlatformError(
+        "CONFLICT",
+        "This Huawei account is already linked",
+        status_code=409,
+        source="auth",
+        user_message="该华为账号已绑定其他用户。",
+    )
+
+
+def oidc_already_linked(provider: str) -> PlatformError:
+    return conflict(f"This {provider} account is already linked")
+
+
+def linked_email_registered(provider: str) -> PlatformError:
+    """A first sign-in through ``provider`` whose email already has an account."""
+    return PlatformError(
+        "CONFLICT",
+        f"The {provider} email already belongs to an existing account",
+        status_code=409,
+        source="auth",
+        user_message="该邮箱已有账户，请使用原登录方式。",
+    )
+
+
+def new_huawei_user(*, huawei_id: str, email: str, name: str) -> UserRecord:
+    return UserRecord(id=f"user_{uuid4().hex}", email=email, name=name, huawei_id=huawei_id)
+
+
+def relinked_huawei_user(user: UserRecord, *, name: str) -> UserRecord:
+    return user.model_copy(update={"name": name, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def new_oidc_user(
+    *, provider: OidcProvider, identity: str, email: str, name: str | None, avatar_url: str | None
+) -> UserRecord:
+    return UserRecord(
+        id=f"user_{uuid4().hex}",
+        email=email,
+        name=name or f"{provider.capitalize()} user",
+        avatar_url=avatar_url,
+        oidc_identities={provider: identity},
+    )
+
+
+def relinked_oidc_user(user: UserRecord, *, name: str | None, avatar_url: str | None) -> UserRecord:
+    return user.model_copy(
+        update={"name": name or user.name, "avatar_url": avatar_url or user.avatar_url, "updated_at": datetime.now(UTC)},
+        deep=True,
     )
 
 

@@ -93,6 +93,8 @@ Each step is its own PR, with an Alembic revision when the schema changes.
 
 Known limits after step 5: the per-actor caps (20 model providers, 500 memories) and memory de-duplication read before inserting, so simultaneous creates on different replicas can exceed a cap by a few or store one duplicate memory. Making them exact needs a per-actor lock row; not done because the cost of either outcome is small.
 
+Sign-in through Google, Microsoft and Apple (added on main in #37) keeps its identities in the `oidc_identities` JSON column, which carries no unique key; the account's email, which is unique, stops concurrent first sign-ins from creating two users. Huawei ids have a unique key like GitHub ids (migration `0006`). A column or table per external identity would make the guarantee independent of the email.
+
 Follow-up outside this plan: `GET /conversations` and the admin conversation endpoints return every conversation with its full message history. Step 2 loads those messages in one batched query, but the endpoints should page and return summaries without messages.
 
 ## 7. Testing
