@@ -38,7 +38,8 @@ S256 PKCE；仅申请读取验证邮箱所需的 `user:email` scope。每次登�
 
 ## 华为 Uniportal OAuth
 
-按 Nexent 的华为适配协议接入内部 Uniportal。在 Uniportal 注册应用后，将回调地址设置为
+按 [Nexent 的华为适配协议](https://github.com/ModelEngine-Group/nexent/blob/0fa09c1d767b0419d4c42a3e6a5f172f2723ec1b/backend/consts/oauth_providers.py)接入内部 Uniportal。
+在 Uniportal 注册应用后，将回调地址设置为
 `http://127.0.0.1:5173/api/auth/huawei/callback`，并配置：
 
 ```dotenv
@@ -59,9 +60,14 @@ UNIBOT_FRONTEND_BASE_URL=http://127.0.0.1:5173
 授权使用随机 `state` 和 10 分钟有效的签名 HttpOnly Cookie，回调成功后清除授权 Cookie，
 签发与其他登录方式相同的会话。访问令牌不会持久化；同邮箱已有账户时拒绝自动合并。
 
-后端也接受 Nexent 的 `UNIPORTAL_URL`、`HUAWEI_OAUTH_CLIENT_ID`、
-`HUAWEI_OAUTH_CLIENT_SECRET`，对应的 `UNIBOT_*` 变量优先。Docker 部署请使用示例中的
-`UNIBOT_*` 变量，Compose 会将它们传入后端容器。
+本地开发将以上配置写入 `backend/.env`；Docker Compose 部署写入项目根目录 `.env`；
+飞牛部署写入 `deploy/fnos/.env`。也可以直接注入进程环境变量，环境变量优先于后端 dotenv 文件。
+这些 `.env` 文件均被 Git 忽略，提交的 `.env.example` 只包含空值和配置示例；密钥仅由后端读取。
+
+后端及 Docker Compose 都接受 Nexent 的 `UNIPORTAL_URL`、`HUAWEI_OAUTH_CLIENT_ID`、
+`HUAWEI_OAUTH_CLIENT_SECRET`。容器部署中，非空的 `UNIBOT_*` 变量优先，留空时回退到 Nexent 名称；
+本地 dotenv 中的空值也按未设置处理，可直接在模板中追加 Nexent 别名。回调地址仍通过
+`UNIBOT_HUAWEI_CALLBACK_URL` 配置，不能沿用 Nexent 的 `/api/user/oauth/callback` 路径。
 
 内部证书可通过 `UNIBOT_HUAWEI_CA_BUNDLE=/path/to/internal-ca.pem` 配置。默认验证 TLS 证书；
 `UNIBOT_HUAWEI_SSL_VERIFY=false` 可用于内部联调，CA bundle 配置优先于该开关。
@@ -69,8 +75,8 @@ UNIBOT_FRONTEND_BASE_URL=http://127.0.0.1:5173
 
 生产回调地址需要改为实际站点的 `/api/auth/huawei/callback`；若前端部署在 `/superbot/`，
 则回调为 `/superbot/api/auth/huawei/callback`，且 `UNIBOT_FRONTEND_BASE_URL` 也应包含 `/superbot`。
-首次升级启动会自动为现有 `unibot_users` 表添加可空的 `huawei_id` 字段，数据库用户需要
-`ALTER` 权限。全新数据库直接按新结构建表。
+`huawei_id`、`oidc_identities` 字段及华为身份唯一索引随后端启动自动建表；表结构变化时后端会删除并重建全部业务表，
+已有数据全部丢失，详见[容器化部署 · 数据库表结构](container-deployment.md#数据库表结构)。
 
 ## Google、Microsoft、Apple 登录
 
@@ -157,7 +163,7 @@ print(secret)
 并将 `UNIBOT_FRONTEND_BASE_URL` 设置为 `https://unibot.example.com/superbot`。
 Docker 和飞牛部署的环境变量示例已包含上述配置。Apple 在飞牛部署中同样需要 HTTPS 反向代理。
 
-旧数据库启动时自动添加可空的 `oidc_identities` JSON 字段；原用户的空值按未绑定身份处理。
+旧数据库由 Alembic 版本 `0006` 补齐可空的 `oidc_identities` JSON 字段；原用户的空值按未绑定身份处理。
 数据库用户需要 `ALTER` 权限。新表直接使用新结构，Redis 锁协调跨节点账户创建和登录。
 
 ## 生产和多节点部署

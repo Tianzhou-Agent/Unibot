@@ -12,6 +12,7 @@ from uuid import uuid4
 from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
+from tianzhou_agent_platform.aina.mcp.models import McpServerRecord
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -52,6 +53,7 @@ WORKSPACES_RESOURCE = "workspaces"
 CONVERSATIONS_RESOURCE = "conversations"
 MEMORIES_RESOURCE = "memories"
 TOOLS_RESOURCE = "tools"
+MCP_SERVERS_RESOURCE = "mcp_servers"
 SKILLS_RESOURCE = "skills"
 AINAS_RESOURCE = "ainas"
 AINA_PROJECTS_RESOURCE = "aina_projects"
@@ -86,6 +88,7 @@ class InMemoryRepository:
         self._workspaces: dict[str, Workspace] = {}
         self._conversations: dict[str, Conversation] = {}
         self._tools: dict[str, ToolRecord] = {}
+        self._mcp_servers: dict[str, McpServerRecord] = {}
         self._skills: dict[str, SkillRecord] = {}
         self._ainas: dict[str, AinaRecord] = {}
         self._aina_projects: dict[str, AinaProjectRecord] = {}
@@ -1089,6 +1092,39 @@ class InMemoryRepository:
             if self._tools.pop(tool_id, None) is None:
                 raise not_found("Tool", tool_id)
             await self._delete_record(TOOLS_RESOURCE, tool_id)
+
+    async def register_mcp_server(self, server: McpServerRecord) -> McpServerRecord:
+        async with self._lock:
+            if server.server_id in self._mcp_servers:
+                raise conflict(f"MCP server {server.server_id!r} is already registered")
+            self._mcp_servers[server.server_id] = server
+            await self._save_record(MCP_SERVERS_RESOURCE, server.server_id, server)
+        return self._copy(server)
+
+    async def replace_mcp_server(self, server: McpServerRecord) -> McpServerRecord:
+        async with self._lock:
+            if server.server_id not in self._mcp_servers:
+                raise not_found("MCP server", server.server_id)
+            self._mcp_servers[server.server_id] = server
+            await self._save_record(MCP_SERVERS_RESOURCE, server.server_id, server)
+        return self._copy(server)
+
+    async def get_mcp_server(self, server_id: str) -> McpServerRecord:
+        async with self._lock:
+            server = self._mcp_servers.get(server_id)
+            if server is None:
+                raise not_found("MCP server", server_id)
+            return self._copy(server)
+
+    async def list_mcp_servers(self) -> list[McpServerRecord]:
+        async with self._lock:
+            return [self._copy(item) for item in self._mcp_servers.values()]
+
+    async def remove_mcp_server(self, server_id: str) -> None:
+        async with self._lock:
+            if self._mcp_servers.pop(server_id, None) is None:
+                raise not_found("MCP server", server_id)
+            await self._delete_record(MCP_SERVERS_RESOURCE, server_id)
 
     async def register_skill(self, skill: SkillRecord) -> SkillRecord:
         async with self._lock:

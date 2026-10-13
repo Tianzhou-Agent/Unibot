@@ -18,6 +18,7 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
+from tianzhou_agent_platform.aina.mcp.client import McpCapabilityClient
 from tianzhou_agent_platform.aina.project_service import (
     AinaProjectArtifactStore,
     AinaProjectService,
@@ -84,6 +85,7 @@ def create_app(
     github_auth_http_client: httpx.AsyncClient | None = None,
     huawei_auth_http_client: httpx.AsyncClient | None = None,
     oidc_auth_http_client: httpx.AsyncClient | None = None,
+    mcp_capability_client: McpCapabilityClient | None = None,
     enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -244,6 +246,7 @@ def create_app(
         managed_runtime=managed_aina_runtime,
         enforce_destination_policy=enforce_auth,
     )
+    mcp_client = mcp_capability_client or McpCapabilityClient(credentials=resolved_settings.mcp_credentials)
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
     vision_client = VisionClient(
@@ -354,6 +357,7 @@ def create_app(
     app.state.conversation_service = conversation_service
     app.state.model_provider_service = model_provider_service
     app.state.capability_gateway = gateway
+    app.state.mcp_client = mcp_client
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
     app.state.aina_project_service = aina_project_service
@@ -400,6 +404,7 @@ def create_app(
                 repository=resolved_repository,
                 conversations=conversation_service,
                 gateway=gateway,
+                mcp_client=mcp_client,
                 catalog=catalog,
                 prompts=prompts,
                 document_service=resolved_document_service,

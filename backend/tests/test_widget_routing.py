@@ -487,6 +487,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
+        "mcp_tool": 0,
         "remote_aina": 3,
             "builtin_capability": 9,
     }

@@ -301,7 +301,7 @@ class AuthService:
         base_url = self.settings.huawei_oauth_base_url
         client_id = self.settings.huawei_oauth_client_id
         client_secret = self.settings.huawei_oauth_client_secret
-        if not base_url or not client_id or client_secret is None:
+        if not self.settings.huawei_oauth_enabled:
             raise PlatformError(
                 "DEPENDENCY_FAILED",
                 "Huawei OAuth is not configured",
@@ -309,6 +309,7 @@ class AuthService:
                 source="auth",
                 user_message="华为登录尚未配置。",
             )
+        assert base_url and client_id and client_secret
         return base_url.rstrip("/"), client_id, client_secret.get_secret_value()
 
     def _decode_oauth_cookie(self, token: str | None, *, provider: str = "GitHub") -> dict[str, Any]:

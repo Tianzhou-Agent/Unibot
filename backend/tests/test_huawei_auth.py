@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -211,9 +212,11 @@ def test_huawei_rejects_upstream_errors_and_invalid_profiles(failure: str) -> No
 
 
 @pytest.mark.parametrize("missing", ["huawei_oauth_base_url", "huawei_oauth_client_id", "huawei_oauth_client_secret"])
-def test_huawei_requires_all_configuration(missing: str) -> None:
+@pytest.mark.parametrize("empty", [None, ""])
+def test_huawei_requires_all_configuration(missing: str, empty: str | None) -> None:
     settings = _huawei_settings()
-    setattr(settings, missing, None)
+    value = SecretStr(empty) if missing == "huawei_oauth_client_secret" and empty is not None else empty
+    setattr(settings, missing, value)
     app = create_app(settings=settings, enforce_auth=True)
     with TestClient(app) as client:
         assert client.get("/auth/config").json()["huawei_enabled"] is False
@@ -254,7 +257,7 @@ def test_huawei_does_not_auto_link_existing_email() -> None:
 
 def test_huawei_accepts_nexent_environment_names(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("BASE_URL", "CLIENT_ID", "CLIENT_SECRET"):
-        monkeypatch.delenv(f"UNIBOT_HUAWEI_{name}", raising=False)
+        monkeypatch.setenv(f"UNIBOT_HUAWEI_{name}", "")
     monkeypatch.setenv("UNIPORTAL_URL", "https://uniportal.example.com")
     monkeypatch.setenv("HUAWEI_OAUTH_CLIENT_ID", "nexent-client")
     monkeypatch.setenv("HUAWEI_OAUTH_CLIENT_SECRET", "nexent-secret")
@@ -265,3 +268,24 @@ def test_huawei_accepts_nexent_environment_names(monkeypatch: pytest.MonkeyPatch
     assert settings.huawei_oauth_client_secret.get_secret_value() == "nexent-secret"
     monkeypatch.setenv("UNIBOT_HUAWEI_CLIENT_ID", "unibot-client")
     assert AgentSettings(_env_file=None).huawei_oauth_client_id == "unibot-client"
+
+
+def test_huawei_reads_nexent_aliases_from_dotenv_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "UNIBOT_HUAWEI_BASE_URL", "UNIBOT_HUAWEI_CLIENT_ID", "UNIBOT_HUAWEI_CLIENT_SECRET",
+        "UNIPORTAL_URL", "HUAWEI_OAUTH_CLIENT_ID", "HUAWEI_OAUTH_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        'UNIBOT_HUAWEI_BASE_URL=""\nUNIBOT_HUAWEI_CLIENT_ID=""\nUNIBOT_HUAWEI_CLIENT_SECRET=""\n'
+        'UNIPORTAL_URL="https://uniportal.example.com"\nHUAWEI_OAUTH_CLIENT_ID="nexent-client"\n'
+        'HUAWEI_OAUTH_CLIENT_SECRET="nexent-secret"\n',
+        encoding="utf-8",
+    )
+    settings = AgentSettings(_env_file=dotenv)
+    assert settings.huawei_oauth_enabled is True
+    assert settings.huawei_oauth_base_url == "https://uniportal.example.com"
+    assert settings.huawei_oauth_client_id == "nexent-client"
+    assert settings.huawei_oauth_client_secret.get_secret_value() == "nexent-secret"
+    assert "nexent-secret" not in settings.model_dump_json()
