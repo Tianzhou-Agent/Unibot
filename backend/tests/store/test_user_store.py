@@ -82,6 +82,29 @@ async def test_github_sign_in_does_not_take_over_a_local_account() -> None:
     assert error.value.user_message == "该邮箱已有账户，请先使用邮箱登录。"
 
 
+async def test_huawei_identity_is_shared_by_replicas_and_restored_after_restart() -> None:
+    first, second = _replicas()
+    created = await first.upsert_huawei_user(huawei_id="employee-7", email="Employee@Example.com", name="Employee")
+    updated = await second.upsert_huawei_user(huawei_id="employee-7", email="changed@example.com", name="Updated")
+    restarted = PersistentRepository(first.stores)
+
+    assert updated.id == created.id
+    assert updated.huawei_id == "employee-7"
+    assert str(updated.email) == "employee@example.com"
+    assert updated.name == "Updated"
+    assert await restarted.find_user_by_id(created.id) == updated
+    assert len(await restarted.list_users()) == 1
+
+
+async def test_huawei_sign_in_cannot_take_over_a_local_account_on_another_replica() -> None:
+    first, second = _replicas()
+    await first.create_user(_user("local", "employee@example.com"))
+    with pytest.raises(PlatformError) as error:
+        await second.upsert_huawei_user(huawei_id="employee-7", email="EMPLOYEE@example.com", name="Employee")
+    assert error.value.status_code == 409
+    assert (await first.find_user_by_id("local")).huawei_id is None
+
+
 async def test_list_searches_and_pages_newest_first() -> None:
     first, second = _replicas()
     start = datetime(2026, 10, 1, tzinfo=UTC)

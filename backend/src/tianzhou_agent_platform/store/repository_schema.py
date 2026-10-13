@@ -242,6 +242,7 @@ mcp_servers_table = _table(
     Column("name", String(128), nullable=False),
     Column("endpoint", URL, nullable=False),
     Column("authentication", JSON, nullable=False),
+    Column("credential_env", String(128), nullable=True),
     Column("timeout_seconds", Double, nullable=False),
     Column("side_effect_level", STATUS, nullable=False),
     Column("visibility", STATUS, nullable=False),

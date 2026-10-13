@@ -53,6 +53,10 @@ class AgentSettings(BaseSettings):
         gt=0,
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_TIMEOUT_SECONDS", "capability_timeout_seconds"),
     )
+    mcp_credentials: dict[str, SecretStr] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("UNIBOT_MCP_CREDENTIALS", "mcp_credentials"),
+    )
     capability_allowed_origins: str = Field(
         default="",
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_ALLOWED_ORIGINS", "capability_allowed_origins"),

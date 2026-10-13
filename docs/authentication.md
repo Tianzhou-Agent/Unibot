@@ -75,8 +75,9 @@ UNIBOT_FRONTEND_BASE_URL=http://127.0.0.1:5173
 
 生产回调地址需要改为实际站点的 `/api/auth/huawei/callback`；若前端部署在 `/superbot/`，
 则回调为 `/superbot/api/auth/huawei/callback`，且 `UNIBOT_FRONTEND_BASE_URL` 也应包含 `/superbot`。
-首次升级启动会自动为现有 `unibot_users` 表添加可空的 `huawei_id` 字段，数据库用户需要
-`ALTER` 权限。全新数据库直接按新结构建表。
+部署启动前由 `tianzhou-agent-platform-migrate` 执行 Alembic 迁移；版本 `0006` 为旧数据库补齐
+`huawei_id`、`oidc_identities` 字段及华为身份唯一索引。Compose 的 `migrate` 服务会先完成升级，
+后端确认数据库版本与当前代码一致后才启动。数据库迁移用户需要 `ALTER` 权限。
 
 ## Google、Microsoft、Apple 登录
 
@@ -163,7 +164,7 @@ print(secret)
 并将 `UNIBOT_FRONTEND_BASE_URL` 设置为 `https://unibot.example.com/superbot`。
 Docker 和飞牛部署的环境变量示例已包含上述配置。Apple 在飞牛部署中同样需要 HTTPS 反向代理。
 
-旧数据库启动时自动添加可空的 `oidc_identities` JSON 字段；原用户的空值按未绑定身份处理。
+旧数据库由 Alembic 版本 `0006` 补齐可空的 `oidc_identities` JSON 字段；原用户的空值按未绑定身份处理。
 数据库用户需要 `ALTER` 权限。新表直接使用新结构，Redis 锁协调跨节点账户创建和登录。
 
 ## 生产和多节点部署

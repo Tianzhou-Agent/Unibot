@@ -9,8 +9,14 @@ import pytest
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+from tianzhou_agent_platform.aina.mcp.client import McpCapabilityClient
 from tianzhou_agent_platform.aina.mcp.models import McpServerRecord, McpToolDescriptor
+from tianzhou_agent_platform.api.capabilities import create_capability_router
+from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.core.errors import PlatformError
@@ -79,6 +85,39 @@ async def test_concurrent_mcp_registration_has_one_shared_winner() -> None:
     errors = [item for item in results if isinstance(item, PlatformError)]
     assert len(errors) == 1 and errors[0].code == "CONFLICT"
     assert len(await second.list_mcp_servers()) == 1
+
+
+async def test_mcp_sql_round_trip_keeps_only_credential_reference() -> None:
+    first, second = _replicas()
+    server = McpServerRecord.model_validate({
+        **_server().model_dump(mode="json"),
+        "authentication": {"type": "bearer", "credential": "transient-secret"},
+        "credential_env": "MCP_CALCULATOR_TOKEN",
+    })
+    await first.register_mcp_server(server)
+    restored = await second.get_mcp_server(server.server_id)
+    assert restored.credential_env == "MCP_CALCULATOR_TOKEN"
+    assert restored.authentication.credential is None
+    assert "transient-secret" not in restored.model_dump_json()
+    client = McpCapabilityClient(credentials={"MCP_CALCULATOR_TOKEN": SecretStr("configured-secret")})
+    assert client._headers(restored) == {"Authorization": "Bearer configured-secret"}
+
+
+def test_persistent_mcp_api_rejects_raw_only_credentials_before_discovery() -> None:
+    first, _second = _replicas()
+    app = FastAPI()
+    app.state.repository = first
+    app.state.auth_enforced = False
+    app.include_router(create_capability_router())
+    install_exception_handlers(app)
+    with TestClient(app) as client:
+        response = client.post("/mcp-servers", json={
+            "server_id": "secure", "name": "Secure", "endpoint": "https://mcp.invalid/mcp",
+            "authentication": {"type": "bearer", "credential": "transient-secret"},
+        })
+    assert response.status_code == 422
+    assert "credential_env" in response.json()["error"]["message"]
+    assert "transient-secret" not in response.text
 
 
 def test_mcp_migration_creates_the_record_schema_and_preserves_existing_table() -> None:

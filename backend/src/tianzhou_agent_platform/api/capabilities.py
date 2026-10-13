@@ -20,6 +20,7 @@ from tianzhou_agent_platform.api.dependencies import (
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.services.platform_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
+from tianzhou_agent_platform.store.repository import PersistentRepository
 
 
 def create_capability_router() -> APIRouter:
@@ -57,11 +58,24 @@ def create_capability_router() -> APIRouter:
     @router.post("/mcp-servers", response_model=McpServerRecord, status_code=status.HTTP_201_CREATED)
     async def register_mcp_server(payload: McpServerCreate, request: Request) -> McpServerRecord:
         require_platform_admin(request)
+        data_repository = repository(request)
+        if (
+            isinstance(data_repository, PersistentRepository)
+            and payload.authentication.type != "none"
+            and not payload.credential_env
+        ):
+            raise PlatformError(
+                "INVALID_REQUEST",
+                "Persistent MCP authentication requires credential_env; configure the secret in environment "
+                "variables or UNIBOT_MCP_CREDENTIALS",
+                status_code=422,
+                source="mcp",
+            )
         gateway(request).require_approved_destination(str(payload.endpoint))
         discovered = await mcp_client(request).discover(payload)
         _validate_mcp_tools(discovered)
         actor = request_actor(request)
-        return await repository(request).register_mcp_server(
+        return await data_repository.register_mcp_server(
             discovered.model_copy(update={"owner_user_id": actor.user_id, "tenant_id": actor.tenant_id})
         )
 

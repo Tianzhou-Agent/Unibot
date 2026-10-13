@@ -256,7 +256,7 @@ def create_app(
         managed_runtime=managed_aina_runtime,
         enforce_destination_policy=enforce_auth,
     )
-    mcp_client = mcp_capability_client or McpCapabilityClient()
+    mcp_client = mcp_capability_client or McpCapabilityClient(credentials=resolved_settings.mcp_credentials)
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
     vision_client = VisionClient(

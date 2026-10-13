@@ -29,7 +29,7 @@ const initialForm = {
   endpoint: "",
   authentication_type: "none" as AuthenticationType,
   header_name: "Authorization",
-  credential: "",
+  credential_env: "",
   side_effect_level: "low" as "none" | "low" | "high",
 };
 
@@ -67,13 +67,13 @@ export function McpServerSettings() {
         : {
             type: form.authentication_type,
             header_name: form.header_name,
-            credential: form.credential,
           };
       const created = await api.post<McpServerRecord>("/mcp-servers", {
         server_id: form.server_id,
         name: form.name,
         endpoint: form.endpoint,
         authentication,
+        credential_env: form.authentication_type === "none" ? null : form.credential_env,
         side_effect_level: form.side_effect_level,
       });
       setServers((current) => [...current, created]);
@@ -156,7 +156,7 @@ export function McpServerSettings() {
             {form.authentication_type !== "none" ? (
               <>
                 <Field label="Header"><input required value={form.header_name} onChange={(event) => setForm({ ...form, header_name: event.target.value })} className="input h-9 font-mono" /></Field>
-                <Field label="凭据"><input required type="password" value={form.credential} onChange={(event) => setForm({ ...form, credential: event.target.value })} className="input h-9" autoComplete="new-password" /></Field>
+                <Field label="环境变量或凭据引用名"><input required pattern="[A-Za-z_][A-Za-z0-9_]*" value={form.credential_env} onChange={(event) => setForm({ ...form, credential_env: event.target.value })} className="input h-9 font-mono" placeholder="MCP_CALCULATOR_TOKEN" /></Field>
               </>
             ) : null}
           </div>

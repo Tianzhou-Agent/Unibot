@@ -7,6 +7,7 @@ Revises: 0006
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
@@ -20,12 +21,13 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     timestamp = sa.DateTime(timezone=True).with_variant(mysql.DATETIME(fsp=6), "mysql")
-    columns = (
+    columns: tuple[sa.Column[Any], ...] = (
         sa.Column("id", sa.String(length=255), nullable=False),
         sa.Column("server_id", sa.String(length=128), nullable=False),
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("endpoint", sa.String(length=2083), nullable=False),
         sa.Column("authentication", sa.JSON(), nullable=False),
+        sa.Column("credential_env", sa.String(length=128), nullable=True),
         sa.Column("timeout_seconds", sa.Double(), nullable=False),
         sa.Column("side_effect_level", sa.String(length=32), nullable=False),
         sa.Column("visibility", sa.String(length=32), nullable=False),
@@ -44,9 +46,11 @@ def upgrade() -> None:
     inspector = sa.inspect(op.get_bind())
     if inspector.has_table("unibot_mcp_servers"):
         existing = {column["name"] for column in inspector.get_columns("unibot_mcp_servers")}
-        missing = {column.name for column in columns} - existing
+        missing = {column.name for column in columns} - existing - {"credential_env"}
         if missing:
             raise RuntimeError(f"The existing MCP registry is missing columns: {sorted(missing)}")
+        if "credential_env" not in existing:
+            op.add_column("unibot_mcp_servers", sa.Column("credential_env", sa.String(length=128), nullable=True))
         return
     op.create_table("unibot_mcp_servers", *columns, sa.PrimaryKeyConstraint("id"))
 

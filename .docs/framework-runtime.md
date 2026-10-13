@@ -68,3 +68,13 @@ MySQL 中的 AINA 任务和执行历史仍是业务事实来源。这个设计�
 ```
 
 MCP Server 在设置页独立配置，不需要包装成 AINA。MCP 工具的 `destructiveHint` 或 Server 的高风险级别会进入现有人工审批流程。
+
+认证凭据由后端环境配置注入，注册表仅保存 `credential_env` 引用。例如，在 `backend/.env`（容器部署使用根目录 `.env`）配置：
+
+```dotenv
+UNIBOT_MCP_CREDENTIALS='{"MCP_SERVER_TOKEN":"your-token"}'
+```
+
+设置页选择 Bearer 或 API Key 认证并填写凭据引用 `MCP_SERVER_TOKEN`。也可将同名变量直接注入后端进程环境；进程环境优先于上述映射。
+Docker Compose 会传递 `UNIBOT_MCP_CREDENTIALS`，所以本地与生产可以共用同一套引用配置。
+MCP 注册记录不保存密钥，SQL 存储下不接受仅随注册请求传入、重启后无法恢复的临时密钥。

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from time import perf_counter
 from typing import Any, AsyncIterator
@@ -7,6 +9,7 @@ from typing import Any, AsyncIterator
 import httpx2
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
+from pydantic import SecretStr
 
 from tianzhou_agent_platform.aina.mcp.models import McpServerCreate, McpServerRecord, McpToolDescriptor
 from tianzhou_agent_platform.aina.security.models import Authentication
@@ -15,6 +18,24 @@ from tianzhou_agent_platform.core.errors import PlatformError
 
 class McpCapabilityClient:
     """Official MCP SDK adapter for Streamable HTTP servers."""
+
+    def __init__(self, *, credentials: Mapping[str, SecretStr] | None = None) -> None:
+        self.credentials = credentials or {}
+
+    def _headers(self, server: McpServerCreate) -> dict[str, str]:
+        authentication = server.authentication
+        if authentication.type != "none" and server.credential_env is not None:
+            configured = self.credentials.get(server.credential_env)
+            value = os.environ.get(server.credential_env) or (configured.get_secret_value() if configured is not None else None)
+            if not value:
+                raise PlatformError(
+                    "AUTHENTICATION_FAILED",
+                    f"MCP credential reference {server.credential_env!r} is not configured",
+                    status_code=502,
+                    source="mcp",
+                )
+            authentication = authentication.model_copy(update={"credential": SecretStr(value)})
+        return _authentication_headers(authentication)
 
     async def discover(self, server: McpServerCreate) -> McpServerRecord:
         try:
@@ -103,7 +124,7 @@ class McpCapabilityClient:
 
     @asynccontextmanager
     async def _connect(self, server: McpServerCreate) -> AsyncIterator[Client]:
-        headers = _authentication_headers(server.authentication)
+        headers = self._headers(server)
         timeout = httpx2.Timeout(server.timeout_seconds)
         async with httpx2.AsyncClient(
             headers=headers,

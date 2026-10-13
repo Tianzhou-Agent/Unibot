@@ -12,6 +12,7 @@ class McpServerCreate(StrictModel):
     name: str = Field(min_length=1, max_length=128)
     endpoint: AnyHttpUrl
     authentication: Authentication = Field(default_factory=Authentication)
+    credential_env: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     side_effect_level: Literal["none", "low", "high"] = "low"
     visibility: Literal["public", "private", "tenant"] = "public"
