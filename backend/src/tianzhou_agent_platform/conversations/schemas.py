@@ -76,3 +76,4 @@ class ChatResponse(StrictModel):
     usage: Usage = Field(default_factory=Usage)
     approval: ApprovalRecord | None = None
     widgets: list[WidgetDefinition] = Field(default_factory=list)
+    opened_app_id: str | None = Field(default=None, exclude_if=lambda value: value is None)

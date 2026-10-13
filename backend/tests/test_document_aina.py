@@ -322,7 +322,7 @@ def test_document_lookup_activates_scope_then_searches_without_opening_canvas(tm
     assert "收藏.md" in tool_result["content"]
     assert "这里保存了一首古诗" in tool_result["content"]
     assert "旅行.md" not in tool_result["content"]
-    assert not any(event["target_id"] == "open_aina" for event in trace["events"])
+    assert not any(event["target_id"] == "open_app" for event in trace["events"])
     assert any(
         event["kind"] == "builtin.completed" and event["target_id"] == "document.search"
         for event in trace["events"]
@@ -900,7 +900,7 @@ def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_pat
     assert response.status_code == 200
     assert len(llm.calls) == 2
     assert len(llm.calls[0]["tools"]) == 12
-    assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
+    assert any(item["function"]["name"].startswith("builtin_open_app_") for item in llm.calls[0]["tools"])
     resolution = next(
         event
         for event in trace["events"]

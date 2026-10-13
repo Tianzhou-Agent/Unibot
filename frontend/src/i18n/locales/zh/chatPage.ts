@@ -13,6 +13,7 @@ export default {
     cancelling: "正在取消调用…",
   },
   newConversation: "新对话",
+  loadingConversation: "正在加载对话",
   canvasShow: "显示应用面板",
   canvasHide: "隐藏应用面板",
   viewObsAria: "查看当前对话观测数据",
@@ -22,6 +23,8 @@ export default {
   deleteNote: "删除后会从列表隐藏，你可以立即恢复。",
   confirmDelete: "确认删除",
   failure: {
+    title: "处理失败",
+    type: "错误",
     capability: "能力调用失败：{{name}} · {{error}}",
     call: "调用失败：{{error}}",
   },

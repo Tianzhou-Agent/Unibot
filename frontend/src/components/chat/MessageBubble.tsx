@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Check, Copy, Share2, Trash2, Paperclip, ArrowUp, X } from "lucide-react";
+import { Check, Copy, Paperclip, ArrowUp, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { classNames } from "@/lib/utils";
 import type { ChatMessage, FileChip, MessageBlock } from "@/types";
@@ -141,12 +141,6 @@ function AgentActions({ message, conversationId }: { message: ChatMessage; conve
         onClick={() => void copyMessage()}
         disabled={!copyText || copyState === "copying"}
       />
-      <ActionIcon icon={<Share2 className="w-3.5 h-3.5" />} label={t("message.share")} />
-      <ActionIcon
-        icon={<Trash2 className="w-3.5 h-3.5" />}
-        label={t("message.delete")}
-        tone="danger"
-      />
     </div>
   );
 }
@@ -154,13 +148,11 @@ function AgentActions({ message, conversationId }: { message: ChatMessage; conve
 function ActionIcon({
   icon,
   label,
-  tone = "default",
   onClick,
   disabled,
 }: {
   icon: React.ReactNode;
   label: string;
-  tone?: "default" | "danger";
   onClick?: () => void;
   disabled?: boolean;
 }) {
@@ -170,10 +162,7 @@ function ActionIcon({
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className={classNames(
-        "w-6 h-6 rounded-md hover:bg-line/50 flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-40",
-        tone === "danger" ? "text-danger" : "text-ink-muted",
-      )}
+      className="w-6 h-6 rounded-md hover:bg-app-soft transition-colors flex items-center justify-center text-ink-muted disabled:cursor-not-allowed disabled:opacity-40"
     >
       {icon}
     </button>

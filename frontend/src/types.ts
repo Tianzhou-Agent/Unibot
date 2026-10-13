@@ -442,6 +442,7 @@ export interface ChatResponse {
   usage: { input_tokens: number; output_tokens: number; estimated?: boolean };
   approval?: ApprovalRecord | null;
   widgets: WidgetDefinition[];
+  opened_app_id?: string | null;
 }
 
 export interface AinaCanvasResponse {

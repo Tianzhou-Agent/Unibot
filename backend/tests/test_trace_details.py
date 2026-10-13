@@ -61,7 +61,7 @@ def test_trace_groups_aina_tools_and_keeps_host_tools_standalone() -> None:
     assert {item["id"] for item in discovery["model_scope"]["standalone"]} == {
         "describe_aina",
         "list_app",
-        "open_aina",
+        "open_app",
         "request_clarification",
         "suggest_ainas",
         "task_create",

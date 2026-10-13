@@ -10,7 +10,8 @@ from tianzhou_agent_platform.aina.protocol.models import AinaRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.conversations.models import Conversation
-from tianzhou_agent_platform.services.agent_integration.capabilities import CapabilityRegistry
+from tianzhou_agent_platform.services.agent_integration.capabilities import CapabilityRegistry, function_name
+from tianzhou_agent_platform.services.platform_tools import OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID
 
 
 class SystemPrompts:
@@ -114,12 +115,16 @@ def _platform_tool_guidance() -> str:
         "the user asks to list or discover "
         "applications. Use describe_aina directly for read-only questions about a named AINA's details, skills, "
         "tools, UI, or capabilities; it accepts an exact ID or display name, so do not call list_app first unless "
-        "the target AINA is unknown or ambiguous. Use open_aina only when the user asks to enter, open, or start using a specific "
-        "AINA; never open an AINA merely to inspect or explain it. When the user wants to work on something an "
-        "AINA's UI is built for (e.g. writing a document) without naming the app, call suggest_ainas; you may "
+        "the target AINA is unknown or ambiguous. Use open_app only when the user asks to enter, open, or start using a specific "
+        f"AINA, using the exact function name {function_name('builtin', OPEN_APP_TOOL_ID)}; "
+        "never open an AINA merely to inspect or explain it. When the user wants to work on something an "
+        "AINA's UI is built for (e.g. writing a document) without naming the app, call suggest_ainas using the "
+        f"exact function name {function_name('builtin', SUGGEST_AINAS_TOOL_ID)}; you may "
         "still ask for missing details. If no system skill or tool is needed, answer "
-        "as an ordinary conversation. After open_aina, only confirm that the requested AINA is ready and let the "
-        "navigation widget carry its details. When essential details are missing and guessing would change the "
+        "as an ordinary conversation. After list_app or suggest_ainas, the host shows Suggested apps chips. "
+        "Reply with a short invitation to choose a chip; do not repeat the app names, IDs, descriptions, list "
+        "or table in the reply. After open_app, briefly confirm that the app is open; the canvas opens directly "
+        "without a navigation card. When essential details are missing and guessing would change the "
         "result, call request_clarification to show a host-rendered form. Prefill any values already known from "
         "the conversation. Select an AINA entrypoint only when the user wants that AINA to perform work; do not "
         "select an AINA merely to list, inspect, or open applications, and never combine an AINA entrypoint with "

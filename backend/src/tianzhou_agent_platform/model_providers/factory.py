@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import openai
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -34,13 +35,23 @@ class UnibotChatOpenAI(ChatOpenAI):
     """ChatOpenAI with a wall-clock deadline per call that keeps the provider's ``reasoning_content``.
 
     The base class drops this non-standard field (e.g. MiMo, DeepSeek, Qwen thinking mode); here it lands in
-    ``additional_kwargs["reasoning_content"]`` so the chat stream can show it. It is never sent back to the provider.
+    ``additional_kwargs["reasoning_content"]`` so the chat stream can show it. DeepSeek requires it to be replayed
+    in subsequent requests that use tools; other providers keep their standard message format.
     A call past ``call_deadline_seconds`` fails with ``openai.APITimeoutError``, the provider's own timeout error;
     a timeout before the first chunk is retried ``silent_timeout_retries`` times.
     """
 
     call_deadline_seconds: float = CALL_DEADLINE_SECONDS
     silent_timeout_retries: int = SILENT_TIMEOUT_RETRIES
+
+    def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
+        messages = self._convert_input(input_).to_messages()
+        payload = super()._get_request_payload(messages, stop=stop, **kwargs)
+        if self.model_name.lower().startswith("deepseek") and "messages" in payload:
+            for message, wire in zip(messages, payload["messages"], strict=True):
+                if isinstance(message, AIMessage):
+                    wire[REASONING_KEY] = message.additional_kwargs.get(REASONING_KEY) or ""
+        return payload
 
     async def _astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
         for attempt in range(self.silent_timeout_retries + 1):

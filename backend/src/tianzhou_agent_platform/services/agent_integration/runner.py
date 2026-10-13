@@ -706,6 +706,7 @@ class AgentRunner:
             usage=usage,
             approval=approval,
             widgets=run.scope.widgets,
+            opened_app_id=run.opened_app_id,
         )
         await run.push(
             "final.response",

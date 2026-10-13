@@ -91,6 +91,32 @@ def test_reasoning_content_is_never_sent_back_to_the_provider() -> None:
     assert "reasoning_content" not in payload["messages"][1]
 
 
+def test_deepseek_replays_reasoning_for_tool_calls_and_plain_assistant_messages() -> None:
+    model = create_native_chat_model(model="deepseek-v4-flash", api_key="sk", base_url="https://api.deepseek.com")
+    messages = [
+        HumanMessage(content="hi"),
+        AIMessage(content="Hello", additional_kwargs={"reasoning_content": "Greet."}),
+        HumanMessage(content="Suggest an app"),
+        AIMessage(content="", tool_calls=[{"id": "c1", "name": "suggest", "args": {}}],
+                  additional_kwargs={"reasoning_content": "Choose an app."}),
+        ToolMessage(content="{}", tool_call_id="c1", name="suggest"),
+    ]
+
+    payload = model._get_request_payload(project_scope_history(messages, {"suggest"}), tools=[])
+
+    assert payload["messages"][1]["reasoning_content"] == "Greet."
+    assert payload["messages"][3]["reasoning_content"] == "Choose an app."
+    assert "reasoning_content" not in payload["messages"][4]
+
+
+def test_archive_restores_reasoning_for_deepseek_history() -> None:
+    message = Message(id="m1", role="assistant", content="Hello", reasoning="Greet.")
+
+    restored = archive_to_native(message)
+
+    assert restored.additional_kwargs["reasoning_content"] == "Greet."
+
+
 def test_native_model_from_settings() -> None:
     model = create_model_from_settings(
         model="gpt-test",

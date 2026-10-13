@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { useEffect, useState } from "react";
-import { Check, MessageSquareText, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { MessageSquareText, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { classNames } from "@/lib/utils";
 import { api, apiErrorMessage } from "@/lib/api";
 import type { FeedbackRecord } from "@/types";
@@ -29,7 +29,6 @@ export function MessageFeedback({ messageId, conversationId }: { messageId: stri
   const [editorOpen, setEditorOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [comment, setComment] = useState("");
-  const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -39,7 +38,6 @@ export function MessageFeedback({ messageId, conversationId }: { messageId: stri
       .then((record) => { if (active) setFeedback(record); })
       .catch((reason) => { if (active) setError(apiErrorMessage(reason)); });
     setEditorOpen(false);
-    setSaved(false);
     return () => { active = false; };
   }, [messageId]);
 
@@ -53,8 +51,6 @@ export function MessageFeedback({ messageId, conversationId }: { messageId: stri
           ...next,
         });
         setFeedback(record);
-        setSaved(true);
-        window.setTimeout(() => setSaved(false), 1600);
       } else {
         await api.delete<void>(`/feedback/messages/${encodeURIComponent(messageId)}`);
         setFeedback(null);
@@ -67,13 +63,18 @@ export function MessageFeedback({ messageId, conversationId }: { messageId: stri
   }
 
   function chooseUp() {
-    void persist({ rating: "up", reason: "", comment: "" });
+    void persist(feedback?.rating === "up" ? null : { rating: "up", reason: "", comment: "" });
     setEditorOpen(false);
   }
 
   function openDownEditor() {
-    setReason(feedback?.rating === "down" ? feedback.reason : "");
-    setComment(feedback?.rating === "down" ? feedback.comment : "");
+    if (feedback?.rating === "down") {
+      void persist(null);
+      setEditorOpen(false);
+      return;
+    }
+    setReason("");
+    setComment("");
     setEditorOpen(true);
   }
 
@@ -86,14 +87,13 @@ export function MessageFeedback({ messageId, conversationId }: { messageId: stri
   return (
     <div className="relative flex items-center gap-1">
       {error ? <span className="mr-1 max-w-40 truncate text-[10px] text-danger" title={error}>{t("failed")}</span> : null}
-      {saved ? <span className="mr-1 inline-flex items-center gap-1 text-[10.5px] font-semibold text-success"><Check className="h-3 w-3" />{t("recorded")}</span> : null}
       <button
         type="button"
         onClick={chooseUp}
         disabled={saving}
         aria-label={t("like", { id: messageId })}
         aria-pressed={feedback?.rating === "up"}
-        className={classNames("flex h-6 w-6 items-center justify-center rounded-md transition-colors", feedback?.rating === "up" ? "bg-success-soft text-success" : "text-ink-muted hover:bg-line/50 hover:text-success")}
+        className={classNames("flex h-6 w-6 items-center justify-center rounded-md transition-colors", feedback?.rating === "up" ? "bg-success-soft text-success" : "text-ink-muted hover:bg-app-soft hover:text-success")}
       >
         <ThumbsUp className="h-3.5 w-3.5" />
       </button>
@@ -103,11 +103,10 @@ export function MessageFeedback({ messageId, conversationId }: { messageId: stri
         disabled={saving}
         aria-label={t("dislike", { id: messageId })}
         aria-pressed={feedback?.rating === "down"}
-        className={classNames("flex h-6 w-6 items-center justify-center rounded-md transition-colors", feedback?.rating === "down" ? "bg-danger-soft text-danger" : "text-ink-muted hover:bg-line/50 hover:text-danger")}
+        className={classNames("flex h-6 w-6 items-center justify-center rounded-md transition-colors", feedback?.rating === "down" ? "bg-danger-soft text-danger" : "text-ink-muted hover:bg-app-soft hover:text-danger")}
       >
         <ThumbsDown className="h-3.5 w-3.5" />
       </button>
-      {feedback ? <button type="button" disabled={saving} onClick={() => void persist(null)} aria-label={t("undoAria", { id: messageId })} className="ml-0.5 text-[10px] font-semibold text-ink-subtle hover:text-ink">{t("undo")}</button> : null}
 
       {editorOpen ? (
         <div role="dialog" aria-label={t("dialogAria")} className="absolute right-0 top-8 z-40 w-[310px] rounded-xl border border-line bg-white p-4 text-left shadow-lg">

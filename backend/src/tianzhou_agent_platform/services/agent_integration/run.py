@@ -36,6 +36,7 @@ class AgentRun:
     # Results of capability calls that returned, by call id. A stop can cancel the tool step before LangGraph saves
     # them, and a finished call must then keep its real result instead of being closed as interrupted.
     finished_tool_results: dict[str, ToolMessage] = field(default_factory=dict)
+    opened_app_id: str | None = None
 
     async def emit(self, event: dict[str, Any]) -> None:
         """Send a live application event to the streaming client, if any."""

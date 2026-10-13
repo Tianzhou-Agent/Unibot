@@ -150,7 +150,8 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
 
     assert response.status_code == 200
     widget = response.json()["widgets"][0]
-    assert widget["kind"] == "app_list"
+    assert widget["kind"] == "aina_chooser"
+    assert widget["title"] == "Suggested apps"
     assert [item["aina_id"] for item in widget["apps"]] == [
         "unibot-code-runner",
         "unibot-memory",
@@ -199,7 +200,7 @@ def test_describe_aina_returns_real_skills_without_opening_canvas(tmp_path: Path
     )
     assert not any(event["target_id"] == "list_app" for event in trace["events"])
     assert not any(
-        event["kind"] == "builtin.completed" and event["target_id"] == "open_aina"
+        event["kind"] == "builtin.completed" and event["target_id"] == "open_app"
         for event in trace["events"]
     )
     assert "do not call list_app first unless the target AINA is unknown or ambiguous" in llm.calls[0]["messages"][0]["content"]
@@ -318,11 +319,11 @@ def test_open_aina_returns_canvas_and_declared_main_widget() -> None:
     assert bound["primary_aina_id"] == "com.example.canvas"
 
 
-def test_open_aina_builtin_returns_navigation_widget_through_agent() -> None:
+def test_open_app_opens_canvas_without_navigation_widget() -> None:
     llm = ScriptedLLM(
         [
             call_first_tool(
-                prefix="builtin_open_aina_",
+                prefix="builtin_open_app_",
                 arguments='{"aina_id":"unibot-memory"}',
             ),
             assistant("Unibot Memory is ready to open."),
@@ -333,29 +334,27 @@ def test_open_aina_builtin_returns_navigation_widget_through_agent() -> None:
             "/chat",
             json={
                 "message": "Open the Unibot Memory application",
-                "capability": "builtin:open_aina",
+                "capability": "builtin:open_app",
             },
         )
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    widget = response.json()["widgets"][0]
-    assert widget["kind"] == "navigation"
-    assert widget["actions"][0]["kind"] == "open_aina"
-    assert widget["actions"][0]["aina_id"] == "unibot-memory"
+    assert response.json()["widgets"] == []
+    assert response.json()["opened_app_id"] == "unibot-memory"
     assert len(llm.calls[0]["tools"]) == 1
-    assert llm.calls[0]["tools"][0]["function"]["name"].startswith("builtin_open_aina_")
+    assert llm.calls[0]["tools"][0]["function"]["name"].startswith("builtin_open_app_")
     assert any(
-        event["kind"] == "builtin.completed" and event["target_id"] == "open_aina"
+        event["kind"] == "builtin.completed" and event["target_id"] == "open_app"
         for event in trace.json()["events"]
     )
 
 
-def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_path: Path) -> None:
+def test_open_document_app_uses_open_app_even_when_documents_is_primary(tmp_path: Path) -> None:
     llm = ScriptedLLM(
         [
             call_first_tool(
-                prefix="builtin_open_aina_",
+                prefix="builtin_open_app_",
                 arguments='{"aina_id":"unibot-documents"}',
             ),
             assistant("文档应用已打开。"),
@@ -380,9 +379,10 @@ def test_open_document_app_uses_open_aina_even_when_documents_is_primary(tmp_pat
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
     assert response.status_code == 200
-    assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-documents"
+    assert response.json()["widgets"] == []
+    assert response.json()["opened_app_id"] == "unibot-documents"
     assert len(llm.calls[0]["tools"]) == 12
-    assert any(item["function"]["name"].startswith("builtin_open_aina_") for item in llm.calls[0]["tools"])
+    assert any(item["function"]["name"].startswith("builtin_open_app_") for item in llm.calls[0]["tools"])
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["details"]["source"] == "unified_entry"
 
@@ -581,23 +581,24 @@ def test_aina_widget_output_is_returned_and_persisted() -> None:
     assert conversation.json()["messages"][-1]["widgets"][0]["markdown"].startswith("## On track")
 
 
-def test_open_aina_accepts_the_advertised_entry_function_name() -> None:
+def test_open_app_accepts_the_advertised_entry_function_name() -> None:
     # Live models sometimes pass the entry function they were shown instead of the AINA id.
     from tianzhou_agent_platform.services.agent_integration.capabilities import function_name as _function_name
 
     llm = ScriptedLLM(
         [
             call_first_tool(
-                prefix="builtin_open_aina_",
+                prefix="builtin_open_app_",
                 arguments=json.dumps({"aina_id": _function_name("aina", "unibot-memory")}),
             ),
             assistant("Opened."),
         ]
     )
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
-        response = client.post("/chat", json={"message": "open memory", "capability": "builtin:open_aina"})
+        response = client.post("/chat", json={"message": "open memory", "capability": "builtin:open_app"})
 
-    assert response.json()["widgets"][0]["actions"][0]["aina_id"] == "unibot-memory"
+    assert response.json()["widgets"] == []
+    assert response.json()["opened_app_id"] == "unibot-memory"
 
 
 def test_suggest_ainas_returns_a_ranked_chooser_without_opening_anything() -> None:
@@ -635,6 +636,28 @@ def test_suggest_ainas_returns_a_ranked_chooser_without_opening_anything() -> No
     assert widget["actions"] == []
     assert bound["active_aina_ids"] == []
     assert "call suggest_ainas" in llm.calls[0]["messages"][0]["content"]
+    from tianzhou_agent_platform.services.agent_integration.capabilities import function_name
+
+    assert function_name("builtin", "suggest_ainas") in llm.calls[0]["messages"][0]["content"]
+
+
+def test_listing_then_suggesting_apps_keeps_only_the_ranked_chips() -> None:
+    llm = ScriptedLLM([
+        call_first_tool(prefix="builtin_list_app_"),
+        call_first_tool(prefix="builtin_suggest_ainas_", arguments=json.dumps({
+            "aina_ids": ["unibot-memory"], "reason": "Keep your notes.",
+        })),
+        assistant("Choose an app below."),
+    ])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        response = client.post("/chat", json={"message": "Suggest an app for my notes"})
+
+    assert response.status_code == 200
+    assert len(response.json()["widgets"]) == 1
+    assert response.json()["widgets"][0]["kind"] == "aina_chooser"
+    assert [app["aina_id"] for app in response.json()["widgets"][0]["apps"]] == ["unibot-memory"]
+    assert "opened_app_id" not in response.json()
+    assert "do not repeat the app names" in llm.calls[0]["messages"][0]["content"]
 
 
 def test_routing_into_an_aina_with_a_ui_offers_to_open_it() -> None:

@@ -19,13 +19,13 @@ from tianzhou_agent_platform.tasks.service import TaskService
 
 LIST_APP_TOOL_ID = "list_app"
 DESCRIBE_AINA_TOOL_ID = "describe_aina"
-OPEN_AINA_TOOL_ID = "open_aina"
+OPEN_APP_TOOL_ID = "open_app"
 SUGGEST_AINAS_TOOL_ID = "suggest_ainas"
 REQUEST_CLARIFICATION_TOOL_ID = "request_clarification"
 PLATFORM_TOOL_IDS = {
     LIST_APP_TOOL_ID,
     DESCRIBE_AINA_TOOL_ID,
-    OPEN_AINA_TOOL_ID,
+    OPEN_APP_TOOL_ID,
     SUGGEST_AINAS_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
 } | TASK_TOOL_IDS
@@ -40,8 +40,8 @@ async def list_app_widget(
     apps = await _available_apps(repository, user_id=user_id, tenant_id=tenant_id)
     return WidgetDefinition(
         id="unibot-app-list",
-        kind="app_list",
-        title="AINA apps",
+        kind="aina_chooser",
+        title="Suggested apps",
         description=f"{len(apps)} apps are available.",
         apps=apps,
     )
@@ -262,10 +262,10 @@ async def invoke_platform_tool(
             user_id=user_id,
             tenant_id=tenant_id,
         ), []
-    if tool_id == OPEN_AINA_TOOL_ID:
+    if tool_id == OPEN_APP_TOOL_ID:
         aina_id = _aina_id_argument(arguments)
         if not aina_id:
-            raise PlatformError("INVALID_REQUEST", "open_aina requires aina_id")
+            raise PlatformError("INVALID_REQUEST", "open_app requires aina_id")
         canvas = await open_aina(
             repository,
             aina_id,
@@ -273,14 +273,7 @@ async def invoke_platform_tool(
             tenant_id=tenant_id,
             conversation_id=conversation_id,
         )
-        widget = WidgetDefinition(
-            id=f"open-{aina_id}",
-            kind="navigation",
-            title=f"Open {canvas.name}",
-            description="The app is ready; you can enter its Canvas.",
-            actions=[WidgetAction(id="open", label="Enter Canvas", kind="open_aina", aina_id=aina_id)],
-        )
-        return canvas.model_dump(mode="json"), [widget]
+        return canvas.model_dump(mode="json"), []
     if tool_id == SUGGEST_AINAS_TOOL_ID:
         raw_ids = arguments.get("aina_ids")
         if not isinstance(raw_ids, list) or not raw_ids:

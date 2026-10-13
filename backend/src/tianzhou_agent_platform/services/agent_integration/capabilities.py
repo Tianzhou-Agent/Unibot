@@ -41,7 +41,7 @@ from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.services.platform_tools import (
     DESCRIBE_AINA_TOOL_ID,
     LIST_APP_TOOL_ID,
-    OPEN_AINA_TOOL_ID,
+    OPEN_APP_TOOL_ID,
     REQUEST_CLARIFICATION_TOOL_ID,
     SUGGEST_AINAS_TOOL_ID,
 )
@@ -490,7 +490,7 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
         LIST_APP_TOOL_ID,
         "List applications",
         (
-            "List all AINA applications in an interactive widget only when the user wants to discover or "
+            "Show all available applications as Suggested apps chips only when the user wants to discover or "
             "choose among applications. Do not use it to resolve a named AINA before describe_aina."
         ),
         {"type": "object", "properties": {}, "additionalProperties": False},
@@ -515,8 +515,8 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
         },
     ),
     (
-        OPEN_AINA_TOOL_ID,
-        "Open AINA",
+        OPEN_APP_TOOL_ID,
+        "Open application",
         (
             "Navigate to a selected AINA's canvas and load its main widget only when the user explicitly asks "
             "to open, enter, or switch to the application UI. Never use this to list, search, inspect, read, "
@@ -539,7 +539,7 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
         "Suggest AINAs",
         (
             "Offer a ranked shortlist of AINAs whose UI fits the user's goal; the user picks which to open. "
-            "Never use it when the user asks to open a named app: call open_aina."
+            "Never use it when the user asks to open a named app: call open_app."
         ),
         {
             "type": "object",
@@ -721,7 +721,7 @@ def aina_entry_description(aina: AinaRecord, *, executable: bool) -> str:
         f"{description}. Activate this built-in capability scope when the user wants work performed in this "
         "domain, including listing, searching, reading, creating, or editing its data. This entrypoint takes no "
         "arguments, does not execute the work itself and does not open the application UI: when the user asks to "
-        "open, enter, launch or show this app, call open_aina instead. Do not use open_aina for data work."
+        "open, enter, launch or show this app, call open_app instead. Do not use open_app for data work."
     )
 
 

@@ -36,6 +36,9 @@ def native_to_wire(message: Any) -> dict[str, Any] | None:
         }
     if isinstance(message, AIMessage):
         item: dict[str, Any] = {"role": "assistant", "content": _text(message)}
+        reasoning = message.additional_kwargs.get(REASONING_KEY)
+        if isinstance(reasoning, str):
+            item[REASONING_KEY] = reasoning
         tool_calls = [
             {
                 "id": call.get("id"),
@@ -90,12 +93,19 @@ def wire_to_native(item: dict[str, Any], *, message_id: str | None = None) -> Ba
                 invalid_tool_calls.append({"name": name, "args": arguments, "id": call.get("id"), "error": str(exc)})
                 continue
         tool_calls.append({"name": name, "args": arguments, "id": call.get("id")})
-    return AIMessage(content=content, tool_calls=tool_calls, invalid_tool_calls=invalid_tool_calls, id=message_id)
+    reasoning = item.get(REASONING_KEY)
+    return AIMessage(
+        content=content, tool_calls=tool_calls, invalid_tool_calls=invalid_tool_calls, id=message_id,
+        additional_kwargs={REASONING_KEY: reasoning} if isinstance(reasoning, str) else {},
+    )
 
 
 def archive_to_native(message: Message) -> BaseMessage:
     """Rebuild working memory from a durable archive record (same ID, so it is never archived twice)."""
-    return wire_to_native(message.provider_message(), message_id=message.id)
+    wire = message.provider_message()
+    if message.role == "assistant" and message.reasoning is not None:
+        wire[REASONING_KEY] = message.reasoning
+    return wire_to_native(wire, message_id=message.id)
 
 
 def project_scope_history(messages: list[Any], visible_names: set[str]) -> list[Any]:

@@ -33,7 +33,7 @@ import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
-import { api, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
+import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
@@ -57,6 +57,7 @@ interface MessageFailure {
   kind: "llm" | "capability";
   name: string;
   error: string;
+  code?: string;
   callId?: string;
 }
 
@@ -74,6 +75,7 @@ export default function ChatModePage() {
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [loading, setLoading] = useState(Boolean(conversationId));
+  const loadingConversation = loading && !conversation;
   const [sending, setSending] = useState(false);
   const [composerVersion, setComposerVersion] = useState(0);
   const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
@@ -83,7 +85,11 @@ export default function ChatModePage() {
   const optimisticBaselineRef = useRef<number | null>(null);
   const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [errorInfo, setErrorInfo] = useState<{ message: string; code: string | null } | null>(null);
+  const error = errorInfo?.message ?? null;
+  const setError = useCallback((message: string | null, code: string | null = null) => {
+    setErrorInfo(message ? { message, code } : null);
+  }, []);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
@@ -180,7 +186,7 @@ export default function ChatModePage() {
         if (span.status !== "failed" && !span.error) continue;
         const err = span.error;
         const message = typeof err === "string" ? err : (err as Record<string, unknown> | null)?.message;
-        push(trace.trace_id, { kind: "capability", name: span.target_id || span.name, error: typeof message === "string" ? message : t("err.capabilityFailed") });
+        push(trace.trace_id, { kind: "capability", name: span.target_id || span.name, error: typeof message === "string" ? message : t("err.capabilityFailed"), code: typeof err?.code === "string" ? err.code : undefined });
       }
     }
     return map;
@@ -192,6 +198,9 @@ export default function ChatModePage() {
   const errorLogHref = error && conversation?.id && errorTraceId
     ? `/obs?sessionId=${encodeURIComponent(conversation.id)}&tab=logs&traceId=${encodeURIComponent(errorTraceId)}`
     : null;
+  const recordedError = traces.find((trace) => trace.trace_id === errorTraceId)?.spans
+    .find((span) => span.kind === "agent" && span.status === "failed")?.error;
+  const errorCode = errorInfo?.code ?? (typeof recordedError?.code === "string" ? recordedError.code : null);
 
   const loadConversation = useCallback(async (id: string, silent = false) => {
     const requestId = ++loadRequestRef.current;
@@ -458,6 +467,7 @@ export default function ChatModePage() {
       && activeWorkspaceIdRef.current === routeWorkspaceId;
     let completion: ChatResponse | null = null;
     let streamFailure: string | null = null;
+    let streamFailureCode: string | null = null;
     try {
       let targetConversation = conversation;
       if (!targetConversation) {
@@ -485,12 +495,13 @@ export default function ChatModePage() {
         if (event.type === "message.completed") completion = event.response;
         if (event.type === "error") {
           streamFailure = event.error?.message ?? event.code ?? t("err.streamFailed");
+          streamFailureCode = event.error?.code ?? event.code ?? null;
         }
         if (!isActiveRun()) return;
         setLiveItems((current) => applyLiveEvent(current, event));
         if (event.type === "approval.required") setActivity(t("activity.awaitingApproval"));
         if (event.type === "error") {
-          setError(streamFailure);
+          setError(streamFailure, streamFailureCode);
         }
       };
       if (text === null) {
@@ -529,13 +540,17 @@ export default function ChatModePage() {
       const openAction = completed.widgets
         .flatMap((widget) => widget.actions)
         .find((action) => action.kind === "open_aina" && action.aina_id);
-      // Suggested apps (aina_chooser) stay as chips under the reply; only an explicit open acts on its own.
-      if (openAction?.aina_id && isActiveRun()) openAinas([openAction.aina_id], completed.conversation_id);
+      const openedAppId = completed.opened_app_id ?? openAction?.aina_id;
+      // Only an explicit open_app call opens the canvas; suggestions remain chips under the reply.
+      if (openedAppId && isActiveRun()) openAinas([openedAppId], completed.conversation_id);
       return true;
     } catch (sendError) {
       if (isActiveRun()) {
         if (runConversationId) await loadConversation(runConversationId, true);
-        if (isActiveRun()) setError(apiErrorMessage(sendError));
+        if (isActiveRun()) {
+          const body = sendError instanceof ApiError ? sendError.body as { error?: { code?: string } } | null : null;
+          setError(apiErrorMessage(sendError), streamFailureCode ?? body?.error?.code ?? null);
+        }
         return Boolean(completion);
       }
     } finally {
@@ -652,6 +667,9 @@ export default function ChatModePage() {
     const user = echoed ?? optimisticUser;
     return user ? [...archived.slice(0, baseline), user] : archived.slice(0, baseline);
   }, [conversation?.messages, optimisticUser, sending]);
+  const hasRecordedRunError = messages.some((message) => (
+    message.role === "user" && message.trace_id === errorTraceId && failuresByTrace.has(message.trace_id ?? "")
+  ));
   const toolResultsByCallId = useMemo(() => new Map(
     messages
       .filter((message) => message.role === "tool" && message.tool_call_id)
@@ -765,11 +783,11 @@ export default function ChatModePage() {
             stretch the document and scrollIntoView scrolls the whole page, dragging the composer up. */}
         <div ref={scrollerRef} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
           <div className="mx-auto max-w-[760px] space-y-7">
-              {loading ? <ChatSkeleton /> : null}
-              {!loading && deleted ? (
+              {loadingConversation ? <ChatSkeleton /> : null}
+              {!loadingConversation && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
               ) : null}
-              {!loading && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
+              {!loadingConversation && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
               {!deleted
                 ? messages.map((message, index) => {
                     if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
@@ -826,7 +844,7 @@ export default function ChatModePage() {
               {conversation?.run_status === "stopped" && !sending && !deleted ? (
                 <StoppedNotice onResume={() => void runTurn(null)} />
               ) : null}
-              {error ? <ErrorNotice message={error} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
+              {error && !hasRecordedRunError ? <ErrorNotice message={error} code={errorCode} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
               {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
               <div ref={endRef} />
             </div>
@@ -834,7 +852,7 @@ export default function ChatModePage() {
           {!deleted ? (
             <ChatComposer
               key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${composerVersion}`}
-              disabled={sending || loading}
+              disabled={sending || loadingConversation}
               running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
@@ -1009,23 +1027,15 @@ function ConversationMessage({
 }
 
 function FailedCallNotice({ conversationId, traceId, failure }: { conversationId: string; traceId: string; failure: MessageFailure }) {
-  const { t } = useTranslation("chatPage");
   const logHref = failure.kind === "capability"
     ? `/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}`
     : `/obs?sessionId=${encodeURIComponent(conversationId)}&tab=logs&traceId=${encodeURIComponent(traceId)}&logId=${encodeURIComponent(failure.callId ?? "")}`;
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2">
-      <AlertTriangle className="h-4 w-4 shrink-0 text-danger" />
-      <span className="min-w-0 flex-1 truncate text-[12px] text-danger-deep">
-        {failure.kind === "capability" ? t("failure.capability", { name: failure.name, error: failure.error }) : t("failure.call", { error: failure.error })}
-      </span>
-      <Link
-        to={logHref}
-        className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline"
-      >
-        {t("viewRawLogs")}
-      </Link>
-    </div>
+    <ErrorNotice
+      message={`${failure.name}: ${failure.error}`}
+      code={failure.code}
+      detailsHref={logHref}
+    />
   );
 }
 
@@ -1057,17 +1067,34 @@ function StoppedNotice({ onResume }: { onResume: () => void }) {
   );
 }
 
-function ErrorNotice({ message, detailsHref, onDismiss }: { message: string; detailsHref: string | null; onDismiss: () => void }) {
+function ErrorNotice({ message, code, detailsHref, onDismiss }: {
+  message: string;
+  code?: string | null;
+  detailsHref: string | null;
+  onDismiss?: () => void;
+}) {
   const { t } = useTranslation("chatPage");
   return (
-    <div className="rounded-lg border border-danger-ring bg-danger-soft p-3 flex items-center gap-2.5">
-      <AlertTriangle className="w-4 h-4 text-danger" />
-      <span className="flex-1 text-[12.5px] text-danger-deep">{message}</span>
-      {detailsHref ? <Link to={detailsHref} className="shrink-0 text-[11.5px] font-bold text-danger-deep hover:underline">{t("viewRawLogs")}</Link> : null}
-      <button type="button" onClick={onDismiss} aria-label={t("dismissError")}>
-        <X className="w-4 h-4 text-danger" />
-      </button>
-    </div>
+    <section role="alert" className="py-4">
+      <div className="flex items-center justify-between gap-3 border-b border-line-strong pb-3">
+        <h3 className="text-[14px] font-normal text-ink-subtle">{t("failure.title")}</h3>
+        {onDismiss ? (
+          <button type="button" onClick={onDismiss} aria-label={t("dismissError")} className="rounded p-1 text-ink-subtle hover:bg-app-soft hover:text-ink">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+      <div className="flex min-h-7 items-center gap-1.5 pt-5 text-[13px]">
+        <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
+        <strong className="shrink-0 font-semibold text-danger">{t("failure.type")}</strong>
+        <span aria-hidden="true" className="mx-1 h-0.5 w-0.5 shrink-0 rounded-full bg-ink-subtle" />
+        <span className="min-w-0 flex-1 truncate text-ink-muted" title={message}>
+          {message.replace(/\s+/g, " ").trim()}
+        </span>
+        {code ? <span className="hidden max-w-[140px] truncate font-mono text-[11px] text-ink-subtle sm:block" title={code}>{code}</span> : null}
+        {detailsHref ? <Link to={detailsHref} className="shrink-0 text-[11.5px] text-ink-subtle hover:text-accent hover:underline">{t("viewRawLogs")}</Link> : null}
+      </div>
+    </section>
   );
 }
 
@@ -1108,7 +1135,7 @@ function ChatComposer({
     <div className="bg-white px-4 pb-5 pt-3 md:px-6">
       <div className="mx-auto max-w-[760px] space-y-2">
         <TaskTreeWidget sessionId={sessionId} />
-        {sendFailed ? <p role="alert" className="text-[11.5px] text-danger-deep">{t("sendFailed")}</p> : null}
+        {sendFailed ? <p role="status" className="text-[11.5px] text-ink-muted">{t("sendFailed")}</p> : null}
         <form
           onSubmit={submit}
           className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
@@ -1282,8 +1309,9 @@ function documentTaskUiContext(context: DocumentTaskContext): string {
 }
 
 function ChatSkeleton() {
+  const { t } = useTranslation("chatPage");
   return (
-    <div className="space-y-3 py-6">
+    <div role="status" aria-label={t("loadingConversation")} className="space-y-3 py-6">
       {["w-2/3", "w-1/2", "w-3/4"].map((width) => (
         <div key={width} className={classNames("h-16 rounded-lg bg-line/60 animate-pulse", width)} />
       ))}

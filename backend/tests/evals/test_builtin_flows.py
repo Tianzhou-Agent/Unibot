@@ -53,40 +53,35 @@ def test_list_apps_agent_flow() -> None:
 
     assert run.response["status"] == "completed"
     assert run.response["iterations"] <= 3
-    assert run.response["widgets"] and run.response["widgets"][0]["kind"] == "app_list"
+    assert run.response["widgets"] and run.response["widgets"][0]["kind"] == "aina_chooser"
     listed_ids = {item["aina_id"] for item in run.response["widgets"][0]["apps"]}
     assert "unibot-memory" in listed_ids
     assert "unibot-assistant" not in listed_ids
     assert_agent_run(
         run,
         task="List the AINA applications available to the current user",
-        expected_output=(
-            "A summary of the applications list_app returned, including unibot-memory, and no application it did "
-            "not return."
-        ),
+        expected_output="A short invitation to choose an application from the Suggested apps chips.",
         expected_tools=["list_app"],
-        criteria="The answer must accurately summarize the applications returned by the list_app capability.",
+        criteria="The answer should invite selection without repeating the application names, descriptions, list or table.",
     )
 
 
-def test_open_aina_agent_flow() -> None:
+def test_open_app_agent_flow() -> None:
     run = asyncio.run(
         _run_once(
             "Open the unibot-memory app.",
-            capability="builtin:open_aina",
+            capability="builtin:open_app",
         )
     )
 
     assert run.response["status"] == "completed"
-    widget = run.response["widgets"][0]
-    assert widget["kind"] == "navigation"
-    assert widget["actions"][0]["kind"] == "open_aina"
-    assert widget["actions"][0]["aina_id"] == "unibot-memory"
+    assert run.response["widgets"] == []
+    assert run.response["opened_app_id"] == "unibot-memory"
     assert_agent_run(
         run,
         task="Open the unibot-memory AINA",
         expected_output="Confirm that Unibot Memory is ready to open.",
-        expected_tools=["open_aina"],
+        expected_tools=["open_app"],
         criteria="The answer must concern opening unibot-memory and must not claim a different AINA was opened.",
     )
 

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useState } from "react";
-import { AppWindow, ArrowRight, Boxes, Play, Send, Sparkles } from "lucide-react";
+import { AppWindow, Play, Send, Sparkles } from "lucide-react";
 import { AppIcon } from "@/components/apps/PluginUi";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
@@ -24,8 +24,11 @@ export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
   if (props.widget.kind === "document_outline") {
     return <DocumentOutlineWidget widget={props.widget} workspaceId={props.workspaceId} />;
   }
-  if (props.widget.kind === "aina_chooser") {
+  if (props.widget.kind === "aina_chooser" || props.widget.kind === "app_list") {
     return <AppSuggestions widget={props.widget} disabled={props.disabled} onOpenAina={props.onOpenAina} />;
+  }
+  if (props.widget.kind === "navigation" && props.widget.id.startsWith("open-") && props.widget.actions.some((action) => action.kind === "open_aina")) {
+    return null;
   }
   return <DeclarativeSessionWidgetRenderer {...props} />;
 }
@@ -95,7 +98,7 @@ function DeclarativeSessionWidgetRenderer({
     <section className="overflow-hidden rounded-xl border border-line bg-white p-3" aria-label={widget.title}>
       <header className="flex items-center gap-2">
         <span className="text-ink-muted">
-          {widget.kind === "app_list" ? <Boxes className="h-4 w-4" /> : <AppWindow className="h-4 w-4" />}
+          <AppWindow className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[12px] font-semibold text-ink">{widget.title}</h3>
@@ -105,11 +108,7 @@ function DeclarativeSessionWidgetRenderer({
 
       <div className="mt-3">
         {widget.markdown ? <MarkdownContent content={widget.markdown} className="mb-3" /> : null}
-        {widget.kind === "app_list" ? (
-          <SessionAppList widget={widget} disabled={disabled} onOpenAina={onOpenAina} />
-        ) : (
-          <WidgetFormFields widget={widget} disabled={disabled} values={values} setValues={setValues} />
-        )}
+        <WidgetFormFields widget={widget} disabled={disabled} values={values} setValues={setValues} />
 
         {widget.actions.length ? (
           <div className={classNames("flex flex-wrap items-center gap-2", widget.fields.length || widget.markdown ? "mt-3" : "")}>
@@ -132,43 +131,6 @@ function DeclarativeSessionWidgetRenderer({
         ) : null}
       </div>
     </section>
-  );
-}
-
-function SessionAppList({
-  widget,
-  disabled,
-  onOpenAina,
-}: {
-  widget: WidgetDefinition;
-  disabled: boolean;
-  onOpenAina?: (ainaId: string) => void;
-}) {
-  const { t } = useTranslation("common");
-  return (
-    <div className="grid grid-cols-1 gap-2">
-      {widget.apps.map((app) => (
-        <button
-          key={app.aina_id}
-          type="button"
-          disabled={disabled}
-          onClick={() => onOpenAina?.(app.aina_id)}
-          className="group flex min-h-[82px] w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-lg border border-line bg-app-soft p-2.5 text-left transition hover:border-accent-ring hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label={t("widget.openApp", { name: app.name })}
-        >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-accent shadow-sm">
-            <AppWindow className="h-4.5 w-4.5" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <strong className="block truncate text-[13px] text-ink">{app.name}</strong>
-            <span className="mt-0.5 line-clamp-2 block text-[10.5px] leading-[1.45] text-ink-muted">{app.description}</span>
-            <span className="mt-1 block truncate font-mono text-[9.5px] text-ink-subtle" title={app.aina_id}>{app.aina_id}</span>
-          </span>
-          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
-        </button>
-      ))}
-      {!widget.apps.length ? <p className="col-span-full rounded-lg border border-dashed border-line py-8 text-center text-[12px] text-ink-muted">{t("widget.noApps")}</p> : null}
-    </div>
   );
 }
 

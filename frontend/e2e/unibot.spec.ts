@@ -36,6 +36,7 @@ interface MockState {
   lastDocumentSectionScope: JsonObject | null;
   lastSandboxEnsurePayload: JsonObject | null;
   streamWidgets: JsonObject[];
+  openedAppId: string | null;
   sandbox: JsonObject | null;
   sandboxExecutions: JsonObject[];
   lastProjectImportContentType: string | null;
@@ -316,6 +317,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     lastDocumentSectionScope: null,
     lastSandboxEnsurePayload: null,
     streamWidgets: initial.streamWidgets ?? [],
+    openedAppId: initial.openedAppId ?? null,
     sandbox: initial.sandbox ?? null,
     sandboxExecutions: initial.sandboxExecutions ?? [],
     lastProjectImportContentType: null,
@@ -534,6 +536,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         usage: { input_tokens: 4, output_tokens: 6 },
         approval: null,
         widgets: state.streamWidgets,
+        opened_app_id: state.openedAppId,
       };
       const frames = [
         `event: message.delta\ndata: ${JSON.stringify({ type: "message.delta", delta: reply })}\n\n`,
@@ -1238,7 +1241,8 @@ for (const [surface, path, inputName, sendName] of [
       const draft = "  保留我的草稿\n包括换行和 emoji 🧪  ";
       await input.fill(draft);
       await page.getByRole("button", { name: sendName, exact: true }).click();
-      await expect(page.getByRole("alert")).toHaveText("发送未完成，草稿已保留，可重试。");
+      await expect(page.getByRole("alert")).toContainText("暂时无法发送，请重试");
+      await expect(page.getByRole("status")).toHaveText("发送未完成，草稿已保留，可重试。");
       await expect(input).toBeEnabled();
       await expect(input).toHaveValue(draft);
       await page.getByRole("button", { name: sendName, exact: true }).click();
@@ -2322,26 +2326,7 @@ test("FE-E2E-004I 已完成的轮次折叠中间步骤并显示用时，停止�
 test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
   await installMockApi(page, {
     conversations: [conversation()],
-    streamWidgets: [
-      {
-        id: "open-unibot-documents",
-        kind: "navigation",
-        title: "打开文档编辑器",
-        description: "文档应用已准备好。",
-        markdown: null,
-        fields: [],
-        apps: [],
-        actions: [
-          {
-            id: "open",
-            label: "进入 Canvas",
-            kind: "open_aina",
-            aina_id: "unibot-documents",
-            style: "primary",
-          },
-        ],
-      },
-    ],
+    openedAppId: "unibot-documents",
   });
   await page.goto("/chat/conv-e2e-1");
 
@@ -2349,6 +2334,7 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
   await page.getByRole("button", { name: "发送消息" }).click();
 
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
+  await expect(page.getByRole("button", { name: "进入 Canvas", exact: true })).toHaveCount(0);
 });
 
 test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不打断对话", async ({ page }) => {
@@ -2398,16 +2384,8 @@ test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不�
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
 
   // An explicit open adds a tab beside the ones already open.
-  state.streamWidgets = [{
-    id: "open-unibot-memory",
-    kind: "navigation",
-    title: "Open Unibot Memory",
-    description: "",
-    markdown: null,
-    fields: [],
-    apps: [],
-    actions: [{ id: "open", label: "Enter Canvas", kind: "open_aina", aina_id: "unibot-memory", style: "primary" }],
-  }];
+  state.streamWidgets = [];
+  state.openedAppId = "unibot-memory";
   await input.fill("打开记忆");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
@@ -2988,12 +2966,14 @@ test("FE-E2E-IR-003 对话错误和错误诊断定位到具体原始日志", asy
   }]));
 
   await page.goto("/chat/conv-e2e-1");
-  const chatLogLink = page.locator('a[href="/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e"]');
+  await expect(page.getByRole("alert")).toHaveCount(1);
+  await expect(page.getByRole("alert").getByText("错误", { exact: true })).toBeVisible();
+  const chatLogLink = page.locator('a[href="/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e&logId=llm-error-e2e"]');
   await expect(chatLogLink).toBeVisible();
   await chatLogLink.click();
 
   const targetLog = page.getByLabel("原始日志 llm-error-e2e", { exact: true });
-  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e$/);
+  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-error-e2e&logId=llm-error-e2e$/);
   await expect(targetLog).toHaveAttribute("open", "");
   await expect(targetLog).toContainText(providerError);
   await expect(targetLog).toHaveClass(/ring-2/);
@@ -3063,7 +3043,8 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
   }]));
 
   await page.goto("/chat/conv-e2e-1");
-  await expect(page.getByText(`调用失败：${providerError}`, { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("处理失败");
+  await expect(page.getByRole("alert")).toContainText(`debug-model: ${providerError}`);
   const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
   await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-msg-fail-e2e&logId=llm-msg-fail-e2e");
   await chatLogLink.click();
@@ -3152,7 +3133,8 @@ test("FE-E2E-IR-005 能力调用失败在对话中持久展示并跳转原始日
   }]));
 
   await page.goto("/chat/conv-e2e-1");
-  await expect(page.getByText(`能力调用失败：document.list · ${conflictError}`, { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(`document.list: ${conflictError}`);
+  await expect(page.getByRole("alert")).toContainText("CONFLICT");
   const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
   await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e");
   await chatLogLink.click();
@@ -3181,13 +3163,67 @@ test("FE-E2E-IR-002 普通用户提交、修改和取消回答反馈", async ({ 
   await dialog.getByRole("textbox", { name: "反馈补充说明", exact: true }).fill("缺少负责人联系方式。");
   await dialog.getByRole("button", { name: "提交反馈", exact: true }).click();
   await expect(down).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", { name: "取消评价 msg-feedback-e2e", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "取消评价 msg-feedback-e2e", exact: true })).toHaveCount(0);
+  await expect(page.getByText("已记录", { exact: true })).toHaveCount(0);
 
   const up = page.getByRole("button", { name: "点赞回答 msg-feedback-e2e", exact: true });
   await up.click();
   await expect(up).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "取消评价 msg-feedback-e2e", exact: true }).click();
+  await expect(down).toHaveAttribute("aria-pressed", "false");
+  await up.click();
   await expect(up).toHaveAttribute("aria-pressed", "false");
+  await down.click();
+  await dialog.getByRole("button", { name: "事实或结论错误", exact: true }).click();
+  await dialog.getByRole("button", { name: "提交反馈", exact: true }).click();
+  await expect(down).toHaveAttribute("aria-pressed", "true");
+  await down.click();
+  await expect(down).toHaveAttribute("aria-pressed", "false");
+  await expect(dialog).toHaveCount(0);
+});
+
+test("FE-E2E-LOAD-001 显示占位只用于首次加载对话", async ({ page }) => {
+  await installMockApi(page, { conversations: [conversation({ messages: [{
+    id: "loaded-answer", role: "assistant", content: "已经加载的对话内容。", content_type: "text", widgets: [], created_at: NOW,
+  }] })] });
+  let releaseLoad!: () => void;
+  const pendingLoad = new Promise<void>((resolve) => { releaseLoad = resolve; });
+  await page.route("**/api/conversations/conv-e2e-1", async (route) => {
+    if (route.request().method() === "GET") await pendingLoad;
+    return route.fallback();
+  });
+  try {
+    await page.goto("/chat/conv-e2e-1");
+    await expect(page.getByRole("status", { name: "正在加载对话", exact: true })).toBeVisible();
+  } finally {
+    releaseLoad();
+  }
+  await expect(page.getByText("已经加载的对话内容。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status", { name: "正在加载对话", exact: true })).toHaveCount(0);
+});
+
+test("FE-E2E-LOAD-002 智能体运行时刷新对话不显示加载占位", async ({ page }) => {
+  await installMockApi(page, { streamDelayMs: 100 });
+  let releaseLoad!: () => void;
+  const pendingLoad = new Promise<void>((resolve) => { releaseLoad = resolve; });
+  await page.route("**/api/conversations/conv-e2e-1", async (route) => {
+    if (route.request().method() === "GET") await pendingLoad;
+    return route.fallback();
+  });
+  await page.goto("/chat");
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  await input.fill("运行时保留对话内容");
+  const conversationFetch = page.waitForRequest((request) => request.method() === "GET"
+    && new URL(request.url()).pathname === "/api/conversations/conv-e2e-1");
+  try {
+    await page.getByRole("button", { name: "发送消息", exact: true }).click();
+    await conversationFetch;
+    await expect(page.locator("main p").filter({ hasText: "运行时保留对话内容" })).toBeVisible();
+    await expect(page.getByRole("status", { name: "正在加载对话", exact: true })).toHaveCount(0);
+  } finally {
+    releaseLoad();
+  }
+  await expect(input).toBeEnabled();
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
 });
 
 test("FE-E2E-005 new conversation reloads messages after a delayed stream", async ({ page }) => {
@@ -3349,7 +3385,7 @@ test("FE-E2E-006A Clarification Widget 提交后消失且不进入消息历史",
   await expect(page.getByRole("region", { name: "补充报告信息" })).toHaveCount(0);
 });
 
-test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
+test("FE-E2E-006 历史应用列表以推荐标签打开对应 Canvas", async ({ page }) => {
   const appListWidget = {
     id: "unibot-app-list",
     kind: "app_list",
@@ -3393,9 +3429,22 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
       conversation({
         messages: [
           {
+            id: "msg-app-discovery-user", role: "user", content: "有哪些应用？",
+            content_type: "text", widgets: [], created_at: NOW,
+          },
+          {
+            id: "msg-app-discovery-call", role: "assistant", content: "",
+            content_type: "tool", widgets: [], created_at: NOW,
+            tool_calls: [{ id: "list-app-call", type: "function", function: { name: "builtin_list_app_38ace1fd", arguments: "{}" } }],
+          },
+          {
+            id: "msg-app-discovery-result", role: "tool", content: "{}", name: "builtin_list_app_38ace1fd",
+            tool_call_id: "list-app-call", content_type: "tool", widgets: [], created_at: NOW,
+          },
+          {
             id: "msg-app-list",
             role: "assistant",
-            content: "请选择应用。",
+            content: "请选择下方推荐的应用。",
             content_type: "text",
             widgets: [appListWidget],
             created_at: NOW,
@@ -3411,9 +3460,10 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
   await expect(documentApp).toBeVisible();
   await expect(memoryApp).toBeVisible();
   const documentBox = await documentApp.boundingBox();
-  const memoryBox = await memoryApp.boundingBox();
-  expect(documentBox?.width).toBeGreaterThan(200);
-  expect(memoryBox?.y).toBeGreaterThan((documentBox?.y ?? 0) + (documentBox?.height ?? 0));
+  expect(documentBox?.width).toBeLessThan(200);
+  await expect(page.getByRole("group", { name: "推荐应用", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("region", { name: "AINA 应用", exact: true })).toHaveCount(0);
+  await expect(page.getByText("请选择下方推荐的应用。", { exact: true })).toBeVisible();
 
   await memoryApp.click();
 
@@ -3421,6 +3471,30 @@ test("FE-E2E-006 应用列表 Widget 打开对应 Canvas", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "长期记忆", exact: true })).toBeVisible();
+});
+
+test("FE-E2E-006B 推荐应用不会隐藏文档操作的回答", async ({ page }) => {
+  const messages: JsonObject[] = [{
+    id: "document-user", role: "user", content: "读取文档并推荐应用", content_type: "text", widgets: [], created_at: NOW,
+  }];
+  for (const [index, name] of ["builtin_list_app_38ace1fd", "aina_unibot-documents_12345678"].entries()) {
+    messages.push(
+      { id: `document-call-${index}`, role: "assistant", content: "", content_type: "tool", widgets: [], created_at: NOW,
+        tool_calls: [{ id: `call-${index}`, type: "function", function: { name, arguments: "{}" } }] },
+      { id: `document-result-${index}`, role: "tool", name, tool_call_id: `call-${index}`, content: "{}", content_type: "tool", widgets: [], created_at: NOW },
+    );
+  }
+  messages.push({
+    id: "document-answer", role: "assistant", content: "报告正文不会因推荐应用而隐藏。", content_type: "text", created_at: NOW,
+    widgets: [{
+      id: "unibot-aina-chooser", kind: "aina_chooser", title: "Suggested apps", description: "", fields: [], actions: [], markdown: null,
+      apps: [{ aina_id: "unibot-documents", name: "文档编辑器", description: "管理文档", version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true }],
+    }],
+  });
+  await installMockApi(page, { conversations: [conversation({ messages })] });
+  await page.goto("/chat/conv-e2e-1");
+  await expect(page.getByText("报告正文不会因推荐应用而隐藏。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("group", { name: "推荐应用", exact: true })).toBeVisible();
 });
 
 test("FE-E2E-007 拒绝高风险审批并恢复空闲状态", async ({ page }) => {

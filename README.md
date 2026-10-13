@@ -156,8 +156,8 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - `/tools`、`/skills`：Tool 和基础 Skill 注册管理；
 - `/ainas`、`/installations`：远程 AINA 注册、探测、安装、授权和卸载；
 - `/aina-projects`：生成、校验、按用户导入、列出、下载和删除 AINA Project 1.0 源码包；导入项目保持待部署状态，格式见 [`docs/aina-project-format.md`](docs/aina-project-format.md)，最小示例见 [`examples/text-stats-aina`](examples/text-stats-aina)；
-- `POST /ainas/{id}/open`：调用宿主内置 `open_aina` Tool 并返回 Canvas 路由与 `main_widget`；
-- 宿主内置 `list_app`、`describe_aina`、`open_aina` Tool：负责 AINA 发现、详情查询与 Canvas 导航，不注册为 AINA；
+- `POST /ainas/{id}/open`：调用宿主内置 `open_app` Tool 并返回 Canvas 路由与 `main_widget`；
+- 宿主内置 `list_app`、`describe_aina`、`open_app` Tool：负责 AINA 发现、详情查询与 Canvas 导航，不注册为 AINA；
 - 宿主内置 `request_clarification` Tool：需求模糊时生成 Form Widget，支持模型预填和用户提交；
 - 首次模型调用统一暴露上述宿主 Tool、已发布独立 Tool 与可路由 AINA 入口；内置 AINA 使用无参数入口激活宿主能力域，远程 AINA 才携带完整任务通过 Gateway 调用；
 - 所有 capability 调用在审批和执行前统一校验 input schema，非法参数作为结构化 Tool 错误返回模型修正；
@@ -192,7 +192,7 @@ uv run pytest -q
 ```
 
 真实 API 冒烟测试会通过 HTTP 覆盖直接对话、真实模型驱动的记忆写入/召回、多轮上下文、远程 Tool、统一能力
-入口与 AINA 能力域激活、远程 Widget 输出、`list_app`、`open_aina` Canvas、Trace 和 SSE。先启动后端，再运行：
+入口与 AINA 能力域激活、远程 Widget 输出、`list_app`、`open_app` Canvas、Trace 和 SSE。先启动后端，再运行：
 
 ```bash
 cd backend

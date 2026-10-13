@@ -13,6 +13,7 @@ export default {
     cancelling: "Cancelling the call…",
   },
   newConversation: "New conversation",
+  loadingConversation: "Loading conversation",
   canvasShow: "Show app panel",
   canvasHide: "Hide app panel",
   viewObsAria: "View observability data for this conversation",
@@ -22,6 +23,8 @@ export default {
   deleteNote: "It will be hidden from the list, and you can restore it right away.",
   confirmDelete: "Confirm delete",
   failure: {
+    title: "Processing failed",
+    type: "Error",
     capability: "Capability call failed: {{name}} · {{error}}",
     call: "Call failed: {{error}}",
   },

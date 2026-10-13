@@ -310,7 +310,7 @@ def main() -> None:
         listed_ids = {
             app["aina_id"]
             for widget in app_list["widgets"]
-            if widget["kind"] == "app_list"
+            if widget["kind"] == "aina_chooser"
             for app in widget["apps"]
         }
         if aina_id not in listed_ids or "unibot-assistant" not in listed_ids:

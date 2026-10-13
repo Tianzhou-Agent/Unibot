@@ -149,7 +149,7 @@ def test_builtin_aina_manifests_and_host_tool_inputs_are_exposed() -> None:
             for item in client.get("/ainas").json()
         }
         client.post("/chat", json={"message": "Describe it", "capability": "builtin:describe_aina"})
-        client.post("/chat", json={"message": "Open it", "capability": "builtin:open_aina"})
+        client.post("/chat", json={"message": "Open it", "capability": "builtin:open_app"})
         client.post("/chat", json={"message": "Ask me", "capability": "builtin:request_clarification"})
 
     memory = records["unibot-memory"]

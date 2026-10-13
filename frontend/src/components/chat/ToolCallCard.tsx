@@ -153,7 +153,7 @@ export function toolResultIsError(content: string): boolean {
 
 export function isToolSequenceContinuation(messages: BackendMessage[], index: number): boolean {
   const current = messages[index];
-  if (current?.role !== "assistant" || !current.tool_calls?.length) return false;
+  if (current?.role !== "assistant" || (!current.tool_calls?.length && !current.reasoning)) return false;
   for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
     const previous = messages[previousIndex];
     if (previous.role === "tool") continue;
@@ -175,7 +175,7 @@ function ToolPayload({ label, value, compact, separated = false }: { label: stri
 
 function toolLabel(name: string): string {
   const value = name.toLowerCase();
-  if (value.startsWith("aina_") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
+  if (value.startsWith("aina_") || value.includes("open_app") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
   if (value.includes("list_app")) return i18n.t("chat:tool.label.listApps");
   if (value.includes("suggest_ainas")) return i18n.t("chat:tool.label.suggestApps");
   if (value.includes("search")) {
@@ -194,7 +194,7 @@ function toolLabel(name: string): string {
 
 function toolIcon(name: string) {
   const value = name.toLowerCase();
-  if (value.startsWith("aina_") || value.includes("open_aina") || value.includes("list_app")) return AppWindow;
+  if (value.startsWith("aina_") || value.includes("open_app") || value.includes("open_aina") || value.includes("list_app")) return AppWindow;
   if (value.includes("search")) return Search;
   if (value.includes("browser") || value.includes("fetch") || value.includes("open_url")) return Globe2;
   if (value.includes("code") || value.includes("runner") || value.includes("execute") || value.includes("terminal")) return TerminalSquare;

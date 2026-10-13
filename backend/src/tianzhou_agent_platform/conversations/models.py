@@ -20,7 +20,7 @@ class Message(StrictModel):
     role: Literal["user", "assistant", "system", "tool"]
     content: str = ""
     content_type: str = "text"
-    reasoning: str | None = None  # the model's thinking before this assistant message; never sent back to it
+    reasoning: str | None = None  # retained for providers that require reasoning replay during tool conversations
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     name: str | None = None

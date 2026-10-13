@@ -29,7 +29,8 @@ from tianzhou_agent_platform.services.agent_integration.prompts import SystemPro
 from tianzhou_agent_platform.services.agent_integration.run import AgentRun
 from tianzhou_agent_platform.services.platform_tools import (
     DESCRIBE_AINA_TOOL_ID,
-    OPEN_AINA_TOOL_ID,
+    LIST_APP_TOOL_ID,
+    OPEN_APP_TOOL_ID,
     PLATFORM_TOOL_IDS,
     SUGGEST_AINAS_TOOL_ID,
     invoke_platform_tool,
@@ -102,10 +103,10 @@ class CapabilityExecutor:
         """Perform one capability call; widgets and scope changes are applied to the run."""
         if capability.is_builtin_aina:
             return await self.activate_scope(run, capability, call_id, arguments)
-        if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_AINA_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
+        if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
             run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "app_list"]
-        if capability.capability_id == SUGGEST_AINAS_TOOL_ID:
-            # The model's ranked suggestion replaces the one offered when the turn was routed into an AINA.
+        if capability.capability_id in {LIST_APP_TOOL_ID, OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
+            # Keep one app selection row; opening an app replaces the suggestions.
             run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "aina_chooser"]
         if capability.kind == "mcp":
             server, tool = cast(tuple[McpServerRecord, McpToolDescriptor], capability.value)
@@ -174,6 +175,8 @@ class CapabilityExecutor:
                 sandbox_service=self.sandbox_service,
             )
         run.scope.widgets.extend(widgets)
+        if capability.capability_id == OPEN_APP_TOOL_ID:
+            run.opened_app_id = result["aina_id"]
         if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
             run.scope.direct_reply = _edit_task_reply(result)
         return result
