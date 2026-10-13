@@ -26,6 +26,7 @@ class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(str(_BACKEND_ROOT / ".env"), str(_BACKEND_ROOT / ".venv")),
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
         populate_by_name=True,
     )

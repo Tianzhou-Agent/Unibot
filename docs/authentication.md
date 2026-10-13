@@ -38,7 +38,8 @@ S256 PKCE；仅申请读取验证邮箱所需的 `user:email` scope。每次登�
 
 ## 华为 Uniportal OAuth
 
-按 Nexent 的华为适配协议接入内部 Uniportal。在 Uniportal 注册应用后，将回调地址设置为
+按 [Nexent 的华为适配协议](https://github.com/ModelEngine-Group/nexent/blob/0fa09c1d767b0419d4c42a3e6a5f172f2723ec1b/backend/consts/oauth_providers.py)接入内部 Uniportal。
+在 Uniportal 注册应用后，将回调地址设置为
 `http://127.0.0.1:5173/api/auth/huawei/callback`，并配置：
 
 ```dotenv
@@ -59,9 +60,14 @@ UNIBOT_FRONTEND_BASE_URL=http://127.0.0.1:5173
 授权使用随机 `state` 和 10 分钟有效的签名 HttpOnly Cookie，回调成功后清除授权 Cookie，
 签发与其他登录方式相同的会话。访问令牌不会持久化；同邮箱已有账户时拒绝自动合并。
 
-后端也接受 Nexent 的 `UNIPORTAL_URL`、`HUAWEI_OAUTH_CLIENT_ID`、
-`HUAWEI_OAUTH_CLIENT_SECRET`，对应的 `UNIBOT_*` 变量优先。Docker 部署请使用示例中的
-`UNIBOT_*` 变量，Compose 会将它们传入后端容器。
+本地开发将以上配置写入 `backend/.env`；Docker Compose 部署写入项目根目录 `.env`；
+飞牛部署写入 `deploy/fnos/.env`。也可以直接注入进程环境变量，环境变量优先于后端 dotenv 文件。
+这些 `.env` 文件均被 Git 忽略，提交的 `.env.example` 只包含空值和配置示例；密钥仅由后端读取。
+
+后端及 Docker Compose 都接受 Nexent 的 `UNIPORTAL_URL`、`HUAWEI_OAUTH_CLIENT_ID`、
+`HUAWEI_OAUTH_CLIENT_SECRET`。容器部署中，非空的 `UNIBOT_*` 变量优先，留空时回退到 Nexent 名称；
+本地 dotenv 中的空值也按未设置处理，可直接在模板中追加 Nexent 别名。回调地址仍通过
+`UNIBOT_HUAWEI_CALLBACK_URL` 配置，不能沿用 Nexent 的 `/api/user/oauth/callback` 路径。
 
 内部证书可通过 `UNIBOT_HUAWEI_CA_BUNDLE=/path/to/internal-ca.pem` 配置。默认验证 TLS 证书；
 `UNIBOT_HUAWEI_SSL_VERIFY=false` 可用于内部联调，CA bundle 配置优先于该开关。
