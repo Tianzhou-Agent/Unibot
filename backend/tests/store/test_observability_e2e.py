@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import socket
+from datetime import timedelta
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -133,3 +134,59 @@ async def test_chat_to_obs_query_end_to_end(
         overview = client.get("/obs/overview?range=week").json()
         assert overview["trace_count"] >= 1
         assert overview["total_tokens"] == 8  # 5 input + 3 output, no double count
+
+
+def test_run_traces_leave_memory_after_their_retention_and_readers_fall_back_to_obs(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tianzhou_agent_platform.store import repository as repository_module
+
+    monkeypatch.setattr(repository_module, "RUN_TRACE_RETENTION", timedelta(0))
+    redis_prefix = f"unibot:test:obs:{uuid4().hex}"
+    redis_keys = [redis_prefix, f"{redis_prefix}:dlq", f"{redis_prefix}:producers"]
+    request.addfinalizer(lambda: _delete_redis_keys(redis_keys))
+    settings = AgentSettings(
+        llm_base_url=None,
+        llm_api_key=None,
+        llm_model="test-model",
+        node_id="e2e-node",
+        obs_wal_root=tmp_path / "wal",
+        obs_raw_root=tmp_path / "raw",
+        obs_enabled=True,
+        obs_redis_stream_key=redis_keys[0],
+        obs_redis_group_name=f"unibot-test-{uuid4().hex}",
+        obs_redis_dlq_key=redis_keys[1],
+        obs_redis_producers_key=redis_keys[2],
+    )
+    storage = StorageSettings(mysql_dsn=MYSQL_DSN, redis_dsn=REDIS_URL, nas_root_path=tmp_path / "nas")
+    turns = 30
+    app = create_app(
+        settings=settings,
+        storage_settings=storage,
+        llm=ScriptedLLM([assistant(f"回复 {index}") for index in range(turns)]),
+    )
+
+    with TestClient(app) as client:
+        answers = [client.post("/chat", json={"message": f"问题 {index}"}).json() for index in range(turns)]
+        held = app.state.repository._traces  # noqa: SLF001
+
+        # Each new run drops the finished ones, so memory holds the latest run, not all of them.
+        assert len(held) <= 2
+        assert answers[0]["trace_id"] not in held and answers[-1]["trace_id"] in held
+        for answer in answers:
+            assert client.get(f"/conversations/{answer['conversation_id']}").json()["run_status"] == "idle"
+
+        first = answers[0]
+        assert _wait_for(lambda: (client.get(f"/obs/sessions/{first['conversation_id']}").json() or {}).get("spans"))
+
+        def agent_of(answer: dict) -> tuple[str, str]:
+            body = client.put(
+                f"/feedback/messages/{answer['message_id']}",
+                json={"conversation_id": answer["conversation_id"], "rating": "up"},
+            ).json()
+            return body["agent_name"], body["agent_version"]
+
+        # The first answer's run left memory and is named from OBS, as the latest one is from memory.
+        assert agent_of(first) == agent_of(answers[-1])
