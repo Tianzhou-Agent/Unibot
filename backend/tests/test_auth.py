@@ -18,6 +18,12 @@ from tianzhou_agent_platform.main import create_app
 def _settings(**overrides: object) -> AgentSettings:
     overrides.setdefault("github_oauth_client_id", None)
     overrides.setdefault("github_oauth_client_secret", None)
+    overrides.setdefault("huawei_oauth_base_url", None)
+    overrides.setdefault("huawei_oauth_client_id", None)
+    overrides.setdefault("huawei_oauth_client_secret", None)
+    for provider in ("google", "microsoft", "apple"):
+        overrides.setdefault(f"{provider}_oauth_client_id", None)
+        overrides.setdefault(f"{provider}_oauth_client_secret", None)
     overrides.setdefault("env", "production")
     overrides.setdefault("dev_auth_bypass", False)
     return AgentSettings(  # type: ignore[call-arg]
@@ -45,6 +51,10 @@ def test_password_authentication_session_and_logout() -> None:
             "auth_required": True,
             "registration_enabled": True,
             "github_enabled": False,
+            "huawei_enabled": False,
+            "google_enabled": False,
+            "microsoft_enabled": False,
+            "apple_enabled": False,
         }
         assert client.get("/conversations").status_code == 401
 

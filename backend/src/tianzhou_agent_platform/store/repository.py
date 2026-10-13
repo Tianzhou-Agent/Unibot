@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -203,6 +203,24 @@ class PersistentRepository(InMemoryRepository):
                 email=email,
                 name=name,
                 avatar_url=avatar_url,
+            )
+
+    async def upsert_huawei_user(self, *, huawei_id: str, email: str, name: str) -> UserRecord:
+        async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:
+            if not acquired:
+                raise conflict("Huawei sign-in is already in progress")
+            await self._refresh_users()
+            return await super().upsert_huawei_user(huawei_id=huawei_id, email=email, name=name)
+
+    async def upsert_oidc_user(
+        self, *, provider: OidcProvider, identity: str, email: str, name: str | None, avatar_url: str | None
+    ) -> UserRecord:
+        async with self.stores.redis.lease("auth-user-write", "users", ttl_seconds=30) as acquired:
+            if not acquired:
+                raise conflict(f"{provider} sign-in is already in progress")
+            await self._refresh_users()
+            return await super().upsert_oidc_user(
+                provider=provider, identity=identity, email=email, name=name, avatar_url=avatar_url
             )
 
     async def _refresh_users(self) -> list[UserRecord]:
