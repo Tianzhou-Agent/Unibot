@@ -5,7 +5,6 @@
 根目录的 Docker Compose 会启动完整的 Unibot Web 平台：
 
 - `frontend`：React 静态页面与 `/api` 反向代理；
-- `migrate`：一次性任务，执行数据库迁移后退出，`backend` 在其成功后才启动；
 - `backend`：FastAPI、AINA 调度器与开发模式代码运行器；
 - `mysql`：业务数据；
 - `redis`：分布式锁、缓存和运行状态；
@@ -34,20 +33,10 @@ docker compose ps
 docker compose logs -f backend frontend
 ```
 
-### 数据库迁移
+### 数据库表结构
 
-每次部署新镜像时，`migrate` 服务先运行 `tianzhou-agent-platform-migrate` 把 MySQL 升级到镜像对应的表结构版本；
-迁移失败时 `backend` 不会启动。后端启动时也会检查版本，数据库未升级则拒绝启动。多节点或 Kubernetes 部署应在
-滚动更新前单独执行一次迁移（例如作为 Job），不要让每个节点各自迁移。
-
-引入 Alembic 之前创建的数据库已经有全部表，但没有版本记录。如果它由上一版本（表结构按字段分列的版本）创建，
-执行一次登记即可，之后正常升级：
-
-```powershell
-docker compose run --rm migrate tianzhou-agent-platform-migrate stamp 0001
-```
-
-更早版本创建的数据库与当前表结构不兼容，需要删除业务表或数据卷后重新迁移。
+没有数据库迁移。`backend` 启动时自动建表，并在 `unibot_schema` 表记录表结构指纹。新镜像的表结构与数据库不一致时，
+后端会**删除并重建全部业务表，MySQL 中的已有数据全部丢失**。多个后端节点同时启动时由 MySQL 命名锁保证只有一个节点重建。
 
 停止服务但保留数据：
 

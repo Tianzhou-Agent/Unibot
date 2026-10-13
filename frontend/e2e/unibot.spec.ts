@@ -867,6 +867,22 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           : { source: "environment", provider_name: "环境变量", model_name: "env-model", model: "env-model" },
       });
     }
+    if (method === "POST" && path === "/model-settings/providers") {
+      const payload = request.postDataJSON() as JsonObject;
+      const providerId = `provider-created-${state.modelProviders.length + 1}`;
+      const created = {
+        id: providerId,
+        provider_type: payload.provider_type,
+        name: payload.name,
+        base_url: payload.base_url,
+        api_key_masked: payload.api_key ? "sk-******" : "",
+        has_api_key: Boolean(payload.api_key),
+        timeout_seconds: payload.timeout_seconds,
+        models: (payload.models as JsonObject[]).map((model, index) => ({ ...model, id: `${providerId}-model-${index + 1}`, is_default: false })),
+      };
+      state.modelProviders.push(created);
+      return json(route, created, 201);
+    }
     if (method === "DELETE" && /^\/model-settings\/providers\/[^/]+$/.test(path)) {
       const providerId = path.split("/")[3];
       state.modelProviders = state.modelProviders.filter((provider) => provider.id !== providerId);
@@ -2499,23 +2515,25 @@ test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", as
   await expect(page.getByRole("button", { name: "打开用户菜单", exact: true })).toHaveCount(0);
   await expect(page.locator("aside").getByRole("link", { name: "设置", exact: true }).last()).toBeVisible();
   await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
-  const providerSection = page.getByLabel("Provider 团队模型服务");
-  await providerSection.getByRole("heading", { name: "团队模型服务", exact: true }).click();
-  await expect(providerSection.getByText("快速模型", { exact: true })).toBeVisible();
-  await expect(providerSection.getByText("推理模型", { exact: true })).toBeVisible();
-
+  await expect(page.getByRole("button", { name: "编辑 团队模型服务", exact: true })).toContainText("默认 推理模型");
   await page.getByRole("button", { name: "编辑 团队模型服务", exact: true }).click();
-  await page.getByRole("button", { name: "自动获取", exact: true }).click();
-  await expect(page.getByText("已从 Provider 自动添加 1 个模型。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "模型 3 ID", exact: true })).toHaveValue("team-coder");
-  await expect(page.getByRole("spinbutton", { name: "模型 3 上下文", exact: true })).toHaveValue("262144");
-  await page.getByRole("button", { name: "添加模型", exact: true }).click();
-  await expect(page.getByRole("spinbutton", { name: "模型 4 上下文", exact: true })).toHaveValue("128000");
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: "团队模型服务" });
+  await expect(drawer.getByText("快速模型", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("推理模型", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "设为默认" }).click();
+  await drawer.getByRole("button", { name: "设为默认" }).click();
   await expect(page.getByText("默认模型已切换，新对话请求将使用该模型。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("当前模型").getByText("快速模型", { exact: true })).toBeVisible();
+
+  await drawer.getByRole("button", { name: "自动获取", exact: true }).click();
+  await expect(page.getByText("已从 Provider 自动添加 1 个模型。", { exact: true })).toBeVisible();
+  await drawer.getByRole("button", { name: "编辑模型 3", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "模型 3 ID", exact: true })).toHaveValue("team-coder");
+  await expect(page.getByRole("spinbutton", { name: "模型 3 上下文", exact: true })).toHaveValue("262144");
+  await drawer.getByRole("button", { name: "添加模型", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "模型 4 上下文", exact: true })).toHaveValue("128000");
+  await drawer.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(drawer).toHaveCount(0);
 
   await page.getByRole("button", { name: "账户", exact: true }).click();
   await expect(page.getByRole("link", { name: /^管理/ })).toBeVisible();
@@ -2524,7 +2542,43 @@ test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", as
   await expect(page.getByRole("heading", { name: "个人总览", exact: true })).toBeVisible();
 });
 
-test("FE-E2E-004F 可从折叠状态删除 Provider", async ({ page }) => {
+test("FE-E2E-004K 选择 MiMo 预设后自动带出接口与模型配置并创建 Provider", async ({ page }) => {
+  await installMockApi(page);
+  let createPayload: JsonObject | null = null;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/model-settings/providers") {
+      createPayload = request.postDataJSON() as JsonObject;
+    }
+  });
+  await page.goto("/settings?tab=models");
+
+  await page.getByRole("button", { name: "新增 Provider" }).first().click();
+  const picker = page.getByRole("dialog", { name: "新增 Provider" });
+  for (const label of ["DeepSeek", "MiMo", "opencode", "ChatGPT", "OpenAI 兼容"]) {
+    await expect(picker.getByRole("radio", { name: new RegExp(`^${label}`) })).toBeVisible();
+  }
+  await picker.getByRole("radio", { name: /^MiMo/ }).click();
+  await picker.getByRole("button", { name: "下一步", exact: true }).click();
+
+  const drawer = page.getByRole("dialog", { name: "新增 Provider" });
+  await expect(drawer.getByRole("textbox", { name: "Base URL", exact: true })).toHaveValue("https://api.xiaomimimo.com/v1");
+  await expect(drawer.getByText("mimo-v2.6-pro · 1M", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("mimo-v2.6-flash · 1M", { exact: true })).toBeVisible();
+  await drawer.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(page.getByText("Provider 已创建，请选择一个默认模型。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "编辑 Xiaomi MiMo", exact: true })).toContainText("2 个模型");
+  expect(createPayload).toMatchObject({
+    provider_type: "mimo",
+    base_url: "https://api.xiaomimimo.com/v1",
+    models: [
+      { name: "MiMo V2.6 Pro", model: "mimo-v2.6-pro", enabled: true, context_window_tokens: 1_048_576 },
+      { name: "MiMo V2.6 Flash", model: "mimo-v2.6-flash", enabled: true, context_window_tokens: 1_048_576 },
+    ],
+  });
+});
+
+test("FE-E2E-004F 可从 Provider 抽屉删除 Provider", async ({ page }) => {
   await installMockApi(page, {
     modelProviders: [
       {
@@ -2543,13 +2597,16 @@ test("FE-E2E-004F 可从折叠状态删除 Provider", async ({ page }) => {
   });
   await page.goto("/settings?tab=models");
 
-  const providerSection = page.getByLabel("Provider 待删除模型服务");
-  await page.getByRole("button", { name: "删除 待删除模型服务", exact: true }).click();
-  await expect(providerSection.getByText("删除后该 Provider 的全部模型配置将不可恢复。", { exact: true })).toBeVisible();
-  await providerSection.getByRole("button", { name: "确认删除", exact: true }).click();
+  const providerRow = page.getByRole("button", { name: "编辑 待删除模型服务", exact: true });
+  await providerRow.click();
+  const drawer = page.getByRole("dialog", { name: "待删除模型服务" });
+  await drawer.getByRole("button", { name: "删除 待删除模型服务", exact: true }).click();
+  await expect(drawer.getByText("删除后该 Provider 的全部模型配置将不可恢复。", { exact: true })).toBeVisible();
+  await drawer.getByRole("button", { name: "确认删除", exact: true }).click();
 
   await expect(page.getByText("Provider 已删除。", { exact: true })).toBeVisible();
-  await expect(providerSection).toHaveCount(0);
+  await expect(drawer).toHaveCount(0);
+  await expect(providerRow).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "尚未添加 Provider", exact: true })).toBeVisible();
 });
 

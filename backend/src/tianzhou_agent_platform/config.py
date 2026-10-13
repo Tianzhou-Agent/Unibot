@@ -313,16 +313,6 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("UNIBOT_OBS_ENABLED", "obs_enabled"),
         description="Enable the OTel + Redis Streams + OBS MySQL pipeline.",
     )
-    obs_wal_root: Path = Field(
-        default=_BACKEND_ROOT.parent / "data" / "nas" / "observability" / "wal",
-        validation_alias=AliasChoices("UNIBOT_OBS_WAL_ROOT", "obs_wal_root"),
-    )
-    obs_wal_max_bytes: int = Field(
-        default=4 * 1024 * 1024 * 1024,
-        gt=0,
-        validation_alias=AliasChoices("UNIBOT_OBS_WAL_MAX_BYTES", "obs_wal_max_bytes"),
-        description="Legacy file-WAL limit retained for rollback compatibility.",
-    )
     obs_redis_stream_key: str = Field(
         default="unibot:obs:records:v1",
         validation_alias=AliasChoices("UNIBOT_OBS_REDIS_STREAM_KEY", "obs_redis_stream_key"),

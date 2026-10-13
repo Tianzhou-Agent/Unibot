@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import pytest
 
@@ -11,16 +10,12 @@ from tianzhou_agent_platform.observability.context import (
     suppress_observation,
 )
 from tianzhou_agent_platform.observability.logging import ObservationLogHandler
-from tianzhou_agent_platform.store.observability_wal import (
-    WalWriter,
-    iter_segment_infos,
-    validate_segment_file,
-)
+from tests.support.obs_buffer import InMemoryObsBuffer
 
 
 @pytest.mark.asyncio
-async def test_log_handler_writes_contextual_warning_to_wal(tmp_path: Path) -> None:
-    writer = WalWriter(tmp_path, "node-1-abc")
+async def test_log_handler_writes_contextual_warning_to_buffer() -> None:
+    writer = InMemoryObsBuffer("node-1-abc")
     handler = ObservationLogHandler(writer)
     logger = logging.getLogger("test.observed")
     logger.addHandler(handler)
@@ -42,11 +37,7 @@ async def test_log_handler_writes_contextual_warning_to_wal(tmp_path: Path) -> N
         writer.close()
         await writer.wait_closed()
 
-    records = []
-    for info in iter_segment_infos(writer._directory):  # type: ignore[attr-defined]
-        frames, corrupt, trailing = validate_segment_file(info.path)
-        assert corrupt is None and not trailing
-        records.extend(frame.record for frame in frames)
+    records = writer.records
     assert len(records) == 1
     event = records[0]
     assert event.record_type == "event"
@@ -56,8 +47,8 @@ async def test_log_handler_writes_contextual_warning_to_wal(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_log_handler_honors_recursion_suppression(tmp_path: Path) -> None:
-    writer = WalWriter(tmp_path, "node-1-abc")
+async def test_log_handler_honors_recursion_suppression() -> None:
+    writer = InMemoryObsBuffer("node-1-abc")
     handler = ObservationLogHandler(writer)
     logger = logging.getLogger("test.suppressed")
     logger.addHandler(handler)

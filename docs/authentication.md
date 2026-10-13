@@ -75,9 +75,8 @@ UNIBOT_FRONTEND_BASE_URL=http://127.0.0.1:5173
 
 生产回调地址需要改为实际站点的 `/api/auth/huawei/callback`；若前端部署在 `/superbot/`，
 则回调为 `/superbot/api/auth/huawei/callback`，且 `UNIBOT_FRONTEND_BASE_URL` 也应包含 `/superbot`。
-部署启动前由 `tianzhou-agent-platform-migrate` 执行 Alembic 迁移；版本 `0006` 为旧数据库补齐
-`huawei_id`、`oidc_identities` 字段及华为身份唯一索引。Compose 的 `migrate` 服务会先完成升级，
-后端确认数据库版本与当前代码一致后才启动。数据库迁移用户需要 `ALTER` 权限。
+`huawei_id`、`oidc_identities` 字段及华为身份唯一索引随后端启动自动建表；表结构变化时后端会删除并重建全部业务表，
+已有数据全部丢失，详见[容器化部署 · 数据库表结构](container-deployment.md#数据库表结构)。
 
 ## Google、Microsoft、Apple 登录
 

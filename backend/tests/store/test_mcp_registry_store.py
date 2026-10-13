@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from importlib import import_module
 
 import pytest
-from alembic.operations import Operations
-from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine, inspect
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -23,7 +19,6 @@ from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.services.agent_integration.capabilities import CapabilityCatalog
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.repository import PersistentRepository
-from tianzhou_agent_platform.store.repository_schema import mcp_servers_table
 from tests.support.sqlite_store import sqlite_session_factory
 
 
@@ -119,16 +114,3 @@ def test_persistent_mcp_api_rejects_raw_only_credentials_before_discovery() -> N
     assert "credential_env" in response.json()["error"]["message"]
     assert "transient-secret" not in response.text
 
-
-def test_mcp_migration_creates_the_record_schema_and_preserves_existing_table() -> None:
-    migration = import_module("tianzhou_agent_platform.store.migrations.versions.0007_mcp_server_registry")
-    engine = create_engine("sqlite://")
-    with engine.begin() as connection:
-        with Operations.context(MigrationContext.configure(connection)):
-            migration.upgrade()
-            columns = {column["name"] for column in inspect(connection).get_columns("unibot_mcp_servers")}
-            assert columns == set(mcp_servers_table.c.keys())
-            migration.upgrade()
-            migration.downgrade()
-            assert not inspect(connection).has_table("unibot_mcp_servers")
-    engine.dispose()

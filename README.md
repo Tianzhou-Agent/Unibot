@@ -87,13 +87,11 @@ uv sync --extra dev
 
 ```bash
 docker compose -f docker-compose.storage.yml up -d
-uv run tianzhou-agent-platform-migrate
 uv run tianzhou-agent-platform
 ```
 
-数据库表结构由 Alembic 迁移管理：`tianzhou-agent-platform-migrate` 把数据库升级到最新版本，后端启动时
-检查数据库版本，不一致则拒绝启动，不会自行建表或改表。修改表结构时，在 `backend/` 下运行
-`uv run alembic revision --autogenerate -m "说明"` 生成迁移并人工检查后提交。后端启动时还会对
+项目没有数据库迁移：后端启动时自动建表，并在 `unibot_schema` 表记录表结构指纹。代码中的表结构变化后，
+下次启动会**删除并重建全部业务表，已有数据全部丢失**；修改表结构时直接改 SQLAlchemy 表定义即可。后端启动时还会对
 MySQL、Redis 和 NAS 执行读写探测。MySQL 是业务数据的
 权威存储，Redis 同时用于缓存、会话运行锁和可观测数据缓冲；OBS Streams 要求 Redis 7.2+ 且开启
 AOF，仓库自带的 compose 已包含该配置。NAS 默认位于仓库根目录的 `data/nas/`。可观测链路的部署、

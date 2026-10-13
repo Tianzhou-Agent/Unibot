@@ -40,7 +40,6 @@ from tianzhou_agent_platform.model_providers.tokens import output_token_reserve
 from tianzhou_agent_platform.observability.service import ObservabilityAspect
 from tianzhou_agent_platform.observability.query import ObsQueryService
 from tianzhou_agent_platform.observability.stream import RedisObsIngestWorker
-from tianzhou_agent_platform.observability.writer import ObsIngestWorker
 from tianzhou_agent_platform.observability.analytics import OperationsAnalyticsService
 from tianzhou_agent_platform.observability.logging import ObservationLogHandler
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
@@ -50,7 +49,7 @@ from tianzhou_agent_platform.observability.telemetry import (
     shutdown_tracer_provider,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
-from tianzhou_agent_platform.store.migrations import require_database_revision
+from tianzhou_agent_platform.store.schema import ensure_schema
 from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
@@ -97,7 +96,6 @@ def create_app(
     obs_store: ObservabilityStore | None = None
     obs_buffer: RedisObsBuffer | None = None
     obs_ingest_worker: RedisObsIngestWorker | None = None
-    legacy_wal_ingest_worker: ObsIngestWorker | None = None
     obs_query_service: ObsQueryService | None = None
     raw_io_writer: RawIoWriter | None = None
     if resolved_settings.obs_enabled and storage_settings is not None:
@@ -133,14 +131,6 @@ def create_app(
             wait_replicas=resolved_settings.obs_redis_wait_replicas,
             retention_days=resolved_settings.obs_retention_days,
             raw_root=resolved_settings.obs_raw_root,
-        )
-        # Transition-only reader: drain records created by versions that still
-        # used the file WAL. No new runtime records are written there.
-        legacy_wal_ingest_worker = ObsIngestWorker(
-            resolved_settings.obs_wal_root,
-            obs_store,
-            producer_instance_id,
-            wal_max_bytes=resolved_settings.obs_wal_max_bytes,
         )
         obs_query_service = ObsQueryService(obs_store, resolved_settings.obs_raw_root)
 
@@ -292,14 +282,13 @@ def create_app(
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
         try:
             if storage_stores is not None and storage_settings is not None:
-                await require_database_revision(storage_stores.mysql.engine)
+                await ensure_schema(storage_stores.mysql.engine)
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
             if obs_buffer is not None and obs_store is not None:
                 # Startup order: Redis durability check/group -> producer/consumer.
                 resolved_settings.obs_raw_root.mkdir(parents=True, exist_ok=True)
-                await obs_store.backfill_operations()
                 await obs_buffer.initialize()
                 if obs_ingest_worker is not None:
                     await obs_ingest_worker.initialize()
@@ -308,11 +297,6 @@ def create_app(
                     logging.getLogger().addHandler(obs_log_handler)
                 if obs_ingest_worker is not None:
                     obs_ingest_worker.start()
-                if (
-                    legacy_wal_ingest_worker is not None
-                    and resolved_settings.obs_wal_root.is_dir()
-                ):
-                    legacy_wal_ingest_worker.start()
             await ensure_builtin_ainas(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
@@ -338,8 +322,6 @@ def create_app(
                 await obs_buffer.wait_closed()
             if obs_ingest_worker is not None:
                 await obs_ingest_worker.stop()
-            if legacy_wal_ingest_worker is not None:
-                await legacy_wal_ingest_worker.stop()
             if obs_buffer is not None:
                 shutdown_tracer_provider()
             if obs_store is not None:
@@ -387,7 +369,6 @@ def create_app(
     app.state.observability = observability
     app.state.obs_store = obs_store
     app.state.obs_ingest_worker = obs_ingest_worker
-    app.state.legacy_wal_ingest_worker = legacy_wal_ingest_worker
     app.state.obs_buffer = obs_buffer
     app.state.obs_log_handler = obs_log_handler
     app.state.obs_query = obs_query_service or ObsQueryService(None, None)

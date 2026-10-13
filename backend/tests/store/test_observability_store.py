@@ -22,7 +22,7 @@ from tianzhou_agent_platform.store.observability_store import (
     TRACES_TABLE,
     ObservabilityStore,
 )
-from tianzhou_agent_platform.store.observability_wal import ObsRecord
+from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
 DSN = os.getenv("OBS_TEST_MYSQL_DSN", "")
 
@@ -313,7 +313,7 @@ async def test_list_traces_permissions_scoping(store: ObservabilityStore) -> Non
 async def test_started_record_cannot_downgrade_finished(store: ObservabilityStore) -> None:
     """Late-arriving started records must not downgrade finished rows
     (review P1-3): started uses INSERT IGNORE, finished fully overwrites."""
-    from tianzhou_agent_platform.store.observability_wal import ObsRecord
+    from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
     finished = make_trace_finished(1, "trace_aaa")
     await store.bulk_upsert([finished])
@@ -345,7 +345,7 @@ async def test_started_record_cannot_downgrade_finished(store: ObservabilityStor
 
 
 async def test_span_started_cannot_downgrade_finished(store: ObservabilityStore) -> None:
-    from tianzhou_agent_platform.store.observability_wal import ObsRecord
+    from tianzhou_agent_platform.store.observability_buffer import ObsRecord
 
     await store.bulk_upsert([make_span_finished(2, "trace_aaa", "span_aaa")])
     started = ObsRecord(

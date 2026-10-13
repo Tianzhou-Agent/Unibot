@@ -280,7 +280,7 @@ flowchart TB
 ```
 
 - 会话消息归档、Agent checkpoint、观测数据是三份不同职责的数据。checkpoint 是工作状态，不能等同于完整历史归档；Runner 在调用后裁剪旧 checkpoint。
-- OBS 启用时主要走 Redis Streams → ingest worker → MySQL；旧文件 WAL reader 只做遗留数据排空，不是新记录的主写入路径。
+- OBS 启用时走 Redis Streams → ingest worker → MySQL。
 - OBS 原始输入输出写入 `obs_raw_root`，不经过 `NasStore`，不应默认画成同一块业务 NAS。
 - 不提供持久化配置时，`create_app()` 可组装 InMemoryRepository / InMemorySaver / InMemorySessionTaskStore；正式模块入口传入 StorageSettings。
 

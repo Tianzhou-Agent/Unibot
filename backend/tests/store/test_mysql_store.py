@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
-from contextlib import asynccontextmanager
 
 import pytest
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, create_engine, inspect, text
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table
 from sqlalchemy.dialects import mysql
 
 from tianzhou_agent_platform.store import (
@@ -12,43 +11,6 @@ from tianzhou_agent_platform.store import (
     StoreCondition,
     StoreQuery,
 )
-from tianzhou_agent_platform.store.repository_schema import repository_metadata
-
-
-@pytest.mark.asyncio
-async def test_oauth_schema_upgrade_preserves_existing_users_and_is_idempotent() -> None:
-    # Use a real SQL engine through the async connection interface used by create_tables.
-    engine = create_engine("sqlite://")
-
-    class ConnectionAdapter:
-        def __init__(self, connection):
-            self.connection = connection
-
-        async def run_sync(self, callback):
-            return callback(self.connection)
-
-        async def execute(self, statement):
-            return self.connection.execute(statement)
-
-    class EngineAdapter:
-        @asynccontextmanager
-        async def begin(self):
-            with engine.begin() as connection:
-                yield ConnectionAdapter(connection)
-
-    with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE unibot_users (id VARCHAR(255) PRIMARY KEY, email VARCHAR(320))"))
-        connection.execute(text("INSERT INTO unibot_users VALUES ('existing', 'existing@example.com')"))
-    store = MySqlStore(EngineAdapter(), fake_session_factory)
-    await store.create_tables(repository_metadata)
-    await store.create_tables(repository_metadata)
-    with engine.begin() as connection:
-        columns = inspect(connection).get_columns("unibot_users")
-        assert [column["name"] for column in columns].count("huawei_id") == 1
-        assert [column["name"] for column in columns].count("oidc_identities") == 1
-        row = connection.execute(text("SELECT id, email, huawei_id, oidc_identities FROM unibot_users")).one()
-        assert tuple(row) == ("existing", "existing@example.com", None, None)
-    engine.dispose()
 
 
 class FakeEngine:
