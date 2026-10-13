@@ -54,17 +54,6 @@ services:
       retries: 12
     restart: unless-stopped
 
-  migrate:
-    image: unibot/backend:local
-    build:
-      context: ./backend
-    command: ["tianzhou-agent-platform-migrate"]
-    environment:
-      TZ_STORAGE_MYSQL_DSN: ${TZ_STORAGE_MYSQL_DSN:-mysql+aiomysql://unibot:unibot@mysql:3306/unibot}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
 
   backend:
     image: unibot/backend:local
@@ -114,8 +103,8 @@ services:
       - nas-data:/data/nas
       - sandbox-data:/data/sandboxes
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
       redis:
         condition: service_healthy
       vision:

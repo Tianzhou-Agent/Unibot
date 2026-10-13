@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from sqlalchemy import Table, delete as sa_delete, insert, inspect, select, text, update as sa_update
+from sqlalchemy import Table, delete as sa_delete, insert, select, update as sa_update
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError, SQLAlchemyError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.schema import MetaData
@@ -147,20 +147,6 @@ class MySqlStore:
         try:
             async with self._engine.begin() as connection:
                 await connection.run_sync(metadata.create_all)
-                if "unibot_users" in metadata.tables:
-                    columns = await connection.run_sync(lambda conn: inspect(conn).get_columns("unibot_users"))
-                    existing_columns = {column["name"] for column in columns}
-                    for column_name, column_type in (("huawei_id", "VARCHAR(255)"), ("oidc_identities", "JSON")):
-                        if column_name in existing_columns:
-                            continue
-                        try:
-                            await connection.execute(
-                                text(f"ALTER TABLE unibot_users ADD COLUMN {column_name} {column_type} NULL")
-                            )
-                        except OperationalError as exc:
-                            # Another backend node may have added the column after our inspection.
-                            if not getattr(exc.orig, "args", ()) or exc.orig.args[0] != 1060:
-                                raise
         except SQLAlchemyError as exc:
             raise self._map_sqlalchemy_error(exc) from exc
 

@@ -4,6 +4,8 @@ Date: 2026-10-01 (scope revised 2026-10-13)
 
 Status: Steps 1 (Alembic), 2 (conversations, messages, approvals), 3 (users), 4 (schedules, sandboxes), 5 (per-user records) and 6 (registry) implemented. Step 7 and the trace follow-up proposed.
 
+Update 2026-10-13: Alembic (step 1) was removed because there is no production data yet. The backend creates its tables at startup and, when the table definitions change, drops and recreates every application table (`store/schema.py`). The revision, stamp and `migrate` service notes below are historical.
+
 Target: a public multi-tenant service running several backend replicas against one MySQL database. Every replica must see every other replica's writes immediately, so no business table may be served from a process-local copy.
 
 ## 1. Context

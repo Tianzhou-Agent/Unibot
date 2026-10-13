@@ -49,7 +49,7 @@ from tianzhou_agent_platform.observability.telemetry import (
     shutdown_tracer_provider,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
-from tianzhou_agent_platform.store.migrations import require_database_revision
+from tianzhou_agent_platform.store.schema import ensure_schema
 from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
@@ -289,7 +289,7 @@ def create_app(
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
         try:
             if storage_stores is not None and storage_settings is not None:
-                await require_database_revision(storage_stores.mysql.engine)
+                await ensure_schema(storage_stores.mysql.engine)
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
