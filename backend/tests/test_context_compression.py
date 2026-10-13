@@ -182,7 +182,11 @@ def test_compression_failure_preserves_full_context_and_continues() -> None:
     conversation_id = _seed_long_conversation(repository)
 
     llm = ScriptedLLM([assistant(""), assistant("fallback answer")])
-    with TestClient(create_app(settings=_settings(), repository=repository, llm=llm)) as client:
+    # Same 2,048-token compression trigger, but enough input budget for the uncompressed fallback request.
+    settings = _settings().model_copy(
+        update={"context_window_tokens": 8_192, "context_compression_threshold_ratio": 0.25}
+    )
+    with TestClient(create_app(settings=settings, repository=repository, llm=llm)) as client:
         response = client.post(
             "/chat",
             json={"message": "latest question", "conversation_id": conversation_id},
