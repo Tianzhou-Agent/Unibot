@@ -42,9 +42,6 @@ class FakeObsStore:
     async def get_trace(self, trace_id: str) -> dict | None:
         return self.traces.get(trace_id)
 
-    async def create_tables(self) -> None:
-        return None
-
     async def bulk_upsert(self, records: list) -> int:
         from tianzhou_agent_platform.store.observability_store import _event_values, _span_values, _trace_values
 

@@ -13,7 +13,13 @@
 sh deploy/fnos/start.sh
 ```
 
-首次执行会在 `deploy/fnos/.env` 生成随机 MySQL 密码和认证密钥；再次执行会保留原配置和全部数据。
+首次执行会在 `deploy/fnos/.env` 生成随机 MySQL 密码和认证密钥；再次执行会保留原配置和全部数据。每次启动前 `migrate` 服务会先执行数据库迁移。
+
+已有部署在引入数据库迁移后首次升级时，需要先登记现有表结构，详见[容器化部署 · 数据库迁移](../../docs/container-deployment.md#数据库迁移)：
+
+```sh
+docker compose --env-file deploy/fnos/.env -f deploy/fnos/docker-compose.yml run --rm migrate tianzhou-agent-platform-migrate stamp 0001
+```
 
 ## Docker 图形界面
 

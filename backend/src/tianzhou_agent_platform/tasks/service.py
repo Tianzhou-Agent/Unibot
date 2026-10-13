@@ -129,9 +129,6 @@ class TaskService:
         self.events = event_broker or TaskEventBroker()
         self.verification_timeout_seconds = verification_timeout_seconds
 
-    async def initialize(self) -> None:
-        await self.store.initialize()
-
     async def query(
         self,
         session_id: str,

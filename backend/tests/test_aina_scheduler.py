@@ -182,3 +182,42 @@ def test_schedule_can_be_created_and_debugged_through_the_api() -> None:
     assert execution["input"] == {"message": "生成晨报预览并标出异常项"}
     assert execution["node_id"]
     assert execution["duration_ms"] >= 0
+
+
+class ChangedWhileRunning(InMemoryRepository):
+    """Applies ``during_run`` to the task while the scheduler is executing it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.during_run = None
+
+    async def get_aina(self, aina_id: str):  # type: ignore[no-untyped-def]
+        await self.during_run()
+        return await super().get_aina(aina_id)
+
+
+def test_a_run_keeps_edits_made_while_it_ran_and_does_not_restore_a_deleted_task() -> None:
+    repository = ChangedWhileRunning()
+    scheduler = AinaScheduler(repository, SimpleNamespace(), node_id="node-a")  # type: ignore[arg-type]
+
+    async def run() -> tuple[ScheduledAinaTask, list[ScheduledAinaTask]]:
+        edited = await repository.create_scheduled_aina_task(
+            ScheduledAinaTaskCreate(aina_id="report", name="Daily report", interval_seconds=60)
+        )
+        repository.during_run = lambda: repository.update_scheduled_aina_task(
+            edited.id, ScheduledAinaTaskUpdate(enabled=False, name="Paused report")
+        )
+        await scheduler.tick(now=edited.next_run_at)
+        stored = await repository.get_scheduled_aina_task(edited.id)
+
+        deleted = await repository.create_scheduled_aina_task(
+            ScheduledAinaTaskCreate(aina_id="report", name="Removed report", interval_seconds=60)
+        )
+        repository.during_run = lambda: repository.remove_scheduled_aina_task(deleted.id)
+        await scheduler.run_now(deleted.id)
+        return stored, await repository.list_scheduled_aina_tasks()
+
+    stored, remaining = asyncio.run(run())
+    assert (stored.enabled, stored.name) == (False, "Paused report")
+    assert stored.last_status == "failed"  # the AINA does not exist; the run itself is not under test
+    assert [task.name for task in remaining] == ["Paused report"]

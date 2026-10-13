@@ -12,7 +12,6 @@ from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.conversations.models import ConversationCreate
 from tianzhou_agent_platform.store.memory_repository import LLM_CALLS_RESOURCE, TRACES_RESOURCE
-from tianzhou_agent_platform.store.memory_repository import CONVERSATIONS_RESOURCE, USERS_RESOURCE
 from tianzhou_agent_platform.store.lifecycle import StorageStores
 from tianzhou_agent_platform.store.models import (
     DeleteResult,
@@ -24,15 +23,15 @@ from tianzhou_agent_platform.store.models import (
 )
 from tianzhou_agent_platform.store.repository import PersistentRepository
 from tianzhou_agent_platform.store.repository_schema import row_values
+from tests.support.sqlite_store import sqlite_session_factory
 
 
 class FakeMySqlStore:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, StoreRecord]] = {}
         self.queries: list[str] = []
-
-    async def create_tables(self, metadata: Any) -> None:
-        del metadata
+        # Conversations and approvals are queried in SQL rather than through the record methods below.
+        self.session_factory = sqlite_session_factory()
 
     async def read(self, resource: str, record_id: str) -> StoreRecord | None:
         return self.records.get(resource, {}).get(record_id)
@@ -220,7 +219,6 @@ async def test_huawei_identity_is_persisted_and_shared_across_nodes_and_restarts
     assert restored.huawei_id == "global-123"
     assert restored.name == "Updated"
     assert len(await restarted.list_users()) == 1
-    assert stores.mysql.records[USERS_RESOURCE][original.id].values["huawei_id"] == "global-123"
 
 
 @pytest.mark.asyncio
@@ -259,7 +257,7 @@ async def test_oidc_identity_is_shared_across_nodes_and_restored_after_restart(p
     await restarted.initialize()
     assert await restarted.find_user_by_id(original.id) == updated
     assert len(await restarted.list_users()) == 1
-    assert stores.mysql.records[USERS_RESOURCE][original.id].values["oidc_identities"] == {
+    assert (await restarted.find_user_by_id(original.id)).oidc_identities == {  # type: ignore[union-attr]
         provider: "https://issuer.example|subject",
     }
 
@@ -415,12 +413,14 @@ async def test_expired_run_recovers_even_when_obs_still_says_running() -> None:
     await original.initialize()
     conversation = await original.create_conversation(ConversationCreate(user_id="u1", tenant_id="t1"))
     # Seed the durable state left by a dead worker, without creating a live task.
-    stale = conversation.model_copy(update={
-        "run_status": "running",
-        "active_trace_id": "trace_dead",
-        "run_started_at": datetime.now(UTC) - timedelta(days=1),
-    })
-    await original._save_record(CONVERSATIONS_RESOURCE, conversation.id, stale)
+    await original._conversation_store.mutate(  # noqa: SLF001
+        conversation.id,
+        lambda current: current.model_copy(update={
+            "run_status": "running",
+            "active_trace_id": "trace_dead",
+            "run_started_at": datetime.now(UTC) - timedelta(days=1),
+        }),
+    )
     restarted = PersistentRepository(stores, obs_trace_status_resolver=stale_status)
     await restarted.initialize()
 

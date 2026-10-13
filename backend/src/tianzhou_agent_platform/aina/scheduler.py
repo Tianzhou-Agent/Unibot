@@ -209,9 +209,7 @@ class AinaScheduler:
 
     async def tick(self, *, now: datetime | None = None) -> None:
         current = now or datetime.now(UTC)
-        for task in await self.repository.list_scheduled_aina_tasks():
-            if not task.enabled or task.next_run_at > current:
-                continue
+        for task in await self.repository.list_due_scheduled_aina_tasks(current):
             claim_id = f"{task.id}:{task.next_run_at.isoformat()}"
             async with self._lease(
                 "aina-schedule-lease",
@@ -329,10 +327,7 @@ class AinaScheduler:
             started_at=now,
         )
         await self.repository.put_scheduled_aina_execution(execution)
-        running = task.model_copy(
-            update={"last_status": "running", "last_node_id": self.node_id, "updated_at": now}
-        )
-        await self.repository.put_scheduled_aina_task(running)
+        running = await self.repository.start_scheduled_aina_run(task.id, node_id=self.node_id, started_at=now)
         try:
             record = await self.repository.get_aina(task.aina_id)
             installation = await self.repository.get_installation(
@@ -369,15 +364,13 @@ class AinaScheduler:
                 deep=True,
             )
         )
-        updated = running.model_copy(
-            update={
-                "next_run_at": next_scheduled_run(task, after=finished) if advance_schedule else task.next_run_at,
-                "last_run_at": finished,
-                "last_status": status,
-                "last_error": error,
-                "last_result": result,
-                "updated_at": finished,
-            },
-            deep=True,
+        finished_task = await self.repository.finish_scheduled_aina_run(
+            task.id,
+            status=status,
+            error=error,
+            result=result,
+            finished_at=finished,
+            advance_schedule=advance_schedule,
         )
-        return await self.repository.put_scheduled_aina_task(updated)
+        # A task deleted while it ran stays deleted; report the run on the task as it was.
+        return finished_task or running or task

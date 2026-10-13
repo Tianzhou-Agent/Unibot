@@ -49,6 +49,7 @@ from tianzhou_agent_platform.observability.telemetry import (
     shutdown_tracer_provider,
 )
 from tianzhou_agent_platform.store.lifecycle import StorageStores, create_storage_stores
+from tianzhou_agent_platform.store.migrations import require_database_revision
 from tianzhou_agent_platform.store.checkpoint import MySqlCheckpointSaver, graph_checkpoint_tables
 from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
@@ -288,15 +289,13 @@ def create_app(
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
         try:
             if storage_stores is not None and storage_settings is not None:
+                await require_database_revision(storage_stores.mysql.engine)
                 storage_settings.nas_root_path.mkdir(parents=True, exist_ok=True)
                 await cast(PersistentRepository, resolved_repository).initialize()
-                await cast(MySqlCheckpointSaver, agent_checkpointer).initialize()
                 lifespan_app.state.storage_status = await run_storage_runtime_check(storage_stores)
-            await task_service.initialize()
             if obs_buffer is not None and obs_store is not None:
-                # Startup order: OBS tables -> Redis durability check/group -> producer/consumer.
+                # Startup order: Redis durability check/group -> producer/consumer.
                 resolved_settings.obs_raw_root.mkdir(parents=True, exist_ok=True)
-                await obs_store.create_tables()
                 await obs_store.backfill_operations()
                 await obs_buffer.initialize()
                 if obs_ingest_worker is not None:

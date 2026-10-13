@@ -35,7 +35,6 @@ async def _service(*, gate: object | None = None) -> tuple[TaskService, str]:
         InMemorySessionTaskStore(),
         completion_gate=gate,  # type: ignore[arg-type]
     )
-    await service.initialize()
     return service, conversation.id
 
 

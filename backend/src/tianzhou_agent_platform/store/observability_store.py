@@ -11,7 +11,6 @@ default) so OBS batches cannot exhaust the business connection pool.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -33,7 +32,6 @@ from sqlalchemy import (
     delete as sa_delete,
     func,
     select,
-    text,
     update,
 )
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -234,36 +232,6 @@ def _as_datetime(value: Any) -> datetime | None:
 def _record_version(record: ObsRecord) -> int:
     """Monotonic per-record version: occurred_at in microseconds (UTC)."""
     return int(record.occurred_at.timestamp() * 1_000_000)
-
-
-def _is_duplicate_column_error(exc: Exception) -> bool:
-    """MySQL errno 1060 (duplicate column) means another instance already
-    ran the migration."""
-    return _mysql_errno_in_chain(exc, {1060})
-
-
-def _is_table_exists_error(exc: Exception) -> bool:
-    """MySQL errno 1050 (table already exists) means another instance already
-    created the tables during a concurrent cold start."""
-    return _mysql_errno_in_chain(exc, {1050})
-
-
-def _is_ddl_contention_error(exc: Exception) -> bool:
-    """MySQL errno 1684: table skipped because a concurrent DDL statement is
-    modifying its definition — transient, safe to retry."""
-    return _mysql_errno_in_chain(exc, {1684})
-
-
-def _mysql_errno_in_chain(exc: Exception, errnos: set[int]) -> bool:
-    cursor: Any = exc
-    while cursor is not None:
-        args = getattr(cursor, "args", None)
-        if args:
-            for arg in args:
-                if isinstance(arg, int) and arg in errnos:
-                    return True
-        cursor = getattr(cursor, "__cause__", None) or getattr(cursor, "orig", None)
-    return False
 
 
 def _trace_values(record: ObsRecord) -> dict[str, Any]:
@@ -550,76 +518,6 @@ class ObservabilityStore:
         engine = create_async_engine(dsn, pool_size=pool_size, max_overflow=max_overflow)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         return cls(engine, session_factory)
-
-    async def create_tables(self) -> None:
-        async with self._engine.begin() as connection:
-            # create tables one by one so a concurrent cold start (another
-            # instance creating the same table -> errno 1050) only skips the
-            # table that raced, instead of aborting the remaining CREATEs
-            # (review round 5, P1)
-            for table in OBS_METADATA.sorted_tables:
-                for attempt in range(3):
-                    try:
-                        await connection.run_sync(table.create, checkfirst=True)
-                        break
-                    except Exception as exc:  # noqa: BLE001
-                        if _is_table_exists_error(exc):
-                            logger.info("Table %s already created by another instance", table.name)
-                            break
-                        if _is_ddl_contention_error(exc) and attempt < 2:
-                            await asyncio.sleep(0.2 * (attempt + 1))
-                            continue
-                        raise
-            # SQLAlchemy create_all() never alters existing tables: migrate the
-            # record_version columns explicitly so databases created by an
-            # earlier schema keep working after upgrade (review round 3, P0).
-            await self._ensure_schema_columns(connection)
-
-    async def _ensure_schema_columns(self, connection: Any) -> None:
-        # Concurrent upgrades are tolerated: errno 1060 (duplicate column)
-        # means another instance already migrated; errno 1684 (table skipped
-        # by concurrent DDL) is transient metadata-lock contention and is
-        # retried (review round 4/5, P1).
-        for attempt in range(3):
-            try:
-                migrations = [
-                    (TRACES_TABLE, "record_version", "BIGINT NOT NULL DEFAULT 0"),
-                    (SPANS_TABLE, "record_version", "BIGINT NOT NULL DEFAULT 0"),
-                    (SPANS_TABLE, "producer_instance_id", "VARCHAR(255) NULL"),
-                    (SPANS_TABLE, "target_version", "VARCHAR(255) NULL"),
-                    (EVENTS_TABLE, "record_version", "BIGINT NOT NULL DEFAULT 0"),
-                    (EVENTS_TABLE, "sequence_no", "BIGINT NOT NULL DEFAULT 0"),
-                ]
-                for table_name, column_name, column_type in migrations:
-                    result = await connection.execute(
-                        text(
-                            "SELECT COUNT(*) FROM information_schema.columns "
-                            "WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column"
-                        ),
-                        {"table": table_name, "column": column_name},
-                    )
-                    if int(result.scalar_one()) > 0:
-                        continue
-                    try:
-                        # table names come from module constants, never user input
-                        await connection.execute(
-                            text(
-                                f"ALTER TABLE {table_name} "
-                                f"ADD COLUMN {column_name} {column_type}"
-                            )
-                        )
-                        logger.info("Migrated %s: added %s column", table_name, column_name)
-                    except Exception as exc:  # noqa: BLE001
-                        if _is_duplicate_column_error(exc):
-                            logger.info("%s already migrated by another instance", table_name)
-                            continue
-                        raise
-                return
-            except Exception as exc:  # noqa: BLE001
-                if _is_ddl_contention_error(exc) and attempt < 2:
-                    await asyncio.sleep(0.2 * (attempt + 1))
-                    continue
-                raise
 
     async def bulk_upsert(self, records: list[ObsRecord]) -> int:
         """Persist buffered records in one transaction. Returns row count."""

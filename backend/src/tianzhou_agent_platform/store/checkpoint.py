@@ -62,8 +62,6 @@ graph_checkpoint_tables = {
 
 
 class CheckpointDatabase(Protocol):
-    async def create_tables(self, metadata: MetaData) -> None: ...
-
     async def create(self, resource: str, values: dict[str, Any]) -> StoreRecord: ...
 
     async def read(self, resource: str, record_id: str | int) -> StoreRecord | None: ...
@@ -81,9 +79,6 @@ class MySqlCheckpointSaver(BaseCheckpointSaver[str]):
     def __init__(self, database: CheckpointDatabase, *, serde: SerializerProtocol | None = None) -> None:
         super().__init__(serde=serde)
         self.database = database
-
-    async def initialize(self) -> None:
-        await self.database.create_tables(graph_checkpoint_metadata)
 
     def put(
         self,
