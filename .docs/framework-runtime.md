@@ -10,6 +10,7 @@
 | Cron 语义 | croniter | 时区选择和任务字段校验 |
 | 多节点互斥 | redis-py `Lock` | 锁命名空间和节点执行记录 |
 | 远程 Agent 互操作 | 官方 A2A Python SDK | AINA 安装权限、Canvas/Widget 和 Trace 映射 |
+| 标准工具互操作 | 官方 MCP Python SDK 2.x | Server 配置、工具审批和 Agent 能力映射 |
 
 框架负责通用机制，AINA 代码只保留 Unibot 自身的产品语义。现有 FastAPI、Pydantic、SQLAlchemy、Redis、React 和 Vite 边界保持不变。
 
@@ -37,7 +38,7 @@ MySQL 中的 AINA 任务和执行历史仍是业务事实来源。这个设计�
 ## AINA、A2A 与 MCP
 
 - A2A 复用范围：Agent Card、远程 Agent 发现、消息发送、任务状态、Artifact 和流式更新。
-- MCP 适用范围：工具、资源和 Prompt 的发现及调用。它适合后续替换通用 Tool HTTP 接口，但不能表达完整 AINA App。
+- MCP 适用范围：工具发现及调用。Unibot 通过 Streamable HTTP 自动协商协议版本，注册/刷新 Server 时同步工具描述，并将工具动态加入 Agent 能力范围；资源和 Prompt 将在后续迭代接入。
 - AINA 保留范围：安装与授权、Canvas 路由、`main_widget`、宿主 Widget、Unibot Trace 和内置 AINA。
 
 远程 AINA 的 `runtime.protocol` 支持：
@@ -65,3 +66,15 @@ MySQL 中的 AINA 任务和执行历史仍是业务事实来源。这个设计�
   }
 }
 ```
+
+MCP Server 在设置页独立配置，不需要包装成 AINA。MCP 工具的 `destructiveHint` 或 Server 的高风险级别会进入现有人工审批流程。
+
+认证凭据由后端环境配置注入，注册表仅保存 `credential_env` 引用。例如，在 `backend/.env`（容器部署使用根目录 `.env`）配置：
+
+```dotenv
+UNIBOT_MCP_CREDENTIALS='{"MCP_SERVER_TOKEN":"your-token"}'
+```
+
+设置页选择 Bearer 或 API Key 认证并填写凭据引用 `MCP_SERVER_TOKEN`。也可将同名变量直接注入后端进程环境；进程环境优先于上述映射。
+Docker Compose 会传递 `UNIBOT_MCP_CREDENTIALS`，所以本地与生产可以共用同一套引用配置。
+MCP 注册记录不保存密钥，SQL 存储下不接受仅随注册请求传入、重启后无法恢复的临时密钥。

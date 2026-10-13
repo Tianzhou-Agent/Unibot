@@ -30,6 +30,7 @@ from tianzhou_agent_platform.aina.document.builtin import (
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
+from tianzhou_agent_platform.aina.mcp.models import McpServerRecord, McpToolDescriptor
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -64,6 +65,8 @@ class CapabilityRegistry(Protocol):
 
     async def list_tools(self) -> list[ToolRecord]: ...
 
+    async def list_mcp_servers(self) -> list[McpServerRecord]: ...
+
     async def list_skills(self) -> list[SkillRecord]: ...
 
     async def list_ainas(self) -> list[AinaRecord]: ...
@@ -77,14 +80,14 @@ class CapabilityRegistry(Protocol):
 
 @dataclass(slots=True)
 class Capability:
-    kind: Literal["tool", "aina", "builtin"]
+    kind: Literal["tool", "mcp", "aina", "builtin"]
     capability_id: str
     function_name: str
     display_name: str
     description: str
     input_schema: dict[str, Any]
     requires_confirmation: bool
-    value: ToolRecord | tuple[AinaRecord, AinaInstallation] | str
+    value: ToolRecord | tuple[McpServerRecord, McpToolDescriptor] | tuple[AinaRecord, AinaInstallation] | str
     owner_aina_id: str | None = None
 
     def llm_definition(self) -> dict[str, Any]:
@@ -108,6 +111,9 @@ class Capability:
     @property
     def retries_transiently(self) -> bool:
         """Only side-effect-free remote tools may be retried (automatically or by the model)."""
+        if self.kind == "mcp":
+            server, tool = cast(tuple[McpServerRecord, McpToolDescriptor], self.value)
+            return server.side_effect_level == "none" and tool.annotations.get("readOnlyHint") is True
         return self.kind == "tool" and cast(ToolRecord, self.value).side_effect_level == "none"
 
 
@@ -218,6 +224,30 @@ class CapabilityCatalog:
                 requires_confirmation=tool.side_effect_level == "high",
                 value=tool,
             )
+        for server in await self.registry.list_mcp_servers():
+            if server.status != "published" or not capability_visible(
+                server,
+                user_id=conversation.user_id,
+                tenant_id=conversation.tenant_id,
+                auth_enforced=self.auth_enforced,
+                is_admin=is_admin,
+            ):
+                continue
+            for mcp_tool in server.tools:
+                capability_id = f"{server.server_id}:{mcp_tool.name}"
+                name = function_name("mcp", capability_id)
+                capabilities[name] = Capability(
+                    kind="mcp",
+                    capability_id=capability_id,
+                    function_name=name,
+                    display_name=mcp_tool.title or mcp_tool.name,
+                    description=mcp_tool.description,
+                    input_schema=mcp_tool.input_schema,
+                    requires_confirmation=(
+                        server.side_effect_level == "high" or mcp_tool.annotations.get("destructiveHint") is True
+                    ),
+                    value=(server, mcp_tool),
+                )
         for capability_id, display_name, description, input_schema in _PLATFORM_BUILTINS:
             name = function_name("builtin", capability_id)
             capabilities[name] = Capability(
@@ -570,17 +600,17 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
 
 
 def resolve_forced_capability(requested: str | None, capabilities: dict[str, Capability]) -> str | None:
-    """Function name of a ``tool:<id>`` / ``aina:<id>`` / ``builtin:<id>`` (or bare id) request."""
+    """Function name of a ``tool:<id>`` / ``mcp:<id>`` / ``aina:<id>`` / ``builtin:<id>`` request."""
     if requested is None:
         return None
     kind: str | None = None
     capability_id = requested
     if ":" in requested:
         kind, capability_id = requested.split(":", 1)
-        if kind not in {"tool", "aina", "builtin"}:
+        if kind not in {"tool", "mcp", "aina", "builtin"}:
             raise PlatformError(
                 "INVALID_REQUEST",
-                "Capability must use tool:<id>, aina:<id>, or builtin:<id>",
+                "Capability must use tool:<id>, mcp:<server>:<tool>, aina:<id>, or builtin:<id>",
             )
     matches = [
         item
@@ -660,6 +690,9 @@ def tool_error_payload(
 
 
 def capability_version(capability: Capability) -> str | None:
+    if capability.kind == "mcp":
+        server, _tool = cast(tuple[McpServerRecord, McpToolDescriptor], capability.value)
+        return server.server_version
     if capability.kind == "tool":
         return cast(ToolRecord, capability.value).version
     if capability.kind == "aina":

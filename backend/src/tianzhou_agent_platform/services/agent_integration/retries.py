@@ -53,7 +53,7 @@ def tool_retry_middleware(registry: dict[str, Capability]) -> list[ToolRetryMidd
     """
     groups: dict[int, list[str]] = defaultdict(list)
     for name, capability in registry.items():
-        if capability.retries_transiently:
+        if capability.kind == "tool" and capability.retries_transiently:
             retries = cast(ToolRecord, capability.value).retries
             if retries > 0:
                 groups[retries].append(name)

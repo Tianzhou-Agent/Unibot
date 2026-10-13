@@ -391,6 +391,7 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
     assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 0}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
+        "mcp_tool": 0,
         "remote_aina": 0,
         "builtin_capability": 0,
     }

@@ -26,6 +26,7 @@ class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(str(_BACKEND_ROOT / ".env"), str(_BACKEND_ROOT / ".venv")),
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
         populate_by_name=True,
     )
@@ -51,6 +52,10 @@ class AgentSettings(BaseSettings):
         default=15.0,
         gt=0,
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_TIMEOUT_SECONDS", "capability_timeout_seconds"),
+    )
+    mcp_credentials: dict[str, SecretStr] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("UNIBOT_MCP_CREDENTIALS", "mcp_credentials"),
     )
     capability_allowed_origins: str = Field(
         default="",

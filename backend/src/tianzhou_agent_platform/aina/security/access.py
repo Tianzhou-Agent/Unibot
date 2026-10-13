@@ -1,9 +1,10 @@
+from tianzhou_agent_platform.aina.mcp.models import McpServerRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 
 
 def capability_visible(
-    record: ToolRecord | SkillRecord,
+    record: ToolRecord | SkillRecord | McpServerRecord,
     *,
     user_id: str,
     tenant_id: str,
