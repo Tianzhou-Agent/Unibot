@@ -34,6 +34,11 @@ jobs:
           - name: frontend
             context: frontend
             image: unibot-frontend
+          - name: frontend-superbot
+            context: frontend
+            image: unibot-frontend-superbot
+            build-args: |
+              VITE_BASE_PATH=/superbot/
           - name: vision
             context: vision-service
             image: unibot-vision

@@ -62,7 +62,7 @@ docker compose up -d --build frontend backend
 
 ```nginx
 location = /superbot {
-    return 308 /superbot/;
+    return 308 /superbot/$is_args$args;
 }
 location /superbot/ {
     proxy_pass http://127.0.0.1:8080;
@@ -79,6 +79,8 @@ location /superbot/ {
 默认 `UNIBOT_BASE_PATH=/`，继续支持原来的根路径部署。直接构建前端镜像时使用
 `--build-arg VITE_BASE_PATH=/superbot/`。预构建镜像的前缀已经固定，不能仅修改
 运行时 `.env` 切换；现有根路径 Release 需要换成带 `/superbot/` 前缀的新镜像。
+CI 同时发布 `ghcr.io/tianzhou-agent/unibot-frontend-superbot`（`/superbot/` 前缀）和
+`ghcr.io/tianzhou-agent/unibot-frontend`（根路径）。
 
 ## GPU 图片识别
 
