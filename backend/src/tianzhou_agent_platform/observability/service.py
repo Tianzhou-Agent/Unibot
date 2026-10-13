@@ -104,7 +104,7 @@ class TraceContext:
     tenant_id: str
 
 
-def _otel_trace_id_for(legacy_trace_id: str) -> str:
+def otel_trace_id_for(legacy_trace_id: str) -> str:
     """``trace_<32hex>`` -> ``<32hex>``; anything else is assumed OTel format."""
     if legacy_trace_id.startswith("trace_") and len(legacy_trace_id) == 38:
         return legacy_trace_id[6:]
@@ -267,7 +267,7 @@ class ObservabilityAspect:
                         trace_id, legacy_root_span_id, self._otel_trace_ids[trace_id]
                     )
             return True
-        otel_trace_id = _otel_trace_id_for(trace_id)
+        otel_trace_id = otel_trace_id_for(trace_id)
         context: TraceContext | None = None
         root_span_id: str | None = None
         if self._obs_store is not None:
@@ -378,7 +378,7 @@ class ObservabilityAspect:
         return sequence
 
     def _new_otel_trace_id(self, legacy_trace_id: str) -> str:
-        otel_id = _otel_trace_id_for(legacy_trace_id)
+        otel_id = otel_trace_id_for(legacy_trace_id)
         self._otel_trace_ids[legacy_trace_id] = otel_id
         return otel_id
 
@@ -1066,7 +1066,7 @@ class ObservabilityAspect:
         direct-write fallback (design 14)."""
         import json as _json
 
-        otel_trace_id = self._otel_trace_ids.get(trace_id, _otel_trace_id_for(trace_id))
+        otel_trace_id = self._otel_trace_ids.get(trace_id, otel_trace_id_for(trace_id))
         context = self._trace_contexts.get(trace_id)
         records: list[ObsRecord] = []
         trace_finished = ObsRecord(

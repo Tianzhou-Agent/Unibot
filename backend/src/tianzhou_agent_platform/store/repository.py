@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
@@ -37,6 +37,7 @@ from tianzhou_agent_platform.store.memory_repository import (
     TRACES_RESOURCE,
     InMemoryRepository,
     INTERRUPTED_RUN_ERROR,
+    RUN_IN_PROGRESS_TRACE_STATUSES,
     conversation_with_status,
     deployed_aina_project,
     finished_run,
@@ -72,6 +73,12 @@ from tianzhou_agent_platform.store.repository_schema import (
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
 CONVERSATION_RUN_TTL_SECONDS = 15 * 60
+# With the OBS pipeline on, the traces and LLM calls of this process's runs are kept in memory only while a run or a
+# reader can still need them: OBS stores them durably, and every reader falls back to OBS when a trace is absent, as
+# it is on another node or after a restart. The window covers OBS ingest lag.
+RUN_TRACE_RETENTION = timedelta(minutes=15)
+# Bounds traces that never finish, such as a turn paused for an approval nobody answers. Running traces are kept.
+MAX_RUN_TRACES = 2000
 CONVERSATION_RUN_HEARTBEAT_SECONDS = 30
 
 
@@ -103,6 +110,9 @@ class PersistentRepository(InMemoryRepository):
         # pipeline when a trace is no longer in the in-memory repository.
         self.obs_trace_status_resolver = obs_trace_status_resolver
         self._conversation_run_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+        # Traces and LLM calls created by this process's runs; legacy rows read on demand are not pruned.
+        self._run_trace_ids: set[str] = set()
+        self._run_llm_call_ids: set[str] = set()
         self._conversation_store = ConversationStore(stores.mysql)
         self._user_store = UserStore(stores.mysql)
         self._schedule_store = ScheduleStore(stores.mysql)
@@ -819,6 +829,48 @@ class PersistentRepository(InMemoryRepository):
         denied = await self._conversation_store.deny_pending_approvals(conversation_id)
         # As in InMemoryRepository: only approvals whose trace this process holds are reported for closing.
         return [approval for approval in denied if approval.trace_id in self._traces]
+
+    async def create_trace(self, trace: TraceRecord) -> TraceRecord:
+        created = await super().create_trace(trace)
+        if not self.persist_observability:
+            async with self._lock:
+                self._run_trace_ids.add(trace.trace_id)
+            await self._prune_run_traces(datetime.now(UTC))
+        return created
+
+    async def upsert_llm_call(self, call: LLMCallRecord) -> None:
+        await super().upsert_llm_call(call)
+        if not self.persist_observability:
+            async with self._lock:
+                self._run_llm_call_ids.add(call.call_id)
+
+    async def _prune_run_traces(self, now: datetime) -> None:
+        """Drop run traces finished longer than the retention ago, then the oldest beyond the cap, with their calls."""
+        async with self._lock:
+            runs = [self._traces[trace_id] for trace_id in self._run_trace_ids if trace_id in self._traces]
+            expired = {
+                trace.trace_id
+                for trace in runs
+                if trace.status not in RUN_IN_PROGRESS_TRACE_STATUSES
+                and trace.completed_at is not None
+                and now - trace.completed_at > RUN_TRACE_RETENTION
+            }
+            evictable = sorted(
+                (trace for trace in runs if trace.trace_id not in expired and trace.status != "running"),
+                key=lambda trace: trace.created_at,
+            )
+            excess = len(runs) - len(expired) - MAX_RUN_TRACES
+            expired.update(trace.trace_id for trace in evictable[: max(0, excess)])
+            for trace_id in expired:
+                self._traces.pop(trace_id, None)
+            self._run_trace_ids = {trace_id for trace_id in self._run_trace_ids if trace_id in self._traces}
+            for call_id in list(self._run_llm_call_ids):
+                call = self._llm_calls.get(call_id)
+                if call is None or call.trace_id in expired or (
+                    call.trace_id not in self._traces and now - call.created_at > RUN_TRACE_RETENTION
+                ):
+                    self._llm_calls.pop(call_id, None)
+                    self._run_llm_call_ids.discard(call_id)
 
     async def get_trace(self, trace_id: str) -> TraceRecord:
         try:

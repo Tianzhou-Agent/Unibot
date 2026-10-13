@@ -56,11 +56,10 @@ def create_feedback_router() -> APIRouter:
             tenant_id=actor.tenant_id,
         )
         message = _assistant_message(conversation, message_id)
-        trace = await _optional_trace(data_repository, message.trace_id)
+        agent_name, agent_version = await _answering_agent(request, data_repository, message.trace_id)
         user = getattr(request.state, "user", None)
         user_name = getattr(user, "name", None) or actor.user_id
         user_email = str(getattr(user, "email", ""))
-        agent_name, agent_version = _agent_identity(trace)
         existing = await data_repository.get_feedback_for_message(
             message_id,
             user_id=actor.user_id,
@@ -252,15 +251,27 @@ async def _optional_trace(data_repository, trace_id: str | None):  # type: ignor
         raise
 
 
-def _agent_identity(trace) -> tuple[str, str]:  # type: ignore[no-untyped-def]
-    if trace is None:
-        return "Unibot", ""
-    span = next((item for item in trace.spans if item.kind == "aina"), None)
+async def _answering_agent(request: Request, data_repository, trace_id: str | None) -> tuple[str, str]:  # type: ignore[no-untyped-def]
+    """The agent that produced an answer, from its run trace or, once the run left memory, from OBS."""
+    trace = await _optional_trace(data_repository, trace_id)
+    if trace is not None:
+        return _agent_identity([span.model_dump() for span in trace.spans])
+    query = getattr(request.app.state, "obs_query", None)
+    if trace_id and query is not None and query.enabled:
+        try:
+            return _agent_identity(await query.run_trace_spans(trace_id))
+        except Exception:
+            logger.exception("OBS span query failed; recording feedback without the answering agent")
+    return "Unibot", ""
+
+
+def _agent_identity(spans: list[dict[str, Any]]) -> tuple[str, str]:
+    span = next((item for item in spans if item["kind"] == "aina"), None)
     if span is None:
-        span = next((item for item in trace.spans if item.kind == "model"), None)
+        span = next((item for item in spans if item["kind"] == "model"), None)
     if span is None:
         return "Unibot", ""
-    return span.target_id or span.name or "Unibot", span.target_version or ""
+    return span.get("target_id") or span.get("name") or "Unibot", span.get("target_version") or ""
 
 
 def _aware(value: datetime | None) -> datetime | None:

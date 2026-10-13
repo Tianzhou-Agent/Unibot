@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from tianzhou_agent_platform.model_providers.tokens import estimate_request_tokens
+from tianzhou_agent_platform.observability.service import otel_trace_id_for
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
 
 logger = logging.getLogger(__name__)
@@ -368,6 +369,12 @@ class ObsQueryService:
             "items": [self._trace_dto(row) for row in traces[:page_size]],
             "has_more": len(traces) > page_size,
         }
+
+    async def run_trace_spans(self, run_trace_id: str) -> list[dict[str, Any]]:
+        """The OBS spans of a run trace, given the run's own (legacy) trace id; empty when OBS has none."""
+        if self._store is None:
+            return []
+        return await self._store.list_spans(otel_trace_id_for(run_trace_id))
 
     async def admin_trace_detail(
         self,

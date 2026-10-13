@@ -122,3 +122,41 @@ def test_feedback_rejects_another_users_message() -> None:
             },
         )
         assert denied.status_code == 403
+
+
+class _ObsWithSpans:
+    enabled = True
+
+    def __init__(self, spans: list[dict]) -> None:
+        self.spans = spans
+        self.requested: list[str] = []
+
+    async def run_trace_spans(self, run_trace_id: str) -> list[dict]:
+        self.requested.append(run_trace_id)
+        return self.spans
+
+
+def test_feedback_names_the_answering_agent_from_obs_once_the_run_left_memory() -> None:
+    app = create_app(settings=_settings(), llm=ScriptedLLM([assistant("回复")]), enforce_auth=True)
+
+    with TestClient(app) as client:
+        _register(client, "member@example.com", "反馈用户")
+        answered = client.post("/chat", json={"message": "问题"}).json()
+        # The run trace has been dropped from this process (retention, a restart, or another node answered).
+        app.state.repository._traces.pop(answered["trace_id"])
+        obs = _ObsWithSpans(
+            [
+                {"kind": "model", "name": "llm", "target_id": "model-x", "target_version": None},
+                {"kind": "aina", "name": "aina.call", "target_id": "com.example.docs", "target_version": "2.1.0"},
+            ]
+        )
+        app.state.obs_query = obs
+
+        submitted = client.put(
+            f"/feedback/messages/{answered['message_id']}",
+            json={"conversation_id": answered["conversation_id"], "rating": "up"},
+        )
+
+    assert submitted.status_code == 200
+    assert (submitted.json()["agent_name"], submitted.json()["agent_version"]) == ("com.example.docs", "2.1.0")
+    assert obs.requested == [answered["trace_id"]]
