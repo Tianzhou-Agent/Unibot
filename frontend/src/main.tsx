@@ -12,7 +12,7 @@ async function enableMocking() {
   const { worker } = await import("./mocks/browser");
   await worker.start({
     onUnhandledRequest: "bypass",
-    serviceWorker: { url: "/mockServiceWorker.js" },
+    serviceWorker: { url: `${import.meta.env.BASE_URL}mockServiceWorker.js` },
   });
 }
 
@@ -21,7 +21,7 @@ enableMocking().then(() => {
   if (!container) throw new Error("Root element not found");
   createRoot(container).render(
     <StrictMode>
-      <BrowserRouter>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <AuthProvider>
           <LanguageBoundary>
             <App />
