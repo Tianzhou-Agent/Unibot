@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Bot, Github, Loader2, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { Apple, Bot, Building2, Github, Globe, Grid2X2, Loader2, LockKeyhole, Mail, UserRound } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { apiErrorMessage, apiUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -22,6 +22,13 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const from = ((location.state as { from?: string } | null)?.from ?? "/chat");
+  const oauthProviders = [
+    { id: "google", enabled: config.google_enabled, icon: Globe },
+    { id: "microsoft", enabled: config.microsoft_enabled, icon: Grid2X2 },
+    { id: "apple", enabled: config.apple_enabled, icon: Apple },
+    { id: "huawei", enabled: config.huawei_enabled, icon: Building2 },
+    { id: "github", enabled: config.github_enabled, icon: Github },
+  ].filter((provider) => provider.enabled);
 
   if (!loading && user) return <Navigate to={from} replace />;
 
@@ -103,15 +110,20 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {config.github_enabled ? (
+          {oauthProviders.length > 0 ? (
             <>
-              <a
-                href={apiUrl(`/auth/github?next=${encodeURIComponent(from)}`)}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-line bg-white text-sm font-bold text-ink transition hover:bg-app-soft"
-              >
-                <Github className="h-4.5 w-4.5" />
-                {t("github")}
-              </a>
+              <div className="space-y-3">
+                {oauthProviders.map(({ id, icon: Icon }) => (
+                  <a
+                    key={id}
+                    href={apiUrl(`/auth/${id}?next=${encodeURIComponent(from)}`)}
+                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-line bg-white text-sm font-bold text-ink transition hover:bg-app-soft"
+                  >
+                    <Icon className="h-4.5 w-4.5" />
+                    {t(id)}
+                  </a>
+                ))}
+              </div>
               <div className="my-5 flex items-center gap-3 text-[11px] text-ink-subtle">
                 <span className="h-px flex-1 bg-line" />{t("orEmail")}<span className="h-px flex-1 bg-line" />
               </div>

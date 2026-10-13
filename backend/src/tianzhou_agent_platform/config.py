@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -231,6 +232,72 @@ class AgentSettings(BaseSettings):
         default="2026-03-10",
         validation_alias=AliasChoices("UNIBOT_GITHUB_API_VERSION", "github_api_version"),
     )
+    huawei_oauth_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_HUAWEI_BASE_URL", "UNIPORTAL_URL", "huawei_oauth_base_url"),
+    )
+    huawei_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_HUAWEI_CLIENT_ID", "HUAWEI_OAUTH_CLIENT_ID", "huawei_oauth_client_id"),
+    )
+    huawei_oauth_client_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "UNIBOT_HUAWEI_CLIENT_SECRET", "HUAWEI_OAUTH_CLIENT_SECRET", "huawei_oauth_client_secret"
+        ),
+    )
+    huawei_oauth_callback_url: str = Field(
+        default="http://127.0.0.1:5173/api/auth/huawei/callback",
+        validation_alias=AliasChoices("UNIBOT_HUAWEI_CALLBACK_URL", "huawei_oauth_callback_url"),
+    )
+    huawei_oauth_ssl_verify: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_HUAWEI_SSL_VERIFY", "huawei_oauth_ssl_verify"),
+    )
+    huawei_oauth_ca_bundle: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_HUAWEI_CA_BUNDLE", "huawei_oauth_ca_bundle"),
+    )
+    google_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_GOOGLE_CLIENT_ID", "google_oauth_client_id"),
+    )
+    google_oauth_client_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_GOOGLE_CLIENT_SECRET", "google_oauth_client_secret"),
+    )
+    google_oauth_callback_url: str = Field(
+        default="http://127.0.0.1:5173/api/auth/google/callback",
+        validation_alias=AliasChoices("UNIBOT_GOOGLE_CALLBACK_URL", "google_oauth_callback_url"),
+    )
+    microsoft_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_MICROSOFT_CLIENT_ID", "microsoft_oauth_client_id"),
+    )
+    microsoft_oauth_client_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_MICROSOFT_CLIENT_SECRET", "microsoft_oauth_client_secret"),
+    )
+    microsoft_oauth_callback_url: str = Field(
+        default="http://127.0.0.1:5173/api/auth/microsoft/callback",
+        validation_alias=AliasChoices("UNIBOT_MICROSOFT_CALLBACK_URL", "microsoft_oauth_callback_url"),
+    )
+    microsoft_oauth_tenant: str = Field(
+        default="common",
+        validation_alias=AliasChoices("UNIBOT_MICROSOFT_TENANT", "microsoft_oauth_tenant"),
+    )
+    apple_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_APPLE_CLIENT_ID", "apple_oauth_client_id"),
+    )
+    apple_oauth_client_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_APPLE_CLIENT_SECRET", "apple_oauth_client_secret"),
+    )
+    apple_oauth_callback_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("UNIBOT_APPLE_CALLBACK_URL", "apple_oauth_callback_url"),
+    )
     admin_identities: str = Field(
         default="",
         validation_alias=AliasChoices("UNIBOT_ADMIN_IDENTITIES", "admin_identities"),
@@ -315,6 +382,14 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("UNIBOT_SYSTEM_PROMPT", "system_prompt"),
     )
 
+    @field_validator("microsoft_oauth_tenant")
+    @classmethod
+    def validate_microsoft_tenant(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value in {"common", "organizations", "consumers"}:
+            return value
+        return str(UUID(value))
+
     @model_validator(mode="after")
     def _restrict_dev_auth_bypass(self) -> "AgentSettings":
         if self.dev_auth_bypass and self.env != "development":
@@ -333,6 +408,27 @@ class AgentSettings(BaseSettings):
     @property
     def github_oauth_enabled(self) -> bool:
         return bool(self.github_oauth_client_id and self.github_oauth_client_secret)
+
+    @property
+    def huawei_oauth_enabled(self) -> bool:
+        return bool(self.huawei_oauth_base_url and self.huawei_oauth_client_id and self.huawei_oauth_client_secret)
+
+    @property
+    def google_oauth_enabled(self) -> bool:
+        return bool(self.google_oauth_client_id and self.google_oauth_client_secret)
+
+    @property
+    def microsoft_oauth_enabled(self) -> bool:
+        return bool(self.microsoft_oauth_client_id and self.microsoft_oauth_client_secret)
+
+    @property
+    def apple_oauth_enabled(self) -> bool:
+        return bool(
+            self.apple_oauth_client_id
+            and self.apple_oauth_client_secret
+            and self.apple_oauth_callback_url.startswith("https://")
+            and self.auth_cookie_secure
+        )
 
     def is_platform_admin(
         self,

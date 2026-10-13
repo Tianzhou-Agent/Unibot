@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import ssl
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -10,9 +11,11 @@ from uuid import uuid4
 
 import httpx
 from jose import JWTError, jwt
+from pydantic import EmailStr, TypeAdapter
 from pwdlib import PasswordHash
 
 from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.oidc import OidcAuthService
 from tianzhou_agent_platform.config import DEV_USER_EMAIL, DEV_USER_ID, AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
@@ -28,6 +31,8 @@ class AuthService:
         settings: AgentSettings,
         repository: InMemoryRepository,
         github_http_client: httpx.AsyncClient | None = None,
+        huawei_http_client: httpx.AsyncClient | None = None,
+        oidc_http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -35,10 +40,21 @@ class AuthService:
         self._dummy_hash: str | None = None
         self._owns_github_client = github_http_client is None
         self._github_client = github_http_client or httpx.AsyncClient(timeout=15.0)
+        self._owns_huawei_client = huawei_http_client is None
+        huawei_verify = (
+            ssl.create_default_context(cafile=settings.huawei_oauth_ca_bundle)
+            if settings.huawei_oauth_ca_bundle
+            else settings.huawei_oauth_ssl_verify
+        )
+        self._huawei_client = huawei_http_client or httpx.AsyncClient(timeout=15.0, verify=huawei_verify)
+        self.oidc = OidcAuthService(settings=settings, repository=repository, http_client=oidc_http_client)
 
     async def aclose(self) -> None:
         if self._owns_github_client:
             await self._github_client.aclose()
+        if self._owns_huawei_client:
+            await self._huawei_client.aclose()
+        await self.oidc.aclose()
 
     async def register(self, *, email: str, password: str, name: str) -> UserRecord:
         if not self.settings.auth_registration_enabled:
@@ -208,9 +224,96 @@ class AuthService:
         )
         return user, _safe_next_path(str(claims.get("next", "/chat")))
 
-    def _decode_oauth_cookie(self, token: str | None) -> dict[str, Any]:
+    def create_huawei_authorization(self, *, next_path: str) -> tuple[str, str]:
+        base_url, client_id, _ = self._huawei_credentials()
+        state = secrets.token_urlsafe(32)
+        now = datetime.now(UTC)
+        oauth_cookie = jwt.encode(
+            {
+                "typ": "huawei-oauth",
+                "state": state,
+                "next": _safe_next_path(next_path),
+                "iat": now,
+                "exp": now + timedelta(minutes=10),
+                "iss": self.settings.auth_issuer,
+            },
+            self.settings.auth_secret.get_secret_value(),
+            algorithm="HS256",
+        )
+        query = urlencode(
+            {
+                "client_id": client_id,
+                "redirect_uri": self.settings.huawei_oauth_callback_url,
+                "scope": "base.profile",
+                "response_type": "code",
+                "state": state,
+            }
+        )
+        return f"{base_url}/saaslogin1/oauth2/authorize?{query}", oauth_cookie
+
+    async def authenticate_huawei(
+        self, *, code: str, state: str, oauth_cookie: str | None
+    ) -> tuple[UserRecord, str]:
+        base_url, client_id, client_secret = self._huawei_credentials()
+        claims = self._decode_oauth_cookie(oauth_cookie, provider="Huawei")
+        if not secrets.compare_digest(str(claims.get("state", "")), state):
+            raise _oauth_error("Huawei OAuth state did not match", provider="Huawei")
+        try:
+            token_response = await self._huawei_client.post(
+                f"{base_url}/saaslogin1/oauth2/accesstoken",
+                headers={"Accept": "application/json"},
+                json={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_response.raise_for_status()
+            token_payload = token_response.json()
+            access_token = token_payload.get("access_token") if isinstance(token_payload, dict) else None
+            if not isinstance(access_token, str) or not access_token or "error" in token_payload:
+                raise _oauth_error("Huawei did not return an access token", provider="Huawei")
+            profile_response = await self._huawei_client.get(
+                f"{base_url}/saaslogin1/oauth2/userinfo",
+                headers={"Accept": "application/json", "Authorization": f"Bearer {access_token}"},
+                params={"access_token": access_token, "client_id": client_id, "scope": "base.profile"},
+            )
+            profile_response.raise_for_status()
+            profile = profile_response.json()
+            if not isinstance(profile, dict) or "error" in profile:
+                raise _oauth_error("Huawei returned an invalid user profile", provider="Huawei")
+            huawei_id = profile.get("globalUserID")
+            name = profile.get("givenName")
+            if not isinstance(huawei_id, str) or not huawei_id.strip() or len(huawei_id) > 255:
+                raise _oauth_error("Huawei returned an invalid user ID", provider="Huawei")
+            email = TypeAdapter(EmailStr).validate_python(profile.get("email"))
+        except (httpx.HTTPError, ValueError) as exc:
+            raise _oauth_error("Huawei OAuth request or user profile is invalid", provider="Huawei") from exc
+        user = await self.repository.upsert_huawei_user(
+            huawei_id=huawei_id,
+            email=str(email),
+            name=name.strip()[:80] if isinstance(name, str) and name.strip() else huawei_id[:80],
+        )
+        return user, _safe_next_path(str(claims.get("next", "/chat")))
+
+    def _huawei_credentials(self) -> tuple[str, str, str]:
+        base_url = self.settings.huawei_oauth_base_url
+        client_id = self.settings.huawei_oauth_client_id
+        client_secret = self.settings.huawei_oauth_client_secret
+        if not base_url or not client_id or client_secret is None:
+            raise PlatformError(
+                "DEPENDENCY_FAILED",
+                "Huawei OAuth is not configured",
+                status_code=503,
+                source="auth",
+                user_message="华为登录尚未配置。",
+            )
+        return base_url.rstrip("/"), client_id, client_secret.get_secret_value()
+
+    def _decode_oauth_cookie(self, token: str | None, *, provider: str = "GitHub") -> dict[str, Any]:
         if not token:
-            raise _oauth_error("GitHub OAuth cookie is missing")
+            raise _oauth_error(f"{provider} OAuth cookie is missing", provider=provider)
         try:
             claims = jwt.decode(
                 token,
@@ -219,9 +322,9 @@ class AuthService:
                 issuer=self.settings.auth_issuer,
             )
         except JWTError as exc:
-            raise _oauth_error("GitHub OAuth cookie is invalid or expired") from exc
-        if claims.get("typ") != _OAUTH_TOKEN_TYPE:
-            raise _oauth_error("GitHub OAuth cookie has an invalid type")
+            raise _oauth_error(f"{provider} OAuth cookie is invalid or expired", provider=provider) from exc
+        if claims.get("typ") != f"{provider.lower()}-oauth":
+            raise _oauth_error(f"{provider} OAuth cookie has an invalid type", provider=provider)
         return claims
 
     def _github_credentials(self) -> tuple[str, str]:
@@ -271,11 +374,11 @@ def _safe_next_path(value: str) -> str:
     return value
 
 
-def _oauth_error(message: str) -> PlatformError:
+def _oauth_error(message: str, *, provider: str = "GitHub") -> PlatformError:
     return PlatformError(
         "AUTHENTICATION_FAILED",
         message,
         status_code=401,
         source="auth",
-        user_message="GitHub 登录失败，请重试。",
+        user_message=f"{'华为' if provider == 'Huawei' else provider} 登录失败，请重试。",
     )

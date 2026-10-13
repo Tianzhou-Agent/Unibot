@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable
 from uuid import uuid4
 
-from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -133,6 +133,17 @@ class InMemoryRepository:
                     source="auth",
                     user_message="该 GitHub 账号已绑定其他用户。",
                 )
+            if user.huawei_id and any(item.huawei_id == user.huawei_id for item in self._users.values()):
+                raise PlatformError(
+                    "CONFLICT",
+                    "This Huawei account is already linked",
+                    status_code=409,
+                    source="auth",
+                    user_message="该华为账号已绑定其他用户。",
+                )
+            for provider, identity in user.oidc_identities.items():
+                if any(item.oidc_identities.get(provider) == identity for item in self._users.values()):
+                    raise conflict(f"This {provider} account is already linked")
             self._users[user.id] = user
             await self._save_record(USERS_RESOURCE, user.id, user)
             return self._copy(user)
@@ -400,6 +411,68 @@ class InMemoryRepository:
                     update={
                         "github_id": github_id,
                         "github_login": github_login,
+                        "name": name or user.name,
+                        "avatar_url": avatar_url or user.avatar_url,
+                        "updated_at": datetime.now(UTC),
+                    },
+                    deep=True,
+                )
+            self._users[user.id] = user
+            await self._save_record(USERS_RESOURCE, user.id, user)
+            return self._copy(user)
+
+    async def upsert_huawei_user(self, *, huawei_id: str, email: str, name: str) -> UserRecord:
+        normalized_email = email.strip().lower()
+        async with self._lock:
+            user = next((item for item in self._users.values() if item.huawei_id == huawei_id), None)
+            if user is None:
+                if any(str(item.email).lower() == normalized_email for item in self._users.values()):
+                    raise PlatformError(
+                        "CONFLICT",
+                        "The Huawei email already belongs to an existing account",
+                        status_code=409,
+                        source="auth",
+                        user_message="该邮箱已有账户，请使用原登录方式。",
+                    )
+                user = UserRecord(
+                    id=f"user_{uuid4().hex}",
+                    email=normalized_email,
+                    name=name,
+                    huawei_id=huawei_id,
+                )
+            else:
+                user = user.model_copy(update={"name": name, "updated_at": datetime.now(UTC)}, deep=True)
+            self._users[user.id] = user
+            await self._save_record(USERS_RESOURCE, user.id, user)
+            return self._copy(user)
+
+    async def upsert_oidc_user(
+        self, *, provider: OidcProvider, identity: str, email: str, name: str | None, avatar_url: str | None
+    ) -> UserRecord:
+        normalized_email = email.strip().lower()
+        async with self._lock:
+            user = next(
+                (item for item in self._users.values() if item.oidc_identities.get(provider) == identity), None
+            )
+            if user is None:
+                if any(str(item.email).lower() == normalized_email for item in self._users.values()):
+                    raise PlatformError(
+                        "CONFLICT",
+                        f"The {provider} email already belongs to an existing account",
+                        status_code=409,
+                        source="auth",
+                        user_message="该邮箱已有账户，请使用原登录方式。",
+                    )
+                user = UserRecord(
+                    id=f"user_{uuid4().hex}",
+                    email=normalized_email,
+                    name=name or f"{provider.capitalize()} user",
+                    avatar_url=avatar_url,
+                    oidc_identities={provider: identity},
+                )
+            else:
+                user = user.model_copy(
+                    update={
                         "name": name or user.name,
                         "avatar_url": avatar_url or user.avatar_url,
                         "updated_at": datetime.now(UTC),

@@ -7,6 +7,9 @@ from pydantic import EmailStr, Field, field_validator
 
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 
+OidcProvider = Literal["google", "microsoft", "apple"]
+AuthProvider = Literal["password", "github", "huawei", "google", "microsoft", "apple"]
+
 
 class UserRecord(StrictModel):
     id: str
@@ -15,10 +18,17 @@ class UserRecord(StrictModel):
     password_hash: str | None = None
     github_id: str | None = None
     github_login: str | None = None
+    huawei_id: str | None = None
+    oidc_identities: dict[OidcProvider, str] = Field(default_factory=dict)
     avatar_url: str | None = None
     tenant_id: str = Field(default="default", min_length=1, max_length=160)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("oidc_identities", mode="before")
+    @classmethod
+    def normalize_oidc_identities(cls, value: object) -> object:
+        return {} if value is None else value
 
 
 class UserView(StrictModel):
@@ -27,16 +37,19 @@ class UserView(StrictModel):
     name: str
     avatar_url: str | None = None
     tenant_id: str
-    providers: list[Literal["password", "github"]]
+    providers: list[AuthProvider]
     is_admin: bool = False
 
     @classmethod
     def from_record(cls, user: UserRecord, *, is_admin: bool = False) -> "UserView":
-        providers: list[Literal["password", "github"]] = []
+        providers: list[AuthProvider] = []
         if user.password_hash:
             providers.append("password")
         if user.github_id:
             providers.append("github")
+        if user.huawei_id:
+            providers.append("huawei")
+        providers.extend(user.oidc_identities)
         return cls(
             id=user.id,
             email=user.email,
@@ -95,3 +108,7 @@ class AuthConfig(StrictModel):
     auth_required: bool
     registration_enabled: bool
     github_enabled: bool
+    huawei_enabled: bool
+    google_enabled: bool
+    microsoft_enabled: bool
+    apple_enabled: bool

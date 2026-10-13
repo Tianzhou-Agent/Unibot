@@ -110,3 +110,12 @@ def test_row_uses_record_id_for_models_without_an_id_field() -> None:
     assert row["id"] == "llm_1"
     record = StoreRecord(resource=LLM_CALLS_RESOURCE, id=row.pop("id"), values=row)
     assert model_from_row(LLMCallRecord, record) == call
+
+
+def test_old_user_rows_allow_null_oidc_identities() -> None:
+    user = UserRecord(id="existing", email="existing@example.com", name="Existing")
+    row = row_values(USERS_RESOURCE, user.id, user)
+    row["oidc_identities"] = None
+    restored = model_from_row(UserRecord, StoreRecord(resource=USERS_RESOURCE, id=user.id, values=row))
+    assert restored == user
+    assert restored.oidc_identities == {}
