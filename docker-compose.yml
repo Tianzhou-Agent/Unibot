@@ -111,7 +111,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: /api
+        VITE_BASE_PATH: ${UNIBOT_BASE_PATH:-/}
     depends_on:
       backend:
         condition: service_healthy

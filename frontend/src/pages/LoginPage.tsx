@@ -49,7 +49,7 @@ export default function LoginPage() {
         <section className="hidden bg-[#0b1831] p-10 text-white lg:flex lg:flex-col lg:justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <img src="/unibot-icon-v2.png" alt="" className="h-11 w-11 rounded-xl" />
+              <img src={`${import.meta.env.BASE_URL}unibot-icon-v2.png`} alt="" className="h-11 w-11 rounded-xl" />
               <div>
                 <div className="text-xl font-extrabold">Unibot</div>
                 <div className="text-xs text-white/55">{t("tagline")}</div>
@@ -69,7 +69,7 @@ export default function LoginPage() {
         <section className="p-6 sm:p-10">
           <div className="mb-8 lg:hidden">
             <div className="flex items-center gap-3">
-              <img src="/unibot-icon-v2.png" alt="" className="h-10 w-10 rounded-xl" />
+              <img src={`${import.meta.env.BASE_URL}unibot-icon-v2.png`} alt="" className="h-10 w-10 rounded-xl" />
               <div className="text-lg font-extrabold text-ink">Unibot</div>
             </div>
           </div>

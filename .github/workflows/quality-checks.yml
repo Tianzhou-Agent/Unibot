@@ -67,6 +67,7 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
+      - run: npx playwright test --config playwright.subpath.config.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:

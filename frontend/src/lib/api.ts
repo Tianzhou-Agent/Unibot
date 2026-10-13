@@ -1,7 +1,7 @@
 import i18n from "@/i18n";
 import type { ChatResponse } from "@/types";
 
-const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const BASE = import.meta.env.VITE_API_BASE_URL || `${import.meta.env.BASE_URL}api`;
 export const AUTH_REQUIRED_EVENT = "unibot:auth-required";
 
 export function apiUrl(path: string): string {

@@ -41,6 +41,47 @@ docker compose down
 
 `docker compose down -v` 会永久删除数据库、NAS 和用户代码工作区，仅应在明确需要清空全部数据时使用。
 
+## 域名下的 `/superbot` 上下文根
+
+在 `.env` 中配置前端构建前缀和对外地址：
+
+```dotenv
+UNIBOT_BASE_PATH=/superbot/
+UNIBOT_FRONTEND_BASE_URL=https://xxxx.com/superbot
+UNIBOT_GITHUB_CALLBACK_URL=https://xxxx.com/superbot/api/auth/github/callback
+UNIBOT_AUTH_COOKIE_SECURE=true
+```
+
+然后重新构建前端镜像（前缀会写入静态资源、React 路由和 nginx 配置）：
+
+```sh
+docker compose up -d --build frontend backend
+```
+
+域名网关的 nginx 配置应保留请求中的 `/superbot/` 前缀；`proxy_pass` 地址后不要加 `/`：
+
+```nginx
+location = /superbot {
+    return 308 /superbot/$is_args$args;
+}
+location /superbot/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+}
+```
+
+页面入口为 `https://xxxx.com/superbot/`，API 为 `/superbot/api/`；直接打开或刷新
+`/superbot/chat` 等页面也能正常加载。GitHub OAuth App 中的回调地址应与配置一致。
+默认 `UNIBOT_BASE_PATH=/`，继续支持原来的根路径部署。直接构建前端镜像时使用
+`--build-arg VITE_BASE_PATH=/superbot/`。预构建镜像的前缀已经固定，不能仅修改
+运行时 `.env` 切换；现有根路径 Release 需要换成带 `/superbot/` 前缀的新镜像。
+CI 同时发布 `ghcr.io/tianzhou-agent/unibot-frontend-superbot`（`/superbot/` 前缀）和
+`ghcr.io/tianzhou-agent/unibot-frontend`（根路径）。
+
 ## GPU 图片识别
 
 默认编排使用 CPU 镜像，可在所有 Docker 环境运行。安装 NVIDIA Container Toolkit 且 Docker 可访问 GPU 后，使用 GPU 覆盖文件：
