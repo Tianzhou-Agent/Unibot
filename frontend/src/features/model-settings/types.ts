@@ -1,4 +1,4 @@
-export type ProviderType = "openai" | "deepseek" | "openrouter" | "ollama" | "custom";
+export type ProviderType = "openai" | "deepseek" | "mimo" | "opencode" | "openrouter" | "ollama" | "custom";
 
 export interface ModelDefinition {
   id: string;

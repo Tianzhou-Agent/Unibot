@@ -16,7 +16,7 @@ from pydantic import Field, field_validator, model_validator
 
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 
-ProviderType = Literal["openai", "deepseek", "openrouter", "ollama", "custom"]
+ProviderType = Literal["openai", "deepseek", "mimo", "opencode", "openrouter", "ollama", "custom"]
 DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
 MIN_CONTEXT_WINDOW_TOKENS = 4_096
 MAX_CONTEXT_WINDOW_TOKENS = 10_000_000

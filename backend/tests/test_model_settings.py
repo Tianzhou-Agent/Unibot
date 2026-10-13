@@ -301,3 +301,12 @@ def test_native_provider_auth_failure_is_reported_as_a_dependency_error(monkeypa
     assert error["code"] == "DEPENDENCY_FAILED"
     assert "HTTP 401" in error["message"]
     assert error["retryable"] is False
+
+
+def test_model_settings_accept_mimo_and_opencode_provider_types() -> None:
+    with TestClient(create_app(settings=_settings(), repository=InMemoryRepository())) as client:
+        for provider_type in ("mimo", "opencode"):
+            payload = {**_provider_payload(), "provider_type": provider_type}
+            created = client.post("/model-settings/providers", json=payload)
+            assert created.status_code == 201, created.text
+            assert created.json()["provider_type"] == provider_type

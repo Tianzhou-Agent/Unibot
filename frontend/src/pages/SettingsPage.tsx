@@ -2,27 +2,24 @@ import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
-  Clock3,
   BarChart3,
   Globe,
+  Info,
   ShieldCheck,
   LogOut,
   UserRound,
-  KeyRound,
-  Pencil,
   Plus,
   RefreshCw,
   Server,
-  Trash2,
-  X,
 } from "lucide-react";
 import DebugPage from "@/pages/DebugPage";
-import { ProviderEditor } from "@/features/model-settings/ProviderEditor";
+import { ProviderEditor, ProviderTypePicker, formatContextTokens, healthText } from "@/features/model-settings/ProviderEditor";
 import type {
+  ActiveModel,
   ModelProvider,
   ModelProviderPayload,
   ModelHealthResult,
@@ -54,11 +51,14 @@ export default function SettingsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // undefined: closed; null: creating a provider of `presetType`; otherwise the provider being edited.
   const [editorProvider, setEditorProvider] = useState<ModelProvider | null | undefined>(undefined);
+  const [presetType, setPresetType] = useState<ProviderType>("deepseek");
+  const [pickingType, setPickingType] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [busyModel, setBusyModel] = useState<string | null>(null);
+  const [checkingProvider, setCheckingProvider] = useState<string | null>(null);
   const [modelHealth, setModelHealth] = useState<Record<string, ModelHealthResult>>({});
 
   const load = useCallback(async (isRefresh = false) => {
@@ -118,7 +118,7 @@ export default function SettingsPage() {
     setBusyModel(providerId);
     try {
       await api.delete(`/model-settings/providers/${providerId}?user_id=anonymous&tenant_id=default`);
-      setPendingDelete(null);
+      setEditorProvider(undefined);
       setNotice(t("notice.deleted"));
       await load();
     } catch (deleteError) {
@@ -128,19 +128,25 @@ export default function SettingsPage() {
     }
   }
 
-  async function checkHealth(providerId: string, modelId: string) {
-    setBusyModel(modelId);
-    try {
-      const result = await api.post<ModelHealthResult>(
-        `/model-settings/providers/${providerId}/models/${modelId}/health`,
-        { user_id: "anonymous", tenant_id: "default" },
-      );
-      setModelHealth((current) => ({ ...current, [modelId]: result }));
-    } catch (healthError) {
-      setError(apiErrorMessage(healthError));
-    } finally {
-      setBusyModel(null);
-    }
+  async function checkHealth(providerId: string, modelIds: string[]) {
+    setCheckingProvider(providerId);
+    const results = await Promise.all(modelIds.map(async (modelId): Promise<[string, ModelHealthResult]> => {
+      try {
+        return [modelId, await api.post<ModelHealthResult>(
+          `/model-settings/providers/${providerId}/models/${modelId}/health`,
+          { user_id: "anonymous", tenant_id: "default" },
+        )];
+      } catch (healthError) {
+        return [modelId, { status: "unhealthy", checked_at: new Date().toISOString(), latency_ms: 0, error: apiErrorMessage(healthError) }];
+      }
+    }));
+    setModelHealth((current) => ({ ...current, ...Object.fromEntries(results) }));
+    setCheckingProvider(null);
+  }
+
+  function openEditor(provider: ModelProvider | null) {
+    setEditorError(null);
+    setEditorProvider(provider);
   }
 
   const active = settings?.active_model;
@@ -194,72 +200,55 @@ export default function SettingsPage() {
             <button type="button" onClick={() => void load(true)} disabled={refreshing} className="btn-outline h-8 w-8 p-0" aria-label={t("refreshAria")} title={t("refresh")}>
               <RefreshCw className={classNames("h-3.5 w-3.5", refreshing && "animate-spin")} />
             </button>
-            <button type="button" onClick={() => { setEditorError(null); setEditorProvider(null); }} className="btn-primary h-8 text-[11.5px]">
+            <button type="button" onClick={() => setPickingType(true)} className="btn-primary h-8 text-[11.5px]">
               <Plus className="h-3.5 w-3.5" />{t("addProvider")}
             </button>
           </div>
 
-          <section className="mb-4 border-b border-line pb-4" aria-label={t("currentModel")}>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent">
-                <Server className="h-4 w-4" />
-              </div>
-              <div>
-                <p className="text-[11px] font-bold text-ink-muted">{t("currentDefault")}</p>
-                <p className="text-[14px] font-extrabold text-ink">{activeLabel}</p>
-              </div>
-              {active?.source === "environment" ? (
-                <span className="rounded bg-warning-soft px-2 py-1 text-[10.5px] font-bold text-warning-deep">{t("fromEnv")}</span>
-              ) : active?.source === "user" ? (
-                <span className="rounded bg-success-soft px-2 py-1 text-[10.5px] font-bold text-success-deep">{t("userConfig")}</span>
-              ) : null}
-              {active?.provider_name ? <span className="text-[11.5px] text-ink-muted">{t("provider", { name: active.provider_name })}</span> : null}
-            </div>
-          </section>
-
           {error ? <div className="mb-4 rounded-lg border border-danger-ring bg-danger-soft px-3 py-2 text-[12px] text-danger-deep">{error}</div> : null}
           {notice ? <div className="mb-4 flex items-center gap-2 rounded-lg border border-green-200 bg-success-soft px-3 py-2 text-[12px] text-success-deep"><CheckCircle2 className="h-4 w-4" />{notice}</div> : null}
 
-          <div className="mb-3 flex items-end">
-            <div>
-              <h2 className="text-[14px] font-extrabold text-ink">Provider</h2>
-              <p className="mt-0.5 text-[11.5px] text-ink-muted">{t("providersHint")}</p>
-            </div>
-            <div className="flex-1" />
-            <span className="text-[11px] font-semibold text-ink-subtle">{t("providerCount", { count: settings?.providers.length ?? 0 })}</span>
+          <CurrentModelCard
+            active={active}
+            label={activeLabel}
+            providers={settings?.providers ?? []}
+            health={active?.model_id ? modelHealth[active.model_id] : undefined}
+            checking={Boolean(active?.provider_id) && checkingProvider === active?.provider_id}
+            onCheckHealth={() => { if (active?.provider_id && active.model_id) void checkHealth(active.provider_id, [active.model_id]); }}
+          />
+
+          <div className="mb-2 mt-6 flex items-center px-1">
+            <h3 className="text-[11px] font-bold uppercase tracking-wide text-ink-subtle">{t("providerCaption", { count: settings?.providers.length ?? 0 })}</h3>
           </div>
 
           {loading ? (
-            <div className="space-y-3" aria-label={t("loadingAria")}>
-              {[0, 1].map((item) => <div key={item} className="h-32 animate-pulse rounded-lg border border-line bg-white" />)}
+            <div className="space-y-2" aria-label={t("loadingAria")}>
+              {[0, 1, 2].map((item) => <div key={item} className="h-[58px] animate-pulse rounded-lg border border-line-strong bg-app-soft" />)}
             </div>
           ) : settings?.providers.length ? (
-            <div className="space-y-3">
+            <ul className="space-y-2">
               {settings.providers.map((provider) => (
-                <ProviderSection
+                <ProviderRow
                   key={provider.id}
                   provider={provider}
                   activeModelId={active?.model_id ?? null}
-                  busyModel={busyModel}
-                  confirmingDelete={pendingDelete === provider.id}
-                  onEdit={() => { setEditorError(null); setEditorProvider(provider); }}
-                  onRequestDelete={() => setPendingDelete(provider.id)}
-                  onCancelDelete={() => setPendingDelete(null)}
-                  onDelete={() => void deleteProvider(provider.id)}
-                  onSetDefault={(modelId) => void setDefault(provider.id, modelId)}
                   health={modelHealth}
-                  onCheckHealth={(modelId) => void checkHealth(provider.id, modelId)}
+                  onOpen={() => openEditor(provider)}
                 />
               ))}
-            </div>
+            </ul>
           ) : (
             <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed border-line-strong bg-white px-6 text-center">
               <Server className="h-8 w-8 text-ink-subtle" />
               <h3 className="mt-3 text-[13px] font-extrabold text-ink">{t("emptyTitle")}</h3>
               <p className="mt-1 max-w-md text-[11.5px] leading-5 text-ink-muted">{t("emptyBody")}</p>
-              <button type="button" onClick={() => setEditorProvider(null)} className="btn-primary mt-4 h-8 text-[11.5px]"><Plus className="h-3.5 w-3.5" />{t("addProvider")}</button>
+              <button type="button" onClick={() => setPickingType(true)} className="btn-primary mt-4 h-8 text-[11.5px]"><Plus className="h-3.5 w-3.5" />{t("addProvider")}</button>
             </div>
           )}
+
+          {settings?.providers.length ? (
+            <p className="mt-3 flex items-center gap-1.5 px-1 text-[11px] text-ink-subtle"><Info className="h-3 w-3 shrink-0" />{t("envHint")}</p>
+          ) : null}
           </>
           ) : null}
           </div>
@@ -267,131 +256,129 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {pickingType ? (
+        <ProviderTypePicker
+          onClose={() => setPickingType(false)}
+          onNext={(type) => { setPickingType(false); setPresetType(type); openEditor(null); }}
+        />
+      ) : null}
       {editorProvider !== undefined ? (
         <ProviderEditor
+          key={editorProvider?.id ?? `new-${presetType}`}
           provider={editorProvider}
+          presetType={presetType}
+          activeModelId={active?.model_id ?? null}
+          health={modelHealth}
+          checkingHealth={Boolean(editorProvider) && checkingProvider === editorProvider?.id}
+          busyModel={busyModel}
           saving={saving}
           error={editorError}
           onClose={() => setEditorProvider(undefined)}
           onSave={saveProvider}
+          onSetDefault={(modelId) => { if (editorProvider) void setDefault(editorProvider.id, modelId); }}
+          onCheckHealth={(modelIds) => { if (editorProvider) void checkHealth(editorProvider.id, modelIds); }}
+          onDelete={() => { if (editorProvider) void deleteProvider(editorProvider.id); }}
         />
       ) : null}
     </div>
   );
 }
 
-function ProviderSection({
-  provider,
-  activeModelId,
-  busyModel,
-  confirmingDelete,
-  onEdit,
-  onRequestDelete,
-  onCancelDelete,
-  onDelete,
-  onSetDefault,
+function CurrentModelCard({
+  active,
+  label,
+  providers,
   health,
+  checking,
   onCheckHealth,
 }: {
-  provider: ModelProvider;
-  activeModelId: string | null;
-  busyModel: string | null;
-  confirmingDelete: boolean;
-  onEdit: () => void;
-  onRequestDelete: () => void;
-  onCancelDelete: () => void;
-  onDelete: () => void;
-  onSetDefault: (modelId: string) => void;
-  health: Record<string, ModelHealthResult>;
-  onCheckHealth: (modelId: string) => void;
+  active: ActiveModel | undefined;
+  label: string;
+  providers: ModelProvider[];
+  health: ModelHealthResult | undefined;
+  checking: boolean;
+  onCheckHealth: () => void;
 }) {
   const { t } = useTranslation("settings");
-  const [collapsed, setCollapsed] = useState(true);
+  const unconfigured = active?.source === "unconfigured";
+  const contextTokens = providers
+    .find((provider) => provider.id === active?.provider_id)
+    ?.models.find((model) => model.id === active?.model_id)?.context_window_tokens;
+  const meta = unconfigured
+    ? t("unconfiguredHint")
+    : [
+        active?.provider_name,
+        active?.source === "environment" ? t("fromEnv") : active?.source === "user" ? t("userConfig") : null,
+        contextTokens ? t("contextLabel", { size: formatContextTokens(contextTokens) }) : null,
+      ].filter(Boolean).join(" · ");
   return (
-    <section className="overflow-hidden rounded-lg border border-line bg-white shadow-card" aria-label={`Provider ${provider.name}`}>
-      <div className="flex w-full items-stretch border-b border-line">
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          aria-expanded={!collapsed}
-          className="flex min-w-0 flex-1 flex-wrap items-center gap-3 px-4 py-3 text-left"
-        >
-          {collapsed ? <ChevronRight className="h-4 w-4 shrink-0 text-ink-subtle" /> : <ChevronDown className="h-4 w-4 shrink-0 text-accent" />}
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-app-soft text-ink-muted"><Server className="h-4 w-4" /></div>
-          <div className="min-w-40">
-            <div className="flex items-center gap-2">
-              <h3 className="text-[13px] font-extrabold text-ink">{provider.name}</h3>
-              <span className="rounded bg-app-soft px-1.5 py-0.5 text-[9.5px] font-bold uppercase text-ink-muted">{providerTypeLabel(provider.provider_type)}</span>
-            </div>
-            <p className="mt-0.5 max-w-xl truncate font-mono text-[10.5px] text-ink-subtle">{provider.base_url}</p>
-          </div>
-          <div className="flex-1" />
-          <div className="hidden items-center gap-4 text-[10.5px] text-ink-muted sm:flex">
-            <span className="flex items-center gap-1"><KeyRound className="h-3 w-3" />{provider.api_key_masked}</span>
-            <span className="flex items-center gap-1"><Clock3 className="h-3 w-3" />{provider.timeout_seconds}s</span>
-          </div>
-        </button>
-        <div className="flex shrink-0 items-center gap-1 pr-4">
-          <button type="button" onClick={onEdit} className="btn-ghost h-8 w-8 p-0" aria-label={t("editAria", { name: provider.name })} title={t("editTitle")}><Pencil className="h-3.5 w-3.5" /></button>
-          <button type="button" onClick={onRequestDelete} aria-expanded={confirmingDelete} className="btn-ghost h-8 w-8 p-0 text-danger" aria-label={t("deleteAria", { name: provider.name })} title={t("deleteTitle")}><Trash2 className="h-3.5 w-3.5" /></button>
-        </div>
+    <section className="flex flex-wrap items-center gap-3 rounded-xl border border-line-strong bg-white px-3.5 py-3 shadow-card" aria-label={t("currentModel")}>
+      <span className={classNames("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", unconfigured ? "bg-warning-soft text-warning-deep" : "bg-accent-soft text-accent")}>
+        {unconfigured ? <AlertTriangle className="h-4 w-4" /> : <Server className="h-4 w-4" />}
+      </span>
+      <div className="min-w-40 flex-1">
+        <p className="text-[10.5px] font-bold text-ink-subtle">{t("currentDefault")}</p>
+        <p className="truncate text-[13.5px] font-extrabold text-ink">{label}</p>
+        {meta ? <p className="mt-0.5 truncate text-[11px] text-ink-subtle">{meta}</p> : null}
       </div>
-
-      {confirmingDelete ? (
-        <div className="flex items-center gap-2 border-b border-danger-ring bg-danger-soft px-4 py-2 text-[11.5px] text-danger-deep">
-          <span>{t("deleteWarn")}</span><span className="flex-1" />
-          <button type="button" onClick={onCancelDelete} disabled={busyModel === provider.id} className="btn-ghost h-7 px-2"><X className="h-3.5 w-3.5" />{t("cancel")}</button>
-          <button type="button" onClick={onDelete} disabled={busyModel === provider.id} className="btn-danger-outline h-7 px-2"><Trash2 className="h-3.5 w-3.5" />{t("confirmDelete")}</button>
-        </div>
+      {health ? (
+        <span className={classNames("flex max-w-full items-center gap-1.5 text-[11px] font-semibold", health.status === "healthy" ? "text-success-deep" : "text-danger-deep")}>
+          <span className={classNames("h-1.5 w-1.5 shrink-0 rounded-full", health.status === "healthy" ? "bg-success" : "bg-danger")} />
+          <span className="truncate">{healthText(t, health)}</span>
+        </span>
       ) : null}
-
-      {!collapsed ? (
-        <div className="divide-y divide-line">
-            {provider.models.map((model) => {
-              const isActive = model.id === activeModelId;
-              const modelStatus = health[model.id];
-              return (
-                <div key={model.id} className={classNames("grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5", isActive && "bg-success-soft/60")}>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[12.5px] font-bold text-ink">{model.name}</span>
-                      {isActive ? <span className="flex items-center gap-1 text-[10px] font-bold text-success-deep"><CheckCircle2 className="h-3 w-3" />{t("default")}</span> : null}
-                      {!model.enabled ? <span className="text-[10px] font-bold text-ink-subtle">{t("disabled")}</span> : null}
-                    </div>
-                    <p className="mt-0.5 truncate font-mono text-[10.5px] text-ink-muted">{model.model}</p>
-                    {modelStatus ? (
-                      <p className={classNames("mt-1 text-[10.5px] font-semibold", modelStatus.status === "healthy" ? "text-success-deep" : "text-danger-deep")}>
-                        {modelStatus.status === "healthy" ? t("healthy", { ms: modelStatus.latency_ms }) : t("unhealthy", { error: modelStatus.error ?? t("checkFailed") })}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => onCheckHealth(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:opacity-40">
-                      <RefreshCw className={classNames("h-3.5 w-3.5", busyModel === model.id && "animate-spin")} />{t("healthCheck")}
-                    </button>
-                  {!isActive ? (
-                    <button type="button" onClick={() => onSetDefault(model.id)} disabled={!model.enabled || busyModel === model.id} className="btn-outline h-8 whitespace-nowrap px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-40">
-                      <Check className="h-3.5 w-3.5" />{t("setDefault")}
-                    </button>
-                  ) : null}
-                  </div>
-                </div>
-              );
-            })}
-        </div>
+      {active?.source === "user" ? (
+        <button type="button" onClick={onCheckHealth} disabled={checking} className="btn-ghost h-7 gap-1.5 px-2 text-[11px] text-ink-muted">
+          <RefreshCw className={classNames("h-3.5 w-3.5", checking && "animate-spin")} />{t("healthCheck")}
+        </button>
       ) : null}
     </section>
   );
 }
 
-function providerTypeLabel(providerType: ProviderType): string {
-  return {
-    openai: "OpenAI",
-    deepseek: "DeepSeek",
-    openrouter: "OpenRouter",
-    ollama: "Ollama",
-    custom: "Custom",
-  }[providerType];
+function ProviderRow({
+  provider,
+  activeModelId,
+  health,
+  onOpen,
+}: {
+  provider: ModelProvider;
+  activeModelId: string | null;
+  health: Record<string, ModelHealthResult>;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation("settings");
+  const defaultModel = provider.models.find((model) => model.id === activeModelId);
+  const results = provider.models.filter((model) => model.enabled).map((model) => health[model.id]).filter(Boolean);
+  const status = results.length === 0 ? "unchecked" : results.every((result) => result.status === "healthy") ? "healthy" : "unhealthy";
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={t("editAria", { name: provider.name })}
+        className="group flex w-full items-center gap-3 rounded-lg border border-line-strong bg-white px-3 py-2.5 text-left transition-colors hover:border-ink-subtle/40 hover:bg-app-soft"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-app-soft text-ink-muted group-hover:bg-white"><Server className="h-4 w-4" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-bold text-ink">{provider.name}</span>
+          <span className="block truncate font-mono text-[10.5px] text-ink-subtle">{provider.base_url}</span>
+        </span>
+        <span className="hidden shrink-0 text-[11px] text-ink-muted sm:block">
+          {t("modelCount", { count: provider.models.length })}
+          {defaultModel ? <> · {t("defaultIs", { name: defaultModel.name })}</> : null}
+        </span>
+        <span className={classNames(
+          "flex shrink-0 items-center gap-1.5 text-[11px]",
+          status === "healthy" ? "text-success-deep" : status === "unhealthy" ? "text-danger-deep" : "text-ink-subtle",
+        )}>
+          <span className={classNames("h-1.5 w-1.5 rounded-full", status === "healthy" ? "bg-success" : status === "unhealthy" ? "bg-danger" : "bg-slate-300")} />
+          {t(`status.${status}`)}
+        </span>
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+      </button>
+    </li>
+  );
 }
 
 function SettingsCard({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
