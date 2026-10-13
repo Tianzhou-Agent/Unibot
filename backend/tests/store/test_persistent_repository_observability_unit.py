@@ -8,6 +8,8 @@ from typing import Any, AsyncIterator
 import pytest
 
 from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord, TraceSpan
+from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.conversations.models import ConversationCreate
 from tianzhou_agent_platform.store.memory_repository import LLM_CALLS_RESOURCE, TRACES_RESOURCE
 from tianzhou_agent_platform.store.lifecycle import StorageStores
@@ -197,6 +199,100 @@ def _seed(stores: StorageStores, resource: str, record_id: str, value: Any) -> N
         id=record_id,
         values=row_values(resource, record_id, value),
     )
+
+
+@pytest.mark.asyncio
+async def test_huawei_identity_is_persisted_and_shared_across_nodes_and_restarts() -> None:
+    stores = _stores()
+    first = PersistentRepository(stores)
+    second = PersistentRepository(stores)
+    await first.initialize()
+    await second.initialize()
+    original = await first.upsert_huawei_user(huawei_id="global-123", email="employee@example.com", name="Employee")
+    updated = await second.upsert_huawei_user(huawei_id="global-123", email="changed@example.com", name="Updated")
+    assert updated.id == original.id
+    assert updated.email == original.email
+    restarted = PersistentRepository(stores)
+    await restarted.initialize()
+    restored = await restarted.find_user_by_id(original.id)
+    assert restored is not None
+    assert restored.huawei_id == "global-123"
+    assert restored.name == "Updated"
+    assert len(await restarted.list_users()) == 1
+
+
+@pytest.mark.asyncio
+async def test_huawei_login_refreshes_email_owners_created_by_another_node() -> None:
+    stores = _stores()
+    first = PersistentRepository(stores)
+    second = PersistentRepository(stores)
+    await first.initialize()
+    await second.initialize()
+    await first.create_user(UserRecord(id="local", email="shared@example.com", name="Local"))
+    with pytest.raises(PlatformError) as error:
+        await second.upsert_huawei_user(huawei_id="global-123", email="SHARED@example.com", name="Employee")
+    assert error.value.status_code == 409
+    assert (await second.find_user_by_id("local")).huawei_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["google", "microsoft", "apple"])
+async def test_oidc_identity_is_shared_across_nodes_and_restored_after_restart(provider: str) -> None:
+    stores = _stores()
+    first, second = PersistentRepository(stores), PersistentRepository(stores)
+    await first.initialize()
+    await second.initialize()
+    original = await first.upsert_oidc_user(
+        provider=provider, identity="https://issuer.example|subject", email="employee@example.com",
+        name="Employee", avatar_url="https://avatars.example/employee.png",
+    )
+    updated = await second.upsert_oidc_user(
+        provider=provider, identity="https://issuer.example|subject", email="changed@example.com",
+        name=None, avatar_url=None,
+    )
+    assert updated.id == original.id
+    assert updated.email == original.email
+    assert updated.name == original.name
+    restarted = PersistentRepository(stores)
+    await restarted.initialize()
+    assert await restarted.find_user_by_id(original.id) == updated
+    assert len(await restarted.list_users()) == 1
+    assert (await restarted.find_user_by_id(original.id)).oidc_identities == {  # type: ignore[union-attr]
+        provider: "https://issuer.example|subject",
+    }
+
+
+@pytest.mark.asyncio
+async def test_oidc_subjects_are_isolated_by_provider_and_issuer() -> None:
+    stores = _stores()
+    repository = PersistentRepository(stores)
+    await repository.initialize()
+    users = []
+    for provider, identity, email in [
+        ("google", "https://issuer.example|subject", "google@example.com"),
+        ("microsoft", "https://issuer.example|subject", "microsoft@example.com"),
+        ("microsoft", "https://another-tenant.example|subject", "another@example.com"),
+    ]:
+        users.append(await repository.upsert_oidc_user(
+            provider=provider, identity=identity, email=email, name="Employee", avatar_url=None,
+        ))
+    assert len({user.id for user in users}) == 3
+
+
+@pytest.mark.asyncio
+async def test_oidc_login_refreshes_email_owners_created_by_another_node() -> None:
+    stores = _stores()
+    first, second = PersistentRepository(stores), PersistentRepository(stores)
+    await first.initialize()
+    await second.initialize()
+    await first.create_user(UserRecord(id="local", email="shared@example.com", name="Local"))
+    with pytest.raises(PlatformError) as error:
+        await second.upsert_oidc_user(
+            provider="google", identity="https://accounts.google.com|subject", email="SHARED@example.com",
+            name="Employee", avatar_url=None,
+        )
+    assert error.value.status_code == 409
+    assert (await second.find_user_by_id("local")).oidc_identities == {}
 
 
 @pytest.mark.asyncio

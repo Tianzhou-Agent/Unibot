@@ -87,12 +87,16 @@ users_table = _table(
     # NULL when unlinked, so the unique key only covers linked accounts.
     Column("github_id", String(64), nullable=True),
     Column("github_login", String(255), nullable=True),
+    Column("huawei_id", String(255), nullable=True),  # NULL when unlinked, like github_id
+    # {provider: identity} for Google, Microsoft and Apple sign-in.
+    Column("oidc_identities", NULLABLE_JSON, nullable=True),
     Column("avatar_url", URL, nullable=True),
     Column("tenant_id", ACTOR, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
     UniqueConstraint("email_normalized", name="uq_unibot_users_email_normalized"),
     UniqueConstraint("github_id", name="uq_unibot_users_github_id"),
+    UniqueConstraint("huawei_id", name="uq_unibot_users_huawei_id"),
     Index("ix_unibot_users_created", "created_at", "id"),
 )
 

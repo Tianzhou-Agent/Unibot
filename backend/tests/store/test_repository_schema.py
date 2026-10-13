@@ -42,6 +42,8 @@ from tianzhou_agent_platform.store.memory_repository import (
 from tianzhou_agent_platform.store.models import StoreRecord
 from tianzhou_agent_platform.store.repository_schema import (
     messages_table,
+    table_values,
+    users_table,
     model_from_row,
     repository_tables,
     row_values,
@@ -129,3 +131,12 @@ def test_row_uses_record_id_for_models_without_an_id_field() -> None:
     assert row["id"] == "llm_1"
     record = StoreRecord(resource=LLM_CALLS_RESOURCE, id=row.pop("id"), values=row)
     assert model_from_row(LLMCallRecord, record) == call
+
+
+def test_old_user_rows_allow_null_oidc_identities() -> None:
+    user = UserRecord(id="existing", email="existing@example.com", name="Existing")
+    row = table_values(users_table, user, email_normalized=str(user.email))
+    row["oidc_identities"] = None
+    restored = model_from_row(UserRecord, StoreRecord(resource=USERS_RESOURCE, id=user.id, values=row))
+    assert restored == user
+    assert restored.oidc_identities == {}

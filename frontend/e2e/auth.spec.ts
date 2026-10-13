@@ -13,7 +13,7 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-async function installAuthApi(page: Page) {
+async function installAuthApi(page: Page, huaweiEnabled = true, oidcEnabled = true) {
   let authenticated = false;
 
   await page.route("**/api/**", async (route) => {
@@ -22,7 +22,10 @@ async function installAuthApi(page: Page) {
     const method = request.method();
 
     if (method === "GET" && path === "/auth/config") {
-      return json(route, { auth_required: true, registration_enabled: true, github_enabled: true });
+      return json(route, {
+        auth_required: true, registration_enabled: true, github_enabled: true, huawei_enabled: huaweiEnabled,
+        google_enabled: oidcEnabled, microsoft_enabled: oidcEnabled, apple_enabled: oidcEnabled,
+      });
     }
     if (method === "GET" && path === "/auth/me") {
       return authenticated
@@ -66,6 +69,15 @@ test("用户可注册、退出并重新登录", async ({ page }) => {
     "href",
     "/api/auth/github?next=%2Fchat",
   );
+  await expect(page.getByRole("link", { name: "使用华为账号登录", exact: true })).toHaveAttribute(
+    "href",
+    "/api/auth/huawei?next=%2Fchat",
+  );
+  for (const [provider, label] of [["google", "Google"], ["microsoft", "Microsoft"], ["apple", "Apple"]]) {
+    await expect(page.getByRole("link", { name: `使用 ${label} 登录`, exact: true })).toHaveAttribute(
+      "href", `/api/auth/${provider}?next=%2Fchat`,
+    );
+  }
 
   await page.getByRole("button", { name: "注册", exact: true }).click();
   await page.getByRole("textbox", { name: "昵称", exact: true }).fill(USER.name);
@@ -93,4 +105,34 @@ test("用户可注册、退出并重新登录", async ({ page }) => {
   await page.locator("form").getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/chat$/);
   await expect(page.getByText(USER.email, { exact: true })).toBeVisible();
+});
+
+test("未配置华为 OAuth 时不显示登录入口", async ({ page }) => {
+  await installAuthApi(page, false);
+  await page.goto("/chat");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("link", { name: "使用华为账号登录", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "使用 GitHub 登录", exact: true })).toBeVisible();
+});
+
+test("未配置 Google、Microsoft、Apple 时不显示入口", async ({ page }) => {
+  await installAuthApi(page, true, false);
+  await page.goto("/chat");
+  await expect(page).toHaveURL(/\/login$/);
+  for (const label of ["Google", "Microsoft", "Apple"]) {
+    await expect(page.getByRole("link", { name: `使用 ${label} 登录`, exact: true })).toHaveCount(0);
+  }
+  await expect(page.getByRole("link", { name: "使用华为账号登录", exact: true })).toBeVisible();
+});
+
+test("第三方登录入口保留原页面并支持英文", async ({ page }) => {
+  await installAuthApi(page);
+  await page.goto("/apps?tab=mine");
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByRole("combobox", { name: "语言", exact: true }).selectOption("en");
+  for (const [provider, label] of [["google", "Google"], ["microsoft", "Microsoft"], ["apple", "Apple"]]) {
+    await expect(page.getByRole("link", { name: `Sign in with ${label}`, exact: true })).toHaveAttribute(
+      "href", `/api/auth/${provider}?next=%2Fapps%3Ftab%3Dmine`,
+    );
+  }
 });

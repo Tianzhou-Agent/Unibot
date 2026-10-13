@@ -75,3 +75,31 @@ async def test_concurrent_first_github_sign_ins_share_one_user(replicas) -> None
     )
 
     assert len({user.id for user in users}) == 1
+
+
+async def test_concurrent_first_huawei_and_oidc_sign_ins_share_one_user(replicas) -> None:  # type: ignore[no-untyped-def]
+    first, second = replicas
+    huawei_id = uuid4().hex[:12]
+    google_identity = f"https://accounts.google.com|{uuid4().hex}"
+
+    huawei_users = await asyncio.gather(
+        *(
+            replica.upsert_huawei_user(huawei_id=huawei_id, email=f"{huawei_id}@example.com", name="Hua")
+            for replica in (first, second) * 5
+        )
+    )
+    google_users = await asyncio.gather(
+        *(
+            replica.upsert_oidc_user(
+                provider="google",
+                identity=google_identity,
+                email=f"{huawei_id}-g@example.com",
+                name="Goo",
+                avatar_url=None,
+            )
+            for replica in (first, second) * 5
+        )
+    )
+
+    assert len({user.id for user in huawei_users}) == 1
+    assert len({user.id for user in google_users}) == 1

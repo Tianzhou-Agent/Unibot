@@ -18,6 +18,12 @@ from tianzhou_agent_platform.main import create_app
 def _settings(**overrides: object) -> AgentSettings:
     overrides.setdefault("github_oauth_client_id", None)
     overrides.setdefault("github_oauth_client_secret", None)
+    overrides.setdefault("huawei_oauth_base_url", None)
+    overrides.setdefault("huawei_oauth_client_id", None)
+    overrides.setdefault("huawei_oauth_client_secret", None)
+    for provider in ("google", "microsoft", "apple"):
+        overrides.setdefault(f"{provider}_oauth_client_id", None)
+        overrides.setdefault(f"{provider}_oauth_client_secret", None)
     overrides.setdefault("env", "production")
     overrides.setdefault("dev_auth_bypass", False)
     return AgentSettings(  # type: ignore[call-arg]
@@ -45,6 +51,10 @@ def test_password_authentication_session_and_logout() -> None:
             "auth_required": True,
             "registration_enabled": True,
             "github_enabled": False,
+            "huawei_enabled": False,
+            "google_enabled": False,
+            "microsoft_enabled": False,
+            "apple_enabled": False,
         }
         assert client.get("/conversations").status_code == 401
 
@@ -105,7 +115,8 @@ def test_authenticated_actor_cannot_impersonate_or_read_another_user() -> None:
         assert chat.status_code == 403
 
 
-def test_github_oauth_uses_state_pkce_and_creates_a_session() -> None:
+@pytest.mark.parametrize("frontend_path", ["", "/superbot"])
+def test_github_oauth_uses_state_pkce_and_creates_a_session(frontend_path: str) -> None:
     requests: list[httpx.Request] = []
 
     def github(request: httpx.Request) -> httpx.Response:
@@ -139,8 +150,8 @@ def test_github_oauth_uses_state_pkce_and_creates_a_session() -> None:
     settings = _settings(
         github_oauth_client_id="github-client",
         github_oauth_client_secret=SecretStr("github-secret"),
-        github_oauth_callback_url="http://127.0.0.1:5173/api/auth/github/callback",
-        frontend_base_url="http://127.0.0.1:5173",
+        github_oauth_callback_url=f"http://127.0.0.1:5173{frontend_path}/api/auth/github/callback",
+        frontend_base_url=f"http://127.0.0.1:5173{frontend_path}",
     )
     app = create_app(
         settings=settings,
@@ -155,6 +166,7 @@ def test_github_oauth_uses_state_pkce_and_creates_a_session() -> None:
         query = parse_qs(authorization.query)
         assert authorization.netloc == "github.com"
         assert query["client_id"] == ["github-client"]
+        assert query["redirect_uri"] == [settings.github_oauth_callback_url]
         assert query["scope"] == ["user:email"]
         assert query["code_challenge_method"] == ["S256"]
         assert query["code_challenge"][0]
@@ -165,7 +177,7 @@ def test_github_oauth_uses_state_pkce_and_creates_a_session() -> None:
             follow_redirects=False,
         )
         assert callback.status_code == 302
-        assert callback.headers["location"] == "http://127.0.0.1:5173/apps"
+        assert callback.headers["location"] == f"http://127.0.0.1:5173{frontend_path}/apps"
         me = client.get("/auth/me")
         assert me.status_code == 200
         assert me.json()["user"] == {

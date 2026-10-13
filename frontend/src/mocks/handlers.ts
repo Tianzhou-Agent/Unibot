@@ -12,7 +12,7 @@ import {
 import type { ChatMessage, ChoiceOption, MemoryItem } from "@/types";
 import { uid } from "@/lib/utils";
 
-const BASE = "/api";
+const BASE = import.meta.env.VITE_API_BASE_URL || `${import.meta.env.BASE_URL}api`;
 
 export const handlers = [
   http.get(`${BASE}/sessions`, async () => {
