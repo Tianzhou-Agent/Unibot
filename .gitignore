@@ -20,3 +20,4 @@ backend/test-temp*/
 /agent-eval/.work/
 /agent-eval/.venv/
 /agent-eval/.pytest_cache/
+/release-artifacts/
