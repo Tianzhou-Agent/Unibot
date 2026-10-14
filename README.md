@@ -21,6 +21,7 @@ Unibot 由两层能力构成：
 | **Canvas 画布**     | 对话 + AINA `main_widget` 双栏工作区               |
 | **AINA Widget**     | 对话内应用列表、表单、Markdown 与导航 Widget       |
 | **可恢复运行**        | 刷新或离开页面后 Agent 继续运行，返回会话后自动恢复状态 |
+| **定时任务**        | [Agent 自主运行或指定应用](docs/scheduled-agent-runs.md)、Cron/间隔、立即调试、执行历史与多节点租约 |
 | **宿主 Widget**      | AINA 只声明 UI 类型、schema 和用法，由前端注册表动态渲染 |
 | **统一能力入口**    | 模型一次判断直答、宿主 Tool、已发布 Tool 或可路由 AINA；选中 AINA 后收敛到其能力域 |
 | **Inline Card**     | 对话流内嵌 HTML 卡片（摘要、选项、消歧选择）       |

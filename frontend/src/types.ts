@@ -371,7 +371,7 @@ export interface AinaInstallation {
 }
 
 export type ScheduleType = "interval" | "cron";
-export type ScheduledAinaStatus = "never" | "running" | "succeeded" | "failed";
+export type ScheduledAinaStatus = "never" | "running" | "approval_required" | "succeeded" | "failed";
 
 export interface ScheduledAinaTask {
   id: string;
@@ -407,7 +407,7 @@ export interface ScheduledAinaExecution {
   call_id: string;
   node_id: string;
   input: Record<string, unknown>;
-  status: "running" | "succeeded" | "failed";
+  status: Exclude<ScheduledAinaStatus, "never">;
   result?: Record<string, unknown> | null;
   error?: string | null;
   started_at: string;

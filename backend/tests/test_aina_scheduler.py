@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -18,6 +19,8 @@ from tianzhou_agent_platform.aina.scheduler import (
     next_scheduled_run,
 )
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.conversations.schemas import ChatResponse
+from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.main import create_app
 from tests.support.fake_llm import ScriptedLLM
@@ -33,6 +36,18 @@ class SharedRedis:
         self.keys.add(marker)
         return SimpleNamespace(written=written)
 
+    @asynccontextmanager
+    async def lease(self, namespace: str, key: str, *, ttl_seconds: int):
+        marker = (namespace, key)
+        acquired = marker not in self.keys
+        if acquired:
+            self.keys.add(marker)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self.keys.remove(marker)
+
 
 def test_distributed_scheduler_lease_has_a_single_winner() -> None:
     shared_redis = SharedRedis()
@@ -43,8 +58,13 @@ def test_distributed_scheduler_lease_has_a_single_winner() -> None:
     first = AinaScheduler(first_repository, SimpleNamespace(), node_id="node-a")  # type: ignore[arg-type]
     second = AinaScheduler(second_repository, SimpleNamespace(), node_id="node-b")  # type: ignore[arg-type]
 
+    async def claim_once(scheduler: AinaScheduler) -> bool:
+        async with scheduler._lease("aina-schedule-lease", "task:run", ttl_seconds=60) as acquired:
+            await asyncio.sleep(0)
+            return acquired
+
     async def claim() -> list[bool]:
-        return list(await asyncio.gather(first._claim("task:run", 60), second._claim("task:run", 60)))
+        return list(await asyncio.gather(claim_once(first), claim_once(second)))
 
     assert asyncio.run(claim()).count(True) == 1
 
@@ -221,3 +241,184 @@ def test_a_run_keeps_edits_made_while_it_ran_and_does_not_restore_a_deleted_task
     assert (stored.enabled, stored.name) == (False, "Paused report")
     assert stored.last_status == "failed"  # the AINA does not exist; the run itself is not under test
     assert [task.name for task in remaining] == ["Paused report"]
+
+
+def test_a_released_occurrence_lease_does_not_run_a_stale_snapshot_twice() -> None:
+    class StaleSnapshotRepository(InMemoryRepository):
+        snapshot: list[ScheduledAinaTask]
+
+        async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]:
+            return self.snapshot
+
+    repository = StaleSnapshotRepository()
+    repository.stores = SimpleNamespace(redis=SharedRedis())  # type: ignore[attr-defined]
+    calls: list[str] = []
+
+    async def agent(request):  # type: ignore[no-untyped-def]
+        calls.append(request.message)
+        return ChatResponse(
+            conversation_id="conversation-test", content="Done", status="completed", trace_id="trace-test", iterations=1
+        )
+
+    first = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+    second = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+
+    async def run() -> None:
+        task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Summarize"))
+        task = await repository.put_scheduled_aina_task(
+            task.model_copy(update={"next_run_at": datetime.now(UTC) - timedelta(seconds=1)})
+        )
+        repository.snapshot = [task]
+        await first.tick(now=task.next_run_at)
+        await second.tick(now=task.next_run_at)
+        assert len(await repository.list_scheduled_aina_executions(task.id)) == 1
+
+    asyncio.run(run())
+    assert calls == ["Summarize"]
+
+
+@pytest.mark.parametrize("first_trigger", ["manual", "scheduled"])
+@pytest.mark.parametrize("distributed", [False, True])
+def test_manual_and_scheduled_runs_share_a_task_lease(first_trigger: str, distributed: bool) -> None:
+    repository = InMemoryRepository()
+    if distributed:
+        repository.stores = SimpleNamespace(redis=SharedRedis())  # type: ignore[attr-defined]
+
+    async def run() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls: list[str] = []
+
+        async def agent(request):  # type: ignore[no-untyped-def]
+            calls.append(request.message)
+            started.set()
+            await release.wait()
+            return ChatResponse(
+                conversation_id="conversation-test", content="Done", status="completed", trace_id="trace-test", iterations=1
+            )
+
+        first = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+        second = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+        task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Summarize"))
+        active = asyncio.create_task(
+            first.run_now(task.id) if first_trigger == "manual" else first.tick(now=task.next_run_at)
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            await second.tick(now=task.next_run_at)
+            with pytest.raises(PlatformError) as error:
+                await second.run_now(task.id)
+            assert error.value.status_code == 409
+            assert len(await repository.list_scheduled_aina_executions(task.id)) == 1
+        finally:
+            release.set()
+            await active
+
+        assert calls == ["Summarize"]
+        if first_trigger == "manual":
+            assert (await repository.get_scheduled_aina_task(task.id)).next_run_at == task.next_run_at
+        # A completed run releases the shared lease, allowing a later manual run.
+        await second.run_now(task.id)
+        assert calls == ["Summarize", "Summarize"]
+
+    asyncio.run(run())
+
+
+def test_a_disabled_task_in_a_due_snapshot_is_not_executed() -> None:
+    class DisabledAfterSnapshot(InMemoryRepository):
+        async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]:
+            snapshot = await super().list_due_scheduled_aina_tasks(now)
+            for task in snapshot:
+                await self.update_scheduled_aina_task(task.id, ScheduledAinaTaskUpdate(enabled=False))
+            return snapshot
+
+    repository = DisabledAfterSnapshot()
+    scheduler = AinaScheduler(repository, SimpleNamespace())  # type: ignore[arg-type]
+
+    async def run() -> None:
+        task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Summarize"))
+        await scheduler.tick(now=task.next_run_at)
+        assert await repository.list_scheduled_aina_executions(task.id) == []
+        assert (await repository.get_scheduled_aina_task(task.id)).last_status == "never"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", ["pause", "reschedule", "delete", "input"])
+def test_changes_between_due_snapshot_and_atomic_start_are_respected(change: str) -> None:
+    class ChangedBeforeStart(InMemoryRepository):
+        async def start_scheduled_aina_run(self, task_id: str, **kwargs):  # type: ignore[no-untyped-def]
+            if change == "delete":
+                await self.remove_scheduled_aina_task(task_id)
+            else:
+                patch = {
+                    "pause": ScheduledAinaTaskUpdate(enabled=False),
+                    "reschedule": ScheduledAinaTaskUpdate(interval_seconds=60),
+                    "input": ScheduledAinaTaskUpdate(prompt="Updated input"),
+                }[change]
+                await self.update_scheduled_aina_task(task_id, patch)
+            return await super().start_scheduled_aina_run(task_id, **kwargs)
+
+    repository = ChangedBeforeStart()
+    calls: list[str] = []
+
+    async def agent(request):  # type: ignore[no-untyped-def]
+        calls.append(request.message)
+        return ChatResponse(
+            conversation_id="conversation-test", content="Done", status="completed", trace_id="trace-test", iterations=1
+        )
+
+    scheduler = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+
+    async def run() -> None:
+        task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Original"))
+        await scheduler.tick(now=task.next_run_at)
+        history = await repository.list_scheduled_aina_executions(task.id)
+        if change == "input":
+            assert calls == ["Updated input"]
+            assert history[0].input == {"message": "Updated input"}
+        else:
+            assert calls == []
+            assert history == []
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("outcome", ["failed", "stopped", "known_error", "cancelled"])
+def test_noncompleted_agent_runs_are_recorded_as_failed(outcome: str) -> None:
+    repository = InMemoryRepository()
+
+    async def agent(request):  # type: ignore[no-untyped-def]
+        if outcome == "known_error":
+            raise PlatformError("MODEL_ERROR", "private provider details", user_message="A safe provider error")
+        if outcome == "cancelled":
+            raise asyncio.CancelledError()
+        return ChatResponse(
+            conversation_id="conversation-test",
+            content="The run did not complete",
+            status=outcome,
+            trace_id="trace-test",
+            iterations=1,
+        )
+
+    scheduler = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+
+    async def run() -> None:
+        task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Summarize"))
+        if outcome == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await scheduler.run_now(task.id)
+        else:
+            await scheduler.run_now(task.id)
+        stored = await repository.get_scheduled_aina_task(task.id)
+        execution = (await repository.list_scheduled_aina_executions(task.id))[0]
+        assert stored.last_status == execution.status == "failed"
+        assert stored.last_error == execution.error
+        assert execution.finished_at is not None
+        if outcome == "known_error":
+            assert execution.error == "A safe provider error"
+            assert "private provider details" not in stored.model_dump_json() + execution.model_dump_json()
+        elif outcome in {"failed", "stopped"}:
+            assert stored.last_result["status"] == outcome
+
+    asyncio.run(run())
