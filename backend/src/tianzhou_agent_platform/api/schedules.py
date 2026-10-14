@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query, Request, Response, status
+from pydantic import ValidationError
 
 from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaDebugRequest,
@@ -9,6 +10,7 @@ from tianzhou_agent_platform.aina.scheduler import (
 )
 from tianzhou_agent_platform.api.dependencies import bind_actor, repository, request_actor, require_actor_ownership
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.store.memory_repository import updated_scheduled_aina_task
 
 
 def create_schedule_router() -> APIRouter:
@@ -18,14 +20,7 @@ def create_schedule_router() -> APIRouter:
     async def create_schedule(payload: ScheduledAinaTaskCreate, request: Request) -> ScheduledAinaTask:
         scoped = bind_actor(request, payload)
         data_repository = repository(request)
-        record = await data_repository.get_aina(scoped.aina_id)
-        if record.manifest.runtime.type != "remote":
-            raise PlatformError("INVALID_REQUEST", "Only remote AINAs can be scheduled", status_code=422)
-        installation = await data_repository.get_installation(
-            tenant_id=scoped.tenant_id, user_id=scoped.user_id, aina_id=scoped.aina_id
-        )
-        if installation.status != "active":
-            raise PlatformError("PERMISSION_DENIED", "AINA installation is disabled", status_code=403)
+        await request.app.state.aina_scheduler.validate_task(scoped)
         return await data_repository.create_scheduled_aina_task(scoped)
 
     @router.get("", response_model=list[ScheduledAinaTask])
@@ -68,6 +63,13 @@ def create_schedule_router() -> APIRouter:
     ) -> ScheduledAinaTask:
         task = await repository(request).get_scheduled_aina_task(task_id)
         require_actor_ownership(request, user_id=task.user_id, tenant_id=task.tenant_id)
+        try:
+            merged = updated_scheduled_aina_task(task, payload)
+        except ValidationError as exc:
+            raise PlatformError("INVALID_REQUEST", "The updated schedule is invalid", status_code=422) from exc
+        # Pausing must remain possible even if the previously selected app is now unavailable.
+        if payload.enabled is not False or payload.model_fields_set - {"enabled"}:
+            await request.app.state.aina_scheduler.validate_task(merged)
         return await repository(request).update_scheduled_aina_task(task_id, payload)
 
     return router

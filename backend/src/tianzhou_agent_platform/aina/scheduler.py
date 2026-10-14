@@ -16,16 +16,20 @@ from pydantic import Field, field_validator, model_validator
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
-from tianzhou_agent_platform.core.errors import conflict
+from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.conversations.schemas import ChatRequest
+from tianzhou_agent_platform.core.errors import PlatformError, conflict
 
 if TYPE_CHECKING:
+    from tianzhou_agent_platform.aina.protocol.models import AinaRecord
+    from tianzhou_agent_platform.services.chat import ChatService
     from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 ScheduleType = Literal["interval", "cron"]
 
 
 class ScheduledAinaTaskCreate(StrictModel):
-    aina_id: str
+    aina_id: str = ""
     user_id: str = "anonymous"
     tenant_id: str = "default"
     name: str = Field(min_length=1, max_length=160)
@@ -36,6 +40,11 @@ class ScheduledAinaTaskCreate(StrictModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
     input: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+
+    @field_validator("aina_id", mode="before")
+    @classmethod
+    def normalize_target(cls, value: str | None) -> str:
+        return "" if value is None else value
 
     @field_validator("cron_expression")
     @classmethod
@@ -54,10 +63,13 @@ class ScheduledAinaTaskCreate(StrictModel):
     def require_cron_expression(self) -> "ScheduledAinaTaskCreate":
         if self.schedule_type == "cron" and self.cron_expression is None:
             raise ValueError("cron_expression is required for cron schedules")
+        if not self.aina_id:
+            agent_message({"message": self.prompt} if self.prompt is not None else self.input)
         return self
 
 
 class ScheduledAinaTaskUpdate(StrictModel):
+    aina_id: str | None = None
     name: str | None = Field(default=None, min_length=1, max_length=160)
     schedule_type: ScheduleType | None = None
     interval_seconds: int | None = Field(default=None, ge=10, le=31_536_000)
@@ -66,6 +78,11 @@ class ScheduledAinaTaskUpdate(StrictModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
     input: dict[str, Any] | None = None
     enabled: bool | None = None
+
+    @field_validator("aina_id", mode="before")
+    @classmethod
+    def normalize_target(cls, value: str | None) -> str:
+        return "" if value is None else value
 
     @field_validator("cron_expression")
     @classmethod
@@ -107,7 +124,7 @@ class ScheduledAinaTask(StrictModel):
     enabled: bool = True
     next_run_at: datetime = Field(default_factory=utc_now)
     last_run_at: datetime | None = None
-    last_status: Literal["never", "running", "succeeded", "failed"] = "never"
+    last_status: Literal["never", "running", "succeeded", "failed", "approval_required"] = "never"
     last_node_id: str | None = None
     last_error: str | None = None
     last_result: dict[str, Any] | None = None
@@ -121,6 +138,8 @@ class ScheduledAinaTask(StrictModel):
             if self.cron_expression is None:
                 raise ValueError("cron_expression is required for cron schedules")
             _validate_cron(self.cron_expression)
+        if not self.aina_id:
+            agent_message(self.input)
         return self
 
 
@@ -135,12 +154,19 @@ class ScheduledAinaExecution(StrictModel):
     call_id: str
     node_id: str
     input: dict[str, Any]
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: Literal["running", "succeeded", "failed", "approval_required"] = "running"
     result: dict[str, Any] | None = None
     error: str | None = None
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = None
     duration_ms: float | None = None
+
+
+def agent_message(arguments: dict[str, Any]) -> str:
+    message = arguments.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("Agent schedules require a non-empty prompt or input.message")
+    return message
 
 
 def next_scheduled_run(task: ScheduledAinaTask, *, after: datetime | None = None) -> datetime:
@@ -176,15 +202,17 @@ class AinaScheduler:
         repository: InMemoryRepository,
         gateway: RemoteCapabilityGateway,
         *,
+        chat_service: ChatService | None = None,
         node_id: str | None = None,
         poll_seconds: float = 1.0,
     ) -> None:
         self.repository = repository
         self.gateway = gateway
+        self.chat_service = chat_service
         self.node_id = node_id or socket.gethostname()
         self.poll_seconds = poll_seconds
         self._stop = asyncio.Event()
-        self._local_claims: set[str] = set()
+        self._local_claims = repository._scheduled_aina_claims
         self._driver: AsyncIOScheduler | None = None
 
     def stop(self) -> None:
@@ -218,26 +246,39 @@ class AinaScheduler:
             ) as acquired:
                 if not acquired:
                     continue
-                await self._execute(
-                    task,
-                    current,
-                    claim_id,
-                    trigger="scheduled",
-                    advance_schedule=True,
-                )
+                async with self._lease("aina-schedule-run", task.id, ttl_seconds=15 * 60) as run_acquired:
+                    if not run_acquired:
+                        continue
+                    try:
+                        latest = await self.repository.get_scheduled_aina_task(task.id)
+                    except PlatformError as exc:
+                        if exc.code == "RESOURCE_NOT_FOUND":
+                            continue
+                        raise
+                    if not latest.enabled or latest.next_run_at != task.next_run_at or latest.next_run_at > current:
+                        continue
+                    await self._execute(
+                        latest,
+                        current,
+                        claim_id,
+                        trigger="scheduled",
+                        advance_schedule=True,
+                    )
 
     async def run_now(
         self, task_id: str, *, input_override: dict[str, Any] | None = None
     ) -> ScheduledAinaTask:
-        task = await self.repository.get_scheduled_aina_task(task_id)
         claim_id = f"debug:{task_id}:{uuid4().hex}"
         async with self._lease(
-            "aina-schedule-debug",
+            "aina-schedule-run",
             task_id,
             ttl_seconds=15 * 60,
         ) as acquired:
             if not acquired:
-                raise conflict("This scheduled AINA task is already running")
+                raise conflict("This scheduled task is already running")
+            task = await self.repository.get_scheduled_aina_task(task_id)
+            if not task.aina_id:
+                self._agent_message(task.input if input_override is None else input_override)
             return await self._execute(
                 task,
                 datetime.now(UTC),
@@ -246,6 +287,55 @@ class AinaScheduler:
                 advance_schedule=False,
                 input_override=input_override,
             )
+
+    async def validate_task(
+        self,
+        task: ScheduledAinaTask | ScheduledAinaTaskCreate,
+        *,
+        input_override: dict[str, Any] | None = None,
+    ) -> AinaRecord | None:
+        arguments = (
+            input_override
+            if input_override is not None
+            else {"message": task.prompt} if task.prompt is not None else task.input
+        )
+        if not task.aina_id:
+            self._agent_message(arguments)
+            if self.chat_service is None:
+                raise PlatformError("INVALID_REQUEST", "The Agent runtime is unavailable", status_code=422)
+            return None
+        record = await self.repository.get_aina(task.aina_id)
+        if record.status != "registered":
+            raise PlatformError("PERMISSION_DENIED", "AINA is disabled", status_code=403)
+        if record.manifest.runtime.type in {"remote", "managed"}:
+            installation = await self.repository.get_installation(
+                tenant_id=task.tenant_id, user_id=task.user_id, aina_id=task.aina_id
+            )
+            if installation.status != "active":
+                raise PlatformError("PERMISSION_DENIED", "AINA installation is disabled", status_code=403)
+            if set(record.manifest.permissions) - set(installation.granted_permissions):
+                raise PlatformError("PERMISSION_DENIED", "AINA permissions have not been granted", status_code=403)
+        else:
+            self._agent_message(arguments)
+            if self.chat_service is None:
+                raise PlatformError("INVALID_REQUEST", "The Agent runtime is unavailable", status_code=422)
+            conversation = Conversation(
+                id="schedule-validation",
+                user_id=task.user_id,
+                tenant_id=task.tenant_id,
+                title=task.name,
+            )
+            capabilities = await self.chat_service.runner.catalog.available(conversation)
+            if not any(item.kind == "aina" and item.capability_id == task.aina_id for item in capabilities.values()):
+                raise PlatformError("PERMISSION_DENIED", "The selected AINA is unavailable", status_code=403)
+        return record
+
+    @staticmethod
+    def _agent_message(arguments: dict[str, Any]) -> str:
+        try:
+            return agent_message(arguments)
+        except ValueError as exc:
+            raise PlatformError("INVALID_REQUEST", str(exc), status_code=422) from exc
 
     @asynccontextmanager
     async def _lease(
@@ -261,47 +351,21 @@ class AinaScheduler:
                 yield acquired
             return
 
-        if namespace == "aina-schedule-debug":
-            acquired = await self._claim_manual(key)
+        local_key = f"{namespace}:{key}"
+        if stores is not None:
+            result = await stores.redis.set_if_absent(
+                namespace, key, {"node_id": self.node_id}, ttl_seconds=ttl_seconds
+            )
+            acquired = bool(result.written)
         else:
-            acquired = await self._claim(key, ttl_seconds)
+            acquired = local_key not in self._local_claims
+            if acquired:
+                self._local_claims.add(local_key)
         try:
             yield acquired
         finally:
             if acquired and stores is None:
-                self._local_claims.discard(key)
-                self._local_claims.discard(f"debug:{key}")
-
-    async def _claim(self, claim_id: str, interval_seconds: int) -> bool:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None:
-            result = await stores.redis.set_if_absent(
-                "aina-schedule-lease",
-                claim_id,
-                {"node_id": self.node_id},
-                ttl_seconds=max(60, interval_seconds),
-            )
-            return cast(bool, result.written)
-        if claim_id in self._local_claims:
-            return False
-        self._local_claims.add(claim_id)
-        return True
-
-    async def _claim_manual(self, task_id: str) -> bool:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None:
-            result = await stores.redis.set_if_absent(
-                "aina-schedule-debug",
-                task_id,
-                {"node_id": self.node_id},
-                ttl_seconds=15 * 60,
-            )
-            return cast(bool, result.written)
-        claim_id = f"debug:{task_id}"
-        if claim_id in self._local_claims:
-            return False
-        self._local_claims.add(claim_id)
-        return True
+                self._local_claims.discard(local_key)
 
     async def _execute(
         self,
@@ -313,6 +377,17 @@ class AinaScheduler:
         advance_schedule: bool,
         input_override: dict[str, Any] | None = None,
     ) -> ScheduledAinaTask:
+        running = await self.repository.start_scheduled_aina_run(
+            task.id,
+            node_id=self.node_id,
+            started_at=now,
+            scheduled_for=task.next_run_at if trigger == "scheduled" else None,
+        )
+        if running is None:
+            if trigger == "manual":
+                raise conflict("This task was removed before it could start")
+            return task
+        task = running
         execution_input = task.input if input_override is None else input_override
         execution = ScheduledAinaExecution(
             task_id=task.id,
@@ -327,29 +402,60 @@ class AinaScheduler:
             started_at=now,
         )
         await self.repository.put_scheduled_aina_execution(execution)
-        running = await self.repository.start_scheduled_aina_run(task.id, node_id=self.node_id, started_at=now)
+        cancelled: asyncio.CancelledError | None = None
         try:
-            record = await self.repository.get_aina(task.aina_id)
-            installation = await self.repository.get_installation(
-                tenant_id=task.tenant_id, user_id=task.user_id, aina_id=task.aina_id
-            )
-            response, _ = await self.gateway.invoke_aina(
-                record.manifest,
-                installation,
-                arguments=execution_input,
-                call_id=claim_id,
-                conversation_id=task.id,
-                trace_id=f"scheduled_{uuid4().hex}",
-                available_tools=[item.id for item in record.manifest.capabilities.tools],
-            )
-            status: Literal["succeeded", "failed"] = (
-                "succeeded" if response.status == "completed" else "failed"
-            )
-            error = None if status == "succeeded" else f"AINA returned {response.status}"
-            result = response.model_dump(mode="json")
-        except Exception as exc:  # execution failures are persisted for operators
+            record = await self.validate_task(task, input_override=execution_input)
+            status: Literal["succeeded", "failed", "approval_required"]
+            if record is None or record.manifest.runtime.type == "builtin":
+                if self.chat_service is None:
+                    raise PlatformError("INVALID_REQUEST", "The Agent runtime is unavailable", status_code=422)
+                response = await self.chat_service.run_turn(
+                    ChatRequest(
+                        message=self._agent_message(execution_input),
+                        user_id=task.user_id,
+                        tenant_id=task.tenant_id,
+                        capability=f"aina:{task.aina_id}" if task.aina_id else None,
+                    )
+                )
+                status = (
+                    "succeeded"
+                    if response.status == "completed"
+                    else "approval_required" if response.status == "approval_required" else "failed"
+                )
+                error = response.content if status == "failed" else None
+                result = response.model_dump(mode="json")
+            else:
+                installation = await self.repository.get_installation(
+                    tenant_id=task.tenant_id, user_id=task.user_id, aina_id=task.aina_id
+                )
+                remote_response, _ = await self.gateway.invoke_aina(
+                    record.manifest,
+                    installation,
+                    arguments=execution_input,
+                    call_id=claim_id,
+                    conversation_id=task.id,
+                    trace_id=f"scheduled_{uuid4().hex}",
+                    available_tools=[item.id for item in record.manifest.capabilities.tools],
+                )
+                status = (
+                    "succeeded"
+                    if remote_response.status == "completed"
+                    else "approval_required" if remote_response.status == "approval_required" else "failed"
+                )
+                error = None if status != "failed" else f"AINA returned {remote_response.status}"
+                result = remote_response.model_dump(mode="json")
+        except PlatformError as exc:
             status = "failed"
-            error = str(exc)
+            error = exc.user_message or exc.message
+            result = None
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+            status = "failed"
+            error = "The scheduled task was interrupted. Please retry."
+            result = None
+        except Exception:  # execution failures are persisted for operators
+            status = "failed"
+            error = "The scheduled task failed unexpectedly."
             result = None
         finished = datetime.now(UTC)
         await self.repository.put_scheduled_aina_execution(
@@ -372,5 +478,7 @@ class AinaScheduler:
             finished_at=finished,
             advance_schedule=advance_schedule,
         )
+        if cancelled is not None:
+            raise cancelled
         # A task deleted while it ran stays deleted; report the run on the task as it was.
         return finished_task or running or task

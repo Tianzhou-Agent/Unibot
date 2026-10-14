@@ -601,9 +601,18 @@ class PersistentRepository(InMemoryRepository):
             raise not_found("Scheduled AINA task", task_id)
 
     async def _record_scheduled_aina_run(
-        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask]
+        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask | None]
     ) -> ScheduledAinaTask | None:
-        return await self._schedule_store.change_task(task_id, change)
+        applied = False
+
+        def apply(task: ScheduledAinaTask) -> ScheduledAinaTask | None:
+            nonlocal applied
+            updated = change(task)
+            applied = updated is not None
+            return updated
+
+        updated = await self._schedule_store.change_task(task_id, apply)
+        return updated if applied else None
 
     async def put_scheduled_aina_execution(self, execution: ScheduledAinaExecution) -> ScheduledAinaExecution:
         await self._schedule_store.put_execution(execution)

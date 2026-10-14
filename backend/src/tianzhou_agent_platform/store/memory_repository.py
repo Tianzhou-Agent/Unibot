@@ -97,6 +97,7 @@ class InMemoryRepository:
         self._model_providers: dict[str, ModelProviderRecord] = {}
         self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
         self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
+        self._scheduled_aina_claims: set[str] = set()
         self._document_edit_tasks: dict[str, DocumentEditTask] = {}
         self._sandboxes: dict[str, SandboxRecord] = {}
         self._sandbox_executions: dict[str, SandboxExecution] = {}
@@ -610,11 +611,14 @@ class InMemoryRepository:
             return self._copy(task)
 
     async def start_scheduled_aina_run(
-        self, task_id: str, *, node_id: str, started_at: datetime
+        self, task_id: str, *, node_id: str, started_at: datetime, scheduled_for: datetime | None = None
     ) -> ScheduledAinaTask | None:
-        """Mark the task running, changing only run-state fields; None when the task was deleted."""
+        """Start a run atomically; skip a deleted, paused or rescheduled occurrence."""
         return await self._record_scheduled_aina_run(
-            task_id, lambda task: started_scheduled_aina_run(task, node_id=node_id, started_at=started_at)
+            task_id,
+            lambda task: started_scheduled_aina_run(
+                task, node_id=node_id, started_at=started_at, scheduled_for=scheduled_for
+            ),
         )
 
     async def finish_scheduled_aina_run(
@@ -641,13 +645,15 @@ class InMemoryRepository:
         )
 
     async def _record_scheduled_aina_run(
-        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask]
+        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask | None]
     ) -> ScheduledAinaTask | None:
         async with self._lock:
             task = self._scheduled_aina_tasks.get(task_id)
             if task is None:
                 return None
             updated = change(task)
+            if updated is None:
+                return None
             self._scheduled_aina_tasks[task_id] = updated
             await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
             return self._copy(updated)
@@ -1799,7 +1805,11 @@ def deployed_aina_project(project: AinaProjectRecord, deployed: bool) -> AinaPro
     )
 
 
-def started_scheduled_aina_run(task: ScheduledAinaTask, *, node_id: str, started_at: datetime) -> ScheduledAinaTask:
+def started_scheduled_aina_run(
+    task: ScheduledAinaTask, *, node_id: str, started_at: datetime, scheduled_for: datetime | None = None
+) -> ScheduledAinaTask | None:
+    if scheduled_for is not None and (not task.enabled or task.next_run_at != scheduled_for):
+        return None
     return task.model_copy(update={"last_status": "running", "last_node_id": node_id, "updated_at": started_at})
 
 
@@ -1837,8 +1847,14 @@ def new_scheduled_aina_task(data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
 
 def updated_scheduled_aina_task(task: ScheduledAinaTask, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
     changes = data.model_dump(exclude_none=True)
+    if "aina_id" in data.model_fields_set:
+        changes["aina_id"] = data.aina_id or ""
+    if "prompt" in data.model_fields_set:
+        changes["prompt"] = data.prompt
     if data.prompt is not None:
         changes["input"] = {"message": data.prompt}
+    elif data.input is not None:
+        changes["prompt"] = None
     now = datetime.now(UTC)
     changes["updated_at"] = now
     updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})

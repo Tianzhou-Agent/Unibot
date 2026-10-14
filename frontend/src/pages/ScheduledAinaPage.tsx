@@ -30,6 +30,7 @@ import type {
 } from "@/types";
 
 interface ScheduleForm {
+  executionMode: "agent" | "aina";
   ainaId: string;
   name: string;
   scheduleType: ScheduleType;
@@ -41,6 +42,7 @@ interface ScheduleForm {
 }
 
 const DEFAULT_FORM: ScheduleForm = {
+  executionMode: "agent",
   ainaId: "",
   name: "",
   scheduleType: "interval",
@@ -71,7 +73,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
   const [debugPrompts, setDebugPrompts] = useState<Record<string, string>>({});
   const [runningId, setRunningId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [notice, setNotice] = useState<{ tone: "success" | "error" | "info"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,7 +104,8 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
   const runnableAinas = useMemo(
     () =>
       ainas.filter(
-        (item) => item.manifest.runtime.type === "remote" && installedIds.has(item.manifest.aina.id),
+        (item) => item.status === "registered" && !["unibot-assistant", "unibot-scheduler"].includes(item.manifest.aina.id)
+          && (item.manifest.runtime.type === "builtin" || installedIds.has(item.manifest.aina.id)),
       ),
     [ainas, installedIds],
   );
@@ -121,6 +124,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
   function openEdit(task: ScheduledAinaTask) {
     setEditingId(task.id);
     setForm({
+      executionMode: task.aina_id ? "aina" : "agent",
       ainaId: task.aina_id,
       name: task.name,
       scheduleType: task.schedule_type,
@@ -140,6 +144,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
     try {
       const prompt = form.prompt.trim();
       const payload = {
+        aina_id: form.executionMode === "aina" ? form.ainaId : "",
         name: form.name.trim(),
         schedule_type: form.scheduleType,
         interval_seconds: Number(form.intervalSeconds),
@@ -150,16 +155,15 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
       };
       if (!payload.name) throw new Error(t("err.name"));
       if (!payload.prompt) throw new Error(t("err.prompt"));
+      if (form.executionMode === "aina" && !payload.aina_id) throw new Error(t("err.aina"));
       if (form.scheduleType === "interval" && (!Number.isFinite(payload.interval_seconds) || payload.interval_seconds < 10)) {
         throw new Error(t("err.interval"));
       }
       if (editingId) {
         await api.patch<ScheduledAinaTask>(`/aina-schedules/${editingId}`, payload);
       } else {
-        if (!form.ainaId) throw new Error(t("err.aina"));
         await api.post<ScheduledAinaTask>("/aina-schedules", {
           ...payload,
-          aina_id: form.ainaId,
           user_id: "anonymous",
           tenant_id: "default",
         });
@@ -239,8 +243,8 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
       replaceTask(updated);
       await loadExecutions(task.id);
       setNotice({
-        tone: updated.last_status === "succeeded" ? "success" : "error",
-        text: updated.last_status === "succeeded" ? t("notice.debugOk") : updated.last_error ?? t("notice.debugFail"),
+        tone: updated.last_status === "succeeded" ? "success" : updated.last_status === "approval_required" ? "info" : "error",
+        text: updated.last_status === "succeeded" ? t("notice.debugOk") : updated.last_status === "approval_required" ? t("notice.approval") : updated.last_error ?? t("notice.debugFail"),
       });
     } catch (error) {
       setNotice({ tone: "error", text: apiErrorMessage(error) });
@@ -316,7 +320,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
             />
           ) : null}
 
-          {!loading && runnableAinas.length === 0 ? (
+          {!loading && editorOpen && form.executionMode === "aina" && runnableAinas.length === 0 ? (
             <div className="rounded-lg border border-warning/30 bg-warning-soft p-3 text-[11.5px] text-warning-deep">
               <Trans t={t} i18nKey="noRunnable" components={{ link: <Link to="/plugin" className="font-bold underline" /> }} />
             </div>
@@ -336,7 +340,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
                 <TaskCard
                   key={task.id}
                   task={task}
-                  ainaName={ainaNames.get(task.aina_id) ?? task.aina_id}
+                  ainaName={task.aina_id ? ainaNames.get(task.aina_id) ?? task.aina_id : t("target.agent")}
                   detailMode={detailTaskId === task.id ? detailMode : null}
                   executions={executions[task.id] ?? []}
                   historyLoading={historyLoadingId === task.id}
@@ -390,16 +394,26 @@ function ScheduleEditor({
       </div>
       <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-2">
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
-          {t("editor.aina")}
-          <select value={form.ainaId} disabled={editing} onChange={(event) => change("ainaId", event.target.value)} className="input-soft w-full text-[11.5px] disabled:opacity-60">
-            <option value="">{t("editor.ainaPlaceholder")}</option>
-            {ainas.map((item) => <option key={item.manifest.aina.id} value={item.manifest.aina.id}>{item.manifest.aina.name}</option>)}
+          {t("editor.executionMode")}
+          <select value={form.executionMode} onChange={(event) => change("executionMode", event.target.value as ScheduleForm["executionMode"])} className="input-soft w-full text-[11.5px]">
+            <option value="agent">{t("editor.agentMode")}</option>
+            <option value="aina">{t("editor.ainaMode")}</option>
           </select>
+          <span className="block text-[10px] font-normal text-ink-subtle">{t(form.executionMode === "agent" ? "editor.agentHint" : "editor.ainaHint")}</span>
         </label>
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
           {t("editor.name")}
           <input value={form.name} onChange={(event) => change("name", event.target.value)} className="input-soft w-full text-[11.5px]" placeholder={t("editor.namePlaceholder")} />
         </label>
+        {form.executionMode === "aina" ? (
+          <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted lg:col-span-2">
+            {t("editor.aina")}
+            <select value={form.ainaId} onChange={(event) => change("ainaId", event.target.value)} className="input-soft w-full text-[11.5px]">
+              <option value="">{t("editor.ainaPlaceholder")}</option>
+              {ainas.map((item) => <option key={item.manifest.aina.id} value={item.manifest.aina.id}>{item.manifest.aina.name}</option>)}
+            </select>
+          </label>
+        ) : null}
         <label className="space-y-1.5 text-[11.5px] font-bold text-ink-muted">
           {t("editor.scheduleType")}
           <select value={form.scheduleType} onChange={(event) => change("scheduleType", event.target.value as ScheduleType)} className="input-soft w-full text-[11.5px]">
@@ -594,6 +608,7 @@ function AinaDebugResult({
         <span className="flex-1" />
         <span className="font-mono text-[10px] text-ink-subtle">{execution.node_id}</span>
       </header>
+      <RunConversationLink execution={execution} />
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-2">
         <TextBlock label={t("debug.input")} value={ainaInputText(execution.input)} />
         <div>
@@ -629,12 +644,27 @@ function AinaOutputValue({ output }: { output: { type: string; content: unknown 
 }
 
 function ainaOutputs(result?: Record<string, unknown> | null): Array<{ type: string; content: unknown }> {
-  if (!result || !Array.isArray(result.outputs)) return [];
+  if (!result) return [];
+  if (typeof result.content === "string") return [{ type: "text", content: result.content }];
+  if (!Array.isArray(result.outputs)) return [];
   return result.outputs.flatMap((output) => {
     if (!output || typeof output !== "object" || !("content" in output)) return [];
     const record = output as Record<string, unknown>;
     return [{ type: typeof record.type === "string" ? record.type : "output", content: record.content }];
   });
+}
+
+function RunConversationLink({ execution }: { execution: ScheduledAinaExecution }) {
+  const { t } = useTranslation("schedule");
+  const conversationId = execution.result?.conversation_id;
+  if (typeof conversationId !== "string" || !conversationId) return null;
+  return (
+    <div className="border-b border-line px-3 py-2">
+      <Link to={`/chat/${encodeURIComponent(conversationId)}`} className="text-[11px] font-bold text-accent hover:underline">
+        {t(execution.status === "approval_required" ? "runConversation.approval" : "runConversation.open")}
+      </Link>
+    </div>
+  );
 }
 
 function ExecutionHistory({
@@ -665,9 +695,12 @@ function ExecutionHistory({
             <span className="flex-1" />
             <span className="font-mono text-[10px] text-ink-subtle">{execution.node_id}</span>
           </summary>
+          <RunConversationLink execution={execution} />
           <div className="grid grid-cols-1 gap-3 border-t border-line p-3 lg:grid-cols-2">
             <TextBlock label={t("hist.input")} value={ainaInputText(execution.input)} />
-            <JsonBlock label={execution.error ? t("hist.error") : t("hist.fullOutput")} value={execution.error ?? execution.result ?? {}} error={Boolean(execution.error)} />
+            {!execution.error && typeof execution.result?.content === "string"
+              ? <TextBlock label={t("hist.fullOutput")} value={execution.result.content} />
+              : <JsonBlock label={execution.error ? t("hist.error") : t("hist.fullOutput")} value={execution.error ?? execution.result ?? {}} error={Boolean(execution.error)} />}
             <div className="text-[10px] text-ink-subtle lg:col-span-2">
               {t("hist.callId")}<span className="font-mono">{execution.call_id}</span>
               {execution.scheduled_for ? <>{t("hist.plannedAt", { time: formatTime(execution.scheduled_for) })}</> : null}
@@ -707,10 +740,11 @@ function Status({ status }: { status: ScheduledAinaStatus }) {
   const styles: Record<ScheduledAinaStatus, string> = {
     never: "bg-app-soft text-ink-muted",
     running: "bg-warning-soft text-warning-deep",
+    approval_required: "bg-warning-soft text-warning-deep",
     succeeded: "bg-success-soft text-success-deep",
     failed: "bg-danger-soft text-danger-deep",
   };
-  const labels: Record<ScheduledAinaStatus, string> = { never: t("status.never"), running: t("status.running"), succeeded: t("status.succeeded"), failed: t("status.failed") };
+  const labels: Record<ScheduledAinaStatus, string> = { never: t("status.never"), running: t("status.running"), approval_required: t("status.approval_required"), succeeded: t("status.succeeded"), failed: t("status.failed") };
   return <span className={classNames("rounded-md px-1.5 py-0.5 text-[9.5px] font-bold", styles[status])}>{labels[status]}</span>;
 }
 
@@ -723,10 +757,10 @@ function Info({ label, value, mono = false }: { label: string; value: string; mo
   return <div className="rounded-lg bg-app-soft p-2.5"><p className="text-[10px] font-bold text-ink-subtle">{label}</p><p className={classNames("mt-1 truncate text-[11.5px] text-ink", mono && "font-mono")}>{value}</p></div>;
 }
 
-function Notice({ tone, text, onClose }: { tone: "success" | "error"; text: string; onClose: () => void }) {
+function Notice({ tone, text, onClose }: { tone: "success" | "error" | "info"; text: string; onClose: () => void }) {
   const { t } = useTranslation("schedule");
   return (
-    <div className={classNames("flex items-center gap-2.5 rounded-lg border p-3", tone === "success" ? "border-success/20 bg-success-soft text-success-deep" : "border-danger-ring bg-danger-soft text-danger-deep")}>
+    <div className={classNames("flex items-center gap-2.5 rounded-lg border p-3", tone === "success" ? "border-success/20 bg-success-soft text-success-deep" : tone === "info" ? "border-accent-ring bg-accent-soft text-accent" : "border-danger-ring bg-danger-soft text-danger-deep")}>
       {tone === "success" ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
       <span className="flex-1 text-[12.5px] font-semibold">{text}</span>
       <button type="button" onClick={onClose} aria-label={t("dismiss")}><X className="h-4 w-4" /></button>

@@ -21,7 +21,7 @@ def unibot_scheduler_record() -> AinaRecord:
                 id=UNIBOT_SCHEDULER_ID,
                 name="Scheduler",
                 version="1.0.0",
-                description="Schedule installed remote AINA on a fixed interval or a cron expression, with an immediate debug run.",
+                description="Schedule Agent tasks or a selected AINA on a fixed interval or a cron expression, with an immediate debug run.",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -30,7 +30,7 @@ def unibot_scheduler_record() -> AinaRecord:
                     AinaUiCapability(
                         id="schedule-manager",
                         kind="panel",
-                        description="Manage scheduled AINA tasks, their run status and debug results.",
+                        description="Manage scheduled Agent and AINA tasks, their run status and debug results.",
                     )
                 ]
             ),
@@ -38,10 +38,11 @@ def unibot_scheduler_record() -> AinaRecord:
                 id="unibot-scheduler-main",
                 kind="panel",
                 title="Scheduler",
-                description="Manage distributed AINA schedules.",
+                description="Manage distributed Agent and AINA schedules.",
                 markdown=(
-                    "### Distributed scheduling\n\nSupports fixed intervals and five-field cron expressions. "
-                    "Unibot nodes compete for a Redis lease, so each scheduled time runs on exactly one node."
+                    "### Distributed scheduling\n\nRun a general Agent task or select an AINA. "
+                    "Supports fixed intervals and five-field cron expressions. "
+                    "Unibot nodes coordinate through renewable Redis leases to prevent overlapping runs of one task."
                 ),
             ),
             authentication=Authentication(type="none"),

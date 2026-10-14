@@ -116,6 +116,75 @@ async def test_execution_history_is_newest_first_and_removed_with_its_task() -> 
         await first.remove_scheduled_aina_task(task.id)
 
 
+async def test_agent_schedules_and_approval_results_roundtrip_without_new_columns() -> None:
+    first, second = _replicas()
+    task = await first.create_scheduled_aina_task(
+        ScheduledAinaTaskCreate(name="Agent digest", prompt="Summarize the news", user_id="u1", tenant_id="t1")
+    )
+    assert task.aina_id == ""
+    assert await second.get_scheduled_aina_task(task.id) == task
+
+    result = {"content": "Approval required", "conversation_id": "conversation_1", "trace_id": "trace_1"}
+    execution = ScheduledAinaExecution(
+        task_id=task.id,
+        aina_id="",
+        user_id="u1",
+        tenant_id="t1",
+        trigger="scheduled",
+        call_id="agent-run",
+        node_id="n1",
+        input=task.input,
+        status="approval_required",
+        result=result,
+    )
+    await first.put_scheduled_aina_execution(execution)
+    finished = await first.finish_scheduled_aina_run(
+        task.id,
+        status="approval_required",
+        error=None,
+        result=result,
+        finished_at=datetime.now(UTC),
+        advance_schedule=True,
+    )
+    assert await second.get_scheduled_aina_task(task.id) == finished
+    assert (await second.list_scheduled_aina_executions(task.id))[0] == execution
+
+
+async def test_null_target_edits_store_an_empty_string_and_validate_the_merged_agent_input() -> None:
+    first, second = _replicas()
+    task = await first.create_scheduled_aina_task(_schedule(input={"report": "daily"}))
+    with pytest.raises(ValueError):
+        await second.update_scheduled_aina_task(task.id, ScheduledAinaTaskUpdate(aina_id=None))
+    assert (await first.get_scheduled_aina_task(task.id)).aina_id == "aina.remote"
+
+    switched = await second.update_scheduled_aina_task(
+        task.id, ScheduledAinaTaskUpdate(aina_id=None, input={"message": "Generate a digest"})
+    )
+    assert switched.aina_id == ""
+    assert switched.input == {"message": "Generate a digest"}
+    assert switched.next_run_at == task.next_run_at
+    assert await first.get_scheduled_aina_task(task.id) == switched
+
+
+@pytest.mark.parametrize("change", ["pause", "reschedule", "delete"])
+async def test_sql_start_skips_an_occurrence_changed_by_another_replica(change: str) -> None:
+    first, second = _replicas()
+    task = await first.create_scheduled_aina_task(_schedule(prompt="Summarize"))
+    if change == "delete":
+        await second.remove_scheduled_aina_task(task.id)
+    else:
+        await second.update_scheduled_aina_task(
+            task.id,
+            ScheduledAinaTaskUpdate(enabled=False) if change == "pause" else ScheduledAinaTaskUpdate(interval_seconds=60),
+        )
+    started = await first.start_scheduled_aina_run(
+        task.id, node_id="n1", started_at=datetime.now(UTC), scheduled_for=task.next_run_at
+    )
+    assert started is None
+    if change != "delete":
+        assert (await second.get_scheduled_aina_task(task.id)).last_status == "never"
+
+
 def _sandbox(sandbox_id: str, workspace_id: str | None = None) -> SandboxRecord:
     return SandboxRecord(
         id=sandbox_id,

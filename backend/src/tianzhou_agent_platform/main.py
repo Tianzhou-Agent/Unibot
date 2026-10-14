@@ -416,6 +416,7 @@ def create_app(
         ),
         stops=RunStops(storage_stores.redis if storage_stores is not None else None),
     )
+    scheduler.chat_service = app.state.chat_service
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service
