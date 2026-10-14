@@ -35,9 +35,9 @@ export default {
   },
   caps: {
     aria: "Capability call analysis",
-    title: "Tool / Skill / MCP call analysis",
+    title: "Tool / Skill call analysis",
     empty: "This conversation has no capability calls.",
-    note: "The current trace protocol has no separate Skill/MCP type; they are counted only when a span explicitly carries a type marker.",
+    note: "The current trace protocol has no separate Skill type; it is counted only when a span explicitly carries a type marker.",
   },
   conversationHealthy: "This conversation is healthy",
   viewRawLog: "View raw log",

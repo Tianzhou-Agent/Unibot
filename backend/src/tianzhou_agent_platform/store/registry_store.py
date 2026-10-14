@@ -6,10 +6,9 @@ Each record's id is its registry id, so the primary key rejects a second registr
 from __future__ import annotations
 
 from pydantic import BaseModel
-from sqlalchemy import Table, insert, select, update
+from sqlalchemy import Table, insert, select
 from sqlalchemy.exc import IntegrityError
 
-from tianzhou_agent_platform.aina.mcp.models import McpServerRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -17,7 +16,6 @@ from tianzhou_agent_platform.core.errors import conflict
 from tianzhou_agent_platform.store.repository_schema import (
     ainas_table,
     installations_table,
-    mcp_servers_table,
     skills_table,
     table_values,
     tools_table,
@@ -28,33 +26,9 @@ tools = tools_table
 skills = skills_table
 ainas = ainas_table
 installations = installations_table
-mcp_servers = mcp_servers_table
 
 
 class RegistryStore(SqlStore):
-    async def register_mcp_server(self, server: McpServerRecord) -> None:
-        await self._register(
-            mcp_servers, server, server.server_id, f"MCP server {server.server_id!r} is already registered"
-        )
-
-    async def replace_mcp_server(self, server: McpServerRecord) -> McpServerRecord | None:
-        async with self._session() as session, session.begin():
-            result = await session.execute(
-                update(mcp_servers).where(mcp_servers.c.id == server.server_id).values(
-                    table_values(mcp_servers, server, id=server.server_id)
-                )
-            )
-        return server if result.rowcount else None  # type: ignore[attr-defined]
-
-    async def get_mcp_server(self, server_id: str) -> McpServerRecord | None:
-        return await self._one(McpServerRecord, select(mcp_servers).where(mcp_servers.c.id == server_id))
-
-    async def list_mcp_servers(self) -> list[McpServerRecord]:
-        return await self._all(McpServerRecord, select(mcp_servers).order_by(mcp_servers.c.created_at, mcp_servers.c.id))
-
-    async def remove_mcp_server(self, server_id: str) -> bool:
-        return await self._delete(mcp_servers, mcp_servers.c.id == server_id) > 0
-
     async def register_tool(self, tool: ToolRecord) -> None:
         await self._register(tools, tool, tool.tool_id, f"Tool {tool.tool_id!r} is already registered")
 

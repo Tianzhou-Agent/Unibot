@@ -41,7 +41,6 @@ from tianzhou_agent_platform.store.memory_repository import (
     INSTALLATIONS_RESOURCE,
     LLM_CALLS_RESOURCE,
     MEMORIES_RESOURCE,
-    MCP_SERVERS_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
     SANDBOX_EXECUTIONS_RESOURCE,
     SANDBOXES_RESOURCE,
@@ -233,29 +232,6 @@ model_providers_table = _table(
     Column("created_at", TIMESTAMP, nullable=False),
     Column("updated_at", TIMESTAMP, nullable=False),
     Index("ix_unibot_model_providers_owner_created", "tenant_id", "user_id", "created_at"),
-)
-
-mcp_servers_table = _table(
-    MCP_SERVERS_RESOURCE,
-    Column("id", ID, primary_key=True),
-    Column("server_id", String(128), nullable=False),
-    Column("name", String(128), nullable=False),
-    Column("endpoint", URL, nullable=False),
-    Column("authentication", JSON, nullable=False),
-    Column("credential_env", String(128), nullable=True),
-    Column("timeout_seconds", Double, nullable=False),
-    Column("side_effect_level", STATUS, nullable=False),
-    Column("visibility", STATUS, nullable=False),
-    Column("status", STATUS, nullable=False),
-    Column("owner_user_id", ACTOR, nullable=True),
-    Column("tenant_id", ACTOR, nullable=True),
-    Column("protocol_version", String(255), nullable=True),
-    Column("server_name", String(255), nullable=True),
-    Column("server_version", String(255), nullable=True),
-    Column("instructions", LONG_TEXT, nullable=True),
-    Column("tools", JSON, nullable=False),
-    Column("refreshed_at", TIMESTAMP, nullable=False),
-    Column("created_at", TIMESTAMP, nullable=False),
 )
 
 tools_table = _table(
@@ -496,7 +472,6 @@ repository_tables: dict[str, Table] = {
     WORKSPACES_RESOURCE: workspaces_table,
     CONVERSATIONS_RESOURCE: conversations_table,
     MEMORIES_RESOURCE: memories_table,
-    MCP_SERVERS_RESOURCE: mcp_servers_table,
     TOOLS_RESOURCE: tools_table,
     SKILLS_RESOURCE: skills_table,
     AINAS_RESOURCE: ainas_table,

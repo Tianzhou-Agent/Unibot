@@ -29,7 +29,6 @@ import type {
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { classNames } from "@/lib/utils";
-import { McpServerSettings } from "@/features/mcp-settings/McpServerSettings";
 
 import i18n, { LANGUAGES, currentLocale } from "@/i18n";
 import { useAuth } from "@/lib/auth";
@@ -250,7 +249,6 @@ export default function SettingsPage() {
           {settings?.providers.length ? (
             <p className="mt-3 flex items-center gap-1.5 px-1 text-[11px] text-ink-subtle"><Info className="h-3 w-3 shrink-0" />{t("envHint")}</p>
           ) : null}
-          <McpServerSettings />
           </>
           ) : null}
           </div>

@@ -290,8 +290,8 @@ function ConversationView({
 
           {dimension === "capabilities" ? <section className="rounded-xl border border-line bg-white" aria-label={t("caps.aria")}>
             <SectionHeader icon={<Wrench />} title={t("caps.title")} note={t("logicalCalls", { count: capabilities.reduce((sum, item) => sum + item.calls, 0) })} />
-            <div className="grid gap-2 p-2.5 sm:grid-cols-4">
-              {(["AINA", "Tool", "Skill", "MCP"] as const).map((type) => (
+            <div className="grid gap-2 p-2.5 sm:grid-cols-3">
+              {(["AINA", "Tool", "Skill"] as const).map((type) => (
                 <div key={type} className="rounded-lg bg-app-soft px-3 py-2">
                   <div className="text-[10.5px] font-bold text-ink-muted">{type}</div>
                   <div className="mt-1 text-xl font-extrabold text-ink">{capabilityTotals[type]}</div>
@@ -313,7 +313,7 @@ function ConversationView({
                 </tbody>
               </table>
             </div>
-            {capabilityTotals.Skill === 0 && capabilityTotals.MCP === 0 ? (
+            {capabilityTotals.Skill === 0 ? (
               <p className="px-3 py-2 text-[10.5px] text-ink-subtle">{t("caps.note")}</p>
             ) : null}
           </section> : null}
@@ -1258,18 +1258,17 @@ function capabilityMetrics(spans: TraceSpan[]) {
   });
 }
 
-function capabilityType(span: TraceSpan): "AINA" | "Tool" | "Skill" | "MCP" {
+function capabilityType(span: TraceSpan): "AINA" | "Tool" | "Skill" {
   if (span.kind === "aina") return "AINA";
   const hints = [span.attributes.capability_kind, span.attributes.transport, span.attributes.protocol, span.attributes.source, span.target_id, span.name]
     .filter((value): value is string => typeof value === "string")
     .join(" ").toLowerCase();
   if (hints.includes("skill")) return "Skill";
-  if (hints.includes("mcp")) return "MCP";
   return "Tool";
 }
 
 function countCapabilityTypes(items: ReturnType<typeof capabilityMetrics>) {
-  return items.reduce((sum, item) => ({ ...sum, [item.type]: sum[item.type] + item.calls }), { AINA: 0, Tool: 0, Skill: 0, MCP: 0 });
+  return items.reduce((sum, item) => ({ ...sum, [item.type]: sum[item.type] + item.calls }), { AINA: 0, Tool: 0, Skill: 0 });
 }
 
 function buildErrors(trace: TraceRecord, calls: LLMCallRecord[]): DiagnosticError[] {

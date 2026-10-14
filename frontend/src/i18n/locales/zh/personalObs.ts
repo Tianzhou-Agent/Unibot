@@ -35,9 +35,9 @@ export default {
   },
   caps: {
     aria: "能力调用分析",
-    title: "工具 / Skill / MCP 调用分析",
+    title: "工具 / Skill 调用分析",
     empty: "当前对话没有能力调用。",
-    note: "当前 Trace 协议没有独立的 Skill/MCP 类型；只有 Span 明确携带类型标记时才会计数。",
+    note: "当前 Trace 协议没有独立的 Skill 类型；只有 Span 明确携带类型标记时才会计数。",
   },
   conversationHealthy: "当前对话正常",
   viewRawLog: "查看原始日志",

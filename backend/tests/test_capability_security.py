@@ -31,6 +31,22 @@ SKILL = {
 }
 
 
+def test_removed_mcp_routes_and_forced_capabilities_are_unavailable() -> None:
+    app = create_app(settings=AgentSettings(_env_file=None), llm=ScriptedLLM([assistant("Hello")]))
+    with TestClient(app) as client:
+        for method, path in [
+            ("GET", "/mcp-servers"),
+            ("POST", "/mcp-servers"),
+            ("GET", "/mcp-servers/calculator"),
+            ("POST", "/mcp-servers/calculator/refresh"),
+            ("DELETE", "/mcp-servers/calculator"),
+        ]:
+            assert client.request(method, path).status_code == 404
+        response = client.post("/chat", json={"message": "Hello", "capability": "mcp:calculator:add"})
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
 def _manifest(**overrides) -> dict:
     return {
         "protocol_version": "1.0",
