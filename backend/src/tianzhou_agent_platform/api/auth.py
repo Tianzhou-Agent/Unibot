@@ -32,7 +32,8 @@ def create_auth_router() -> APIRouter:
         app_settings = settings(request)
         return AuthConfig(
             auth_required=bool(request.app.state.auth_enforced),
-            registration_enabled=app_settings.auth_registration_enabled,
+            default_language=app_settings.default_language,
+            registration_enabled=app_settings.registration_enabled,
             github_enabled=app_settings.github_oauth_enabled,
             huawei_enabled=app_settings.huawei_oauth_enabled,
             google_enabled=app_settings.google_oauth_enabled,

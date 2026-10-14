@@ -11,7 +11,10 @@ export function LanguageSwitcher({ className = "" }: { className?: string }) {
       <select
         aria-label={t("language")}
         value={i18n.resolvedLanguage}
-        onChange={(event) => void i18n.changeLanguage(event.target.value)}
+        onChange={(event) => {
+          localStorage.setItem("unibot.language", event.target.value);
+          void i18n.changeLanguage(event.target.value);
+        }}
         className="min-w-0 flex-1 rounded-md border border-line bg-white px-1.5 py-1 text-[11.5px] text-ink"
       >
         {LANGUAGES.map(({ code, label }) => (

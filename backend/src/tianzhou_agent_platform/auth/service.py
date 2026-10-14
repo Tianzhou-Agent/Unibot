@@ -57,7 +57,7 @@ class AuthService:
         await self.oidc.aclose()
 
     async def register(self, *, email: str, password: str, name: str) -> UserRecord:
-        if not self.settings.auth_registration_enabled:
+        if not self.settings.registration_enabled:
             raise PlatformError(
                 "PERMISSION_DENIED",
                 "User registration is disabled",

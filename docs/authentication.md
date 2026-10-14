@@ -6,12 +6,17 @@ Unibot 支持邮箱密码账户，以及 GitHub、华为 Uniportal、Google、Mi
 
 ## 本地账户
 
-用户可直接在登录页切换到“注册”，填写昵称、邮箱和至少 8 位密码。密码使用 Argon2 单向哈希保存，
+未启用华为 OAuth 时，用户可在登录页点击“注册”，填写昵称、邮箱和至少 8 位密码。启用华为 OAuth 后，
+注册入口与本地注册接口均关闭，已有账号仍可使用邮箱密码登录；第三方首次登录仍会创建对应用户空间。
+密码使用 Argon2 单向哈希保存，
 接口响应中不会返回哈希。可通过以下设置关闭开放注册：
 
 ```dotenv
 UNIBOT_AUTH_REGISTRATION_ENABLED=false
 ```
+
+默认语言通过部署环境变量 `UNIBOT_DEFAULT_LANGUAGE=zh`（中文）或 `en`（英文，默认）配置，
+由 `/auth/config` 下发，无需重新构建前端。登录页不显示语言选择器，用户在设置中明确选择的语言优先于部署默认值。
 
 ## GitHub OAuth App
 
