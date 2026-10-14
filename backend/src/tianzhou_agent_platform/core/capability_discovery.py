@@ -147,7 +147,6 @@ def model_scope_details(
     return {
         "counts": {
             "remote_tool": sum(item.kind == "tool" for item in capabilities.values()),
-            "mcp_tool": sum(item.kind == "mcp" for item in capabilities.values()),
             "remote_aina": sum(item.kind == "aina" for item in capabilities.values()),
             "builtin_capability": sum(item.kind == "builtin" for item in capabilities.values()),
         },

@@ -38,7 +38,7 @@
 
 本设计覆盖：
 
-- Agent、模型、Tool、Skill、MCP、AINA 和内部处理 Span
+- Agent、模型、Tool、Skill、AINA 和内部处理 Span
 - 用户输入、最终回复、Token、TTFT、时延、错误和上下文压缩数据
 - 原始模型请求/响应和工具输入/输出
 - WAL 写入、轮转、重放、幂等入库和积压处理
@@ -189,7 +189,7 @@ flowchart LR
 - 一个对话对应一个 Session。
 - `session.id` 和 `gen_ai.conversation.id` 保存 `conversation_id`。
 - Root Span 表示一次 `invoke_agent`。
-- 模型、工具、Skill、MCP、AINA 和上下文压缩作为 Root Span 的子孙 Span。
+- 模型、工具、Skill、AINA 和上下文压缩作为 Root Span 的子孙 Span。
 
 审批暂停属于本轮交互的终态，Root Span 以 `approval_required` 结束。用户稍后确认审批时创建新的 OTel Trace，通过 `SpanLink` 关联原 Trace，并保持相同 `session.id`。已经结束的 OTel Span 不允许重新打开。
 
@@ -220,7 +220,7 @@ OTel Trace ID 和 Span ID 使用标准格式。本期同时保存：
 | --- | --- | --- |
 | 一轮交互 | Root Agent Span | `gen_ai.operation.name=invoke_agent`、Session、用户、租户 |
 | 模型调用 | Model Span | 模型、Provider、Token、TTFT、输出速率、原始 IO 地址 |
-| Tool/Skill/MCP | Tool Span | 工具类型、工具名、调用 ID、结果摘要、原始 IO 地址 |
+| Tool/Skill | Tool Span | 工具类型、工具名、调用 ID、结果摘要、原始 IO 地址 |
 | AINA | Agent/Tool Span | AINA ID、版本、远端时延、结果摘要 |
 | 上下文压缩 | Internal Span | 压缩前后 Token、保留轮次、压缩模型和结果 |
 | 审批 | Span Event | 审批 ID、请求/确认/拒绝/取消状态 |
@@ -743,7 +743,7 @@ Redis 只负责避免多个实例同时重放，不保存任何唯一数据。�
 
 如果 Redis 不可用，可以依赖同一 NAS 内的原子 rename 认领 Segment。数据库幂等仍是最终正确性保障。
 
-### 13.3 远程 AINA/MCP
+### 13.3 远程 AINA
 
 本期至少在 Unibot Gateway 侧创建完整的远程调用 Span，并向支持 W3C Trace Context 的远端请求注入 `traceparent` 和 `tracestate`。
 

@@ -4,7 +4,6 @@ from fastapi import Request
 from pydantic import BaseModel, Field
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
-from tianzhou_agent_platform.aina.mcp.client import McpCapabilityClient
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
@@ -112,10 +111,6 @@ def task_runtime(request: Request) -> TaskService:
 
 def gateway(request: Request) -> RemoteCapabilityGateway:
     return cast(RemoteCapabilityGateway, request.app.state.capability_gateway)
-
-
-def mcp_client(request: Request) -> McpCapabilityClient:
-    return cast(McpCapabilityClient, request.app.state.mcp_client)
 
 
 def aina_projects(request: Request) -> AinaProjectService:

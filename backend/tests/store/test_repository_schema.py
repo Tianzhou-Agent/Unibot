@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
-from tianzhou_agent_platform.aina.mcp.models import McpServerRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask
@@ -29,7 +28,6 @@ from tianzhou_agent_platform.store.memory_repository import (
     INSTALLATIONS_RESOURCE,
     LLM_CALLS_RESOURCE,
     MEMORIES_RESOURCE,
-    MCP_SERVERS_RESOURCE,
     MODEL_PROVIDERS_RESOURCE,
     SANDBOX_EXECUTIONS_RESOURCE,
     SANDBOXES_RESOURCE,
@@ -57,7 +55,6 @@ RECORD_MODELS: dict[str, type[BaseModel]] = {
     CONVERSATIONS_RESOURCE: Conversation,
     APPROVALS_RESOURCE: ApprovalRecord,
     MEMORIES_RESOURCE: MemoryRecord,
-    MCP_SERVERS_RESOURCE: McpServerRecord,
     FEEDBACKS_RESOURCE: FeedbackRecord,
     MODEL_PROVIDERS_RESOURCE: ModelProviderRecord,
     TOOLS_RESOURCE: ToolRecord,
