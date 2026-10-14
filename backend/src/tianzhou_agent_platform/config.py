@@ -205,6 +205,10 @@ class AgentSettings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("UNIBOT_AUTH_REGISTRATION_ENABLED", "auth_registration_enabled"),
     )
+    default_language: Literal["en", "zh"] = Field(
+        default="en",
+        validation_alias=AliasChoices("UNIBOT_DEFAULT_LANGUAGE", "default_language"),
+    )
     env: Literal["development", "production"] = Field(
         default="production",
         validation_alias=AliasChoices("UNIBOT_ENV", "env"),
@@ -403,6 +407,10 @@ class AgentSettings(BaseSettings):
     @property
     def huawei_oauth_enabled(self) -> bool:
         return bool(self.huawei_oauth_base_url and self.huawei_oauth_client_id and self.huawei_oauth_client_secret)
+
+    @property
+    def registration_enabled(self) -> bool:
+        return self.auth_registration_enabled and not self.huawei_oauth_enabled
 
     @property
     def google_oauth_enabled(self) -> bool:

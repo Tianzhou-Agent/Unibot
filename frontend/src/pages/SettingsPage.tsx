@@ -411,7 +411,10 @@ function GeneralPanel() {
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                onClick={() => void i18n.changeLanguage(code)}
+                onClick={() => {
+                  localStorage.setItem("unibot.language", code);
+                  void i18n.changeLanguage(code);
+                }}
                 className={classNames(
                   "flex items-center gap-3 rounded-lg border px-3 py-3 text-left transition-colors",
                   selected ? "border-accent bg-accent-soft" : "border-line hover:bg-app-soft",

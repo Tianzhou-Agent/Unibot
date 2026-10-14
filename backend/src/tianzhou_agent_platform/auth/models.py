@@ -106,6 +106,7 @@ class AuthResponse(StrictModel):
 
 class AuthConfig(StrictModel):
     auth_required: bool
+    default_language: Literal["en", "zh"]
     registration_enabled: bool
     github_enabled: bool
     huawei_enabled: bool

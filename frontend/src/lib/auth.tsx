@@ -16,6 +16,7 @@ export interface AuthUser {
 
 interface AuthConfig {
   auth_required: boolean;
+  default_language: "en" | "zh";
   registration_enabled: boolean;
   github_enabled: boolean;
   huawei_enabled: boolean;
@@ -39,6 +40,7 @@ interface AuthContextValue {
 
 const DEFAULT_CONFIG: AuthConfig = {
   auth_required: false,
+  default_language: "en",
   registration_enabled: true,
   github_enabled: false,
   huawei_enabled: false,
@@ -69,6 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function initialize() {
       try {
         const nextConfig = await api.get<AuthConfig>("/auth/config");
+        if (!active) return;
+        if (!localStorage.getItem("unibot.language")) {
+          await i18n.changeLanguage(nextConfig.default_language ?? DEFAULT_CONFIG.default_language);
+        }
         if (!active) return;
         setConfig(nextConfig);
         if (!nextConfig.auth_required) {

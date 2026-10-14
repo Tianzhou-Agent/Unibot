@@ -38,10 +38,10 @@ i18n
     ns: Object.keys(en),
     interpolation: { escapeValue: false },
     detection: {
-      // English is the default: only an explicit user choice (stored) switches language.
+      // The deployment default is applied after loading /auth/config; preserve explicit user choices.
       order: ["localStorage"],
       lookupLocalStorage: "unibot.language",
-      caches: ["localStorage"],
+      caches: [],
     },
   });
 

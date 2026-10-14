@@ -12,7 +12,10 @@ test("context root is retained across deep links, login, API requests and refres
     const path = pathname.slice(`${basePath}api`.length);
     let body: unknown = [];
     let status = 200;
-    if (path === "/auth/config") body = { auth_required: true, registration_enabled: true, github_enabled: true };
+    if (path === "/auth/config") body = {
+      auth_required: true, default_language: "en", registration_enabled: false,
+      github_enabled: true, huawei_enabled: true, google_enabled: true, microsoft_enabled: true, apple_enabled: true,
+    };
     if (path === "/auth/me") {
       body = authenticated ? { user } : { error: { user_message: "请先登录。" } };
       status = authenticated ? 200 : 401;
@@ -28,6 +31,15 @@ test("context root is retained across deep links, login, API requests and refres
   await page.goto(`${basePath}settings`);
   await expect(page).toHaveURL(new URL(`${basePath}login`, baseURL).href);
   await expect(page.getByRole("link", { name: "使用 GitHub 登录", exact: true })).toHaveAttribute("href", `${basePath}api/auth/github?next=%2Fsettings`);
+  for (const [provider, label] of [["huawei", "使用华为W3账号登录"], ["google", "使用 Google 登录"], ["microsoft", "使用 Microsoft 登录"], ["apple", "使用 Apple 登录"]]) {
+    await expect(page.getByRole("link", { name: label, exact: true })).toHaveAttribute("href", `${basePath}api/auth/${provider}?next=%2Fsettings`);
+  }
+  for (const provider of ["huawei", "google", "microsoft", "apple", "github"]) {
+    const icon = page.locator(`a img[src$="/oauth/${provider}.svg"]`);
+    await icon.scrollIntoViewIfNeeded();
+    await expect(icon).toHaveAttribute("src", `${basePath}oauth/${provider}.svg`);
+    await expect.poll(() => icon.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+  }
   const logo = page.locator('img[src$="unibot-icon-v2.png"]').first();
   await expect(logo).toHaveAttribute("src", `${basePath}unibot-icon-v2.png`);
   await expect.poll(() => logo.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);

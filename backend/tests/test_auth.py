@@ -49,6 +49,7 @@ def test_password_authentication_session_and_logout() -> None:
     with TestClient(app) as client:
         assert client.get("/auth/config").json() == {
             "auth_required": True,
+            "default_language": "en",
             "registration_enabled": True,
             "github_enabled": False,
             "huawei_enabled": False,
@@ -85,6 +86,42 @@ def test_password_authentication_session_and_logout() -> None:
         accepted = client.post(
             "/auth/login",
             json={"email": "user@example.com", "password": "correct-horse-battery"},
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["user"]["id"] == user["id"]
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_auth_config_exposes_deployment_default_language(monkeypatch: pytest.MonkeyPatch, language: str) -> None:
+    monkeypatch.setenv("UNIBOT_DEFAULT_LANGUAGE", language)
+    app = create_app(settings=_settings(), enforce_auth=True)
+    with TestClient(app) as client:
+        assert client.get("/auth/config").json()["default_language"] == language
+
+
+def test_huawei_disables_registration_but_preserves_password_login() -> None:
+    settings = _settings()
+    app = create_app(settings=settings, enforce_auth=True)
+    with TestClient(app) as client:
+        user = _register(client, email="existing@example.com")
+        client.post("/auth/logout")
+
+        settings.huawei_oauth_base_url = "https://uniportal.example.com"
+        settings.huawei_oauth_client_id = "huawei-client"
+        settings.huawei_oauth_client_secret = SecretStr("huawei-secret")
+        config = client.get("/auth/config").json()
+        assert config["huawei_enabled"] is True
+        assert config["registration_enabled"] is False
+        rejected = client.post(
+            "/auth/register",
+            json={"name": "New user", "email": "new@example.com", "password": "password-123"},
+        )
+        assert rejected.status_code == 403
+        assert rejected.json()["error"]["code"] == "PERMISSION_DENIED"
+
+        accepted = client.post(
+            "/auth/login",
+            json={"email": "existing@example.com", "password": "correct-horse-battery"},
         )
         assert accepted.status_code == 200
         assert accepted.json()["user"]["id"] == user["id"]
