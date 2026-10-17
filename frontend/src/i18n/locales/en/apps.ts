@@ -58,6 +58,8 @@ export default {
   breadcrumb: "Breadcrumb",
   detail: {
     notFound: "This plugin does not exist or was removed.",
+    consentRequired: "This app was updated and is paused until you approve what changed:",
+    reviewUpdate: "Review and approve",
     information: "Information",
     version: "Version",
   },

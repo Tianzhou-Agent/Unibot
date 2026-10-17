@@ -40,6 +40,9 @@ class HostReference:
     tenant_id: str
     user_id: str
     aina_id: str
+    # The invocation's conversation and workspace: documents are read in that workspace (design §8).
+    conversation_id: str | None = None
+    workspace_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +95,16 @@ class ContextTokenSigner:
     def mint(self, *, reference: HostReference, claims: dict[str, Any], ttl_seconds: int = MAX_TOKEN_SECONDS) -> str:
         now = int(time())
         ref = self._box.seal(
-            json.dumps([reference.tenant_id, reference.user_id, reference.aina_id], separators=(",", ":")),
+            json.dumps(
+                [
+                    reference.tenant_id,
+                    reference.user_id,
+                    reference.aina_id,
+                    reference.conversation_id,
+                    reference.workspace_id,
+                ],
+                separators=(",", ":"),
+            ),
             context=_REF_CONTEXT,
         )
         payload = {
@@ -122,12 +134,21 @@ class ContextTokenSigner:
                     "require_iat": True,
                 },
             )
-            tenant_id, user_id, aina_id = json.loads(self._box.open(str(claims["ref"]), context=_REF_CONTEXT))
+            tenant_id, user_id, aina_id, conversation_id, workspace_id = json.loads(
+                self._box.open(str(claims["ref"]), context=_REF_CONTEXT)
+            )
         except (JWTError, KeyError, ValueError, TypeError, PlatformError) as exc:
             raise invalid_token() from exc
         if claims.get("aud") != aina_id or int(claims["exp"]) - int(claims["iat"]) > MAX_TOKEN_SECONDS:
             raise invalid_token()
-        return VerifiedToken(HostReference(tenant_id=tenant_id, user_id=user_id, aina_id=aina_id), claims)
+        reference = HostReference(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            aina_id=aina_id,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+        )
+        return VerifiedToken(reference, claims)
 
 
 def invalid_token() -> PlatformError:

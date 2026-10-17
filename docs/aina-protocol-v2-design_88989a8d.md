@@ -1,6 +1,6 @@
 # AINA Protocol 2.0 — Plugin Contract Design
 
-Status: **Accepted; P0, P1, P3, P6 and most of P2 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+Status: **Accepted; P0, P1, P3, P6 and P2 (except MCP OAuth and notifications) implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
 differs.
 
 Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
@@ -825,6 +825,8 @@ Resolved in rev 4 (each as recommended in rev 3):
 | Manifest-driven scope, `effect` approvals, read-only retries | `package_capabilities` in [capabilities.py](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py), [approvals.py](../backend/src/tianzhou_agent_platform/services/agent_integration/approvals.py), [retries.py](../backend/src/tianzhou_agent_platform/services/agent_integration/retries.py) |
 | Skill index in the scope prompt | `_package_prompt` in [prompts.py](../backend/src/tianzhou_agent_platform/services/agent_integration/prompts.py) |
 | Context token (ES256) and JWKS at `/.well-known/aina-host-jwks.json` | [`aina/package/tokens.py`](../backend/src/tianzhou_agent_platform/aina/package/tokens.py) |
+| Host API: `documents`, `memory` and `llm` services | [`api/aina_host_services.py`](../backend/src/tianzhou_agent_platform/api/aina_host_services.py) |
+| Upgrade re-consent: installations pause when a version widens the AINA | `consent_changes` in [`aina/package/service.py`](../backend/src/tianzhou_agent_platform/aina/package/service.py), [`PluginDetailPage.tsx`](../frontend/src/pages/PluginDetailPage.tsx) |
 | Host API gateway (`/aina-host/v1`) with token, installation and scope checks; `storage/kv` | [`api/aina_host.py`](../backend/src/tianzhou_agent_platform/api/aina_host.py), [`aina/package/storage.py`](../backend/src/tianzhou_agent_platform/aina/package/storage.py) |
 | `config.schema` validation, sealed `x-secret` values, `bearer`/`api_key` MCP auth | [`aina/package/configuration.py`](../backend/src/tianzhou_agent_platform/aina/package/configuration.py), [`aina/package/secrets.py`](../backend/src/tianzhou_agent_platform/aina/package/secrets.py) |
 | Install consent (server origin, tools and effects, scopes with reasons and risk, settings form) | [`InstallConsentDialog.tsx`](../frontend/src/components/apps/InstallConsentDialog.tsx) |
@@ -858,10 +860,20 @@ runtime type only, never on an AINA id.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
-- Host API: `storage/kv`, the task callbacks and `token/refresh` are built. The storage quota is soft under
-  concurrent writers (checked before each write); limits are 256 KiB per value, 10 MiB and 10 000 keys per
-  installation. `storage/files`, `files`, `documents`, `memory`, `llm`, `sandbox` and `notifications` are not built
-  yet. Audit is a structured log line per call, not a trace span.
+- Host API: `storage/kv`, the task callbacks, `token/refresh`, `documents`, `memory` and `llm` are built. The
+  storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per value, 10 MiB
+  and 10 000 keys per installation. `storage/files`, `files`, `sandbox` (with P5's Code Runner) and `notifications`
+  are not built: Unibot has no notification surface yet. Audit is a structured log line per call, not a trace span.
+  - The token's encrypted host reference also carries the invocation's raw conversation and workspace. Documents
+    are read and written in that workspace (the personal root when there is none), like the built-in document tools.
+  - `GET /documents[?query=]`, `GET /documents/{name}[/outline]`, `PUT /documents/{name}` (creates or replaces),
+    `DELETE /documents/{name}`.
+  - `GET /memory/search?query=&limit=`, `POST /memory`, `PATCH /memory/{id}`, `DELETE /memory/{id}`: only the
+    user's own memories (another user's id is 404). Memory content goes through the memory store's usual rules,
+    which reject unsafe instruction markers. New memories record the AINA and conversation that created them.
+  - `POST /llm/chat` `{messages, max_tokens?}` runs the user's own selected model without tools: at most 50
+    messages, 200 000 characters and 4 096 output tokens. The reply carries token usage; the call is not yet
+    recorded in the platform trace.
 - Long-running tasks (§7.3) are their own record (`unibot_aina_tasks`), not nodes of the agent's plan tree. The
   chat lists them as "Background tasks" above the message box, polling every 3 s while one runs; a posted result is
   shown as its own message, never folded into the previous turn.
@@ -887,8 +899,13 @@ runtime type only, never on an AINA id.
   - The posted Markdown is the AINA server's own text. Like model replies, it may contain links and remote images;
     restricting what third-party Markdown can load is left for P3, together with result widgets.
   - There is no cancel callback, and the user cannot cancel a task from the host yet.
-- Upgrade re-consent is not built: a new version keeps existing grants, and a new required scope hides the AINA
-  until the user grants it.
+- Upgrade re-consent: registering a new version compares it with the previous one. A new tool, a tool newly
+  visible to the agent, an effect that asks less often (for example `destructive` → `write`), a new URL-canvas
+  origin, or a required scope the user has not granted pauses that installation (`status: consent_required`, with
+  `consent_changes`). A paused installation is not offered to the agent, and the Host API and app tools refuse it.
+  The plugin page shows the changes and reopens the install consent with the user's earlier choices. Other
+  installations move to the new version silently. The design's "stay pinned to the consented version" is narrowed
+  to "pause": only one version of a package is registered, and its MCP server serves only the current tools.
 - "Confirm the first `write` call in a conversation" is decided from the conversation's checkpointed messages; after
   history summarization the host may ask again, never less often.
 - Non-text MCP content blocks (images, resources) reach the model as a placeholder line. Text content that repeats
@@ -967,7 +984,7 @@ runtime type only, never on an AINA id.
 
 ### Next
 
-Still open from P2: MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Also still open:
+Still open from P2: MCP OAuth 2.0 and notifications. Also still open:
 restricting what posted task Markdown can load, image results reaching vision-capable models, and P4 (published
 `unibot-aina` / `@unibot/aina-ui` packages and `aina init`/`aina dev`) and P5 (rebuilding the first-party AINAs as
 packages).
