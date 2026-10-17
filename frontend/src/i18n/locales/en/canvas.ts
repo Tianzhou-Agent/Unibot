@@ -28,6 +28,8 @@ export default {
     declined: "You declined this action.",
     notCallable: "Tool {{name}} cannot be called from this app.",
     urlOnly: "Only a web-app canvas can request an identity token.",
-    unsupported: "{{method}} is not available on a canvas.",
+    unsupported: "{{method}} is not available here.",
+    proposeOnly: "Only a confirmation widget can propose arguments.",
+    widgetTitle: "{{tool}} widget",
   },
 };

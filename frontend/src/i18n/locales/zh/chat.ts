@@ -7,6 +7,7 @@ export default {
     allow: "允许",
     viewArgs: "查看调用参数",
     joiner: "、",
+    edited: "已修改 · 将按显示的内容执行",
   },
   thinkingNow: "正在思考",
   reasoning: {

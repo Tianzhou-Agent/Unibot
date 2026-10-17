@@ -136,13 +136,22 @@ class ChatService:
         await self._finish(conversation.id, trace_id, response)
         return response
 
-    async def confirm(self, approval_id: str, *, user_id: str, tenant_id: str) -> ChatResponse:
+    async def confirm(
+        self,
+        approval_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        edited_arguments: dict[str, dict[str, Any]] | None = None,
+    ) -> ChatResponse:
         approval, conversation = await self._pending_approval(approval_id, user_id=user_id, tenant_id=tenant_id)
         await self.conversations.start_run(conversation.id, approval.trace_id)
         try:
             with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
                 # Fails before the approval is resolved when the paused batch can no longer be resumed.
-                continuation = await self.runner.open_approval(conversation, approval, approve=True)
+                continuation = await self.runner.open_approval(
+                    conversation, approval, approve=True, edited_arguments=edited_arguments
+                )
         except BaseException:
             # The approval stays pending (it can still be denied) and the conversation stays paused.
             await self.conversations.finish_run(
@@ -157,7 +166,7 @@ class ChatService:
             kind="approval.confirmed",
             status="completed",
             conversation_id=approval.conversation_id,
-            details={"approval_id": approval_id},
+            details={"approval_id": approval_id, "edited_calls": sorted(edited_arguments or {})},
         )
         # The resumed tool calls and model requests are recorded as children of the run's root span.
         await self.events.resume(approval.trace_id, conversation_id=conversation.id)

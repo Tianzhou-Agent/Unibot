@@ -42,9 +42,7 @@ class HostCaller:
 
     @property
     def installation_key(self) -> str:
-        return installation_record_id(
-            self.installation.tenant_id, self.installation.user_id, self.installation.aina_id
-        )
+        return installation_record_id(self.installation.tenant_id, self.installation.user_id, self.installation.aina_id)
 
 
 class StorageValue(StrictModel):

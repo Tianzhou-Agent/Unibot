@@ -56,9 +56,7 @@ def unibot_context(
             f"{installation.tenant_id}\x1f{installation.user_id}\x1f{installation.aina_id}",
         ),
         "granted_permissions": sorted(installation.granted_permissions),
-        "config": {
-            key: value for key, value in installation.configuration.items() if key not in secret_fields
-        },
+        "config": {key: value for key, value in installation.configuration.items() if key not in secret_fields},
     }
     if conversation_id is not None:
         context["conversation_id"] = pairwise("conversation", conversation_id)

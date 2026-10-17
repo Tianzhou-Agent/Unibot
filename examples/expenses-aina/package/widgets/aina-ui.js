@@ -67,6 +67,10 @@ export const host = {
   getIdentityToken() {
     return request("getIdentityToken", {}).then((value) => value.token);
   },
+  /** Widgets only: open this AINA's canvas beside the conversation. */
+  openCanvas() {
+    return request("openCanvas", {});
+  },
   /** Widgets only: request a height up to 480 px. */
   resize(height) {
     return request("resize", { height });

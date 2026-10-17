@@ -41,4 +41,7 @@ change as later phases land:
 - **Canvas (P3a):** open the app from its plugin page. `canvas/app.js` lists, adds and deletes expenses through
   `host.callTool`; Unibot asks you before each change. It can also send a prompt into the chat. `aina-ui.js` and
   `aina-ui.css` are vendored copies of `spec/aina/2.0/ui/`.
-- **Later:** the confirmation and result widgets (P3b), and canvas tools such as `highlight_rows` (P6).
+- **Widgets (P3b):** `confirm-expense` shows inside Unibot's approval card for `add_expense` and lets you adjust the
+  amount and category before you allow it (`host.proposeArguments`); `expense-card` shows the saved expense under
+  the answer, with a button that opens the canvas.
+- **Later:** canvas tools such as `highlight_rows` (P6).

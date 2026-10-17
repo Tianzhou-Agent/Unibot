@@ -205,6 +205,7 @@ def create_operations_router() -> APIRouter:
             approval_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
+            edited_arguments=scoped.edited_arguments,
         )
 
     @router.post("/approvals/{approval_id}/deny", response_model=ApprovalRecord)

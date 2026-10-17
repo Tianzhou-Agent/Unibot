@@ -1,11 +1,29 @@
 <!doctype html>
-<meta charset="utf-8">
-<link rel="stylesheet" href="./aina-ui.css">
-<div id="card"></div>
-<script type="module">
-  import { host } from "./aina-ui.js";
-  const { result } = await host.getContext();
-  const expense = result.structuredContent;
-  document.getElementById("card").textContent =
-    `Saved ${expense.amount.toFixed(2)} ${expense.currency} · ${expense.category}`;
-</script>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="./aina-ui.css">
+  <style>
+    body { padding: 10px 12px; display: flex; align-items: center; gap: 12px; }
+    .amount { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    button { margin-left: auto; }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="amount" id="amount"></div>
+    <div class="aina-muted" id="detail"></div>
+  </div>
+  <button type="button" id="open">Open Expenses</button>
+  <script type="module">
+    // A result widget renders only from the archived result, so it looks the same after a reload.
+    import { host } from "./aina-ui.js";
+    const { result } = await host.getContext();
+    const expense = result.structuredContent;
+    document.getElementById("amount").textContent = `${expense.amount.toFixed(2)} ${expense.currency}`;
+    document.getElementById("detail").textContent = [expense.category, expense.note, expense.day].filter(Boolean).join(" · ");
+    document.getElementById("open").addEventListener("click", () => host.openCanvas());
+    host.resize(72);
+  </script>
+</body>
+</html>

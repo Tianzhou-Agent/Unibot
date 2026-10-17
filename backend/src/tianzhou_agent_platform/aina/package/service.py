@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
@@ -45,7 +46,8 @@ from tianzhou_agent_platform.aina.protocol.models import (
     InstallationRequest,
     Publisher,
 )
-from tianzhou_agent_platform.aina.protocol.widgets import WidgetCanvas, WidgetDefinition
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetAinaUi, WidgetCanvas, WidgetDefinition
+from tianzhou_agent_platform.aina.package.widgets import aina_widget, result_widget_id
 from tianzhou_agent_platform.aina.security.destinations import require_approved_destination
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.base import utc_now
@@ -234,9 +236,9 @@ class AinaPackageService:
         conversation_id: str | None,
         workspace_id: str | None,
         source: Source = "agent",
-    ) -> tuple[dict[str, Any], TaskStart | None]:
-        """Call one exposed MCP tool: what the model sees (design §7.1), and the background task a
-        ``long_running`` tool started (design §7.3), if any."""
+    ) -> ToolOutcome:
+        """Call one exposed MCP tool: what the model sees (design §7.1), the background task a ``long_running``
+        tool started (design §7.3) and the result widget to show (design §9.2), if any."""
         runtime = package_runtime(record)
         snapshot = runtime.tool(name)
         if snapshot is None or snapshot.status != "active":
@@ -284,7 +286,21 @@ class AinaPackageService:
             visible["content"] = text
         exposed = manifest.tools.expose.get(name)
         task = parse_task_start(result.meta) if exposed is not None and exposed.long_running else None
-        return visible or {"content": ""}, task
+        widget_id = result_widget_id(manifest, name, result.meta)
+        widget = (
+            aina_widget(
+                record,
+                widget_id,
+                tool_name=name,
+                call_id=invocation_id,
+                arguments=arguments,
+                content=text,
+                structured_content=result.structured_content,
+            )
+            if widget_id is not None and task is None
+            else None
+        )
+        return ToolOutcome(visible=visible or {"content": ""}, task=task, widget=widget)
 
     async def call_app_tool(
         self,
@@ -327,7 +343,7 @@ class AinaPackageService:
                 status_code=428,
                 source="aina_package",
             )
-        visible, _task = await self.call_tool(
+        outcome = await self.call_tool(
             record,
             installation,
             name,
@@ -337,7 +353,7 @@ class AinaPackageService:
             workspace_id=None,
             source=source,
         )
-        return visible
+        return outcome.visible
 
     async def identity_token(self, aina_id: str, *, tenant_id: str, user_id: str) -> str:
         """Design §9.1: a short-lived pairwise identity for a URL canvas's own backend; it carries no Host API scope."""
@@ -450,6 +466,13 @@ def package_runtime(record: AinaRecord) -> PackageRuntimeDefinition:
             status_code=422,
         )
     return runtime
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOutcome:
+    visible: dict[str, Any]
+    task: TaskStart | None = None
+    widget: WidgetAinaUi | None = None
 
 
 def load_skill(record: AinaRecord, skill_id: str, file: str | None = None) -> str:
@@ -581,8 +604,7 @@ def project_manifest(manifest: AinaPackageManifest, runtime: PackageRuntimeDefin
         runtime=runtime,
         capabilities=AinaCapabilities(
             skills=[
-                AinaCapability(id=skill.id, name=skill.name, description=skill.description)
-                for skill in manifest.skills
+                AinaCapability(id=skill.id, name=skill.name, description=skill.description) for skill in manifest.skills
             ],
             tools=[
                 AinaCapability(
