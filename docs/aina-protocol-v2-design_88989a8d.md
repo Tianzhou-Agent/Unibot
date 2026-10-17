@@ -935,18 +935,24 @@ runtime type only, never on an AINA id.
 - Canvas tools (P6):
   - **Scope:** a package's `canvas.tools` join its scope as tools of kind `canvas`. Arguments are validated against
     the declared `inputSchema`, and `effect` drives approvals exactly as for MCP tools. An undeclared `effect` counts
-    as `write`. Canvas tools are never retried automatically.
+    as `write`. Canvas tools are never retried automatically, but the model may repeat a canvas call later in a run
+    (the run-wide duplicate-call rule exempts them), because the canvas's state changes between calls.
   - **Viewer channel:** a shell showing a conversation opens `GET /conversations/{id}/canvas-viewer?client_id=…`
     (SSE) and posts heartbeats every 5 s with whether the tab is visible. A viewer is live for 20 s after its last
     heartbeat. A call goes to the live viewer that was visible most recently, so two tabs never both draw.
+  - **Acknowledgement:** the viewer acknowledges a call at once
+    (`POST …/canvas-calls/{call_id}/ack`). A viewer with no open stream, or one that does not acknowledge within
+    3 s (a closed or frozen tab), is dropped and the next most recent viewer is tried. Routing decisions are logged
+    at INFO.
   - **No viewer:** the call fails at once with `CANVAS_NOT_OPEN`, and the model is told to ask the user to open the
     conversation; calls are never queued.
   - **The call:** the shell opens a closed canvas (C2), waits up to 10 s for it to `registerTool` the tool, runs it
     with `invokeTool`, and posts `POST /conversations/{id}/canvas-calls/{call_id}` with the result or an error.
     Only the viewer the call was sent to may answer, and only while the run waits (`timeout_seconds`, default 10,
     at most 30). A late result gets `409`.
-  - **Redis-backed futures:** with Redis, viewers, call records, results and model contexts are kept in Redis and
-    delivered over pub/sub, so the run, the viewer stream and the result post may be on different nodes. Without
+  - **Redis-backed futures:** with Redis, viewers, call records and model contexts are kept in Redis. The run
+    subscribes to the call's channel before sending the call and receives the acknowledgement and the result over
+    pub/sub, so the run, the viewer stream and the result post may be on different nodes. Without
     Redis everything stays in process. The viewer list is a read-modify-write of one key, so two heartbeats racing
     can drop a viewer until its next heartbeat.
   - **Ordering:** calls for one canvas are serialized per process. Across nodes, the conversation's run lease

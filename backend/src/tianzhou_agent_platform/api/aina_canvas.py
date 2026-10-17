@@ -106,6 +106,20 @@ def create_aina_canvas_router() -> APIRouter:
             )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @router.post("/conversations/{conversation_id}/canvas-calls/{call_id}/ack", status_code=status.HTTP_204_NO_CONTENT)
+    async def canvas_call_ack(
+        conversation_id: str, call_id: str, payload: ViewerHeartbeat, request: Request
+    ) -> Response:
+        """The viewer received the canvas call; without this the host tries another viewer."""
+        await _owned(request, conversation_id)
+        if not await canvas_calls(request).acknowledge(
+            call_id, conversation_id=conversation_id, client_id=payload.client_id
+        ):
+            raise PlatformError(
+                "CONFLICT", "No canvas call is waiting for this viewer", status_code=409, source="canvas"
+            )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @router.put("/conversations/{conversation_id}/canvas-context/{aina_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def canvas_model_context(
         conversation_id: str, aina_id: str, payload: CanvasModelContext, request: Request

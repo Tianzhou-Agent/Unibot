@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -124,10 +125,13 @@ class OrderedBatchMiddleware(AgentMiddleware):
         enforce_order: bool = True,
         enforce_dedup: bool = True,
         order_timeout: float | None = 30.0,
+        repeatable: Callable[[str], bool] | None = None,
     ) -> None:
         super().__init__()
         self.enforce_order = enforce_order
         self.enforce_dedup = enforce_dedup
+        # Tools whose result depends on live state (e.g. a canvas's scene) may repeat a call in a later response.
+        self.repeatable = repeatable
         self.order_timeout = order_timeout
         self.ledger = RunExecutionLedger()
         self._batches: dict[frozenset[str], BatchCoordinator] = {}
@@ -177,7 +181,7 @@ class OrderedBatchMiddleware(AgentMiddleware):
                 coordinator.started.add(call_id)
                 if not coordinator.deduper.claim(name, args):
                     return error("CONFLICT", "Duplicate tool/argument combination already submitted in this batch")
-                if not self.ledger.may_attempt(name, args):
+                if not (self.repeatable and self.repeatable(name)) and not self.ledger.may_attempt(name, args):
                     return error("CONFLICT", "The same capability call was already attempted in this run.")
             self.ledger.bump_attempt(name, args)
             result = await handler(request)

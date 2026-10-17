@@ -38,6 +38,11 @@ export function useCanvasViewer(conversationId: string | null, openCanvas: (aina
 
     async function run(call: CanvasCall) {
       const deadline = Date.now() + call.timeout_ms - 500;
+      // Confirm receipt at once: without it the host gives the call to another tab.
+      const acknowledged = await api
+        .post(`${base}/canvas-calls/${encodeURIComponent(call.call_id)}/ack`, { client_id: client, visible: visible() })
+        .then(() => true, () => false);
+      if (!acknowledged) return;
       let body: Record<string, unknown>;
       try {
         // Design decision C2: a closed canvas is opened, then the call runs.

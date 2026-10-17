@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -83,6 +84,8 @@ def _fake_canvas(
     tab: str,
     answer: Callable[[dict[str, Any]], dict[str, Any] | None],
     received: list[dict[str, Any]],
+    *,
+    acknowledge: bool = True,
 ) -> Any:
     """A browser tab's viewer channel: answers each canvas call over the real result endpoint.
 
@@ -100,12 +103,13 @@ def _fake_canvas(
                 if event is None:
                     continue
                 received.append(event)
+                url = f"/conversations/{conversation_id}/canvas-calls/{event['call_id']}"
+                if acknowledge:
+                    await http.post(f"{url}/ack", json={"client_id": tab})
                 body = answer(event)
                 if body is None:
                     continue  # this canvas never answers
-                await http.post(
-                    f"/conversations/{conversation_id}/canvas-calls/{event['call_id']}", json={"client_id": tab, **body}
-                )
+                await http.post(url, json={"client_id": tab, **body})
 
     return client.portal.start_task_soon(viewer)  # type: ignore[union-attr]
 
@@ -252,6 +256,16 @@ def test_a_result_from_another_viewer_or_conversation_is_refused() -> None:
         conversation_id = _conversation(client)
         broker: CanvasCallBroker = client.app.state.canvas_calls  # type: ignore[attr-defined]
         _heartbeat(client, conversation_id, TAB_A)
+
+        async def tab_a() -> None:
+            async with broker.listen(TAB_A) as next_event:
+                event = await next_event(5)
+                assert event is not None
+                await broker.acknowledge(event["call_id"], conversation_id=conversation_id, client_id=TAB_A)
+                await asyncio.sleep(5)
+
+        listening = client.portal.start_task_soon(tab_a)  # type: ignore[union-attr]
+        _call(client, asyncio.sleep, 0.05)
         request = {"call_id": "c1", "aina_id": AINA, "name": "get_scene", "arguments": {}, "timeout_ms": 2000}
         future = client.portal.start_task_soon(lambda: broker.dispatch(conversation_id, request, timeout=2))  # type: ignore[union-attr]
         _call(client, asyncio.sleep, 0.05)
@@ -262,6 +276,7 @@ def test_a_result_from_another_viewer_or_conversation_is_refused() -> None:
             f"/conversations/{conversation_id}/canvas-calls/c1", json={"client_id": TAB_A, "result": {"content": "ok"}}
         )
         result = future.result(timeout=5)
+        listening.cancel()
     finally:
         client.__exit__(None, None, None)
 
@@ -327,6 +342,80 @@ def test_the_viewer_stream_delivers_canvas_calls() -> None:
     assert result == {"result": {}}
 
 
+def test_a_tab_that_does_not_acknowledge_is_skipped_for_the_next_one() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix=ENTRY, call_id="a"),
+            call_first_tool(prefix=GET_SCENE, call_id="scene"),
+            assistant("One box."),
+        ]
+    )
+    client = _client(llm)
+    viewers: list[Any] = []
+    frozen: list[dict[str, Any]] = []
+    live: list[dict[str, Any]] = []
+    scene = {"result": {"structuredContent": {"elements": []}}}
+    try:
+        conversation_id = _conversation(client)
+        _heartbeat(client, conversation_id, TAB_B)
+        _heartbeat(client, conversation_id, TAB_A)  # looked at last, but frozen in the background
+        viewers.append(_fake_canvas(client, conversation_id, TAB_A, lambda _e: None, frozen, acknowledge=False))
+        viewers.append(_fake_canvas(client, conversation_id, TAB_B, lambda _e: scene, live))
+        client.post("/chat", json={"message": "Scene?", "conversation_id": conversation_id})
+    finally:
+        _close(client, viewers)
+
+    assert [event["call_id"] for event in frozen] == ["scene"]
+    assert [event["call_id"] for event in live] == ["scene"]
+    assert json.loads(_tool_results(llm)["scene"]) == scene["result"]
+
+
+def test_a_tab_with_heartbeats_but_no_stream_fails_fast() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix=ENTRY, call_id="a"),
+            call_first_tool(prefix=GET_SCENE, call_id="scene"),
+            assistant("Please open the board."),
+        ]
+    )
+    client = _client(llm)
+    try:
+        conversation_id = _conversation(client)
+        _heartbeat(client, conversation_id, TAB_A)  # no viewer stream is open for this tab
+        started = time.monotonic()
+        client.post("/chat", json={"message": "Scene?", "conversation_id": conversation_id})
+        elapsed = time.monotonic() - started
+    finally:
+        client.__exit__(None, None, None)
+
+    assert json.loads(_tool_results(llm)["scene"])["error"]["code"] == "CANVAS_NOT_OPEN"
+    assert elapsed < 5
+
+
+def test_a_canvas_read_may_repeat_within_a_run() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix=ENTRY, call_id="a"),
+            call_first_tool(prefix=GET_SCENE, call_id="first"),
+            call_first_tool(prefix=GET_SCENE, call_id="second"),
+            assistant("Checked twice."),
+        ]
+    )
+    client = _client(llm)
+    viewers: list[Any] = []
+    received: list[dict[str, Any]] = []
+    try:
+        conversation_id = _conversation(client)
+        _heartbeat(client, conversation_id, TAB_A)
+        viewers.append(_fake_canvas(client, conversation_id, TAB_A, lambda _e: {"result": {"content": "ok"}}, received))
+        client.post("/chat", json={"message": "Scene twice", "conversation_id": conversation_id})
+    finally:
+        _close(client, viewers)
+
+    assert [event["call_id"] for event in received] == ["first", "second"]
+    assert json.loads(_tool_results(llm)["second"]) == {"content": "ok"}
+
+
 # --- Model context ---------------------------------------------------------------------------------------------------
 
 
@@ -372,6 +461,7 @@ async def test_a_result_posted_to_another_node_resumes_the_run() -> None:
         async with node_b.listen(TAB_A) as next_event:
             event = await next_event(2)
             assert event is not None
+            assert await node_b.acknowledge(event["call_id"], conversation_id="conv_1", client_id=TAB_A)
             assert await node_b.resolve(event["call_id"], conversation_id="conv_1", client_id=TAB_A, result={"result": {"n": 1}})
             return event
 

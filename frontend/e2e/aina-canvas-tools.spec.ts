@@ -22,7 +22,7 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 async function installApi(page: Page, call: Record<string, unknown>) {
-  const state = { results: [] as Record<string, unknown>[], contexts: [] as string[], heartbeats: [] as Record<string, unknown>[], streams: 0 };
+  const state = { acks: [] as string[], results: [] as Record<string, unknown>[], contexts: [] as string[], heartbeats: [] as Record<string, unknown>[], streams: 0 };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -80,6 +80,10 @@ async function installApi(page: Page, call: Record<string, unknown>) {
       state.heartbeats.push(request.postDataJSON());
       return route.fulfill({ status: 204, body: "" });
     }
+    if (method === "POST" && apiPath.endsWith("/ack")) {
+      state.acks.push(apiPath.split("/").at(-2) ?? "");
+      return route.fulfill({ status: 204, body: "" });
+    }
     if (method === "POST" && apiPath.startsWith(`/conversations/${CONVERSATION}/canvas-calls/`)) {
       state.results.push({ call: apiPath.split("/").pop(), ...request.postDataJSON() });
       return route.fulfill({ status: 204, body: "" });
@@ -111,6 +115,7 @@ test("FE-E2E-AINA-05 a canvas call opens the closed canvas, runs there and retur
   await expect.poll(() => state.results.length).toBe(1);
   const [posted] = state.results;
   expect(posted.call).toBe("call_circle");
+  expect(state.acks).toEqual(["call_circle"]); // receipt is confirmed before the canvas runs the tool
   expect(posted.client_id).toMatch(/^tab_[0-9a-f]{32}$/);
   expect(posted.result).toMatchObject({ structuredContent: { element_id: expect.stringMatching(/^el_/) } });
   // The canvas told the agent what it now shows; heartbeats say this tab is the one being looked at.

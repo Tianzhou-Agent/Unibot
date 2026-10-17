@@ -1,16 +1,18 @@
 """Canvas tool calls (design §9.5): the agent calls a tool the open canvas implements, in the user's browser.
 
 The shell keeps a viewer channel open per conversation it shows (an SSE stream plus heartbeats). A canvas call goes
-to the conversation's most recently active viewer only, so two open tabs never both draw. The run then waits for the
-shell to post the canvas's result. With Redis the wait is a Redis-backed future (the result is stored and announced
-on pub/sub), so the viewer and the run may be served by different nodes; without Redis everything stays in process.
-Canvas calls are never queued: no viewer, or no answer in time, is an error the model reads.
+to the conversation's most recently active viewer, which acknowledges it at once and then posts the canvas's result;
+a viewer that has no open stream or does not acknowledge is skipped for the next one, so two tabs never both run a
+call and a dead tab never holds it. With Redis the run waits on the call's pub/sub channel, subscribed before the
+call is sent, so the viewer and the run may be served by different nodes; without Redis everything stays in
+process. Canvas calls are never queued: no viewer, or no answer in time, is an error the model reads.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -21,15 +23,19 @@ from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.redis import RedisStore
 
 VIEWER_TTL_SECONDS = 20
+# A viewer must confirm it received a call this quickly, or the next one is tried.
+ACK_SECONDS = 3.0
 MAX_MODEL_CONTEXT_CHARS = 4_000
 MAX_STRUCTURED_BYTES = 64 * 1024
 MAX_IMAGE_BYTES = 1024 * 1024
 _CONTEXT_TTL_SECONDS = 24 * 60 * 60
 
+logger = logging.getLogger(__name__)
+
 _VIEWERS = "canvas-viewers"
 _VIEWER_CHANNEL = "canvas-viewer"
 _CALLS = "canvas-call"
-_RESULTS = "canvas-call-result"
+_RESULTS = "canvas-call-messages"
 _CONTEXT = "canvas-model-context"
 
 
@@ -40,7 +46,7 @@ class CanvasCallBroker:
         self._viewers: dict[str, dict[str, dict[str, float]]] = defaultdict(dict)
         self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._calls: dict[str, dict[str, Any]] = {}
-        self._results: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._call_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._context: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -62,12 +68,12 @@ class CanvasCallBroker:
         if viewers.pop(client_id, None) is not None:
             await self._save_viewers(conversation_id, self._live(viewers, self._clock()))
 
-    async def viewer(self, conversation_id: str) -> str | None:
-        """The most recently active live viewer of the conversation."""
+    async def viewers(self, conversation_id: str) -> list[str]:
+        """Live viewers of the conversation, the one the user looked at most recently first."""
         viewers = self._live(await self._load_viewers(conversation_id), self._clock())
-        if not viewers:
-            return None
-        return max(viewers, key=lambda client: (viewers[client]["active_at"], viewers[client]["seen_at"]))
+        return sorted(
+            viewers, key=lambda client: (viewers[client]["active_at"], viewers[client]["seen_at"]), reverse=True
+        )
 
     @asynccontextmanager
     async def listen(self, client_id: str) -> AsyncIterator[Callable[[float], Awaitable[dict[str, Any] | None]]]:
@@ -106,46 +112,82 @@ class CanvasCallBroker:
     # --- Calls ----------------------------------------------------------------------------------------------------
 
     async def dispatch(self, conversation_id: str, request: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-        """Send one canvas call to the active viewer and wait for its result; calls of a canvas run one at a time."""
+        """Run one canvas call in the most recently active viewer that takes it; calls of a canvas run one at a time.
+
+        A viewer must acknowledge the call within ``ACK_SECONDS``. One that has no open stream, or does not
+        acknowledge (a closed or frozen tab), is dropped and the next most recent viewer is tried, so a call never
+        waits out its timeout on a tab that will not answer.
+        """
         call_id = str(request["call_id"])
+        deadline = self._clock() + timeout
+        title = request.get("canvas_title") or "AINA"
         async with self._locks[f"{conversation_id}\x1f{request['aina_id']}"]:
-            client_id = await self.viewer(conversation_id)
-            if client_id is None:
-                raise PlatformError(
-                    "CANVAS_NOT_OPEN",
-                    f"The {request.get('canvas_title') or 'AINA'} canvas is not open, so the call could not run. "
-                    "Ask the user to open the conversation in Unibot and try again.",
-                    status_code=409,
-                    source="canvas",
+            tried: list[str] = []
+            for client_id in await self.viewers(conversation_id):
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                tried.append(client_id)
+                await self._remember_call(call_id, conversation_id, client_id, remaining)
+                async with self._messages(call_id) as next_message:
+                    if not await self._deliver(client_id, {"type": "canvas.tool.requested", **request}):
+                        logger.info("canvas call %s: viewer %s has no open stream", call_id, client_id)
+                        await self.disconnect(conversation_id, client_id)
+                        continue
+                    first = await next_message(min(ACK_SECONDS, remaining))
+                    if first is None:
+                        logger.info("canvas call %s: viewer %s did not acknowledge", call_id, client_id)
+                        await self.disconnect(conversation_id, client_id)
+                        continue
+                    result = first if "ack" not in first else await next_message(deadline - self._clock())
+                await self._forget_call(call_id)
+                logger.info(
+                    "canvas call %s (%s) in viewer %s: %s",
+                    call_id,
+                    request["name"],
+                    client_id,
+                    "answered" if result is not None else "timed out",
                 )
-            await self._remember_call(call_id, conversation_id, client_id, timeout)
-            async with self._result(call_id) as wait:
-                await self._deliver(client_id, {"type": "canvas.tool.requested", **request})
-                result = await wait(timeout)
+                if result is None:
+                    raise PlatformError(
+                        "TIMEOUT",
+                        f"The {title} canvas received {request['name']!r} but did not answer within {timeout:g} "
+                        "seconds",
+                        status_code=504,
+                        source="canvas",
+                    )
+                return dict(result)
             await self._forget_call(call_id)
-        if result is None:
-            raise PlatformError(
-                "TIMEOUT",
-                f"The canvas did not answer {request['name']!r} within {timeout:g} seconds",
-                status_code=504,
-                source="canvas",
-            )
-        return dict(result)
+        logger.info("canvas call %s: no viewer took it (tried %s)", call_id, tried or "none")
+        raise PlatformError(
+            "CANVAS_NOT_OPEN",
+            f"The {title} canvas is not open in any Unibot tab that responds, so the call could not run. "
+            "Ask the user to open the conversation in Unibot (in a visible tab) and try again.",
+            status_code=409,
+            source="canvas",
+        )
+
+    async def acknowledge(self, call_id: str, *, conversation_id: str, client_id: str) -> bool:
+        """The viewer received the call and is running it."""
+        return await self._post(call_id, conversation_id=conversation_id, client_id=client_id, message={"ack": True})
 
     async def resolve(self, call_id: str, *, conversation_id: str, client_id: str, result: dict[str, Any]) -> bool:
         """Accept a viewer's result; only the viewer the call was sent to may answer, and only while it waits."""
+        if not await self._post(call_id, conversation_id=conversation_id, client_id=client_id, message=result):
+            return False
+        await self._forget_call(call_id)
+        return True
+
+    async def _post(self, call_id: str, *, conversation_id: str, client_id: str, message: dict[str, Any]) -> bool:
         call = await self._load_call(call_id)
         if call is None or call["conversation_id"] != conversation_id or call["client_id"] != client_id:
             return False
-        await self._forget_call(call_id)
         if self._redis is not None:
-            await self._redis.set(_RESULTS, call_id, result, ttl_seconds=60)
-            await self._redis.publish(_RESULTS, call_id, result)
-            return True
-        future = self._results.get(call_id)
-        if future is None or future.done():
+            return await self._redis.publish(_RESULTS, call_id, message) > 0
+        queue = self._call_queues.get(call_id)
+        if queue is None:
             return False
-        future.set_result(result)
+        queue.put_nowait(message)
         return True
 
     # --- Model context ----------------------------------------------------------------------------------------------
@@ -182,13 +224,15 @@ class CanvasCallBroker:
             return
         await self._redis.set(_VIEWERS, conversation_id, viewers, ttl_seconds=VIEWER_TTL_SECONDS)
 
-    async def _deliver(self, client_id: str, event: dict[str, Any]) -> None:
+    async def _deliver(self, client_id: str, event: dict[str, Any]) -> bool:
+        """Hand an event to a viewer's open stream; False when it has none (on any node)."""
         if self._redis is not None:
-            await self._redis.publish(_VIEWER_CHANNEL, client_id, event)
-            return
+            return await self._redis.publish(_VIEWER_CHANNEL, client_id, event) > 0
         queue = self._queues.get(client_id)
-        if queue is not None:
-            queue.put_nowait(event)
+        if queue is None:
+            return False
+        queue.put_nowait(event)
+        return True
 
     async def _remember_call(self, call_id: str, conversation_id: str, client_id: str, timeout: float) -> None:
         call = {"conversation_id": conversation_id, "client_id": client_id}
@@ -210,36 +254,35 @@ class CanvasCallBroker:
             self._calls.pop(call_id, None)
 
     @asynccontextmanager
-    async def _result(self, call_id: str) -> AsyncIterator[Callable[[float], Any]]:
-        """A waiter for one call's result, armed before the call is delivered so no answer can be missed."""
-        if self._redis is not None:
-            redis = self._redis
-            async with redis.subscribe(_RESULTS, call_id) as messages:
+    async def _messages(self, call_id: str) -> AsyncIterator[Callable[[float], Awaitable[dict[str, Any] | None]]]:
+        """Acknowledgement and result of one call, subscribed before the call is delivered so none can be missed."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
-                async def wait_redis(timeout: float) -> dict[str, Any] | None:
-                    stored = await redis.get(_RESULTS, call_id)
-                    if stored is not None:
-                        return dict(stored.value)
-                    try:
-                        return dict(await asyncio.wait_for(anext(messages), timeout))
-                    except (TimeoutError, StopAsyncIteration):
-                        return None
-
-                yield wait_redis
-            return
-        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._results[call_id] = future
-
-        async def wait_local(timeout: float) -> dict[str, Any] | None:
+        async def next_message(timeout: float) -> dict[str, Any] | None:
             try:
-                return await asyncio.wait_for(asyncio.shield(future), timeout)
+                return await asyncio.wait_for(queue.get(), max(timeout, 0))
             except TimeoutError:
                 return None
 
+        if self._redis is not None:
+            async with self._redis.subscribe(_RESULTS, call_id) as messages:
+
+                async def pump() -> None:
+                    async for message in messages:
+                        queue.put_nowait(dict(message))
+
+                pumping = asyncio.create_task(pump())
+                try:
+                    yield next_message
+                finally:
+                    pumping.cancel()
+            return
+        self._call_queues[call_id] = queue
         try:
-            yield wait_local
+            yield next_message
         finally:
-            self._results.pop(call_id, None)
+            if self._call_queues.get(call_id) is queue:
+                del self._call_queues[call_id]
 
 
 def canvas_state_block(aina_id: str, state: str) -> str:

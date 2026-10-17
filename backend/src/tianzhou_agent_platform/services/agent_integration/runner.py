@@ -580,7 +580,7 @@ class AgentRunner:
             ProviderErrorMiddleware(map_model_error),
             model_calls,
             InvalidToolCallMiddleware(failures.invalid_arguments),
-            OrderedBatchMiddleware(),
+            OrderedBatchMiddleware(repeatable=lambda name: getattr(run.registry.get(name), "kind", None) == "canvas"),
             call_budget,
             build_approval_middleware(run.registry),
             output_guard,
