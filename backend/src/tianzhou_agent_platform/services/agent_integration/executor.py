@@ -15,6 +15,9 @@ from pydantic import ValidationError
 
 from tianzhou_agent_platform.aina.builtin import invoke_builtin
 from tianzhou_agent_platform.aina.document.builtin import CREATE_EDIT_TASK_TOOL_ID
+from tianzhou_agent_platform.aina.package.models import ToolSnapshot
+from tianzhou_agent_platform.aina.package.service import AinaPackageService, load_skill
+from tianzhou_agent_platform.aina.package.tasks import AinaTask, AinaTaskService
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -49,6 +52,8 @@ class CapabilityExecutor:
         document_edit_task_service: Any | None = None,
         sandbox_service: Any | None = None,
         task_service: Any | None = None,
+        packages: AinaPackageService | None = None,
+        aina_tasks: AinaTaskService | None = None,
     ) -> None:
         # The domain operations (platform tools, built-in AINAs) run against the repository they are written for.
         self.repository = repository
@@ -60,6 +65,8 @@ class CapabilityExecutor:
         self.document_edit_task_service = document_edit_task_service
         self.sandbox_service = sandbox_service
         self.task_service = task_service
+        self.packages = packages
+        self.aina_tasks = aina_tasks
 
     def tools(self, run: AgentRun) -> list[StructuredTool]:
         """One native tool per registered capability; the run scope decides which are advertised."""
@@ -78,6 +85,8 @@ class CapabilityExecutor:
                 # arguments were already validated against the capability schema, so this is invalid data
                 # produced by the domain call.
                 raise ValueError(str(exc)) from exc
+            if capability.kind == "skill":
+                return cast(str, result)  # delimited skill text is read by the model as written
             return json.dumps(result, ensure_ascii=False, default=str)
 
         # The capability's own JSON Schema is advertised verbatim and arguments reach ``execute`` exactly as the
@@ -97,8 +106,38 @@ class CapabilityExecutor:
         arguments: dict[str, Any],
     ) -> Any:
         """Perform one capability call; widgets and scope changes are applied to the run."""
-        if capability.is_builtin_aina:
+        if capability.activates_scope:
             return await self.activate_scope(run, capability, call_id, arguments)
+        if capability.kind == "mcp":
+            if self.packages is None:
+                raise PlatformError("DEPENDENCY_FAILED", "AINA packages are not available", status_code=503)
+            aina, installation, tool = cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], capability.value)
+            visible, started = await self.packages.call_tool(
+                aina,
+                installation,
+                tool.name,
+                arguments,
+                invocation_id=call_id,
+                conversation_id=run.conversation_id,
+                workspace_id=run.workspace_id,
+            )
+            if started is not None:
+                if self.aina_tasks is None:
+                    raise PlatformError("DEPENDENCY_FAILED", "AINA tasks are not available", status_code=503)
+                task = await self.aina_tasks.register(
+                    started,
+                    installation=installation,
+                    tool_name=tool.name,
+                    invocation_id=call_id,
+                    conversation_id=run.conversation_id,
+                    workspace_id=run.workspace_id,
+                )
+                # Design §7.3: the acknowledgement completes the turn; the result is posted when the task ends.
+                run.scope.direct_reply = _aina_task_reply(task)
+            return visible
+        if capability.kind == "skill":
+            aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+            return load_skill(aina, arguments["id"], arguments.get("file"))
         if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
             run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "app_list"]
         if capability.capability_id in {LIST_APP_TOOL_ID, OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
@@ -226,6 +265,14 @@ class CapabilityExecutor:
             return
         if widget.apps[0].has_main_widget:
             run.scope.widgets.append(widget)
+
+
+def _aina_task_reply(task: AinaTask) -> str:
+    """Direct completion text after a long-running AINA tool started a background task."""
+    return (
+        f'"{task.title}" is running in the background. Its result will be posted here when it finishes; '
+        "follow its progress under Background tasks."
+    )
 
 
 def _edit_task_reply(result: Any) -> str | None:

@@ -14,4 +14,13 @@ export default {
     skipped: "已跳过",
     failed: "失败",
   },
+  background: {
+    aria: "后台任务",
+    title: "后台任务",
+    status: {
+      running: "运行中",
+      completed: "已完成",
+      failed: "失败",
+    },
+  },
 };

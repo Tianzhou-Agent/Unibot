@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppWindow, ChevronRight, Download, Trash2, Unplug } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AinaCapabilitySections } from "@/components/apps/AinaCapabilities";
+import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
 import { ActionMenu, AppIcon, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
@@ -20,6 +21,7 @@ export default function PluginDetailPage() {
   const canManageRegistry = !config.auth_required || Boolean(user?.is_admin);
   const [record, setRecord] = useState<AinaRecord | null>(null);
   const [installed, setInstalled] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +72,16 @@ export default function PluginDetailPage() {
 
   return (
     <div className="flex h-full flex-col bg-app-bg">
+      {consentOpen && record ? (
+        <InstallConsentDialog
+          record={record}
+          onClose={() => setConsentOpen(false)}
+          onInstalled={() => {
+            setConsentOpen(false);
+            void load();
+          }}
+        />
+      ) : null}
       <Topbar title={t("title")} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-5 py-6 md:px-8 md:py-8">
@@ -113,7 +125,12 @@ export default function PluginDetailPage() {
                       </button>
                     ) : null}
                     {!usable ? (
-                      <button type="button" disabled={busy} onClick={() => void run(() => installAina(record))} className="btn h-9 rounded-full bg-ink px-4 text-white hover:bg-black">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => (manifest.runtime.type === "package" ? setConsentOpen(true) : void run(() => installAina(record)))}
+                        className="btn h-9 rounded-full bg-ink px-4 text-white hover:bg-black"
+                      >
                         <Download className="h-4 w-4" />{t("aina.install")}
                       </button>
                     ) : null}
@@ -139,7 +156,7 @@ export default function PluginDetailPage() {
                     <InfoRow label={t("detail.version")} value={manifest.aina.version} />
                     <InfoRow
                       label={tAina("runtimeLabel")}
-                      value={tAina(builtin ? "runtime.builtin" : manifest.runtime.type === "managed" ? "runtime.managed" : "runtime.remote")}
+                      value={tAina(`runtime.${manifest.runtime.type}`)}
                     />
                     {manifest.runtime.type === "remote" ? <InfoRow label={tAina("endpoint")} value={manifest.runtime.endpoint} mono /> : null}
                     <InfoRow label={tAina("publisher")} value={manifest.aina.publisher.name} />

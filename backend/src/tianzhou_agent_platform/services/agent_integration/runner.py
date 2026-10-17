@@ -47,6 +47,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
+from tianzhou_agent_platform.aina.package.tasks import model_result_text, result_message_id
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord, ChatRequest, ChatResponse
@@ -243,7 +244,10 @@ class AgentRunner:
         # A conversation without working memory (never run natively, or its checkpoint was lost) is seeded from
         # its archive; the archive IDs are kept so seeded messages are never archived twice.
         seed = [] if checkpointed else [archive_to_native(message) for message in conversation.messages]
+        if seed:
+            seed = await self._delimit_task_results(conversation.id, seed)
         closures = dangling_tool_closures(checkpointed or seed, ABANDONED_CALL_RESULT)
+        task_results = await self._finished_task_results(conversation.id, checkpointed or seed)
         user_message = HumanMessage(content=request.message, id=f"msg_{uuid4().hex}")
         archiver = TranscriptArchiver(
             self.conversations,
@@ -275,8 +279,8 @@ class AgentRunner:
         known_ids = {message.id for message in (checkpointed or seed)}
         return await self._invoke(
             invocation,
-            {"messages": [*seed, *closures, user_message]},
-            known_ids=known_ids | {message.id for message in closures} | {user_message.id},
+            {"messages": [*seed, *closures, *task_results, user_message]},
+            known_ids=known_ids | {message.id for message in [*closures, *task_results]} | {user_message.id},
             stop=stop,
         )
 
@@ -770,6 +774,39 @@ class AgentRunner:
         except Exception:
             # Housekeeping only: the run already completed and older checkpoints are pruned after the next run.
             logger.warning("Could not prune agent checkpoints", exc_info=True, extra={"conversation_id": conversation_id})
+
+    async def _finished_task_results(self, conversation_id: str, history: list[BaseMessage]) -> list[AIMessage]:
+        """Results of background AINA tasks that ended since the last turn, for the model (design §7.3).
+
+        They were posted to the archive when the task ended; working memory gets them here, under the same message
+        id, so they are never archived twice.
+        """
+        tasks = self.executor.aina_tasks
+        if tasks is None:
+            return []
+        present = {message.id for message in history}
+        return [
+            AIMessage(content=model_result_text(task), id=result_message_id(task))
+            for task in await tasks.take_undelivered_results(conversation_id)
+            if result_message_id(task) not in present
+        ]
+
+    async def _delimit_task_results(self, conversation_id: str, seed: list[BaseMessage]) -> list[BaseMessage]:
+        """Archived background task results, as the model must see them: delimited third-party output.
+
+        The archive keeps the user-facing report (the AINA server's own text); seeding it verbatim would hand the model
+        that text as an assistant message of its own.
+        """
+        tasks = self.executor.aina_tasks
+        if tasks is None:
+            return seed
+        by_message = {result_message_id(task): task for task in await tasks.repository.list_aina_tasks(conversation_id)}
+        return [
+            AIMessage(content=model_result_text(by_message[message.id]), id=message.id)
+            if message.id in by_message
+            else message
+            for message in seed
+        ]
 
     async def _working_messages(self, config: RunnableConfig) -> list[BaseMessage]:
         checkpoint = await self.checkpointer.aget_tuple(config)

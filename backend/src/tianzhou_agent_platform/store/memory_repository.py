@@ -10,6 +10,8 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
+from tianzhou_agent_platform.aina.package.storage import AinaStorageItem, check_quota
+from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -103,6 +105,8 @@ class InMemoryRepository:
         self._sandbox_executions: dict[str, SandboxExecution] = {}
         self._users: dict[str, UserRecord] = {}
         self._feedbacks: dict[str, FeedbackRecord] = {}
+        self._aina_storage: dict[str, AinaStorageItem] = {}
+        self._aina_tasks: dict[str, AinaTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
         return None
@@ -1273,6 +1277,94 @@ class InMemoryRepository:
             for key in [key for key in self._installations if key[2] == aina_id]:
                 del self._installations[key]
                 await self._delete_record(INSTALLATIONS_RESOURCE, installation_record_id(*key))
+
+    async def get_aina_storage_item(self, installation_key: str, key: str) -> AinaStorageItem | None:
+        async with self._lock:
+            item = next(
+                (
+                    item
+                    for item in self._aina_storage.values()
+                    if item.installation_key == installation_key and item.key == key
+                ),
+                None,
+            )
+            return self._copy(item)
+
+    async def put_aina_storage_item(self, item: AinaStorageItem) -> AinaStorageItem:
+        async with self._lock:
+            owned = [stored for stored in self._aina_storage.values() if stored.installation_key == item.installation_key]
+            check_quota(
+                used_bytes=sum(stored.size_bytes for stored in owned),
+                used_items=len(owned),
+                replaced=self._aina_storage.get(item.id),
+                item=item,
+            )
+            self._aina_storage[item.id] = self._copy(item)
+        return self._copy(item)
+
+    async def delete_aina_storage_item(self, installation_key: str, key: str) -> bool:
+        async with self._lock:
+            match = next(
+                (
+                    item_id
+                    for item_id, item in self._aina_storage.items()
+                    if item.installation_key == installation_key and item.key == key
+                ),
+                None,
+            )
+            return match is not None and self._aina_storage.pop(match, None) is not None
+
+    async def list_aina_storage_items(self, installation_key: str, *, prefix: str, limit: int) -> list[AinaStorageItem]:
+        async with self._lock:
+            items = sorted(
+                (
+                    item
+                    for item in self._aina_storage.values()
+                    if item.installation_key == installation_key and item.key.startswith(prefix)
+                ),
+                key=lambda item: item.key,
+            )
+            return [self._copy(item) for item in items[:limit]]
+
+    async def delete_aina_storage(self, *, installation_key: str | None = None, aina_id: str | None = None) -> int:
+        """Delete the storage of one installation, or of every installation of one AINA."""
+        async with self._lock:
+            doomed = [
+                item_id
+                for item_id, item in self._aina_storage.items()
+                if (installation_key is None or item.installation_key == installation_key)
+                and (aina_id is None or item.aina_id == aina_id)
+            ]
+            for item_id in doomed:
+                del self._aina_storage[item_id]
+            return len(doomed)
+
+    async def create_aina_task(self, task: AinaTask) -> AinaTask:
+        async with self._lock:
+            if task.id in self._aina_tasks:
+                raise conflict(f"Task {task.external_id!r} already exists")
+            self._aina_tasks[task.id] = self._copy(task)
+        return self._copy(task)
+
+    async def get_aina_task(self, task_id: str) -> AinaTask | None:
+        async with self._lock:
+            return self._copy(self._aina_tasks.get(task_id))
+
+    async def update_aina_task(self, task_id: str, change: Callable[[AinaTask], AinaTask | None]) -> AinaTask | None:
+        """Apply ``change`` atomically; it returns the updated task, or None to leave it as it is."""
+        async with self._lock:
+            current = self._aina_tasks.get(task_id)
+            if current is None:
+                return None
+            updated = change(self._copy(current))
+            if updated is not None:
+                self._aina_tasks[task_id] = self._copy(updated)
+            return self._copy(updated or current)
+
+    async def list_aina_tasks(self, conversation_id: str) -> list[AinaTask]:
+        async with self._lock:
+            items = [task for task in self._aina_tasks.values() if task.conversation_id == conversation_id]
+            return [self._copy(task) for task in sorted(items, key=lambda task: task.created_at)]
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation:
         key = (installation.tenant_id, installation.user_id, installation.aina_id)

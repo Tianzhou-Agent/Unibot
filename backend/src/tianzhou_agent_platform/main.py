@@ -16,6 +16,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
+from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
+from tianzhou_agent_platform.aina.package.service import AinaPackageService
+from tianzhou_agent_platform.aina.package.ui import PackageUiStore
+from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.aina.project_service import (
@@ -25,6 +29,8 @@ from tianzhou_agent_platform.aina.project_service import (
     NasAinaProjectArtifactStore,
 )
 from tianzhou_agent_platform.aina.scheduler import AinaScheduler
+from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, JWKS_PATH
+from tianzhou_agent_platform.api.aina_ui import AINA_UI_PREFIX
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.auth import SESSION_COOKIE
 from tianzhou_agent_platform.api.dependencies import RequestActor
@@ -84,6 +90,7 @@ def create_app(
     github_auth_http_client: httpx.AsyncClient | None = None,
     huawei_auth_http_client: httpx.AsyncClient | None = None,
     oidc_auth_http_client: httpx.AsyncClient | None = None,
+    mcp_client: McpToolClient | None = None,
     enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -246,6 +253,13 @@ def create_app(
     )
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
+    aina_packages = AinaPackageService(
+        repository=resolved_repository,
+        settings=resolved_settings,
+        mcp=mcp_client,
+        ui=PackageUiStore(resolved_aina_project_artifact_store),
+        enforce_destination_policy=enforce_auth,
+    )
     vision_client = VisionClient(
         base_url=resolved_settings.vision_base_url,
         timeout_seconds=resolved_settings.vision_timeout_seconds,
@@ -350,6 +364,7 @@ def create_app(
     from tianzhou_agent_platform.services.run_stops import RunStops
 
     conversation_service = ConversationService(resolved_repository)
+    aina_tasks = AinaTaskService(resolved_repository, conversation_service)
     model_provider_service = ModelProviderService(resolved_repository)
     app.state.conversation_service = conversation_service
     app.state.model_provider_service = model_provider_service
@@ -357,6 +372,8 @@ def create_app(
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
     app.state.aina_project_service = aina_project_service
+    app.state.aina_packages = aina_packages
+    app.state.aina_tasks = aina_tasks
     app.state.managed_aina_runtime = managed_aina_runtime
     app.state.document_edit_task_service = document_edit_task_service
     app.state.document_edit_worker = document_edit_worker
@@ -406,6 +423,8 @@ def create_app(
                 document_edit_task_service=document_edit_task_service,
                 sandbox_service=resolved_sandbox_service,
                 task_service=task_service,
+                packages=aina_packages,
+                aina_tasks=aina_tasks,
             ),
             checkpointer=agent_checkpointer,
             events=run_events,
@@ -415,6 +434,7 @@ def create_app(
             model_factory=(lambda runtime, **options: create_model_from_runtime(runtime, **options)) if llm is None else None,
         ),
         stops=RunStops(storage_stores.redis if storage_stores is not None else None),
+        aina_tasks=aina_tasks,
     )
     scheduler.chat_service = app.state.chat_service
     app.state.background_tasks = set()
@@ -488,4 +508,11 @@ def run() -> None:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in {"/health", "/openapi.json", "/docs", "/redoc"} or path.startswith("/auth/")
+    # The AINA Host API authenticates MCP servers with context tokens, never with a user session.
+    return (
+        path in {"/health", "/openapi.json", "/docs", "/redoc", JWKS_PATH}
+        or path.startswith("/auth/")
+        or path.startswith(f"{HOST_API_PREFIX}/")
+        # Packaged UI files are public package content, served to sandboxed frames without a session.
+        or path.startswith(f"{AINA_UI_PREFIX}/")
+    )

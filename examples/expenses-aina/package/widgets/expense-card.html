@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="./aina-ui.css">
+<div id="card"></div>
+<script type="module">
+  import { host } from "./aina-ui.js";
+  const { result } = await host.getContext();
+  const expense = result.structuredContent;
+  document.getElementById("card").textContent =
+    `Saved ${expense.amount.toFixed(2)} ${expense.currency} · ${expense.category}`;
+</script>

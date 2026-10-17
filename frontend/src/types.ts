@@ -280,7 +280,7 @@ export interface WidgetDocumentSectionDefinition {
 
 export interface WidgetDefinition {
   id: string;
-  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline";
+  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline" | "aina_canvas";
   title: string;
   description: string;
   markdown?: string | null;
@@ -289,6 +289,8 @@ export interface WidgetDefinition {
   apps: WidgetAppDefinition[];
   document_name?: string | null;
   sections?: WidgetDocumentSectionDefinition[];
+  /** The web app of an AINA 2.0 canvas (``aina_canvas`` widgets). */
+  canvas?: { kind: "package" | "url"; version: string; entry?: string | null; url?: string | null } | null;
 }
 
 export interface AinaManifest {
@@ -313,6 +315,20 @@ export interface AinaManifest {
         language: "python" | "node";
         entrypoint: string;
         dependency_file?: string | null;
+      }
+    | {
+        // AINA Protocol 2.0 package: tools served by the publisher's MCP server, reviewed at registration.
+        type: "package";
+        archive_sha256: string;
+        package: AinaPackageManifest;
+        tools: {
+          name: string;
+          title?: string | null;
+          description: string;
+          effect: "read" | "write" | "destructive";
+          visibility: ("model" | "app")[];
+          status: "active" | "drifted" | "missing";
+        }[];
       };
   capabilities: {
     skills: AinaCapabilityDefinition[];
@@ -366,6 +382,8 @@ export interface AinaInstallation {
   tenant_id: string;
   granted_permissions: string[];
   configuration: Record<string, unknown>;
+  // Names of secret settings that have a value; secret values are never returned.
+  configured_secrets?: string[];
   status: "active" | "disabled";
   installed_at: string;
 }
@@ -838,6 +856,30 @@ export interface MemoryStatsResponse {
   instruction: number;
 }
 
+/** The parts of an AINA 2.0 ``aina.json`` the install consent shows (design §10). */
+export interface AinaPackageManifest {
+  aina: { id: string; name: string; version: string; publisher: { id: string; name: string; url?: string | null } };
+  tools: { mcp: { url: string; auth: { type: "none" | "bearer" | "api_key" | "oauth2" } } };
+  canvas?: { title: string; entry?: string | null; url?: string | null } | null;
+  config?: { schema: AinaConfigSchema } | null;
+  permissions: { scope: string; reason?: string | null; optional: boolean }[];
+}
+
+export interface AinaConfigField {
+  type?: "string" | "number" | "integer" | "boolean";
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: (string | number)[];
+  "x-secret"?: boolean;
+}
+
+export interface AinaConfigSchema {
+  type: "object";
+  properties?: Record<string, AinaConfigField>;
+  required?: string[];
+}
+
 export interface CapabilityOption {
   value: string;
   label: string;
@@ -872,4 +914,22 @@ export interface TaskTreeSnapshot {
   session_id: string;
   revision: number;
   tasks: SessionTaskNode[];
+}
+
+/** A background task started by a long-running AINA tool (AINA Protocol 2.0 §7.3). */
+export interface AinaTask {
+  id: string;
+  external_id: string;
+  aina_id: string;
+  conversation_id: string;
+  tool_name: string;
+  title: string;
+  status: "running" | "completed" | "failed";
+  progress: number | null;
+  total: number | null;
+  message: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
 }

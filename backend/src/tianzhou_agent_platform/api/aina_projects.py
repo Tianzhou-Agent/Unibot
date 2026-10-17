@@ -36,7 +36,7 @@ def create_aina_project_router() -> APIRouter:
 
     @router.post("/validate", response_model=AinaProjectValidationReport)
     async def validate_aina_project(file: UploadFile = File(...)) -> AinaProjectValidationReport:
-        payload = await _read_project_upload(file)
+        payload = await read_archive_upload(file)
         return validate_project_archive(payload)
 
     @router.post("", response_model=AinaProjectRecord, status_code=status.HTTP_201_CREATED)
@@ -45,7 +45,7 @@ def create_aina_project_router() -> APIRouter:
         file: UploadFile = File(...),
         actor: RequestActor = Depends(request_actor),
     ) -> AinaProjectRecord:
-        payload = await _read_project_upload(file)
+        payload = await read_archive_upload(file)
         return await aina_projects(request).import_project(
             payload,
             source_filename=file.filename,
@@ -120,7 +120,7 @@ def create_aina_project_router() -> APIRouter:
     return router
 
 
-async def _read_project_upload(file: UploadFile) -> bytes:
+async def read_archive_upload(file: UploadFile) -> bytes:
     try:
         payload = await file.read(MAX_PROJECT_ARCHIVE_BYTES + 1)
     finally:

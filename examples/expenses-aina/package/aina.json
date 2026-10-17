@@ -1,0 +1,90 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "com.example.expenses",
+    "version": "1.2.0",
+    "name": "Expenses",
+    "description": "Record, categorize and summarize the user's expenses.",
+    "publisher": { "id": "example", "name": "Example Inc.", "url": "https://example.com" },
+    "icon": "assets/icon.svg",
+    "locales": {
+      "zh-CN": { "name": "报销助手", "description": "记录、分类并汇总用户的支出。" }
+    }
+  },
+
+  "tools": {
+    "mcp": {
+      "url": "http://127.0.0.1:8765/mcp",
+      "auth": { "type": "none" }
+    },
+    "expose": {
+      "add_expense": {
+        "effect": "write",
+        "visibility": ["model", "app"],
+        "confirm_widget": "confirm-expense",
+        "result_widget": "expense-card"
+      },
+      "list_expenses": { "effect": "read", "visibility": ["model", "app"] },
+      "delete_expense": { "effect": "destructive", "visibility": ["model", "app"] },
+      "monthly_report": { "effect": "read", "visibility": ["model", "app"], "long_running": true },
+      "sync_bank": { "effect": "write", "visibility": ["app"] }
+    }
+  },
+
+  "skills": [
+    {
+      "id": "record-expense",
+      "name": "Record an expense",
+      "description": "Use when the user mentions money they spent and wants it recorded.",
+      "path": "skills/record-expense",
+      "tools": ["add_expense", "list_expenses"]
+    },
+    {
+      "id": "monthly-close",
+      "name": "Monthly close",
+      "description": "Use when the user wants to reconcile and summarize one month of expenses.",
+      "path": "skills/monthly-close",
+      "tools": ["list_expenses", "delete_expense", "highlight_rows"]
+    }
+  ],
+
+  "canvas": {
+    "entry": "canvas/index.html",
+    "title": "Expenses",
+    "tools": [
+      {
+        "name": "highlight_rows",
+        "description": "Highlight expense rows in the open Expenses canvas so the user can review them.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "expense_ids": { "type": "array", "items": { "type": "string" }, "maxItems": 200 } },
+          "required": ["expense_ids"],
+          "additionalProperties": false
+        },
+        "effect": "read"
+      }
+    ]
+  },
+
+  "widgets": [
+    { "id": "confirm-expense", "purpose": "confirmation", "entry": "widgets/confirm-expense.html", "height": 160 },
+    { "id": "expense-card", "purpose": "result", "entry": "widgets/expense-card.html", "height": 120 }
+  ],
+
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "currency": { "type": "string", "default": "CNY", "title": "Default currency" }
+      }
+    }
+  },
+
+  "permissions": [
+    { "scope": "storage" },
+    { "scope": "documents.read", "reason": "Import receipts that you saved as documents.", "optional": true },
+    { "scope": "llm", "reason": "Categorize free-text receipts.", "optional": true }
+  ]
+}

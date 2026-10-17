@@ -12,7 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Interrupt
 
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
@@ -53,9 +53,23 @@ def _has_valid_arguments(capability: Capability) -> Any:
             )
         except PlatformError:
             return False
+        if capability.confirm_once and _completed_before(request.state, capability.function_name):
+            return False
         return True
 
     return when
+
+
+def _completed_before(state: Any, function_name: str) -> bool:
+    """Whether a call of this capability already completed (so was approved) earlier in the conversation."""
+    messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+    return any(
+        isinstance(message, ToolMessage)
+        and message.name == function_name
+        and message.status != "error"
+        and message.content != DENIED_TOOL_RESULT
+        for message in messages
+    )
 
 
 def approval_record(

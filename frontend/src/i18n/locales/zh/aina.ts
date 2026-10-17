@@ -4,6 +4,7 @@ export default {
     builtin: "系统内置",
     managed: "本地托管",
     remote: "远程服务",
+    package: "AINA 2.0 包（MCP）",
   },
   endpoint: "服务地址",
   publisher: "发布者",
