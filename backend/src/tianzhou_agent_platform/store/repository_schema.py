@@ -317,6 +317,36 @@ aina_storage_table = Table(
     Index("ix_unibot_aina_storage_aina", "aina_id"),
 )
 
+aina_tasks_table = Table(
+    "unibot_aina_tasks",
+    repository_metadata,
+    Column("id", String(64), primary_key=True),  # sha256 of (installation_key, external_id)
+    Column("external_id", String(128), nullable=False),
+    Column("installation_key", String(64), nullable=False),
+    Column("aina_id", String(160), nullable=False),
+    Column("tenant_id", ACTOR, nullable=False),
+    Column("user_id", ACTOR, nullable=False),
+    Column("conversation_id", String(160), nullable=False),
+    Column("workspace_id", String(160), nullable=True),
+    Column("tool_name", String(128), nullable=False),
+    Column("invocation_id", String(160), nullable=False),
+    Column("title", String(200), nullable=False),
+    Column("status", STATUS, nullable=False),
+    Column("progress", Double, nullable=True),
+    Column("total", Double, nullable=True),
+    Column("message", Text, nullable=True),
+    Column("result", LONG_TEXT, nullable=True),
+    Column("structured_content", NULLABLE_JSON, nullable=True),
+    Column("error", Text, nullable=True),
+    Column("result_posted", Boolean, nullable=False),
+    Column("result_delivered", Boolean, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    Column("updated_at", TIMESTAMP, nullable=False),
+    Column("deadline_at", TIMESTAMP, nullable=False),
+    Column("finished_at", TIMESTAMP, nullable=True),
+    Index("ix_unibot_aina_tasks_conversation", "conversation_id", "created_at"),
+)
+
 installations_table = _table(
     INSTALLATIONS_RESOURCE,
     Column("id", String(64), primary_key=True),  # sha256 of (tenant_id, user_id, aina_id)

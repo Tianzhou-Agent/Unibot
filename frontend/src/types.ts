@@ -913,3 +913,21 @@ export interface TaskTreeSnapshot {
   revision: number;
   tasks: SessionTaskNode[];
 }
+
+/** A background task started by a long-running AINA tool (AINA Protocol 2.0 §7.3). */
+export interface AinaTask {
+  id: string;
+  external_id: string;
+  aina_id: string;
+  conversation_id: string;
+  tool_name: string;
+  title: string;
+  status: "running" | "completed" | "failed";
+  progress: number | null;
+  total: number | null;
+  message: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}

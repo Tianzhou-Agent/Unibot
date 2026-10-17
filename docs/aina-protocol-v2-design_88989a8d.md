@@ -828,7 +828,9 @@ Resolved in rev 4 (each as recommended in rev 3):
 | Host API gateway (`/aina-host/v1`) with token, installation and scope checks; `storage/kv` | [`api/aina_host.py`](../backend/src/tianzhou_agent_platform/api/aina_host.py), [`aina/package/storage.py`](../backend/src/tianzhou_agent_platform/aina/package/storage.py) |
 | `config.schema` validation, sealed `x-secret` values, `bearer`/`api_key` MCP auth | [`aina/package/configuration.py`](../backend/src/tianzhou_agent_platform/aina/package/configuration.py), [`aina/package/secrets.py`](../backend/src/tianzhou_agent_platform/aina/package/secrets.py) |
 | Install consent (server origin, tools and effects, scopes with reasons and risk, settings form) | [`InstallConsentDialog.tsx`](../frontend/src/components/apps/InstallConsentDialog.tsx) |
-| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py) |
+| Long-running tools (§7.3): task record, ack ends the turn, Host API task callbacks and `token/refresh`, result posted to the conversation | [`aina/package/tasks.py`](../backend/src/tianzhou_agent_platform/aina/package/tasks.py), [`api/aina_host.py`](../backend/src/tianzhou_agent_platform/api/aina_host.py), [`store/aina_task_store.py`](../backend/src/tianzhou_agent_platform/store/aina_task_store.py) |
+| Background tasks above the chat composer | [`AinaTaskList.tsx`](../frontend/src/components/tasks/AinaTaskList.tsx) |
+| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py), [`tests/test_aina_host_tasks.py`](../backend/tests/test_aina_host_tasks.py) |
 
 API: `POST /ainas/packages/validate` (anyone), `POST /ainas/packages` and `POST /ainas/{id}/tools/refresh`
 (platform admin; both take an optional one-time `credential` for an authenticated server's `tools/list`, never
@@ -852,12 +854,35 @@ runtime type only, never on an AINA id.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
-- Host API: only `storage/kv` is built. Its quota is soft under concurrent writers (checked before each write);
-  limits are 256 KiB per value, 10 MiB and 10 000 keys per installation. `storage/files`, `files`, `documents`,
-  `memory`, `llm`, `sandbox`, `notifications`, `token/refresh` and task callbacks are not built yet. Audit is a
-  structured log line per call, not a trace span.
-- Long-running tools (§7.3) are not built. Unibot's task system is the agent's plan tree, so AINA tasks need their
-  own background-task record, Tasks-pane entry and out-of-turn conversation posting.
+- Host API: `storage/kv`, the task callbacks and `token/refresh` are built. The storage quota is soft under
+  concurrent writers (checked before each write); limits are 256 KiB per value, 10 MiB and 10 000 keys per
+  installation. `storage/files`, `files`, `documents`, `memory`, `llm`, `sandbox` and `notifications` are not built
+  yet. Audit is a structured log line per call, not a trace span.
+- Long-running tasks (§7.3) are their own record (`unibot_aina_tasks`), not nodes of the agent's plan tree. The
+  chat lists them as "Background tasks" above the message box, polling every 3 s while one runs; a posted result is
+  shown as its own message, never folded into the previous turn.
+  - A task id is the server's own and is looked up within the caller's installation only, so another
+    installation's id is simply not found (404). An id that another invocation already used is rejected.
+  - Callbacks: `progress` takes `{progress, total?, message?}`; `complete` takes an MCP-shaped result
+    (`content` blocks, optional `structuredContent`; ≤ 100 000 characters and 256 KiB); `fail` takes `{error}`.
+    Any callback on a task that has ended is `409`.
+  - A task must end within 24 hours. There is no sweeper: an overdue task is failed when it is next read or called
+    back.
+  - `POST /token/refresh` takes `{"task_id"}`. It is the only route that accepts an expired token, and only one minted
+    for the invocation that started a still-live task. The new token keeps the old claims; scopes revoked since are
+    dropped.
+  - The acknowledgement ends the turn with a host-written reply (`RunScope.direct_reply`). Document edit tasks keep
+    their own `direct_reply` path for now.
+  - The result is posted as an assistant message (Markdown; `structuredContent` as JSON when there is no text).
+    Rendering it with `result_widget` and offering the canvas for review wait for P3. A result that arrives while a
+    turn runs is posted when that turn finishes, so it never lands above that turn's reply; if the turn failed, it is
+    posted when the task list is next read or at the start of the next turn.
+  - The model sees the result at the start of the conversation's next turn, as an assistant message delimited as
+    `<aina-task-result>` third-party output, also when working memory is rebuilt from the archive (which keeps the
+    user-facing text). A finished task does not start a turn by itself.
+  - The posted Markdown is the AINA server's own text. Like model replies, it may contain links and remote images;
+    restricting what third-party Markdown can load is left for P3, together with result widgets.
+  - There is no cancel callback, and the user cannot cancel a task from the host yet.
 - Upgrade re-consent is not built: a new version keeps existing grants, and a new required scope hides the AINA
   until the user grants it.
 - "Confirm the first `write` call in a conversation" is decided from the conversation's checkpointed messages; after
@@ -870,5 +895,5 @@ runtime type only, never on an AINA id.
 
 ### Next
 
-Remaining P2: long-running tasks (§7.3), MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Then
+Remaining P2: MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Then
 P3 (canvas and widgets), which canvas tools (P6) build on.
