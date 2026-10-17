@@ -4,6 +4,7 @@ export default {
     builtin: "Built-in",
     managed: "Locally managed",
     remote: "Remote service",
+    package: "AINA 2.0 package (MCP)",
   },
   endpoint: "Endpoint",
   publisher: "Publisher",

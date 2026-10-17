@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Body, File, Form, Query, Request, Response, UploadFile, status
+from pydantic import SecretStr
 
 from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS
+from tianzhou_agent_platform.aina.package.validation import PackageValidationReport, validate_package_archive
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCanvasResponse,
     AinaInstallation,
@@ -13,10 +15,12 @@ from tianzhou_agent_platform.aina.protocol.models import (
 from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
+from tianzhou_agent_platform.api.aina_projects import read_archive_upload
 from tianzhou_agent_platform.api.dependencies import (
-    actor_scope, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
+    actor_scope, aina_packages, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.store.memory_repository import installation_record_id
 from tianzhou_agent_platform.services.platform_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
 
@@ -96,6 +100,37 @@ def create_capability_router() -> APIRouter:
         health = await gateway(request).probe_aina(payload)
         return await repository(request).register_aina(AinaRecord(manifest=payload, last_health=health))
 
+    @router.post("/ainas/packages/validate", response_model=PackageValidationReport)
+    async def validate_aina_package(file: UploadFile = File(...)) -> PackageValidationReport:
+        """AINA Protocol 2.0 package checks that need no MCP server (the CLI adds the live tools/list check)."""
+        return validate_package_archive(await read_archive_upload(file))
+
+    @router.post("/ainas/packages", response_model=AinaRecord, status_code=status.HTTP_201_CREATED)
+    async def register_aina_package(
+        request: Request,
+        file: UploadFile = File(...),
+        credential: SecretStr | None = Form(default=None),
+    ) -> AinaRecord:
+        """``credential`` authenticates the registration-time tools/list of a bearer/api_key server; not stored."""
+        require_platform_admin(request)
+        return await aina_packages(request).register(
+            await read_archive_upload(file),
+            credential=credential.get_secret_value() if credential is not None else None,
+        )
+
+    @router.post("/ainas/{aina_id}/tools/refresh", response_model=AinaRecord)
+    async def refresh_aina_package_tools(
+        aina_id: str,
+        request: Request,
+        credential: SecretStr | None = Body(default=None, embed=True),
+    ) -> AinaRecord:
+        """Re-check a package's MCP tools against its reviewed snapshot; drifted tools are disabled."""
+        require_platform_admin(request)
+        return await aina_packages(request).refresh_tools(
+            aina_id,
+            credential=credential.get_secret_value() if credential is not None else None,
+        )
+
     @router.get("/ainas", response_model=list[AinaRecord])
     async def list_ainas(request: Request) -> list[AinaRecord]:
         return await repository(request).list_ainas()
@@ -152,6 +187,7 @@ def create_capability_router() -> APIRouter:
                 status_code=409,
             )
         await data_repository.remove_aina(aina_id)
+        await data_repository.delete_aina_storage(aina_id=aina_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/ainas/{aina_id}/install", response_model=AinaInstallation)
@@ -165,6 +201,8 @@ def create_capability_router() -> APIRouter:
             raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         data_repository = repository(request)
         record = await data_repository.get_aina(aina_id)
+        if record.manifest.runtime.type == "package":
+            return await aina_packages(request).install(aina_id, scoped)
         _validate_permission_subset(record, scoped.granted_permissions)
         installation = AinaInstallation(
             **scoped.model_dump(),
@@ -197,13 +235,19 @@ def create_capability_router() -> APIRouter:
         request: Request,
         user_id: str = Query(default="anonymous"),
         tenant_id: str = Query(default="default"),
+        keep_data: bool = Query(default=False, description="Keep the AINA's private storage for a reinstall."),
     ) -> Response:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        await repository(request).remove_installation(
+        data_repository = repository(request)
+        await data_repository.remove_installation(
             tenant_id=actor.tenant_id,
             user_id=actor.user_id,
             aina_id=aina_id,
         )
+        if not keep_data:
+            await data_repository.delete_aina_storage(
+                installation_key=installation_record_id(actor.tenant_id, actor.user_id, aina_id)
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/installations", response_model=list[AinaInstallation])

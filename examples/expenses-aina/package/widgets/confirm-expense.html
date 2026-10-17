@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="./aina-ui.css">
+<div id="preview"></div>
+<script type="module">
+  import { host } from "./aina-ui.js";
+  const { arguments: args, config } = await host.getContext();
+  document.getElementById("preview").textContent =
+    `${args.amount.toFixed(2)} ${config.currency ?? "CNY"} · ${args.category}`;
+</script>

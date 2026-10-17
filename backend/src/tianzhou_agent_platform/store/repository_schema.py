@@ -303,6 +303,20 @@ aina_projects_table = _table(
     Index("ix_unibot_aina_projects_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
+aina_storage_table = Table(
+    "unibot_aina_storage",
+    repository_metadata,
+    Column("id", String(64), primary_key=True),  # sha256 of (installation_key, key)
+    Column("installation_key", String(64), nullable=False),  # installation_record_id(tenant, user, aina)
+    Column("aina_id", String(160), nullable=False),
+    Column("key", String(512), nullable=False),
+    Column("value", JSON, nullable=False),
+    Column("size_bytes", Integer, nullable=False),
+    Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_aina_storage_installation", "installation_key", "key"),
+    Index("ix_unibot_aina_storage_aina", "aina_id"),
+)
+
 installations_table = _table(
     INSTALLATIONS_RESOURCE,
     Column("id", String(64), primary_key=True),  # sha256 of (tenant_id, user_id, aina_id)
@@ -310,6 +324,7 @@ installations_table = _table(
     Column("tenant_id", ACTOR, nullable=False),
     Column("granted_permissions", JSON, nullable=False),
     Column("configuration", JSON, nullable=False),
+    Column("secrets", JSON, nullable=False),
     Column("aina_id", String(160), nullable=False),
     Column("installed_version", String(255), nullable=False),
     Column("status", STATUS, nullable=False),

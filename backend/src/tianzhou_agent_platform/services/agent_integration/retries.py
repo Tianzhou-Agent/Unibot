@@ -53,8 +53,10 @@ def tool_retry_middleware(registry: dict[str, Capability]) -> list[ToolRetryMidd
     """
     groups: dict[int, list[str]] = defaultdict(list)
     for name, capability in registry.items():
-        if capability.kind == "tool" and capability.retries_transiently:
-            retries = cast(ToolRecord, capability.value).retries
-            if retries > 0:
-                groups[retries].append(name)
+        if not capability.retries_transiently:
+            continue
+        # A read tool of an AINA package gets one automatic retry; remote tools declare their own budget.
+        retries = cast(ToolRecord, capability.value).retries if capability.kind == "tool" else 1
+        if retries > 0:
+            groups[retries].append(name)
     return [_ToolRetryGroup(max_retries=retries, tools=names) for retries, names in sorted(groups.items())]
