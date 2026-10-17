@@ -20,7 +20,10 @@ from typing import Any, Callable, Literal, Protocol
 
 from pydantic import Field, ValidationError
 
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
+from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
+from tianzhou_agent_platform.aina.package.widgets import aina_widget, aina_widget_definition
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.conversations.models import Message
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
@@ -85,6 +88,8 @@ class AinaTaskRepository(Protocol):
     ) -> AinaTask | None: ...
 
     async def list_aina_tasks(self, conversation_id: str) -> list[AinaTask]: ...
+
+    async def get_aina(self, aina_id: str) -> AinaRecord: ...
 
 
 class ConversationArchive(Protocol):
@@ -221,7 +226,9 @@ class AinaTaskService:
         return await self._post(await self._update_live(installation_key, external_id, change))
 
     async def fail(self, installation_key: str, external_id: str, *, error: str) -> AinaTask:
-        return await self._post(await self._update_live(installation_key, external_id, lambda task: _failed(task, error)))
+        return await self._post(
+            await self._update_live(installation_key, external_id, lambda task: _failed(task, error))
+        )
 
     async def list_for_conversation(self, conversation_id: str) -> list[AinaTask]:
         """The conversation's tasks; results held back while a turn ran are posted now."""
@@ -288,7 +295,12 @@ class AinaTaskService:
         """Post a finished task's result to its conversation once; held back while a turn runs."""
         if task.status == "running" or task.result_posted:
             return task
-        message = Message(id=result_message_id(task), role="assistant", content=result_text(task))
+        message = Message(
+            id=result_message_id(task),
+            role="assistant",
+            content=result_text(task),
+            widgets=await self._result_widgets(task),
+        )
         try:
             if not during_turn and (await self.conversations.get(task.conversation_id)).run_status == "running":
                 return task
@@ -301,6 +313,31 @@ class AinaTaskService:
             task.id, lambda current: current.model_copy(update={"result_posted": True})
         )
         return updated or task
+
+    async def _result_widgets(self, task: AinaTask) -> list[WidgetDefinition]:
+        """Design §7.3: a finished task's result is shown with its tool's ``result_widget``, if it declares one."""
+        if task.status != "completed":
+            return []
+        try:
+            record = await self.repository.get_aina(task.aina_id)
+        except PlatformError:
+            return []
+        runtime = record.manifest.runtime
+        exposed = (
+            runtime.package.tools.expose.get(task.tool_name) if isinstance(runtime, PackageRuntimeDefinition) else None
+        )
+        if exposed is None or exposed.result_widget is None:
+            return []
+        widget = aina_widget(
+            record,
+            exposed.result_widget,
+            tool_name=task.tool_name,
+            call_id=task.invocation_id,
+            arguments={},
+            content=task.result,
+            structured_content=task.structured_content,
+        )
+        return [aina_widget_definition(widget)] if widget is not None else []
 
 
 def result_text(task: AinaTask) -> str:

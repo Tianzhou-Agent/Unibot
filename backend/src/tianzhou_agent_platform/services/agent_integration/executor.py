@@ -18,6 +18,7 @@ from tianzhou_agent_platform.aina.document.builtin import CREATE_EDIT_TASK_TOOL_
 from tianzhou_agent_platform.aina.package.models import ToolSnapshot
 from tianzhou_agent_platform.aina.package.service import AinaPackageService, load_skill
 from tianzhou_agent_platform.aina.package.tasks import AinaTask, AinaTaskService
+from tianzhou_agent_platform.aina.package.widgets import aina_widget_definition
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -112,7 +113,7 @@ class CapabilityExecutor:
             if self.packages is None:
                 raise PlatformError("DEPENDENCY_FAILED", "AINA packages are not available", status_code=503)
             aina, installation, tool = cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], capability.value)
-            visible, started = await self.packages.call_tool(
+            outcome = await self.packages.call_tool(
                 aina,
                 installation,
                 tool.name,
@@ -121,11 +122,14 @@ class CapabilityExecutor:
                 conversation_id=run.conversation_id,
                 workspace_id=run.workspace_id,
             )
-            if started is not None:
+            if outcome.widget is not None:
+                # Design §9.2: the AINA's result widget, shown with the turn's answer and kept with it.
+                run.scope.widgets.append(aina_widget_definition(outcome.widget))
+            if outcome.task is not None:
                 if self.aina_tasks is None:
                     raise PlatformError("DEPENDENCY_FAILED", "AINA tasks are not available", status_code=503)
                 task = await self.aina_tasks.register(
-                    started,
+                    outcome.task,
                     installation=installation,
                     tool_name=tool.name,
                     invocation_id=call_id,
@@ -134,7 +138,7 @@ class CapabilityExecutor:
                 )
                 # Design §7.3: the acknowledgement completes the turn; the result is posted when the task ends.
                 run.scope.direct_reply = _aina_task_reply(task)
-            return visible
+            return outcome.visible
         if capability.kind == "skill":
             aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
             return load_skill(aina, arguments["id"], arguments.get("file"))

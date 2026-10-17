@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -51,6 +51,23 @@ class WidgetCanvas(StrictModel):
     url: str | None = None
 
 
+class WidgetAinaUi(StrictModel):
+    """One AINA 2.0 widget (design §9.2): a packaged HTML file rendered in a sandboxed frame, with its input."""
+
+    aina_id: str
+    version: str
+    widget_id: str
+    entry: str
+    height: int = Field(default=160, ge=1, le=480)
+    purpose: Literal["confirmation", "result", "display"]
+    tool_name: str
+    call_id: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    # ``content`` text and ``structuredContent`` of the result, for result and display widgets.
+    content: str | None = None
+    structured_content: Any = None
+
+
 class WidgetDefinition(StrictModel):
     id: str = Field(min_length=1, max_length=160)
     kind: Literal[
@@ -64,6 +81,7 @@ class WidgetDefinition(StrictModel):
         "document",
         "document_outline",
         "aina_canvas",
+        "aina_widget",
     ]
     title: str
     description: str = ""
@@ -74,3 +92,4 @@ class WidgetDefinition(StrictModel):
     document_name: str | None = None
     sections: list[WidgetDocumentSection] = Field(default_factory=list)
     canvas: WidgetCanvas | None = None
+    aina_widget: WidgetAinaUi | None = None

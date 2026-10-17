@@ -48,7 +48,9 @@ def create_aina_ui_router() -> APIRouter:
         return Response(content, media_type=media_type, headers=ui_headers(frame_ancestors=ancestors))
 
     @router.post("/ainas/{aina_id}/app-tools/{tool_name}")
-    async def call_aina_app_tool(aina_id: str, tool_name: str, payload: AppToolCall, request: Request) -> dict[str, Any]:
+    async def call_aina_app_tool(
+        aina_id: str, tool_name: str, payload: AppToolCall, request: Request
+    ) -> dict[str, Any]:
         """A tool call relayed from the AINA's canvas or widget (design §9.4 ``callTool``)."""
         actor = request_actor(request)
         return await aina_packages(request).call_app_tool(

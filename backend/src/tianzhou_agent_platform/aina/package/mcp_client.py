@@ -38,7 +38,9 @@ class McpToolClient:
     def __init__(self, *, servers: Mapping[str, Any] | None = None) -> None:
         self.servers = dict(servers or {})
 
-    async def list_tools(self, url: str, *, headers: Mapping[str, str] | None = None, timeout: float = 30.0) -> McpServerInfo:
+    async def list_tools(
+        self, url: str, *, headers: Mapping[str, str] | None = None, timeout: float = 30.0
+    ) -> McpServerInfo:
         try:
             async with self._connect(url, headers=headers, timeout=timeout) as client:
                 tools: list[McpToolDescriptor] = []
@@ -86,7 +88,9 @@ class McpToolClient:
     ) -> McpCallResult:
         try:
             async with self._connect(url, headers=headers, timeout=timeout) as client:
-                result = await client.call_tool(name, arguments, read_timeout_seconds=timeout, meta=cast(RequestParamsMeta, meta))
+                result = await client.call_tool(
+                    name, arguments, read_timeout_seconds=timeout, meta=cast(RequestParamsMeta, meta)
+                )
         except PlatformError:
             raise
         except Exception as exc:
@@ -125,11 +129,7 @@ def _failure(exc: BaseException, message: str) -> PlatformError:
     if isinstance(exc, TimeoutError) or any(isinstance(item, TimeoutError) for item in _leaves(exc)):
         return PlatformError("TIMEOUT", message, status_code=504, retryable=True, source="mcp")
     status = next(
-        (
-            item.response.status_code
-            for item in _leaves(exc)
-            if isinstance(item, httpx2.HTTPStatusError)
-        ),
+        (item.response.status_code for item in _leaves(exc) if isinstance(item, httpx2.HTTPStatusError)),
         None,
     )
     if status in {401, 403}:

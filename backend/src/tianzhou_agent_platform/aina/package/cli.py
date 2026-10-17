@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _validate(path: Path, *, live: bool) -> int:
-    report = validate_package_archive(path.read_bytes()) if path.is_file() else validate_package_files(_read_folder(path))
+    report = (
+        validate_package_archive(path.read_bytes()) if path.is_file() else validate_package_files(_read_folder(path))
+    )
     if live and report.valid and report.manifest is not None:
         url = report.manifest.tools.mcp.url
         info = asyncio.run(McpToolClient().list_tools(url))

@@ -28,6 +28,8 @@ export default {
     declined: "你拒绝了这次操作。",
     notCallable: "该应用不能调用工具 {{name}}。",
     urlOnly: "只有网页应用画布可以申请身份令牌。",
-    unsupported: "画布不支持 {{method}}。",
+    unsupported: "此处不支持 {{method}}。",
+    proposeOnly: "只有确认组件可以提议参数。",
+    widgetTitle: "{{tool}} 组件",
   },
 };

@@ -280,7 +280,7 @@ export interface WidgetDocumentSectionDefinition {
 
 export interface WidgetDefinition {
   id: string;
-  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline" | "aina_canvas";
+  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline" | "aina_canvas" | "aina_widget";
   title: string;
   description: string;
   markdown?: string | null;
@@ -291,6 +291,23 @@ export interface WidgetDefinition {
   sections?: WidgetDocumentSectionDefinition[];
   /** The web app of an AINA 2.0 canvas (``aina_canvas`` widgets). */
   canvas?: { kind: "package" | "url"; version: string; entry?: string | null; url?: string | null } | null;
+  /** One AINA 2.0 widget (``aina_widget`` widgets). */
+  aina_widget?: AinaWidget | null;
+}
+
+/** An AINA 2.0 widget and the data it renders from (design §9.2). */
+export interface AinaWidget {
+  aina_id: string;
+  version: string;
+  widget_id: string;
+  entry: string;
+  height: number;
+  purpose: "confirmation" | "result" | "display";
+  tool_name: string;
+  call_id?: string | null;
+  arguments: Record<string, unknown>;
+  content?: string | null;
+  structured_content?: unknown;
 }
 
 export interface AinaManifest {
@@ -446,6 +463,8 @@ export interface ApprovalRecord {
   }>;
   capability_names: string[];
   status: "pending" | "approved" | "denied" | "executed";
+  /** Confirmation widgets of AINA 2.0 tool calls, shown inside the card. */
+  widgets?: AinaWidget[];
   created_at: string;
   resolved_at?: string | null;
 }

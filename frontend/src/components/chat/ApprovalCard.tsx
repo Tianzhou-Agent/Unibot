@@ -1,6 +1,10 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ShieldAlert } from "lucide-react";
+import { PencilLine, ShieldAlert } from "lucide-react";
+import { AinaWidgetFrame } from "@/components/widgets/AinaWidgetFrame";
 import type { ApprovalRecord } from "@/types";
+
+export type EditedArguments = Record<string, Record<string, unknown>>;
 
 export function ApprovalCard({
   approval,
@@ -12,10 +16,12 @@ export function ApprovalCard({
   approval: ApprovalRecord;
   disabled: boolean;
   debugMode: boolean;
-  onConfirm: () => void;
+  onConfirm: (edited: EditedArguments) => void;
   onDeny: () => void;
 }) {
   const { t } = useTranslation("chat");
+  // Arguments the AINA's confirmation widgets proposed, by call id; the host validates them again on Allow.
+  const [edited, setEdited] = useState<EditedArguments>({});
   return (
     <section className="rounded-xl border border-line-strong bg-white px-3.5 py-2.5" aria-label={t("approval.aria")}>
       <div className="flex flex-wrap items-center gap-2.5">
@@ -30,11 +36,30 @@ export function ApprovalCard({
           <button type="button" disabled={disabled} onClick={onDeny} className="btn-outline h-8 px-3.5 text-[12px] disabled:opacity-50">
             {t("approval.deny")}
           </button>
-          <button type="button" disabled={disabled} onClick={onConfirm} className="btn h-8 bg-ink px-3.5 text-[12px] text-white hover:bg-black disabled:opacity-50">
+          <button type="button" disabled={disabled} onClick={() => onConfirm(edited)} className="btn h-8 bg-ink px-3.5 text-[12px] text-white hover:bg-black disabled:opacity-50">
             {t("approval.allow")}
           </button>
         </div>
       </div>
+      {approval.widgets?.length ? (
+        <div className="mt-2.5 space-y-2">
+          {approval.widgets.map((widget) => (
+            <div key={widget.call_id ?? widget.widget_id}>
+              <AinaWidgetFrame
+                widget={widget}
+                onProposeArguments={(args) => {
+                  if (widget.call_id) setEdited((current) => ({ ...current, [widget.call_id as string]: args }));
+                }}
+              />
+              {widget.call_id && edited[widget.call_id] ? (
+                <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
+                  <PencilLine className="h-3 w-3" />{t("approval.edited")}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {debugMode ? (
         <details className="mt-2.5 border-t border-line pt-2.5">
           <summary className="cursor-pointer text-[10.5px] text-ink-subtle">{t("approval.viewArgs")}</summary>

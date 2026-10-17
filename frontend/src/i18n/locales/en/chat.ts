@@ -7,6 +7,7 @@ export default {
     allow: "Allow",
     viewArgs: "View call arguments",
     joiner: ", ",
+    edited: "Edited · runs with the changes shown",
   },
   thinkingNow: "Thinking",
   reasoning: {
