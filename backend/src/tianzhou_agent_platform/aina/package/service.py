@@ -577,12 +577,17 @@ def resolve_effect(declared: Effect | None, annotations: dict[str, Any]) -> Effe
 
 
 def validate_arguments(snapshot: ToolSnapshot, arguments: dict[str, Any]) -> None:
-    error = next(iter(sorted(Draft202012Validator(snapshot.input_schema).iter_errors(arguments), key=str)), None)
+    validate_schema_arguments(snapshot.name, snapshot.input_schema, arguments)
+
+
+def validate_schema_arguments(name: str, schema: dict[str, Any], arguments: dict[str, Any]) -> None:
+    """Arguments against a reviewed JSON Schema (the full draft, not the function-calling subset)."""
+    error = next(iter(sorted(Draft202012Validator(schema).iter_errors(arguments), key=str)), None)
     if error is not None:
         location = "/".join(str(part) for part in error.absolute_path) or "arguments"
         raise PlatformError(
             "INVALID_REQUEST",
-            f"Tool {snapshot.name} {location}: {error.message}",
+            f"Tool {name} {location}: {error.message}",
             status_code=400,
             source="tool",
             user_message="Invalid arguments; fix them and retry.",

@@ -47,6 +47,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
+from tianzhou_agent_platform.aina.package.canvas_calls import canvas_state_block
 from tianzhou_agent_platform.aina.package.tasks import model_result_text, result_message_id
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.conversations.models import Conversation
@@ -457,6 +458,7 @@ class AgentRunner:
         if selected.kind == "aina":
             conversation = await self.conversations.bind_aina(conversation.id, selected.capability_id)
             capabilities, aina = await self.catalog.aina_scope(conversation, selected)
+            run.active_aina_id = selected.capability_id
             prompt = await self.prompts.build(conversation, aina, memory_context=run.memory_context)
             # A remote AINA selected directly is invoked on the first model request.
             remote = aina.manifest.runtime.type == "remote"
@@ -513,7 +515,7 @@ class AgentRunner:
         scope.project_messages = project_scope_history
         scope.on_unknown_tool = failures.unknown_tool
         scope.on_tool_error = failures.unrecorded
-        scope.prompt_suffix = self._task_projection(run)
+        scope.prompt_suffix = self._prompt_suffix(run)
 
         model = self._request_model()
         model_name, endpoint = self._model_target()
@@ -837,16 +839,26 @@ class AgentRunner:
             },
         }
 
-    def _task_projection(self, run: AgentRun) -> Callable[[], Awaitable[str]]:
-        async def projection() -> str:
-            task_service = self.executor.task_service
-            if task_service is None:
-                return ""
-            return await task_service.context_projection(
-                run.conversation_id, user_id=run.user_id, tenant_id=run.tenant_id
-            )
+    def _prompt_suffix(self, run: AgentRun) -> Callable[[], Awaitable[str]]:
+        """Per-request context: the task projection, and the active AINA's canvas state (design §9.5)."""
 
-        return projection
+        async def suffix() -> str:
+            parts: list[str] = []
+            task_service = self.executor.task_service
+            if task_service is not None:
+                parts.append(
+                    await task_service.context_projection(
+                        run.conversation_id, user_id=run.user_id, tenant_id=run.tenant_id
+                    )
+                )
+            broker = self.executor.canvas_calls
+            if broker is not None and run.active_aina_id is not None:
+                state = await broker.model_context(run.conversation_id, run.active_aina_id)
+                if state:
+                    parts.append(canvas_state_block(run.active_aina_id, state))
+            return "\n\n".join(part for part in parts if part)
+
+        return suffix
 
     async def _record_user_request(
         self,

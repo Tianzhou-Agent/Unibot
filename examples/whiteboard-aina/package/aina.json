@@ -1,0 +1,117 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "com.example.whiteboard",
+    "version": "1.0.0",
+    "name": "Whiteboard",
+    "description": "Sketch diagrams on a shared whiteboard: draw shapes, arrows and text on the user's open board.",
+    "publisher": { "id": "example", "name": "Example Inc." },
+    "icon": "assets/icon.svg"
+  },
+
+  "tools": {
+    "mcp": { "url": "http://127.0.0.1:8766/mcp", "auth": { "type": "none" } },
+    "expose": {
+      "load_board": { "effect": "read", "visibility": ["model", "app"] },
+      "save_board": { "effect": "write", "visibility": ["app"] }
+    }
+  },
+
+  "skills": [
+    {
+      "id": "sketch",
+      "name": "Sketch on the whiteboard",
+      "description": "Use when the user wants something drawn, annotated or rearranged on the open whiteboard.",
+      "path": "skills/sketch",
+      "tools": ["get_scene", "draw_circle", "draw_rectangle", "draw_arrow", "add_text", "clear_scene"]
+    }
+  ],
+
+  "canvas": {
+    "entry": "canvas/index.html",
+    "title": "Whiteboard",
+    "tools": [
+      {
+        "name": "get_scene",
+        "description": "Return the shapes on the open whiteboard with ids, types, positions, sizes and text.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "effect": "read"
+      },
+      {
+        "name": "draw_circle",
+        "description": "Draw a circle on the open whiteboard. Coordinates are scene pixels (the board is 1200x800); use get_scene to find shapes.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "radius": { "type": "number", "exclusiveMinimum": 0 },
+            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+          },
+          "required": ["x", "y", "radius"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "draw_rectangle",
+        "description": "Draw a rectangle on the open whiteboard from its top-left corner, in scene pixels.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number", "exclusiveMinimum": 0 },
+            "height": { "type": "number", "exclusiveMinimum": 0 },
+            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "label": { "type": "string", "maxLength": 80 }
+          },
+          "required": ["x", "y", "width", "height"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "draw_arrow",
+        "description": "Draw an arrow between two points on the open whiteboard, in scene pixels.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "from_x": { "type": "number" }, "from_y": { "type": "number" },
+            "to_x": { "type": "number" }, "to_y": { "type": "number" },
+            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+          },
+          "required": ["from_x", "from_y", "to_x", "to_y"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "add_text",
+        "description": "Write text on the open whiteboard at a position in scene pixels.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+          },
+          "required": ["x", "y", "text"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "clear_scene",
+        "description": "Remove every shape from the open whiteboard.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "effect": "destructive"
+      }
+    ]
+  },
+
+  "permissions": [{ "scope": "storage" }]
+}

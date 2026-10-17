@@ -6,6 +6,7 @@
 const PROTOCOL = "aina-ui/2.0";
 const pending = new Map();
 const listeners = new Map();
+const tools = new Map();
 let nextId = 1;
 let context;
 
@@ -16,6 +17,10 @@ window.addEventListener("message", (event) => {
   if (message.method === "event") {
     const { type, data } = message.params || {};
     for (const listener of listeners.get(type) || []) listener(data);
+    return;
+  }
+  if (message.method === "invokeTool") {
+    invokeTool(message.id, message.params || {});
     return;
   }
   const call = pending.get(message.id);
@@ -32,6 +37,22 @@ function request(method, params) {
     // The frame does not know the shell's origin; only window.parent receives the message.
     window.parent.postMessage({ unibot: PROTOCOL, jsonrpc: "2.0", id, method, params }, "*");
   });
+}
+
+// The agent called a canvas tool (design §9.5): run its handler and answer the shell.
+async function invokeTool(id, { name, arguments: args }) {
+  const reply = (body) => window.parent.postMessage({ unibot: PROTOCOL, jsonrpc: "2.0", id, ...body }, "*");
+  const handler = tools.get(name);
+  if (!handler) {
+    reply({ error: { code: "METHOD_NOT_FOUND", message: `Canvas tool ${name} is not registered` } });
+    return;
+  }
+  try {
+    const result = await handler(args || {});
+    reply({ result: result ?? {} });
+  } catch (error) {
+    reply({ error: { code: "TOOL_FAILED", message: String((error && error.message) || error) } });
+  }
 }
 
 function applyTheme(theme) {
@@ -78,6 +99,18 @@ export const host = {
   /** Confirmation widgets only: propose edited arguments for the pending call. */
   proposeArguments(args) {
     return request("proposeArguments", { arguments: args });
+  },
+  /**
+   * Canvas only: implement a canvas tool declared in aina.json. The handler gets the validated arguments and returns
+   * an MCP-shaped result, e.g. { structuredContent: {...} } or { content: [{ type: "text", text: "..." }] }.
+   */
+  registerTool(name, handler) {
+    tools.set(name, handler);
+    return request("registerTool", { name });
+  },
+  /** Canvas only: a compact summary of what the canvas shows (at most 4000 characters), sent with the agent's requests. */
+  setModelContext(value) {
+    return request("setModelContext", { value: String(value).slice(0, 4000) });
   },
   /** Listen to "tool_result" (the agent changed data in chat) or "context_changed". Returns an unsubscribe. */
   on(type, listener) {

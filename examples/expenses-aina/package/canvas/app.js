@@ -67,4 +67,10 @@ document.getElementById("summarize").addEventListener("click", () => {
 
 // The agent changed data in chat: show it.
 host.on("tool_result", render);
-render();
+await render();
+
+// Canvas tool (design §9.5): the agent highlights rows for the user to review, e.g. suspected duplicates.
+host.registerTool("highlight_rows", async ({ expense_ids }) => {
+  for (const row of rows.rows) row.classList.toggle("highlight", expense_ids.includes(row.dataset.id));
+  return { structuredContent: { highlighted: expense_ids.filter((id) => rows.querySelector(`[data-id="${CSS.escape(id)}"]`)).length } };
+});
