@@ -1,8 +1,8 @@
 """Expenses AINA tool server: a plain MCP server (Streamable HTTP) built with the official MCP Python SDK.
 
 Run it with ``python main.py`` and register ``../package`` with Unibot. Unibot sends its context in the request
-``_meta["unibot/context"]``; this example keys expenses by the pairwise user id found there. Until the Host API
-ships (protocol phase P2), expenses are kept in process memory instead of ``storage``.
+``_meta["unibot/context"]``. Expenses live in the AINA's private Host API ``storage``: the context token scopes every
+read and write to the calling user, so this server keeps no user data of its own.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+import httpx
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
@@ -18,7 +19,8 @@ from pydantic import BaseModel
 CATEGORIES = {"food", "transport", "housing", "shopping", "health", "entertainment", "other"}
 
 mcp = MCPServer("expenses", version="1.2.0")
-_expenses: dict[str, list[dict[str, Any]]] = {}
+# Tests route Host API calls to an in-process Unibot; None means real HTTP.
+HOST_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 
 class Expense(BaseModel):
@@ -43,9 +45,27 @@ def _unibot(ctx: Context) -> dict[str, Any]:
     return context
 
 
-def _user_items(ctx: Context) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+async def _host(context: dict[str, Any], method: str, path: str, **kwargs: Any) -> httpx.Response:
+    async with httpx.AsyncClient(
+        base_url=context["host"]["api_base"],
+        headers={"Authorization": f"Bearer {context['token']}"},
+        transport=HOST_TRANSPORT,
+        timeout=10,
+    ) as client:
+        return await client.request(method, path, **kwargs)
+
+
+async def _load(ctx: Context) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     context = _unibot(ctx)
-    return _expenses.setdefault(context["user"]["id"], []), context
+    response = await _host(context, "GET", "/storage/kv/expenses")
+    if response.status_code == 404:
+        return [], context
+    response.raise_for_status()
+    return list(response.json()["value"]), context
+
+
+async def _save(context: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    (await _host(context, "PUT", "/storage/kv/expenses", json={"value": items})).raise_for_status()
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
@@ -56,27 +76,27 @@ async def add_expense(amount: float, category: str, ctx: Context, note: str = ""
         raise ToolError(f"Unknown category {category!r}; use one of {', '.join(sorted(CATEGORIES))}")
     if amount <= 0:
         raise ToolError("The amount must be positive")
-    items, context = _user_items(ctx)
+    items, context = await _load(ctx)
     # The invocation id is stable across host retries, so a retried call does not record the expense twice.
     invocation_id = context["invocation_id"]
     existing = next((item for item in items if item["invocation_id"] == invocation_id), None)
     if existing is None:
         existing = {
-            "id": f"e_{len(items) + 1}",
+            "id": f"e_{max((int(item['id'][2:]) for item in items), default=0) + 1}",
             "invocation_id": invocation_id,
             "amount": amount,
             "category": category,
             "note": note,
             "day": day or date.today().isoformat(),
         }
-        items.append(existing)
+        await _save(context, [*items, existing])
     return _expense(existing, context)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_expenses(ctx: Context, month: str = "") -> ExpenseList:
     """List the user's expenses, optionally only those of one month (YYYY-MM)."""
-    items, context = _user_items(ctx)
+    items, context = await _load(ctx)
     selected = [_expense(item, context) for item in items if item["day"].startswith(month)]
     return ExpenseList(items=selected, total=round(sum(item.amount for item in selected), 2))
 
@@ -84,18 +104,18 @@ async def list_expenses(ctx: Context, month: str = "") -> ExpenseList:
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
 async def delete_expense(expense_id: str, ctx: Context) -> str:
     """Permanently delete one expense by its id."""
-    items, _context = _user_items(ctx)
-    for index, item in enumerate(items):
-        if item["id"] == expense_id:
-            del items[index]
-            return f"Deleted expense {expense_id}"
-    raise ToolError(f"No expense has id {expense_id!r}")
+    items, context = await _load(ctx)
+    remaining = [item for item in items if item["id"] != expense_id]
+    if len(remaining) == len(items):
+        raise ToolError(f"No expense has id {expense_id!r}")
+    await _save(context, remaining)
+    return f"Deleted expense {expense_id}"
 
 
 @mcp.tool()
 async def sync_bank(ctx: Context) -> str:
     """Import new card transactions (called from the canvas only)."""
-    _user_items(ctx)
+    _unibot(ctx)
     return "No new transactions"
 
 

@@ -59,6 +59,8 @@ from tianzhou_agent_platform.store.memory_store import MemoryStore
 from tianzhou_agent_platform.store.model_provider_store import ModelProviderStore
 from tianzhou_agent_platform.store.feedback_store import FeedbackStore
 from tianzhou_agent_platform.store.document_task_store import DocumentTaskStore
+from tianzhou_agent_platform.aina.package.storage import AinaStorageItem
+from tianzhou_agent_platform.store.aina_storage_store import AinaStorageStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
 from tianzhou_agent_platform.store.registry_store import RegistryStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
@@ -114,6 +116,7 @@ class PersistentRepository(InMemoryRepository):
         self._document_task_store = DocumentTaskStore(stores.mysql)
         self._aina_project_store = AinaProjectStore(stores.mysql)
         self._registry_store = RegistryStore(stores.mysql)
+        self._aina_storage_store = AinaStorageStore(stores.mysql)
 
     async def initialize(self) -> None:
         traces = (
@@ -469,6 +472,22 @@ class PersistentRepository(InMemoryRepository):
     async def remove_aina(self, aina_id: str) -> None:
         if not await self._registry_store.remove_aina(aina_id):
             raise not_found("AINA", aina_id)
+
+    async def get_aina_storage_item(self, installation_key: str, key: str) -> AinaStorageItem | None:
+        return await self._aina_storage_store.get(installation_key, key)
+
+    async def put_aina_storage_item(self, item: AinaStorageItem) -> AinaStorageItem:
+        await self._aina_storage_store.put(item)
+        return self._copy(item)
+
+    async def delete_aina_storage_item(self, installation_key: str, key: str) -> bool:
+        return await self._aina_storage_store.delete(installation_key, key)
+
+    async def list_aina_storage_items(self, installation_key: str, *, prefix: str, limit: int) -> list[AinaStorageItem]:
+        return await self._aina_storage_store.list(installation_key, prefix=prefix, limit=limit)
+
+    async def delete_aina_storage(self, *, installation_key: str | None = None, aina_id: str | None = None) -> int:
+        return await self._aina_storage_store.delete_all(installation_key=installation_key, aina_id=aina_id)
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation:
         await self._aina_project_store.put_installation(installation)

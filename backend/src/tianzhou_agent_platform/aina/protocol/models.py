@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, Field, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, computed_field, field_validator, model_validator
 
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
@@ -146,6 +146,14 @@ class AinaInstallation(InstallationRequest):
     installed_version: str
     status: Literal["active", "disabled"] = "active"
     installed_at: datetime = Field(default_factory=utc_now)
+    # Encrypted ``x-secret`` configuration values of an AINA 2.0 package; stored, never serialized to clients.
+    secrets: dict[str, str] = Field(default_factory=dict, exclude=True)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def configured_secrets(self) -> list[str]:
+        """Names of the secret settings that have a value (their values are never returned)."""
+        return sorted(self.secrets)
 
 
 class PermissionUpdate(StrictModel):

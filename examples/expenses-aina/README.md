@@ -20,8 +20,9 @@ aina validate examples/expenses-aina/package --live     # schema, files, budgets
 aina pack examples/expenses-aina/package -o expenses.aina.zip
 ```
 
-Register the zip as a platform admin with `POST /ainas/packages` (multipart field `file`), then install it with
-`POST /ainas/com.example.expenses/install` and grant the required `storage` scope. The loopback MCP origin must be in
+Register the zip as a platform admin with `POST /ainas/packages` (multipart field `file`), then install it from the
+Plugins page, or with `POST /ainas/com.example.expenses/install`. `storage` is granted automatically. Set
+`UNIBOT_AINA_HOST_API_BASE` to an address of Unibot that this server can reach. The loopback MCP origin must be in
 `UNIBOT_CAPABILITY_ALLOWED_ORIGINS` when destination policy is enforced.
 
 ## What works today
@@ -29,8 +30,8 @@ Register the zip as a platform admin with `POST /ainas/packages` (multipart fiel
 The protocol ships in phases (design §15). This package is written against the frozen P0 schema, so it does not
 change as later phases land:
 
-- **P0/P1 (implemented):** validation, MCP tool snapshot and drift check, manifest-driven scope, effect-based
-  approvals, skill index and `load_skill`.
-- **Later phases:** Host API and context token, `bearer`/`oauth2` MCP auth and secret config (P2); canvas, widgets and
-  the `aina-ui.js` bridge the HTML files import (P3); canvas tools such as `highlight_rows` (P6). Until P2 the server
-  keeps expenses in process memory instead of Host API `storage`.
+- **P0–P2 (implemented):** validation, MCP tool snapshot and drift check, manifest-driven scope, effect-based
+  approvals, skills, the context token, and Host API `storage`. The server keeps no data of its own: every expense is
+  read and written through `storage`, scoped by the token to the calling user.
+- **Later:** canvas, widgets and the `aina-ui.js` bridge the HTML files import (P3), and canvas tools such as
+  `highlight_rows` (P6).

@@ -15,9 +15,12 @@ from typing import Any, Protocol, cast
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 
+from tianzhou_agent_platform.aina.package.configuration import mcp_auth_headers, prepare_configuration
 from tianzhou_agent_platform.aina.package.context import CONTEXT_META_KEY, Source, unibot_context
 from tianzhou_agent_platform.aina.package.manifest import EFFECT_ORDER, AinaPackageManifest, Effect
 from tianzhou_agent_platform.aina.package.mcp_client import McpServerInfo, McpToolClient
+from tianzhou_agent_platform.aina.package.secrets import SecretBox, aina_key_material
+from tianzhou_agent_platform.aina.package.tokens import ContextTokenSigner, HostReference
 from tianzhou_agent_platform.aina.package.models import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     McpToolDescriptor,
@@ -36,6 +39,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
     AinaInstallation,
     AinaManifest,
     AinaRecord,
+    InstallationRequest,
     Publisher,
 )
 from tianzhou_agent_platform.aina.security.destinations import require_approved_destination
@@ -44,12 +48,18 @@ from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 
 _MAX_ERROR_TEXT_CHARS = 2_000
+# Design §10: low-risk scopes are shown at install and granted without asking.
+AUTO_GRANTED_SCOPES = frozenset({"storage", "notify"})
 
 
 class PackageRegistry(Protocol):
     async def get_aina(self, aina_id: str) -> AinaRecord: ...
 
     async def upsert_aina(self, aina: AinaRecord) -> AinaRecord: ...
+
+    async def get_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> AinaInstallation: ...
+
+    async def put_installation(self, installation: AinaInstallation) -> AinaInstallation: ...
 
 
 class AinaPackageService:
@@ -65,16 +75,21 @@ class AinaPackageService:
         self.settings = settings
         self.mcp = mcp or McpToolClient()
         self.enforce_destination_policy = enforce_destination_policy
+        self.box = SecretBox.from_settings(settings)
+        self.tokens = ContextTokenSigner.from_settings(settings)
 
-    async def register(self, payload: bytes) -> AinaRecord:
-        """Validate a package, snapshot its exposed MCP tools and register (or upgrade) the AINA."""
+    async def register(self, payload: bytes, *, credential: str | None = None) -> AinaRecord:
+        """Validate a package, snapshot its exposed MCP tools and register (or upgrade) the AINA.
+
+        ``credential`` authenticates the registration-time ``tools/list`` of a ``bearer``/``api_key`` server; it
+        is used once and never stored.
+        """
         report = validate_package_archive(payload)
         manifest = require_valid_package(report)
-        if manifest.tools.mcp.auth.type != "none":
+        if manifest.tools.mcp.auth.type == "oauth2":
             raise PlatformError(
                 "INVALID_REQUEST",
-                f"MCP authentication {manifest.tools.mcp.auth.type!r} needs installation secrets, which the host "
-                "does not support yet; register a server with auth type 'none'",
+                "MCP OAuth 2.0 authorization is not supported yet; use auth type none, bearer or api_key",
                 status_code=422,
                 source="aina_package",
             )
@@ -93,7 +108,7 @@ class AinaPackageService:
                     f"AINA {manifest.aina.id!r} version {manifest.aina.version!r} was already registered with "
                     "different content; publish a new version"
                 )
-        info = await self._list_tools(manifest)
+        info = await self._list_tools(manifest, self._discovery_headers(manifest, credential=credential))
         snapshots, errors, warnings = snapshot_tools(manifest, info.tools)
         if errors:
             raise PlatformError(
@@ -122,11 +137,56 @@ class AinaPackageService:
         )
         return await self.repository.upsert_aina(record)
 
-    async def refresh_tools(self, aina_id: str) -> AinaRecord:
+    async def install(self, aina_id: str, request: InstallationRequest) -> AinaInstallation:
+        """Install a package for one user: configuration, sealed secrets, scopes and a fresh tool check."""
+        record = await self.repository.get_aina(aina_id)
+        manifest = package_runtime(record).package
+        declared = {item.scope for item in manifest.permissions}
+        undeclared = set(request.granted_permissions) - declared
+        if undeclared:
+            raise PlatformError(
+                "INVALID_REQUEST",
+                f"Cannot grant undeclared permissions: {', '.join(sorted(undeclared))}",
+                status_code=422,
+            )
+        previous = await self._installation(aina_id, tenant_id=request.tenant_id, user_id=request.user_id)
+        public, sealed = prepare_configuration(
+            manifest,
+            request.configuration,
+            box=self.box,
+            tenant_id=request.tenant_id,
+            user_id=request.user_id,
+            previous=previous,
+        )
+        installation = AinaInstallation(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            granted_permissions=sorted(set(request.granted_permissions) | (declared & AUTO_GRANTED_SCOPES)),
+            configuration=public,
+            secrets=sealed,
+            aina_id=aina_id,
+            installed_version=record.manifest.aina.version,
+        )
+        # Design §6.1: the tool snapshot is re-checked before every new installation, as this user.
+        await self.refresh_tools(aina_id, installation=installation)
+        return await self.repository.put_installation(installation)
+
+    async def refresh_tools(
+        self,
+        aina_id: str,
+        *,
+        installation: AinaInstallation | None = None,
+        credential: str | None = None,
+    ) -> AinaRecord:
         """Re-run ``tools/list`` and disable every exposed tool that disappeared or changed since review."""
         record = await self.repository.get_aina(aina_id)
         runtime = package_runtime(record)
-        info = await self._list_tools(runtime.package)
+        headers = (
+            mcp_auth_headers(runtime.package.tools.mcp.auth, installation, box=self.box)
+            if installation is not None
+            else self._discovery_headers(runtime.package, credential=credential)
+        )
+        info = await self._list_tools(runtime.package, headers)
         listed = {tool.name: tool for tool in info.tools}
         tools: list[ToolSnapshot] = []
         for snapshot in runtime.tools:
@@ -179,23 +239,24 @@ class AinaPackageService:
         validate_arguments(snapshot, arguments)
         manifest = runtime.package
         self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
-        meta = {
-            "progressToken": invocation_id,
-            CONTEXT_META_KEY: unibot_context(
-                secret=self.settings.auth_secret.get_secret_value(),
-                manifest=manifest,
-                installation=installation,
-                invocation_id=invocation_id,
-                source=source,
-                conversation_id=conversation_id,
-                workspace_id=workspace_id,
-            ),
-        }
+        headers = mcp_auth_headers(manifest.tools.mcp.auth, installation, box=self.box)
+        context = unibot_context(
+            secret=aina_key_material(self.settings),
+            manifest=manifest,
+            installation=installation,
+            invocation_id=invocation_id,
+            source=source,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+        )
+        context["host"] = {"api_base": self.settings.aina_host_api_base}
+        context["token"] = self.mint_token(installation, context)
         result = await self.mcp.call_tool(
             manifest.tools.mcp.url,
             name,
             arguments,
-            meta=meta,
+            meta={"progressToken": invocation_id, CONTEXT_META_KEY: context},
+            headers=headers,
             timeout=snapshot.timeout_seconds,
         )
         text = _content_text(result.content)
@@ -213,6 +274,38 @@ class AinaPackageService:
             visible["content"] = text
         return visible or {"content": ""}
 
+    def mint_token(self, installation: AinaInstallation, context: dict[str, Any]) -> str:
+        """Context token carrying the same pairwise identity as ``context`` (design §8)."""
+        claims = {
+            "sub": context["user"]["id"],
+            "tenant": context["tenant_id"],
+            "installation_id": context["installation_id"],
+            "scopes": sorted(installation.granted_permissions),
+            "invocation_id": context["invocation_id"],
+        }
+        for claim, key in (("conversation", "conversation_id"), ("workspace", "workspace_id")):
+            if key in context:
+                claims[claim] = context[key]
+        reference = HostReference(
+            tenant_id=installation.tenant_id,
+            user_id=installation.user_id,
+            aina_id=installation.aina_id,
+        )
+        return self.tokens.mint(reference=reference, claims=claims)
+
+    async def _installation(self, aina_id: str, *, tenant_id: str, user_id: str) -> AinaInstallation | None:
+        try:
+            return await self.repository.get_installation(tenant_id=tenant_id, user_id=user_id, aina_id=aina_id)
+        except PlatformError as exc:
+            if exc.code == "RESOURCE_NOT_FOUND":
+                return None
+            raise
+
+    def _discovery_headers(self, manifest: AinaPackageManifest, *, credential: str | None) -> dict[str, str]:
+        if manifest.tools.mcp.auth.type == "none" or credential is None:
+            return {}
+        return mcp_auth_headers(manifest.tools.mcp.auth, None, box=self.box, credential=credential)
+
     async def _existing(self, aina_id: str) -> AinaRecord | None:
         try:
             return await self.repository.get_aina(aina_id)
@@ -221,9 +314,13 @@ class AinaPackageService:
                 return None
             raise
 
-    async def _list_tools(self, manifest: AinaPackageManifest) -> McpServerInfo:
+    async def _list_tools(self, manifest: AinaPackageManifest, headers: dict[str, str]) -> McpServerInfo:
         self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
-        return await self.mcp.list_tools(manifest.tools.mcp.url, timeout=self.settings.capability_timeout_seconds)
+        return await self.mcp.list_tools(
+            manifest.tools.mcp.url,
+            headers=headers,
+            timeout=self.settings.capability_timeout_seconds,
+        )
 
     def _require_destination(self, url: str, allowed_origins: str) -> None:
         if self.enforce_destination_policy:

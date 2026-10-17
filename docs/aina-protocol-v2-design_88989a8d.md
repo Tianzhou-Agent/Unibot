@@ -1,6 +1,7 @@
 # AINA Protocol 2.0 — Plugin Contract Design
 
-Status: **Accepted; P0 and P1 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it differs.
+Status: **Accepted; P0, P1 and most of P2 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+differs.
 
 Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
 **skills** and **widgets** — described by a JSON manifest (`aina.json`). The custom plugin RPC and the managed runtime
@@ -810,7 +811,7 @@ Resolved in rev 4 (each as recommended in rev 3):
 
 ## 17. Implementation status
 
-### What is built (P0, P1)
+### What is built (P0, P1, P2)
 
 | Part | Where |
 |---|---|
@@ -823,33 +824,51 @@ Resolved in rev 4 (each as recommended in rev 3):
 | `_meta["unibot/context"]` with pairwise ids | [`aina/package/context.py`](../backend/src/tianzhou_agent_platform/aina/package/context.py) |
 | Manifest-driven scope, `effect` approvals, read-only retries | `package_capabilities` in [capabilities.py](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py), [approvals.py](../backend/src/tianzhou_agent_platform/services/agent_integration/approvals.py), [retries.py](../backend/src/tianzhou_agent_platform/services/agent_integration/retries.py) |
 | Skill index in the scope prompt | `_package_prompt` in [prompts.py](../backend/src/tianzhou_agent_platform/services/agent_integration/prompts.py) |
-| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py) |
+| Context token (ES256) and JWKS at `/.well-known/aina-host-jwks.json` | [`aina/package/tokens.py`](../backend/src/tianzhou_agent_platform/aina/package/tokens.py) |
+| Host API gateway (`/aina-host/v1`) with token, installation and scope checks; `storage/kv` | [`api/aina_host.py`](../backend/src/tianzhou_agent_platform/api/aina_host.py), [`aina/package/storage.py`](../backend/src/tianzhou_agent_platform/aina/package/storage.py) |
+| `config.schema` validation, sealed `x-secret` values, `bearer`/`api_key` MCP auth | [`aina/package/configuration.py`](../backend/src/tianzhou_agent_platform/aina/package/configuration.py), [`aina/package/secrets.py`](../backend/src/tianzhou_agent_platform/aina/package/secrets.py) |
+| Install consent (server origin, tools and effects, scopes with reasons and risk, settings form) | [`InstallConsentDialog.tsx`](../frontend/src/components/apps/InstallConsentDialog.tsx) |
+| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py) |
 
 API: `POST /ainas/packages/validate` (anyone), `POST /ainas/packages` and `POST /ainas/{id}/tools/refresh`
-(platform admin). A package is stored as an ordinary `AinaRecord` whose runtime is `package`; the record's 1.0 fields
+(platform admin; both take an optional one-time `credential` for an authenticated server's `tools/list`, never
+stored). Installing a package validates its settings, seals secrets, grants `storage`/`notify` automatically and
+re-checks the tools as the installing user. Uninstall deletes the AINA's private storage unless `keep_data=true`. A package is stored as an ordinary `AinaRecord` whose runtime is `package`; the record's 1.0 fields
 are a projection of `aina.json`, so listing, install and grants keep one code path. The 2.0 path branches on the
 runtime type only, never on an AINA id.
 
 ### Where the implementation differs from or narrows this design
 
 - `tools.mcp.url` also accepts plain `http://` for loopback hosts, so a developer can register a local server.
-- Registration accepts only `tools.mcp.auth.type: none` until installation secrets exist (P2). The schema already
-  accepts every auth type.
+- MCP `oauth2` authorization is not implemented yet; registration rejects it. `none`, `bearer` and `api_key` work.
 - The drift check runs before every new installation and on `POST /ainas/{id}/tools/refresh`; it is not yet on a
   periodic schedule.
-- `_meta["unibot/context"]` has no `token`, `host` or user `locale`/`timezone` yet (P2), and no `traceparent` header
-  is sent yet.
+- `_meta["unibot/context"]` has no user `locale`/`timezone` yet. The MCP SDK's own OpenTelemetry spans join the
+  platform trace as children of the tool span, so no separate `traceparent` work was needed.
+- The context token's identity claims are the pairwise ids. A `ref` claim holds the host's own installation
+  reference, encrypted, so the Host API needs no per-token state. The signing key is derived from the AINA key
+  material (`UNIBOT_AINA_SECRET_KEY`, else the auth secret), so all nodes share it; `UNIBOT_AINA_SIGNING_KEY`
+  (P-256 PEM) overrides it. Key rotation is not implemented.
+- A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
+  the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
+  at token expiry.
+- Host API: only `storage/kv` is built. Its quota is soft under concurrent writers (checked before each write);
+  limits are 256 KiB per value, 10 MiB and 10 000 keys per installation. `storage/files`, `files`, `documents`,
+  `memory`, `llm`, `sandbox`, `notifications`, `token/refresh` and task callbacks are not built yet. Audit is a
+  structured log line per call, not a trace span.
+- Long-running tools (§7.3) are not built. Unibot's task system is the agent's plan tree, so AINA tasks need their
+  own background-task record, Tasks-pane entry and out-of-turn conversation posting.
+- Upgrade re-consent is not built: a new version keeps existing grants, and a new required scope hides the AINA
+  until the user grants it.
 - "Confirm the first `write` call in a conversation" is decided from the conversation's checkpointed messages; after
   history summarization the host may ask again, never less often.
 - Non-text MCP content blocks (images, resources) reach the model as a placeholder line. Text content that repeats
   `structuredContent` exactly is dropped, so the model does not read the result twice.
 - Skill folders may contain only UTF-8 text files. A frontmatter `name` may match either the skill `id` (the Agent
   Skills convention) or its `name`. Skill text is limited to 1 000 000 characters per package in total.
-- Registering a new version replaces the record. Installations keep their grants. A new required scope hides the
-  AINA until it is granted. The re-consent flow is P2.
 - The bridge message schema and Host API OpenAPI are written with the phases that implement them (P3, P2).
 
 ### Next
 
-P2 (Host API, context token, consent, secrets and MCP auth), then P3 (canvas and widgets). Canvas tools (P6) build on
-P3.
+Remaining P2: long-running tasks (§7.3), MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Then
+P3 (canvas and widgets), which canvas tools (P6) build on.

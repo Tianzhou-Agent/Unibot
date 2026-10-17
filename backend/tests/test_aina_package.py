@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import io
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from mcp.server.mcpserver import MCPServer
@@ -28,6 +30,7 @@ from tianzhou_agent_platform.aina.package.validation import (
 from tianzhou_agent_platform.aina.project import build_project_archive
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
+from tianzhou_agent_platform.store.memory_repository import installation_record_id
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLE = REPO / "examples" / "expenses-aina"
@@ -46,6 +49,7 @@ def _settings() -> AgentSettings:
         llm_base_url="https://model.invalid/v1",
         llm_api_key="test-key",
         llm_model="test-model",
+        aina_host_api_base="http://testserver/aina-host/v1",
     )
 
 
@@ -77,6 +81,17 @@ def _example_server() -> ModuleType:
 def _register(client: TestClient, files: dict[str, bytes]) -> Any:
     archive = build_project_archive(files)
     return client.post("/ainas/packages", files={"file": ("expenses.aina.zip", archive, "application/zip")})
+
+
+def _call(client: TestClient, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run an async repository method on the app's event loop."""
+    return client.portal.call(functools.partial(function, *args, **kwargs))  # type: ignore[union-attr]
+
+
+def _installation_key(client: TestClient) -> str:
+    """Storage namespace of the test actor's Expenses installation (the actor depends on the auth settings)."""
+    (installation,) = _call(client, client.app.state.repository.list_installations)  # type: ignore[attr-defined]
+    return installation_record_id(installation.tenant_id, installation.user_id, installation.aina_id)
 
 
 def _tool_names(call: dict[str, Any]) -> list[str]:
@@ -347,13 +362,7 @@ def test_registration_rejects_missing_tools_changed_content_and_unsupported_auth
 
     files = _example_files()
     changed = _with_manifest(files, _set("aina.description", "Track expenses."))
-    authenticated = _with_manifest(
-        files,
-        lambda manifest: (
-            manifest["tools"]["mcp"].update(auth={"type": "bearer", "secret": "api_token"}),
-            manifest["config"]["schema"]["properties"].update(api_token={"type": "string", "x-secret": True}),
-        ),
-    )
+    oauth = _with_manifest(files, _set("tools.mcp.auth", {"type": "oauth2"}))
     with TestClient(
         create_app(settings=_settings(), llm=ScriptedLLM([]), mcp_client=McpToolClient(servers={MCP_URL: partial}))
     ) as client:
@@ -365,7 +374,7 @@ def test_registration_rejects_missing_tools_changed_content_and_unsupported_auth
     ) as client:
         first = _register(client, files)
         conflict = _register(client, changed)
-        unsupported = _register(client, _with_manifest(authenticated, _set("aina.version", "2.0.0")))
+        unsupported = _register(client, _with_manifest(oauth, _set("aina.version", "2.0.0")))
 
     assert missing.status_code == 422
     assert "does not list a tool named 'list_expenses'" in missing.json()["error"]["message"]
@@ -373,17 +382,24 @@ def test_registration_rejects_missing_tools_changed_content_and_unsupported_auth
     assert conflict.status_code == 409
     assert "publish a new version" in conflict.json()["error"]["message"]
     assert unsupported.status_code == 422
-    assert "MCP authentication 'bearer'" in unsupported.json()["error"]["message"]
+    assert "MCP OAuth 2.0 authorization is not supported yet" in unsupported.json()["error"]["message"]
 
 
 # --- P1: scope, skills, effects and approvals ----------------------------------------------------------------
 
 
-def _installed_client(server: ModuleType, llm: ScriptedLLM, *, scopes: list[str] | None = None) -> TestClient:
+def _installed_client(
+    server: ModuleType,
+    llm: ScriptedLLM,
+    *,
+    scopes: list[str] | None = None,
+    files: dict[str, bytes] | None = None,
+) -> TestClient:
     app = create_app(settings=_settings(), llm=llm, mcp_client=McpToolClient(servers={MCP_URL: server.mcp}))
+    server.HOST_TRANSPORT = httpx.ASGITransport(app=app)  # the example's Host API calls reach this app
     client = TestClient(app)
     client.__enter__()
-    assert _register(client, _example_files()).status_code == 201
+    assert _register(client, files or _example_files()).status_code == 201
     installed = client.post(
         "/ainas/com.example.expenses/install",
         json={"granted_permissions": scopes if scopes is not None else ["storage"], "configuration": {"currency": "EUR"}},
@@ -480,6 +496,7 @@ def test_write_tool_asks_once_per_conversation_and_destructive_tool_always_asks(
         second = client.post("/chat", json={"message": "And 8 on coffee", "conversation_id": conversation_id}).json()
         third = client.post("/chat", json={"message": "Delete the lunch", "conversation_id": conversation_id}).json()
         deleted = client.post(f"/approvals/{third['approval']['id']}/confirm", json={}).json()
+        stored = _call(client, client.app.state.repository.list_aina_storage_items, _installation_key(client), prefix="", limit=10)
     finally:
         client.__exit__(None, None, None)
 
@@ -488,8 +505,9 @@ def test_write_tool_asks_once_per_conversation_and_destructive_tool_always_asks(
     assert second["status"] == "completed"  # the first write call in this conversation was approved
     assert third["status"] == "approval_required"  # destructive asks for every call
     assert deleted["status"] == "completed"
-    remaining = next(iter(server._expenses.values()))
-    assert [(item["id"], item["amount"]) for item in remaining] == [("e_2", 8.0)]
+    # The example server keeps no data: expenses live in the installation's Host API storage.
+    assert [item.key for item in stored] == ["expenses"]
+    assert [(item["id"], item["amount"]) for item in stored[0].value] == [("e_2", 8.0)]
 
 
 def test_domain_error_reaches_the_model_and_invalid_arguments_never_reach_the_server() -> None:
@@ -523,7 +541,8 @@ def test_domain_error_reaches_the_model_and_invalid_arguments_never_reach_the_se
 def test_required_scope_must_be_granted_before_the_aina_is_offered() -> None:
     server = _example_server()
     llm = ScriptedLLM([assistant("Hello.")])
-    client = _installed_client(server, llm, scopes=[])
+    files = _with_manifest(_example_files(), _set("permissions.1.optional", False))  # documents.read required
+    client = _installed_client(server, llm, scopes=[], files=files)
     try:
         client.post("/chat", json={"message": "Hello"})
     finally:

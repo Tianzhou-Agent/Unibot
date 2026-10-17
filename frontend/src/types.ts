@@ -318,8 +318,10 @@ export interface AinaManifest {
         // AINA Protocol 2.0 package: tools served by the publisher's MCP server, reviewed at registration.
         type: "package";
         archive_sha256: string;
+        package: AinaPackageManifest;
         tools: {
           name: string;
+          title?: string | null;
           description: string;
           effect: "read" | "write" | "destructive";
           visibility: ("model" | "app")[];
@@ -378,6 +380,8 @@ export interface AinaInstallation {
   tenant_id: string;
   granted_permissions: string[];
   configuration: Record<string, unknown>;
+  // Names of secret settings that have a value; secret values are never returned.
+  configured_secrets?: string[];
   status: "active" | "disabled";
   installed_at: string;
 }
@@ -848,6 +852,30 @@ export interface MemoryStatsResponse {
   preference: number;
   goal: number;
   instruction: number;
+}
+
+/** The parts of an AINA 2.0 ``aina.json`` the install consent shows (design §10). */
+export interface AinaPackageManifest {
+  aina: { id: string; name: string; version: string; publisher: { id: string; name: string; url?: string | null } };
+  tools: { mcp: { url: string; auth: { type: "none" | "bearer" | "api_key" | "oauth2" } } };
+  canvas?: { title: string; entry?: string | null; url?: string | null } | null;
+  config?: { schema: AinaConfigSchema } | null;
+  permissions: { scope: string; reason?: string | null; optional: boolean }[];
+}
+
+export interface AinaConfigField {
+  type?: "string" | "number" | "integer" | "boolean";
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: (string | number)[];
+  "x-secret"?: boolean;
+}
+
+export interface AinaConfigSchema {
+  type: "object";
+  properties?: Record<string, AinaConfigField>;
+  required?: string[];
 }
 
 export interface CapabilityOption {

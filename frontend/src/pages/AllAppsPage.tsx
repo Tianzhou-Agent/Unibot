@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
 import { ActionMenu, AppIcon, PluginChip, PluginRow, PluginSection, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
@@ -151,6 +152,7 @@ export default function AllAppsPage() {
   const [view, setView] = useState<View>("apps");
   const [query, setQuery] = useState("");
   const [ainas, setAinas] = useState<AinaRecord[]>([]);
+  const [consentFor, setConsentFor] = useState<AinaRecord | null>(null);
   const [projects, setProjects] = useState<AinaProjectRecord[]>([]);
   const [installations, setInstallations] = useState<AinaInstallation[]>([]);
   const [tools, setTools] = useState<ToolRecord[]>([]);
@@ -335,6 +337,10 @@ export default function AllAppsPage() {
   }
 
   async function install(aina: AinaRecord) {
+    if (aina.manifest.runtime.type === "package") {
+      setConsentFor(aina); // a 2.0 package installs only after the user reviews its access and settings
+      return;
+    }
     try {
       await installAina(aina);
       setNotice({ tone: "success", text: t("notice.installed", { name: aina.manifest.aina.name }) });
@@ -413,6 +419,17 @@ export default function AllAppsPage() {
 
   return (
     <div className="flex h-full flex-col bg-app-bg">
+      {consentFor ? (
+        <InstallConsentDialog
+          record={consentFor}
+          onClose={() => setConsentFor(null)}
+          onInstalled={() => {
+            setNotice({ tone: "success", text: t("notice.installed", { name: consentFor.manifest.aina.name }) });
+            setConsentFor(null);
+            void load();
+          }}
+        />
+      ) : null}
       <Topbar title={t("title")} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-5 py-7 md:px-8 md:py-9">

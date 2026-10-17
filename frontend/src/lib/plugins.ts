@@ -13,6 +13,15 @@ export function installAina(aina: AinaRecord) {
   });
 }
 
+/** Installs an AINA 2.0 package with the scopes and settings the user consented to. */
+export function installPackage(aina: AinaRecord, grantedPermissions: string[], configuration: Record<string, unknown>) {
+  return api.post(`/ainas/${aina.manifest.aina.id}/install`, {
+    ...ACTOR,
+    granted_permissions: grantedPermissions,
+    configuration,
+  });
+}
+
 export function uninstallAina(ainaId: string) {
   return api.delete(`/ainas/${ainaId}/install?${ACTOR_QUERY}`);
 }

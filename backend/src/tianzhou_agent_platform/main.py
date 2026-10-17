@@ -27,6 +27,7 @@ from tianzhou_agent_platform.aina.project_service import (
     NasAinaProjectArtifactStore,
 )
 from tianzhou_agent_platform.aina.scheduler import AinaScheduler
+from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, JWKS_PATH
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.auth import SESSION_COOKIE
 from tianzhou_agent_platform.api.dependencies import RequestActor
@@ -499,4 +500,9 @@ def run() -> None:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in {"/health", "/openapi.json", "/docs", "/redoc"} or path.startswith("/auth/")
+    # The AINA Host API authenticates MCP servers with context tokens, never with a user session.
+    return (
+        path in {"/health", "/openapi.json", "/docs", "/redoc", JWKS_PATH}
+        or path.startswith("/auth/")
+        or path.startswith(f"{HOST_API_PREFIX}/")
+    )
