@@ -14,4 +14,13 @@ export default {
     skipped: "Skipped",
     failed: "Failed",
   },
+  background: {
+    aria: "Background tasks",
+    title: "Background tasks",
+    status: {
+      running: "Running",
+      completed: "Completed",
+      failed: "Failed",
+    },
+  },
 };

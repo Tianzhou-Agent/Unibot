@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
+from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord, ChatRequest, ChatResponse
 from tianzhou_agent_platform.conversations.service import ConversationService
@@ -38,12 +39,14 @@ class ChatService:
         runner: AgentRunner,
         events: Any,
         stops: RunStops | None = None,
+        aina_tasks: AinaTaskService | None = None,
     ) -> None:
         self.conversations = conversations
         self.model_providers = model_providers
         self.runner = runner
         self.events = events
         self.stops = stops or RunStops()
+        self.aina_tasks = aina_tasks
 
     async def run_turn(
         self,
@@ -244,6 +247,9 @@ class ChatService:
             error=response.content if response.status == "failed" else None,
             expected_trace_id=trace_id,
         )
+        if self.aina_tasks is not None:
+            # Background task results that arrived during the turn follow its reply.
+            await self.aina_tasks.post_finished(conversation_id)
         root_span_id = self.events.root_span_id(trace_id)
         # A stopped run ends its trace; resuming it is a new run.
         trace_status = "cancelled" if response.status == "stopped" else response.status

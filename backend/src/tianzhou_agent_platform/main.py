@@ -18,6 +18,7 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
+from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.aina.project_service import (
@@ -360,6 +361,7 @@ def create_app(
     from tianzhou_agent_platform.services.run_stops import RunStops
 
     conversation_service = ConversationService(resolved_repository)
+    aina_tasks = AinaTaskService(resolved_repository, conversation_service)
     model_provider_service = ModelProviderService(resolved_repository)
     app.state.conversation_service = conversation_service
     app.state.model_provider_service = model_provider_service
@@ -368,6 +370,7 @@ def create_app(
     app.state.document_service = resolved_document_service
     app.state.aina_project_service = aina_project_service
     app.state.aina_packages = aina_packages
+    app.state.aina_tasks = aina_tasks
     app.state.managed_aina_runtime = managed_aina_runtime
     app.state.document_edit_task_service = document_edit_task_service
     app.state.document_edit_worker = document_edit_worker
@@ -418,6 +421,7 @@ def create_app(
                 sandbox_service=resolved_sandbox_service,
                 task_service=task_service,
                 packages=aina_packages,
+                aina_tasks=aina_tasks,
             ),
             checkpointer=agent_checkpointer,
             events=run_events,
@@ -427,6 +431,7 @@ def create_app(
             model_factory=(lambda runtime, **options: create_model_from_runtime(runtime, **options)) if llm is None else None,
         ),
         stops=RunStops(storage_stores.redis if storage_stores is not None else None),
+        aina_tasks=aina_tasks,
     )
     scheduler.chat_service = app.state.chat_service
     app.state.background_tasks = set()

@@ -60,7 +60,9 @@ from tianzhou_agent_platform.store.model_provider_store import ModelProviderStor
 from tianzhou_agent_platform.store.feedback_store import FeedbackStore
 from tianzhou_agent_platform.store.document_task_store import DocumentTaskStore
 from tianzhou_agent_platform.aina.package.storage import AinaStorageItem
+from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.store.aina_storage_store import AinaStorageStore
+from tianzhou_agent_platform.store.aina_task_store import AinaTaskStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
 from tianzhou_agent_platform.store.registry_store import RegistryStore
 from tianzhou_agent_platform.store.lifecycle import StorageStores
@@ -117,6 +119,7 @@ class PersistentRepository(InMemoryRepository):
         self._aina_project_store = AinaProjectStore(stores.mysql)
         self._registry_store = RegistryStore(stores.mysql)
         self._aina_storage_store = AinaStorageStore(stores.mysql)
+        self._aina_task_store = AinaTaskStore(stores.mysql)
 
     async def initialize(self) -> None:
         traces = (
@@ -488,6 +491,19 @@ class PersistentRepository(InMemoryRepository):
 
     async def delete_aina_storage(self, *, installation_key: str | None = None, aina_id: str | None = None) -> int:
         return await self._aina_storage_store.delete_all(installation_key=installation_key, aina_id=aina_id)
+
+    async def create_aina_task(self, task: AinaTask) -> AinaTask:
+        await self._aina_task_store.create(task)
+        return self._copy(task)
+
+    async def get_aina_task(self, task_id: str) -> AinaTask | None:
+        return await self._aina_task_store.get(task_id)
+
+    async def update_aina_task(self, task_id: str, change: Callable[[AinaTask], AinaTask | None]) -> AinaTask | None:
+        return await self._aina_task_store.update(task_id, change)
+
+    async def list_aina_tasks(self, conversation_id: str) -> list[AinaTask]:
+        return await self._aina_task_store.list(conversation_id)
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation:
         await self._aina_project_store.put_installation(installation)

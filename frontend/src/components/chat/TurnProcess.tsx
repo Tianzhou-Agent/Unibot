@@ -11,6 +11,11 @@ export type TurnProcess = {
   durationMs: number | null;
 };
 
+/** A message posted between turns, e.g. a background AINA task's result (backend ``result_message_id``). */
+function isOutOfTurn(message: BackendMessage): boolean {
+  return message.id.startsWith("msg_aina_task_");
+}
+
 /**
  * The intermediate steps of every finished turn, keyed by the turn's user message id.
  * A turn is finished once it ends in an assistant answer; the last turn is left out while it can still change.
@@ -21,7 +26,10 @@ export function finishedTurnProcesses(messages: BackendMessage[], lastTurnFinish
   starts.forEach((start, turnIndex) => {
     const last = turnIndex === starts.length - 1;
     if (last && !lastTurnFinished) return;
-    const turn = messages.slice(start + 1, last ? messages.length : starts[turnIndex + 1]).filter((message) => message.role !== "system");
+    const following = messages.slice(start + 1, last ? messages.length : starts[turnIndex + 1]);
+    // Out-of-turn messages end the turn; they are shown on their own, never folded into its steps.
+    const end = following.findIndex(isOutOfTurn);
+    const turn = (end < 0 ? following : following.slice(0, end)).filter((message) => message.role !== "system");
     const answer = turn[turn.length - 1];
     if (!answer || answer.role !== "assistant" || !answer.content || answer.tool_calls?.length) return;
     if (turn.length < 2 && !answer.reasoning) return;

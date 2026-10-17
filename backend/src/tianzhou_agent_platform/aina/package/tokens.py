@@ -106,14 +106,21 @@ class ContextTokenSigner:
         }
         return str(jwt.encode(payload, self._private_pem, algorithm=ALGORITHM, headers={"kid": self.kid}))
 
-    def verify(self, token: str) -> VerifiedToken:
+    def verify(self, token: str, *, allow_expired: bool = False) -> VerifiedToken:
+        """``allow_expired`` accepts a correctly signed token past its ``exp``; only token refresh uses it."""
         try:
             claims: dict[str, Any] = jwt.decode(
                 token,
                 self._public_jwk,
                 algorithms=[ALGORITHM],
                 issuer=self.issuer,
-                options={"verify_aud": False, "require_exp": True, "require_iat": True},
+                # python-jose turns verify_exp back on for a required exp; its presence is checked below.
+                options={
+                    "verify_aud": False,
+                    "verify_exp": not allow_expired,
+                    "require_exp": not allow_expired,
+                    "require_iat": True,
+                },
             )
             tenant_id, user_id, aina_id = json.loads(self._box.open(str(claims["ref"]), context=_REF_CONTEXT))
         except (JWTError, KeyError, ValueError, TypeError, PlatformError) as exc:

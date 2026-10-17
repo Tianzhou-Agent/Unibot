@@ -28,6 +28,7 @@
       },
       "list_expenses": { "effect": "read", "visibility": ["model", "app"] },
       "delete_expense": { "effect": "destructive", "visibility": ["model", "app"] },
+      "monthly_report": { "effect": "read", "visibility": ["model", "app"], "long_running": true },
       "sync_bank": { "effect": "write", "visibility": ["app"] }
     }
   },
