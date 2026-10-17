@@ -1,18 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import type { WidgetDefinition } from "@/types";
-import { BridgeConfirmDialog, BridgeError, PACKAGE_SANDBOX, packageUiUrl, URL_SANDBOX, useAinaBridge } from "./ainaBridge";
+import {
+  BridgeConfirmDialog,
+  BridgeError,
+  PACKAGE_SANDBOX,
+  packageUiUrl,
+  setCanvasToolHost,
+  URL_SANDBOX,
+  useAinaBridge,
+  type CanvasToolHost,
+} from "./ainaBridge";
 
 /** An AINA 2.0 canvas (design §9.3) in the canvas pane: a packaged web app or the developer's own (URL canvas). */
 export function AinaCanvasFrame({
   ainaId,
   widget,
+  conversationId,
   refreshToken,
   onPrompt,
 }: {
   ainaId: string;
   widget: WidgetDefinition;
+  conversationId?: string | null;
   refreshToken?: string | null;
   onPrompt?: (prompt: string) => void;
 }) {
@@ -25,8 +36,13 @@ export function AinaCanvasFrame({
   // A packaged canvas has an opaque origin, so replies can only be addressed to its window; a URL canvas is
   // checked and addressed by its own origin.
   const origin = canvas?.kind === "url" && canvas.url ? new URL(canvas.url).origin : null;
+  // Canvas tools the canvas registered (design §9.5), and its latest summary for the agent.
+  const registered = useMemo(() => new Set<string>(), []);
+  const modelContext = useRef<string | null>(null);
+  const conversationRef = useRef(conversationId);
+  conversationRef.current = conversationId;
 
-  const { confirmation, decide, postEvent, error } = useAinaBridge({
+  const { confirmation, decide, postEvent, requestFrame, loaded, error } = useAinaBridge({
     ainaId,
     frame,
     origin,
@@ -41,6 +57,18 @@ export function AinaCanvasFrame({
         case "notify":
           setNotice(String(params.text ?? "").slice(0, 300));
           return Promise.resolve({});
+        case "registerTool": {
+          const name = String(params.name ?? "");
+          return loaded.then(({ canvasTools }) => {
+            if (!canvasTools.includes(name)) throw new BridgeError("PERMISSION_DENIED", t("ainaFrame.undeclaredTool", { name }));
+            registered.add(name);
+            setCanvasToolHost(ainaId, host.current);
+            return {};
+          });
+        }
+        case "setModelContext":
+          modelContext.current = String(params.value ?? "").slice(0, 4000);
+          return sendModelContext();
         case "getIdentityToken":
           if (canvas?.kind !== "url") return Promise.reject(new BridgeError("PERMISSION_DENIED", t("ainaFrame.urlOnly")));
           return api.post(`/ainas/${encodeURIComponent(ainaId)}/identity-token`, {});
@@ -49,6 +77,29 @@ export function AinaCanvasFrame({
       }
     },
   });
+
+  function sendModelContext(): Promise<unknown> {
+    const id = conversationRef.current;
+    if (!id || modelContext.current === null) return Promise.resolve({});
+    return api.put(`/conversations/${encodeURIComponent(id)}/canvas-context/${encodeURIComponent(ainaId)}`, { value: modelContext.current });
+  }
+
+  // Publish this canvas as the one that runs the AINA's canvas tools while it is open.
+  const host = useRef<CanvasToolHost>({
+    tools: registered,
+    invoke: (name, args, timeoutMs) => requestFrame("invokeTool", { name, arguments: args }, timeoutMs),
+  });
+  host.current.invoke = (name, args, timeoutMs) => requestFrame("invokeTool", { name, arguments: args }, timeoutMs);
+  useEffect(() => {
+    setCanvasToolHost(ainaId, host.current);
+    return () => setCanvasToolHost(ainaId, null);
+  }, [ainaId]);
+
+  // A canvas opened before its conversation existed sends its summary once there is one.
+  useEffect(() => {
+    if (conversationId) void sendModelContext().catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   // Design §9.3: tell the canvas the agent may have changed data; for now after every finished chat run.
   const firstToken = useRef(refreshToken);

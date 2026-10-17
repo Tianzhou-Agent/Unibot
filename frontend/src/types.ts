@@ -879,7 +879,7 @@ export interface MemoryStatsResponse {
 export interface AinaPackageManifest {
   aina: { id: string; name: string; version: string; publisher: { id: string; name: string; url?: string | null } };
   tools: { mcp: { url: string; auth: { type: "none" | "bearer" | "api_key" | "oauth2" } } };
-  canvas?: { title: string; entry?: string | null; url?: string | null } | null;
+  canvas?: { title: string; entry?: string | null; url?: string | null; tools?: { name: string }[] } | null;
   config?: { schema: AinaConfigSchema } | null;
   permissions: { scope: string; reason?: string | null; optional: boolean }[];
 }

@@ -16,6 +16,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
+from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.ui import PackageUiStore
@@ -374,6 +375,8 @@ def create_app(
     app.state.aina_project_service = aina_project_service
     app.state.aina_packages = aina_packages
     app.state.aina_tasks = aina_tasks
+    canvas_calls = CanvasCallBroker(storage_stores.redis if storage_stores is not None else None)
+    app.state.canvas_calls = canvas_calls
     app.state.managed_aina_runtime = managed_aina_runtime
     app.state.document_edit_task_service = document_edit_task_service
     app.state.document_edit_worker = document_edit_worker
@@ -425,6 +428,7 @@ def create_app(
                 task_service=task_service,
                 packages=aina_packages,
                 aina_tasks=aina_tasks,
+                canvas_calls=canvas_calls,
             ),
             checkpointer=agent_checkpointer,
             events=run_events,

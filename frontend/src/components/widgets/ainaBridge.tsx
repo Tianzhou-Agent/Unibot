@@ -27,7 +27,8 @@ const THEME: Record<string, string> = {
 
 export type PackageTool = Extract<AinaRecord["manifest"]["runtime"], { type: "package" }>["tools"][number];
 
-type BridgeRequest = { unibot: string; id: number | string; method: string; params?: Record<string, unknown> };
+type BridgeRequest = { unibot: string; id: number | string; method?: string; params?: Record<string, unknown> };
+type BridgeReply = { unibot: string; id: number | string; result?: unknown; error?: { code?: string; message?: string } };
 
 export class BridgeError extends Error {
   constructor(readonly code: string, message: string) {
@@ -68,6 +69,9 @@ export function useAinaBridge({
   const { t } = useTranslation("canvas");
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const pending = useRef<Confirmation | null>(null);
+  // Requests the host sends to the frame (canvas tool calls), by id.
+  const hostRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
+  const nextHostRequest = useRef(1);
   const approvedWrites = useRef(new Set<string>());
   const latest = useRef({ context, onPrompt, extra });
   latest.current = { context, onPrompt, extra };
@@ -78,10 +82,14 @@ export function useAinaBridge({
       Promise.all([
         api.get<AinaRecord>(`/ainas/${encodeURIComponent(ainaId)}`),
         api.get<AinaInstallation[]>("/installations"),
-      ]).then(([record, installations]) => ({
-        tools: record.manifest.runtime.type === "package" ? record.manifest.runtime.tools : [],
-        installation: installations.find((item) => item.aina_id === ainaId) ?? null,
-      })),
+      ]).then(([record, installations]) => {
+        const runtime = record.manifest.runtime;
+        return {
+          tools: runtime.type === "package" ? runtime.tools : [],
+          canvasTools: runtime.type === "package" ? (runtime.package?.canvas?.tools ?? []).map((tool) => tool.name) : [],
+          installation: installations.find((item) => item.aina_id === ainaId) ?? null,
+        };
+      }),
     [ainaId],
   );
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +148,17 @@ export function useAinaBridge({
       if (!target || event.source !== target) return;
       if (origin && event.origin !== origin) return;
       const message = event.data as BridgeRequest | null;
-      if (!message || message.unibot !== PROTOCOL || typeof message.method !== "string" || message.id === undefined) return;
+      if (!message || message.unibot !== PROTOCOL || message.id === undefined) return;
+      if (typeof message.method !== "string") {
+        // The frame's answer to a request of the host.
+        const waiting = hostRequests.current.get(String(message.id));
+        if (!waiting) return;
+        hostRequests.current.delete(String(message.id));
+        const reply = message as BridgeReply;
+        if (reply.error) waiting.reject(new BridgeError(reply.error.code ?? "TOOL_FAILED", reply.error.message ?? "failed"));
+        else waiting.resolve(reply.result ?? {});
+        return;
+      }
       const reply = (body: Record<string, unknown>) =>
         target.postMessage({ unibot: PROTOCOL, jsonrpc: "2.0", id: message.id, ...body }, origin ?? "*");
       handle(message.method, isRecord(message.params) ? message.params : {}).then(
@@ -165,13 +183,84 @@ export function useAinaBridge({
     [frame, origin],
   );
 
+  /** Send a request to the frame and wait for its answer (design §9.5 canvas tool calls). */
+  const requestFrame = useCallback(
+    (method: string, params: Record<string, unknown>, timeoutMs: number) =>
+      new Promise<unknown>((resolve, reject) => {
+        const target = frame.current?.contentWindow;
+        if (!target) {
+          reject(new BridgeError("CANVAS_NOT_OPEN", "The canvas is not loaded"));
+          return;
+        }
+        const id = `host-${nextHostRequest.current++}`;
+        const timer = window.setTimeout(() => {
+          hostRequests.current.delete(id);
+          reject(new BridgeError("TIMEOUT", `The canvas did not answer ${method} in time`));
+        }, timeoutMs);
+        hostRequests.current.set(id, {
+          resolve: (value) => {
+            window.clearTimeout(timer);
+            resolve(value);
+          },
+          reject: (error) => {
+            window.clearTimeout(timer);
+            reject(error);
+          },
+        });
+        target.postMessage({ unibot: PROTOCOL, jsonrpc: "2.0", id, method, params }, origin ?? "*");
+      }),
+    [frame, origin],
+  );
+
   const decide = useCallback((allowed: boolean) => {
     pending.current?.resolve(allowed);
     pending.current = null;
     setConfirmation(null);
   }, []);
 
-  return { confirmation, decide, postEvent, error };
+  return { confirmation, decide, postEvent, requestFrame, loaded, error };
+}
+
+// --- Canvas tools (design §9.5) ------------------------------------------------------------------------------------
+
+/** An open canvas that can run the canvas tools it registered. */
+export type CanvasToolHost = {
+  tools: Set<string>;
+  invoke: (name: string, args: Record<string, unknown>, timeoutMs: number) => Promise<unknown>;
+};
+
+const canvasHosts = new Map<string, CanvasToolHost>();
+const canvasHostListeners = new Set<() => void>();
+
+/** Publish (or with null, withdraw) the open canvas of an AINA; called when it mounts and when it registers tools. */
+export function setCanvasToolHost(ainaId: string, host: CanvasToolHost | null) {
+  if (host) canvasHosts.set(ainaId, host);
+  else canvasHosts.delete(ainaId);
+  for (const listener of canvasHostListeners) listener();
+}
+
+/** The AINA's open canvas once it has registered ``name``; rejects after ``timeoutMs``. */
+export function waitForCanvasTool(ainaId: string, name: string, timeoutMs: number): Promise<CanvasToolHost> {
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      const host = canvasHosts.get(ainaId);
+      if (!host?.tools.has(name)) return false;
+      finish();
+      resolve(host);
+      return true;
+    };
+    const timer = window.setTimeout(() => {
+      finish();
+      reject(new BridgeError("CANVAS_NOT_READY", `The canvas did not register ${name} in time`));
+    }, timeoutMs);
+    const finish = () => {
+      window.clearTimeout(timer);
+      canvasHostListeners.delete(listener);
+    };
+    const listener = () => void check();
+    canvasHostListeners.add(listener);
+    check();
+  });
 }
 
 /** The host's own confirmation for a tool call an AINA's UI requested; drawn outside the iframe. */

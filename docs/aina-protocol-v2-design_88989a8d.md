@@ -1,6 +1,6 @@
 # AINA Protocol 2.0 — Plugin Contract Design
 
-Status: **Accepted; P0, P1, P3 and most of P2 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+Status: **Accepted; P0, P1, P3, P6 and most of P2 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
 differs.
 
 Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
@@ -811,7 +811,7 @@ Resolved in rev 4 (each as recommended in rev 3):
 
 ## 17. Implementation status
 
-### What is built (P0, P1, P2, P3)
+### What is built (P0, P1, P2, P3, P6)
 
 | Part | Where |
 |---|---|
@@ -833,7 +833,8 @@ Resolved in rev 4 (each as recommended in rev 3):
 | Packaged UI files served sandboxed (`/aina-ui/{id}/{version}/…`); app tool calls; URL-canvas identity token | [`aina/package/ui.py`](../backend/src/tianzhou_agent_platform/aina/package/ui.py), [`api/aina_ui.py`](../backend/src/tianzhou_agent_platform/api/aina_ui.py) |
 | UI bridge: iframe SDK `aina-ui.js` + theme `aina-ui.css`; host side shared by canvas and widgets | [`spec/aina/2.0/ui/`](../spec/aina/2.0/ui), [`ainaBridge.tsx`](../frontend/src/components/widgets/ainaBridge.tsx), [`AinaCanvasFrame.tsx`](../frontend/src/components/widgets/AinaCanvasFrame.tsx) |
 | Widgets: confirmation widgets in the approval card with edited arguments, result widgets with the answer and with finished tasks | [`aina/package/widgets.py`](../backend/src/tianzhou_agent_platform/aina/package/widgets.py), [`approvals.py`](../backend/src/tianzhou_agent_platform/services/agent_integration/approvals.py), [`AinaWidgetFrame.tsx`](../frontend/src/components/widgets/AinaWidgetFrame.tsx), [`ApprovalCard.tsx`](../frontend/src/components/chat/ApprovalCard.tsx) |
-| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py), [`tests/test_aina_host_tasks.py`](../backend/tests/test_aina_host_tasks.py), [`tests/test_aina_ui.py`](../backend/tests/test_aina_ui.py), [`tests/test_aina_widgets.py`](../backend/tests/test_aina_widgets.py), [`e2e/aina-canvas.spec.ts`](../frontend/e2e/aina-canvas.spec.ts), [`e2e/aina-widgets.spec.ts`](../frontend/e2e/aina-widgets.spec.ts) |
+| Canvas tools: scope, viewer channel and routing, Redis-backed call futures, model context; whiteboard reference AINA | [`aina/package/canvas_calls.py`](../backend/src/tianzhou_agent_platform/aina/package/canvas_calls.py), [`api/aina_canvas.py`](../backend/src/tianzhou_agent_platform/api/aina_canvas.py), [`useCanvasViewer.ts`](../frontend/src/components/canvas/useCanvasViewer.ts), [`examples/whiteboard-aina`](../examples/whiteboard-aina) |
+| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py), [`tests/test_aina_host_tasks.py`](../backend/tests/test_aina_host_tasks.py), [`tests/test_aina_ui.py`](../backend/tests/test_aina_ui.py), [`tests/test_aina_widgets.py`](../backend/tests/test_aina_widgets.py), [`tests/test_aina_canvas_tools.py`](../backend/tests/test_aina_canvas_tools.py), [`e2e/aina-canvas.spec.ts`](../frontend/e2e/aina-canvas.spec.ts), [`e2e/aina-widgets.spec.ts`](../frontend/e2e/aina-widgets.spec.ts), [`e2e/aina-canvas-tools.spec.ts`](../frontend/e2e/aina-canvas-tools.spec.ts) |
 
 API: `POST /ainas/packages/validate` (anyone), `POST /ainas/packages` and `POST /ainas/{id}/tools/refresh`
 (platform admin; both take an optional one-time `credential` for an authenticated server's `tools/list`, never
@@ -896,8 +897,9 @@ runtime type only, never on an AINA id.
   Skills convention) or its `name`. Skill text is limited to 1 000 000 characters per package in total.
 - The Host API OpenAPI is not written yet. The bridge protocol is defined by `spec/aina/2.0/ui/aina-ui.js`: JSON-RPC
   2.0 messages tagged `"unibot": "aina-ui/2.0"`; requests `initialize`, `callTool`, `sendPrompt`, `setTitle`, `notify`,
-  `getIdentityToken`, and for widgets `resize`, `proposeArguments`, `openCanvas`; host notifications `event` with
-  `{type, data}`.
+  `getIdentityToken`, `registerTool`, `setModelContext`, and for widgets `resize`, `proposeArguments`, `openCanvas`;
+  host notifications `event` with `{type, data}`; host requests `invokeTool` `{name, arguments}`, answered by the
+  frame.
 - Canvas (P3a):
   - The canvas is a host widget of kind `aina_canvas` (the package's `main_widget`), so "Open app" and the canvas
     tabs work unchanged. The iframe `sandbox` and the §9.1 isolation apply as designed.
@@ -930,7 +932,42 @@ runtime type only, never on an AINA id.
   - Only confirmation widgets may `proposeArguments`. A widget's `callTool` follows the canvas rules (app-visible
     tools, host confirmation, `source: widget`).
 
+- Canvas tools (P6):
+  - **Scope:** a package's `canvas.tools` join its scope as tools of kind `canvas`. Arguments are validated against
+    the declared `inputSchema`, and `effect` drives approvals exactly as for MCP tools. An undeclared `effect` counts
+    as `write`. Canvas tools are never retried automatically, but the model may repeat a canvas call later in a run
+    (the run-wide duplicate-call rule exempts them), because the canvas's state changes between calls.
+  - **Viewer channel:** a shell showing a conversation opens `GET /conversations/{id}/canvas-viewer?client_id=…`
+    (SSE) and posts heartbeats every 5 s with whether the tab is visible. A viewer is live for 20 s after its last
+    heartbeat. A call goes to the live viewer that was visible most recently, so two tabs never both draw.
+  - **Acknowledgement:** the viewer acknowledges a call at once
+    (`POST …/canvas-calls/{call_id}/ack`). A viewer with no open stream, or one that does not acknowledge within
+    3 s (a closed or frozen tab), is dropped and the next most recent viewer is tried. Routing decisions are logged
+    at INFO.
+  - **No viewer:** the call fails at once with `CANVAS_NOT_OPEN`, and the model is told to ask the user to open the
+    conversation; calls are never queued.
+  - **The call:** the shell opens a closed canvas (C2), waits up to 10 s for it to `registerTool` the tool, runs it
+    with `invokeTool`, and posts `POST /conversations/{id}/canvas-calls/{call_id}` with the result or an error.
+    Only the viewer the call was sent to may answer, and only while the run waits (`timeout_seconds`, default 10,
+    at most 30). A late result gets `409`.
+  - **Redis-backed futures:** with Redis, viewers, call records and model contexts are kept in Redis. The run
+    subscribes to the call's channel before sending the call and receives the acknowledgement and the result over
+    pub/sub, so the run, the viewer stream and the result post may be on different nodes. Without
+    Redis everything stays in process. The viewer list is a read-modify-write of one key, so two heartbeats racing
+    can drop a viewer until its next heartbeat.
+  - **Ordering:** calls for one canvas are serialized per process. Across nodes, the conversation's run lease
+    already serializes them.
+  - **Model context:** `setModelContext` is stored per conversation and AINA (`PUT …/canvas-context/{aina}`,
+    ≤ 4000 characters). It is added to every model request while that AINA's scope is active, as
+    `<aina-canvas-state>` data.
+  - **Results:** `structuredContent` up to 64 KiB, and at most one image of up to 1 MiB, which reaches the model as a
+    placeholder line for now.
+  - **First turn:** in a brand-new conversation, the shell connects its viewer once the conversation id is known, so
+    a canvas call in the very first model response can find no viewer.
+
 ### Next
 
-P6 canvas tools (`registerTool`, viewer routing, `setModelContext`). Still open from P2: MCP OAuth 2.0, upgrade
-re-consent, and the other Host API endpoints. Restricting what posted task Markdown can load is still open.
+Still open from P2: MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Also still open:
+restricting what posted task Markdown can load, image results reaching vision-capable models, and P4 (published
+`unibot-aina` / `@unibot/aina-ui` packages and `aina init`/`aina dev`) and P5 (rebuilding the first-party AINAs as
+packages).

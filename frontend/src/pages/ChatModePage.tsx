@@ -33,6 +33,7 @@ import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { AinaTaskList } from "@/components/tasks/AinaTaskList";
+import { useCanvasViewer } from "@/components/canvas/useCanvasViewer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
@@ -311,6 +312,9 @@ export default function ChatModePage() {
     const query = canvasQuery(route);
     navigate(`${workspaceChatPath(routeWorkspaceId, targetConversationId)}${query ? `?${query}` : ""}`, { replace });
   }
+
+  // Canvas tool calls (AINA 2.0 §9.5) reach the canvas of this tab while it shows the conversation.
+  useCanvasViewer(conversation?.id ?? null, (id) => openAinas([id]));
 
   /** Opens `ids` as tabs beside the conversation, activating the first; open tabs are kept. */
   function openAinas(ids: string[], targetConversationId = conversation?.id ?? conversationId ?? null) {
@@ -921,6 +925,7 @@ export default function ChatModePage() {
                           documentName={documentName}
                           disabled={false}
                           refreshToken={lastRun?.trace_id}
+                          conversationId={conversation?.id ?? null}
                           onOpenAina={(next) => openAinas([next])}
                           onPrompt={(prompt) => void sendMessage(prompt)}
                           onDocumentTaskContextChange={setDocumentTaskContext}
