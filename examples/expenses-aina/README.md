@@ -38,5 +38,7 @@ change as later phases land:
   `/complete` or `/fail`). It renews its context token with `/token/refresh` if the token expires. Unibot posts the
   report to the conversation and shows the task in the Tasks pane. The jobs live in process memory, so a restart
   loses them; a real server would use a durable queue.
-- **Later:** canvas, widgets and the `aina-ui.js` bridge the HTML files import (P3), and canvas tools such as
-  `highlight_rows` (P6).
+- **Canvas (P3a):** open the app from its plugin page. `canvas/app.js` lists, adds and deletes expenses through
+  `host.callTool`; Unibot asks you before each change. It can also send a prompt into the chat. `aina-ui.js` and
+  `aina-ui.css` are vendored copies of `spec/aina/2.0/ui/`.
+- **Later:** the confirmation and result widgets (P3b), and canvas tools such as `highlight_rows` (P6).

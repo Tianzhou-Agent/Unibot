@@ -1,0 +1,28 @@
+/* @unibot/aina-ui theme: Unibot sends these custom properties with the context, so AINAs look native. */
+:root {
+  --aina-bg: #ffffff;
+  --aina-surface: #f6f7f9;
+  --aina-fg: #16181d;
+  --aina-muted: #6b7280;
+  --aina-border: #e5e7eb;
+  --aina-accent: #3b6cf6;
+  --aina-danger: #d93f3f;
+  --aina-radius: 10px;
+  --aina-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+html, body { margin: 0; background: var(--aina-bg); color: var(--aina-fg); font: 13px/1.5 var(--aina-font); }
+button {
+  font: inherit; cursor: pointer; border: 1px solid var(--aina-border); border-radius: 999px;
+  background: var(--aina-bg); color: var(--aina-fg); padding: 4px 12px;
+}
+button.primary { background: var(--aina-accent); border-color: var(--aina-accent); color: #fff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input, select, textarea {
+  font: inherit; color: inherit; background: var(--aina-bg); border: 1px solid var(--aina-border);
+  border-radius: 8px; padding: 5px 8px;
+}
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 600; color: var(--aina-muted); }
+th, td { padding: 7px 8px; border-bottom: 1px solid var(--aina-border); }
+.aina-muted { color: var(--aina-muted); }
