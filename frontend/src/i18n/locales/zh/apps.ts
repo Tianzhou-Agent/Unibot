@@ -58,6 +58,8 @@ export default {
   breadcrumb: "面包屑导航",
   detail: {
     notFound: "该插件不存在或已被移除。",
+    consentRequired: "该应用已更新，在你确认以下变化之前暂停使用：",
+    reviewUpdate: "查看并确认",
     information: "信息",
     version: "版本",
   },

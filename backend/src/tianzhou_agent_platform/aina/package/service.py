@@ -67,6 +67,10 @@ class PackageRegistry(Protocol):
 
     async def put_installation(self, installation: AinaInstallation) -> AinaInstallation: ...
 
+    async def list_installations(
+        self, *, tenant_id: str | None = None, user_id: str | None = None
+    ) -> list[AinaInstallation]: ...
+
 
 class AinaPackageService:
     def __init__(
@@ -137,6 +141,7 @@ class AinaPackageService:
         if self.ui is not None:
             # Canvas, widget and asset files are served from the stored archive (design §9.1).
             await self.ui.save(manifest.aina.id, runtime.archive_sha256, payload)
+        previous = existing.manifest.runtime if existing is not None else None
         record = AinaRecord(
             manifest=project_manifest(manifest, runtime),
             last_health={
@@ -146,7 +151,34 @@ class AinaPackageService:
                 "warnings": [*report.warnings, *warnings],
             },
         )
-        return await self.repository.upsert_aina(record)
+        registered = await self.repository.upsert_aina(record)
+        if isinstance(previous, PackageRuntimeDefinition):
+            await self._upgrade_installations(previous, runtime)
+        return registered
+
+    async def _upgrade_installations(self, previous: PackageRuntimeDefinition, current: PackageRuntimeDefinition) -> None:
+        """Design §10: an upgrade that widens what the AINA can do pauses installations until the user re-consents.
+
+        Other installations move to the new version silently.
+        """
+        widened = consent_changes(previous, current)
+        required = current.package.required_scopes()
+        aina_id = current.package.aina.id
+        for installation in await self.repository.list_installations():
+            if installation.aina_id != aina_id or installation.status == "disabled":
+                continue
+            missing = sorted(required - set(installation.granted_permissions))
+            changes = [*widened, *(f"Needs the {scope!r} permission" for scope in missing)]
+            if changes:
+                update: dict[str, Any] = {
+                    "status": "consent_required",
+                    "consent_changes": list(dict.fromkeys([*installation.consent_changes, *changes])),
+                }
+            elif installation.status == "active":
+                update = {"installed_version": current.package.aina.version}
+            else:
+                continue  # still waiting for the user's approval of an earlier upgrade
+            await self.repository.put_installation(installation.model_copy(update=update))
 
     async def install(self, aina_id: str, request: InstallationRequest) -> AinaInstallation:
         """Install a package for one user: configuration, sealed secrets, scopes and a fresh tool check."""
@@ -262,7 +294,9 @@ class AinaPackageService:
             workspace_id=workspace_id,
         )
         context["host"] = {"api_base": self.settings.aina_host_api_base}
-        context["token"] = self.mint_token(installation, context)
+        context["token"] = self.mint_token(
+            installation, context, conversation_id=conversation_id, workspace_id=workspace_id
+        )
         result = await self.mcp.call_tool(
             manifest.tools.mcp.url,
             name,
@@ -404,8 +438,18 @@ class AinaPackageService:
             )
         return record, installation
 
-    def mint_token(self, installation: AinaInstallation, context: dict[str, Any]) -> str:
-        """Context token carrying the same pairwise identity as ``context`` (design §8)."""
+    def mint_token(
+        self,
+        installation: AinaInstallation,
+        context: dict[str, Any],
+        *,
+        conversation_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> str:
+        """Context token carrying the same pairwise identity as ``context`` (design §8).
+
+        The raw conversation and workspace ids travel only inside the encrypted host reference.
+        """
         claims = {
             "sub": context["user"]["id"],
             "tenant": context["tenant_id"],
@@ -420,6 +464,8 @@ class AinaPackageService:
             tenant_id=installation.tenant_id,
             user_id=installation.user_id,
             aina_id=installation.aina_id,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
         )
         return self.tokens.mint(reference=reference, claims=claims)
 
@@ -473,6 +519,36 @@ class ToolOutcome:
     visible: dict[str, Any]
     task: TaskStart | None = None
     widget: WidgetAinaUi | None = None
+
+
+def consent_changes(previous: PackageRuntimeDefinition, current: PackageRuntimeDefinition) -> list[str]:
+    """What a new version can do that the user did not consent to: new tools, model access, looser effects."""
+    changes: list[str] = []
+
+    def surface(runtime: PackageRuntimeDefinition) -> dict[str, tuple[Effect, bool]]:
+        tools: dict[str, tuple[Effect, bool]] = {
+            tool.name: (tool.effect, "model" in tool.visibility) for tool in runtime.tools
+        }
+        canvas = runtime.package.canvas
+        for canvas_tool in canvas.tools if canvas is not None else []:
+            tools[canvas_tool.name] = (canvas_tool.effect or "write", True)
+        return tools
+
+    before, after = surface(previous), surface(current)
+    for name, (effect, model_visible) in sorted(after.items()):
+        if name not in before:
+            changes.append(f"New tool {name!r} ({effect})")
+            continue
+        old_effect, old_visible = before[name]
+        if EFFECT_ORDER[effect] < EFFECT_ORDER[old_effect]:
+            changes.append(f"Tool {name!r} now asks less often ({old_effect} → {effect})")
+        if model_visible and not old_visible:
+            changes.append(f"The agent can now call {name!r}")
+    old_url = previous.package.canvas.url if previous.package.canvas is not None else None
+    new_url = current.package.canvas.url if current.package.canvas is not None else None
+    if new_url is not None and new_url != old_url:
+        changes.append(f"Canvas web app at {new_url}")
+    return changes
 
 
 def load_skill(record: AinaRecord, skill_id: str, file: str | None = None) -> str:

@@ -356,6 +356,7 @@ installations_table = _table(
     Column("granted_permissions", JSON, nullable=False),
     Column("configuration", JSON, nullable=False),
     Column("secrets", JSON, nullable=False),
+    Column("consent_changes", JSON, nullable=False),
     Column("aina_id", String(160), nullable=False),
     Column("installed_version", String(255), nullable=False),
     Column("status", STATUS, nullable=False),

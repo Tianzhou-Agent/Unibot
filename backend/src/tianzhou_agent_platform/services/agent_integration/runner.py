@@ -888,6 +888,10 @@ class AgentRunner:
             },
         )
 
+    def chat_model(self) -> BaseChatModel:
+        """The chat model of the current actor (``use_model_runtime``); the AINA Host API ``llm`` scope uses it."""
+        return self._request_model()
+
     def _request_model(self) -> BaseChatModel:
         """Chat model serving this request: the actor's selected provider model, else the configured model."""
         runtime = current_model_runtime()

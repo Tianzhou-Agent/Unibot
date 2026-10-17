@@ -401,7 +401,9 @@ export interface AinaInstallation {
   configuration: Record<string, unknown>;
   // Names of secret settings that have a value; secret values are never returned.
   configured_secrets?: string[];
-  status: "active" | "disabled";
+  // ``consent_required``: an upgrade widened what the AINA can do; it is paused until the user approves again.
+  status: "active" | "disabled" | "consent_required";
+  consent_changes?: string[];
   installed_at: string;
 }
 

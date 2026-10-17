@@ -144,8 +144,11 @@ class InstallationRequest(StrictModel):
 class AinaInstallation(InstallationRequest):
     aina_id: str
     installed_version: str
-    status: Literal["active", "disabled"] = "active"
+    # ``consent_required``: an upgrade widened what the AINA can do; it is paused until the user approves again.
+    status: Literal["active", "disabled", "consent_required"] = "active"
     installed_at: datetime = Field(default_factory=utc_now)
+    # What the upgrade that paused the installation changed, shown when the user is asked again.
+    consent_changes: list[str] = Field(default_factory=list)
     # Encrypted ``x-secret`` configuration values of an AINA 2.0 package; stored, never serialized to clients.
     secrets: dict[str, str] = Field(default_factory=dict, exclude=True)
 
