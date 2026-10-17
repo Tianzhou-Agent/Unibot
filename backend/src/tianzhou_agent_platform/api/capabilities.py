@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, File, Query, Request, Response, UploadFile, status
 
 from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS
+from tianzhou_agent_platform.aina.package.validation import PackageValidationReport, validate_package_archive
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCanvasResponse,
     AinaInstallation,
@@ -13,8 +14,9 @@ from tianzhou_agent_platform.aina.protocol.models import (
 from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
+from tianzhou_agent_platform.api.aina_projects import read_archive_upload
 from tianzhou_agent_platform.api.dependencies import (
-    actor_scope, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
+    actor_scope, aina_packages, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
 )
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.services.platform_tools import open_aina
@@ -96,6 +98,22 @@ def create_capability_router() -> APIRouter:
         health = await gateway(request).probe_aina(payload)
         return await repository(request).register_aina(AinaRecord(manifest=payload, last_health=health))
 
+    @router.post("/ainas/packages/validate", response_model=PackageValidationReport)
+    async def validate_aina_package(file: UploadFile = File(...)) -> PackageValidationReport:
+        """AINA Protocol 2.0 package checks that need no MCP server (the CLI adds the live tools/list check)."""
+        return validate_package_archive(await read_archive_upload(file))
+
+    @router.post("/ainas/packages", response_model=AinaRecord, status_code=status.HTTP_201_CREATED)
+    async def register_aina_package(request: Request, file: UploadFile = File(...)) -> AinaRecord:
+        require_platform_admin(request)
+        return await aina_packages(request).register(await read_archive_upload(file))
+
+    @router.post("/ainas/{aina_id}/tools/refresh", response_model=AinaRecord)
+    async def refresh_aina_package_tools(aina_id: str, request: Request) -> AinaRecord:
+        """Re-check a package's MCP tools against its reviewed snapshot; drifted tools are disabled."""
+        require_platform_admin(request)
+        return await aina_packages(request).refresh_tools(aina_id)
+
     @router.get("/ainas", response_model=list[AinaRecord])
     async def list_ainas(request: Request) -> list[AinaRecord]:
         return await repository(request).list_ainas()
@@ -166,6 +184,9 @@ def create_capability_router() -> APIRouter:
         data_repository = repository(request)
         record = await data_repository.get_aina(aina_id)
         _validate_permission_subset(record, scoped.granted_permissions)
+        if record.manifest.runtime.type == "package":
+            # Design §6.1: the tool snapshot is re-checked before every new installation.
+            record = await aina_packages(request).refresh_tools(aina_id)
         installation = AinaInstallation(
             **scoped.model_dump(),
             aina_id=aina_id,

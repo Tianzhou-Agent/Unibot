@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 
+from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.security.models import Authentication
 from tianzhou_agent_platform.core.base import StrictModel, Usage, utc_now
@@ -102,19 +103,20 @@ class AinaCapabilities(StrictModel):
 class AinaManifest(StrictModel):
     protocol_version: str
     aina: AinaIdentity
-    runtime: RemoteRuntimeDefinition | BuiltinRuntimeDefinition | ManagedRuntimeDefinition
+    runtime: RemoteRuntimeDefinition | BuiltinRuntimeDefinition | ManagedRuntimeDefinition | PackageRuntimeDefinition
     capabilities: AinaCapabilities = Field(default_factory=AinaCapabilities)
     main_widget: WidgetDefinition | None = None
     permissions: list[str] = Field(default_factory=list)
     authentication: Authentication = Field(default_factory=Authentication)
     health_check: AnyHttpUrl | None = None
 
-    @field_validator("protocol_version")
-    @classmethod
-    def validate_protocol_version(cls, value: str) -> str:
-        if value != "1.0":
-            raise ValueError("Only AINA Protocol 1.0 is supported")
-        return value
+    @model_validator(mode="after")
+    def validate_protocol_version(self) -> "AinaManifest":
+        # A 2.0 package is registered from its aina.json; this record is only its host-side projection.
+        expected = "2.0" if self.runtime.type == "package" else "1.0"
+        if self.protocol_version != expected:
+            raise ValueError(f"A {self.runtime.type} AINA runtime requires AINA Protocol {expected}")
+        return self
 
 
 def _validate_relative_project_path(value: str, *, label: str) -> None:

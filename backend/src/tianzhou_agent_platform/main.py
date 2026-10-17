@@ -16,6 +16,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
+from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
+from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.aina.project_service import (
@@ -84,6 +86,7 @@ def create_app(
     github_auth_http_client: httpx.AsyncClient | None = None,
     huawei_auth_http_client: httpx.AsyncClient | None = None,
     oidc_auth_http_client: httpx.AsyncClient | None = None,
+    mcp_client: McpToolClient | None = None,
     enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -246,6 +249,12 @@ def create_app(
     )
     health_client = model_health_http_client or httpx.AsyncClient()
     scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
+    aina_packages = AinaPackageService(
+        repository=resolved_repository,
+        settings=resolved_settings,
+        mcp=mcp_client,
+        enforce_destination_policy=enforce_auth,
+    )
     vision_client = VisionClient(
         base_url=resolved_settings.vision_base_url,
         timeout_seconds=resolved_settings.vision_timeout_seconds,
@@ -357,6 +366,7 @@ def create_app(
     app.state.model_health_http_client = health_client
     app.state.document_service = resolved_document_service
     app.state.aina_project_service = aina_project_service
+    app.state.aina_packages = aina_packages
     app.state.managed_aina_runtime = managed_aina_runtime
     app.state.document_edit_task_service = document_edit_task_service
     app.state.document_edit_worker = document_edit_worker
@@ -406,6 +416,7 @@ def create_app(
                 document_edit_task_service=document_edit_task_service,
                 sandbox_service=resolved_sandbox_service,
                 task_service=task_service,
+                packages=aina_packages,
             ),
             checkpointer=agent_checkpointer,
             events=run_events,

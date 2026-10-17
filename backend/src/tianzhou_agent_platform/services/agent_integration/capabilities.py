@@ -30,6 +30,7 @@ from tianzhou_agent_platform.aina.document.builtin import (
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
+from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition, ToolSnapshot
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -77,15 +78,18 @@ class CapabilityRegistry(Protocol):
 
 @dataclass(slots=True)
 class Capability:
-    kind: Literal["tool", "aina", "builtin"]
+    # ``mcp`` is a tool exposed by an AINA 2.0 package and ``skill`` its ``load_skill`` host tool.
+    kind: Literal["tool", "aina", "builtin", "mcp", "skill"]
     capability_id: str
     function_name: str
     display_name: str
     description: str
     input_schema: dict[str, Any]
     requires_confirmation: bool
-    value: ToolRecord | tuple[AinaRecord, AinaInstallation] | str
+    value: ToolRecord | tuple[AinaRecord, AinaInstallation] | tuple[AinaRecord, AinaInstallation, ToolSnapshot] | str
     owner_aina_id: str | None = None
+    # Confirmation is asked only until one call of this capability has completed in the conversation.
+    confirm_once: bool = False
 
     def llm_definition(self) -> dict[str, Any]:
         return {
@@ -98,16 +102,17 @@ class Capability:
         }
 
     @property
-    def is_builtin_aina(self) -> bool:
-        """A built-in AINA entrypoint only loads that AINA's capabilities into the model scope."""
-        return (
-            self.kind == "aina"
-            and cast(tuple[AinaRecord, AinaInstallation], self.value)[0].manifest.runtime.type == "builtin"
-        )
+    def activates_scope(self) -> bool:
+        """A built-in or package AINA entrypoint only loads that AINA's capabilities into the model scope."""
+        return self.kind == "aina" and cast(
+            tuple[AinaRecord, AinaInstallation], self.value
+        )[0].manifest.runtime.type in {"builtin", "package"}
 
     @property
     def retries_transiently(self) -> bool:
         """Only side-effect-free remote tools may be retried (automatically or by the model)."""
+        if self.kind == "mcp":
+            return cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], self.value)[2].effect == "read"
         return self.kind == "tool" and cast(ToolRecord, self.value).side_effect_level == "none"
 
 
@@ -131,10 +136,13 @@ class CapabilityCatalog:
 
     async def available(self, conversation: Conversation) -> dict[str, Capability]:
         """Every capability reachable in the conversation, including built-ins kept for historical calls."""
-        return {
-            **await self._fallback(conversation),
-            **await self._aina_entries(conversation),
-        }
+        entries = await self._aina_entries(conversation)
+        packaged: dict[str, Capability] = {}
+        for capability in entries.values():
+            aina, installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+            if aina.manifest.runtime.type == "package":
+                packaged.update(package_capabilities(aina, installation))
+        return {**await self._fallback(conversation), **entries, **packaged}
 
     async def entry(self, conversation: Conversation) -> dict[str, Capability]:
         """Expose direct host tools and only conversational AINA entrypoints on the first model turn."""
@@ -155,7 +163,7 @@ class CapabilityCatalog:
     ) -> tuple[dict[str, Capability], AinaRecord]:
         if selected.kind != "aina":
             raise PlatformError("INVALID_REQUEST", "The selected capability is not an AINA")
-        aina, _installation = cast(tuple[AinaRecord, AinaInstallation], selected.value)
+        aina, installation = cast(tuple[AinaRecord, AinaInstallation], selected.value)
         switch_capabilities = {
             function_name: capability
             for function_name, capability in (await self._aina_entries(conversation)).items()
@@ -170,6 +178,9 @@ class CapabilityCatalog:
             if capability.capability_id in TASK_TOOL_IDS
         }
         aina_id = aina.manifest.aina.id
+        if aina.manifest.runtime.type == "package":
+            scoped = package_capabilities(aina, installation)
+            return {**scoped, **task_capabilities, **switch_capabilities}, aina
         if aina_id == UNIBOT_MEMORY_ID:
             return {**self._memory(), **task_capabilities, **switch_capabilities}, aina
         if aina_id == UNIBOT_DOCUMENTS_ID:
@@ -259,11 +270,26 @@ class CapabilityCatalog:
                 aina = await self.registry.get_aina(installation.aina_id)
             except PlatformError:
                 continue
-            if aina.status != "registered" or aina.manifest.runtime.type not in {"remote", "managed"}:
+            if aina.status != "registered" or aina.manifest.runtime.type not in {"remote", "managed", "package"}:
+                continue
+            name = function_name("aina", installation.aina_id)
+            if isinstance(aina.manifest.runtime, PackageRuntimeDefinition):
+                if aina.manifest.runtime.package.required_scopes() - set(installation.granted_permissions):
+                    continue
+                capabilities[name] = Capability(
+                    kind="aina",
+                    capability_id=installation.aina_id,
+                    function_name=name,
+                    display_name=aina.manifest.aina.name,
+                    description=aina_entry_description(aina, executable=False),
+                    input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+                    requires_confirmation=False,
+                    value=(aina, installation),
+                    owner_aina_id=installation.aina_id,
+                )
                 continue
             if set(aina.manifest.permissions) - set(installation.granted_permissions):
                 continue
-            name = function_name("aina", installation.aina_id)
             capabilities[name] = Capability(
                 kind="aina",
                 capability_id=installation.aina_id,
@@ -569,6 +595,63 @@ _PLATFORM_BUILTINS: tuple[tuple[str, str, str, dict[str, Any]], ...] = (
 )
 
 
+def package_capabilities(aina: AinaRecord, installation: AinaInstallation) -> dict[str, Capability]:
+    """The model-visible scope of an AINA 2.0 package: its active exposed tools and ``load_skill``.
+
+    Design §6.1: the reviewed snapshot is what the model sees, and the tool effect decides approvals. ``write``
+    asks only for the first completed call in a conversation; ``destructive`` asks for every call.
+    """
+    runtime = cast(PackageRuntimeDefinition, aina.manifest.runtime)
+    aina_id = aina.manifest.aina.id
+    capabilities: dict[str, Capability] = {}
+    for tool in runtime.tools:
+        if not tool.model_visible:
+            continue
+        name = function_name("mcp", f"{aina_id}.{tool.name}")
+        capabilities[name] = Capability(
+            kind="mcp",
+            capability_id=f"{aina_id}/{tool.name}",
+            function_name=name,
+            display_name=tool.title or tool.name,
+            description=tool.description,
+            input_schema=tool.input_schema,
+            requires_confirmation=tool.effect != "read",
+            value=(aina, installation, tool),
+            owner_aina_id=aina_id,
+            confirm_once=tool.effect == "write",
+        )
+    if runtime.skills:
+        name = load_skill_function_name(aina_id)
+        capabilities[name] = Capability(
+            kind="skill",
+            capability_id=f"{aina_id}/load_skill",
+            function_name=name,
+            display_name="Load skill",
+            description=(
+                f"Load one {aina.manifest.aina.name} skill: a workflow written by the AINA publisher for a task. "
+                "Call it when a skill in the index matches the user's task, before using the AINA's tools; pass "
+                "file to read a supporting file the skill names."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "enum": [skill.id for skill in runtime.skills]},
+                    "file": {"type": "string", "description": "A supporting file path listed by the skill."},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+            requires_confirmation=False,
+            value=(aina, installation),
+            owner_aina_id=aina_id,
+        )
+    return capabilities
+
+
+def load_skill_function_name(aina_id: str) -> str:
+    return function_name("load_skill", aina_id)
+
+
 def resolve_forced_capability(requested: str | None, capabilities: dict[str, Capability]) -> str | None:
     """Function name of a ``tool:<id>`` / ``aina:<id>`` / ``builtin:<id>`` request."""
     if requested is None:
@@ -662,8 +745,8 @@ def tool_error_payload(
 def capability_version(capability: Capability) -> str | None:
     if capability.kind == "tool":
         return cast(ToolRecord, capability.value).version
-    if capability.kind == "aina":
-        aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
+    if capability.kind in {"aina", "mcp", "skill"}:
+        aina = cast(tuple[AinaRecord, ...], capability.value)[0]
         return aina.manifest.aina.version
     return None
 
@@ -672,7 +755,7 @@ def is_routable_aina(capability: Capability) -> bool:
     if capability.kind != "aina":
         return False
     aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-    if aina.manifest.runtime.type in {"remote", "managed"}:
+    if aina.manifest.runtime.type in {"remote", "managed", "package"}:
         return True
     return aina.manifest.aina.id in {UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID, UNIBOT_CODE_RUNNER_ID}
 
@@ -685,7 +768,7 @@ def aina_entry_description(aina: AinaRecord, *, executable: bool) -> str:
             "request, preserving every important constraint instead of narrowing it to one planned subtask."
         )
     return (
-        f"{description}. Activate this built-in capability scope when the user wants work performed in this "
+        f"{description}. Activate this capability scope when the user wants work performed in this "
         "domain, including listing, searching, reading, creating, or editing its data. This entrypoint takes no "
         "arguments, does not execute the work itself and does not open the application UI: when the user asks to "
         "open, enter, launch or show this app, call open_app instead. Do not use open_app for data work."

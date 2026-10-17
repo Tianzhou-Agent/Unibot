@@ -313,6 +313,18 @@ export interface AinaManifest {
         language: "python" | "node";
         entrypoint: string;
         dependency_file?: string | null;
+      }
+    | {
+        // AINA Protocol 2.0 package: tools served by the publisher's MCP server, reviewed at registration.
+        type: "package";
+        archive_sha256: string;
+        tools: {
+          name: string;
+          description: string;
+          effect: "read" | "write" | "destructive";
+          visibility: ("model" | "app")[];
+          status: "active" | "drifted" | "missing";
+        }[];
       };
   capabilities: {
     skills: AinaCapabilityDefinition[];
