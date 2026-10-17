@@ -280,7 +280,7 @@ export interface WidgetDocumentSectionDefinition {
 
 export interface WidgetDefinition {
   id: string;
-  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline";
+  kind: "aina_chooser" | "app_list" | "form" | "markdown" | "panel" | "navigation" | "memory" | "document" | "document_outline" | "aina_canvas";
   title: string;
   description: string;
   markdown?: string | null;
@@ -289,6 +289,8 @@ export interface WidgetDefinition {
   apps: WidgetAppDefinition[];
   document_name?: string | null;
   sections?: WidgetDocumentSectionDefinition[];
+  /** The web app of an AINA 2.0 canvas (``aina_canvas`` widgets). */
+  canvas?: { kind: "package" | "url"; version: string; entry?: string | null; url?: string | null } | null;
 }
 
 export interface AinaManifest {

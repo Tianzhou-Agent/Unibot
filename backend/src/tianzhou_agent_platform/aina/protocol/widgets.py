@@ -42,6 +42,15 @@ class WidgetDocumentSection(StrictModel):
     line_end: int = Field(ge=1)
 
 
+class WidgetCanvas(StrictModel):
+    """The web app of an AINA 2.0 canvas: a file of the package (``entry``) or the developer's HTTPS app (``url``)."""
+
+    kind: Literal["package", "url"]
+    version: str
+    entry: str | None = None
+    url: str | None = None
+
+
 class WidgetDefinition(StrictModel):
     id: str = Field(min_length=1, max_length=160)
     kind: Literal[
@@ -54,6 +63,7 @@ class WidgetDefinition(StrictModel):
         "memory",
         "document",
         "document_outline",
+        "aina_canvas",
     ]
     title: str
     description: str = ""
@@ -63,3 +73,4 @@ class WidgetDefinition(StrictModel):
     apps: list[WidgetApp] = Field(default_factory=list)
     document_name: str | None = None
     sections: list[WidgetDocumentSection] = Field(default_factory=list)
+    canvas: WidgetCanvas | None = None

@@ -19,4 +19,15 @@ export default {
   },
   context: "对话上下文：{{task}} / {{section}}",
   placeholderEdit: "描述希望 AI 如何继续修改当前章节",
+  ainaFrame: {
+    confirmTitle: "允许这次修改吗？",
+    confirmWrite: "{{app}} 想要运行 {{tool}}，它会修改你的数据。",
+    confirmDestructive: "{{app}} 想要运行 {{tool}}，它会删除数据，且无法撤销。",
+    allow: "允许",
+    deny: "拒绝",
+    declined: "你拒绝了这次操作。",
+    notCallable: "该应用不能调用工具 {{name}}。",
+    urlOnly: "只有网页应用画布可以申请身份令牌。",
+    unsupported: "画布不支持 {{method}}。",
+  },
 };

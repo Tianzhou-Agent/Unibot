@@ -1,6 +1,6 @@
 # AINA Protocol 2.0 — Plugin Contract Design
 
-Status: **Accepted; P0, P1 and most of P2 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+Status: **Accepted; P0, P1, most of P2 and the canvas half of P3 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
 differs.
 
 Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
@@ -811,7 +811,7 @@ Resolved in rev 4 (each as recommended in rev 3):
 
 ## 17. Implementation status
 
-### What is built (P0, P1, P2)
+### What is built (P0, P1, P2, P3a)
 
 | Part | Where |
 |---|---|
@@ -830,7 +830,9 @@ Resolved in rev 4 (each as recommended in rev 3):
 | Install consent (server origin, tools and effects, scopes with reasons and risk, settings form) | [`InstallConsentDialog.tsx`](../frontend/src/components/apps/InstallConsentDialog.tsx) |
 | Long-running tools (§7.3): task record, ack ends the turn, Host API task callbacks and `token/refresh`, result posted to the conversation | [`aina/package/tasks.py`](../backend/src/tianzhou_agent_platform/aina/package/tasks.py), [`api/aina_host.py`](../backend/src/tianzhou_agent_platform/api/aina_host.py), [`store/aina_task_store.py`](../backend/src/tianzhou_agent_platform/store/aina_task_store.py) |
 | Background tasks above the chat composer | [`AinaTaskList.tsx`](../frontend/src/components/tasks/AinaTaskList.tsx) |
-| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py), [`tests/test_aina_host_tasks.py`](../backend/tests/test_aina_host_tasks.py) |
+| Packaged UI files served sandboxed (`/aina-ui/{id}/{version}/…`); app tool calls; URL-canvas identity token | [`aina/package/ui.py`](../backend/src/tianzhou_agent_platform/aina/package/ui.py), [`api/aina_ui.py`](../backend/src/tianzhou_agent_platform/api/aina_ui.py) |
+| UI bridge: iframe SDK `aina-ui.js` + theme `aina-ui.css`; host side in the canvas pane | [`spec/aina/2.0/ui/`](../spec/aina/2.0/ui), [`AinaCanvasFrame.tsx`](../frontend/src/components/widgets/AinaCanvasFrame.tsx) |
+| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py), [`tests/test_aina_host_tasks.py`](../backend/tests/test_aina_host_tasks.py), [`tests/test_aina_ui.py`](../backend/tests/test_aina_ui.py), [`e2e/aina-canvas.spec.ts`](../frontend/e2e/aina-canvas.spec.ts) |
 
 API: `POST /ainas/packages/validate` (anyone), `POST /ainas/packages` and `POST /ainas/{id}/tools/refresh`
 (platform admin; both take an optional one-time `credential` for an authenticated server's `tools/list`, never
@@ -891,9 +893,29 @@ runtime type only, never on an AINA id.
   `structuredContent` exactly is dropped, so the model does not read the result twice.
 - Skill folders may contain only UTF-8 text files. A frontmatter `name` may match either the skill `id` (the Agent
   Skills convention) or its `name`. Skill text is limited to 1 000 000 characters per package in total.
-- The bridge message schema and Host API OpenAPI are written with the phases that implement them (P3, P2).
+- The Host API OpenAPI is not written yet. The bridge protocol is defined by `spec/aina/2.0/ui/aina-ui.js`: JSON-RPC
+  2.0 messages tagged `"unibot": "aina-ui/2.0"`; requests `initialize`, `callTool`, `sendPrompt`, `setTitle`, `notify`,
+  `getIdentityToken` (and `resize`, `proposeArguments` for widgets, P3b); host notifications `event` with
+  `{type, data}`.
+- Canvas (P3a):
+  - The canvas is a host widget of kind `aina_canvas` (the package's `main_widget`), so "Open app" and the canvas
+    tabs work unchanged. The iframe `sandbox` and the §9.1 isolation apply as designed.
+  - Packaged UI is served by the backend itself, not a separate `aina-ui.<host>` origin. Every file carries
+    `Content-Security-Policy: sandbox …` (so even a file opened in a tab gets an opaque origin), `connect-src 'none'`
+    and `frame-ancestors` for the frontend origin, plus `Access-Control-Allow-Origin: *`, because a sandboxed
+    document's own module scripts are cross-origin requests. A separate cookieless origin is still recommended in
+    production. Only the registered version is served, and never `aina.json` or skill folders.
+  - Package archives are now kept in the AINA project artifact store (NAS, or memory without storage), so packages
+    registered before this change must be registered again to show their canvas.
+  - The shell relays only `app`-visible tools. It asks the user itself before every `destructive` call and before the
+    first call of each `write` tool while the canvas is open; the backend refuses a non-`read` call the shell did not
+    mark as confirmed. Long-running tools cannot be started from the UI.
+  - `tool_result` is sent to the canvas after every finished chat run, without details yet.
+  - The theme is a fixed light token set. `getIdentityToken` is answered only for URL canvases; the token has
+    `use: identity` and no scopes, and the Host API refuses it.
 
 ### Next
 
-Remaining P2: MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Then
-P3 (canvas and widgets), which canvas tools (P6) build on.
+P3b: widgets in the conversation (confirmation widgets inside the approval card with `proposeArguments`, result widgets
+under the tool card and for finished tasks). Then P6 canvas tools. Still open from P2: MCP OAuth 2.0, upgrade
+re-consent, and the other Host API endpoints.

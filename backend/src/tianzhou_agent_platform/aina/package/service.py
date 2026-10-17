@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections.abc import Iterable
 from typing import Any, Protocol, cast
+from uuid import uuid4
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
@@ -22,6 +23,7 @@ from tianzhou_agent_platform.aina.package.mcp_client import McpServerInfo, McpTo
 from tianzhou_agent_platform.aina.package.secrets import SecretBox, aina_key_material
 from tianzhou_agent_platform.aina.package.tasks import TaskStart, parse_task_start
 from tianzhou_agent_platform.aina.package.tokens import ContextTokenSigner, HostReference
+from tianzhou_agent_platform.aina.package.ui import PackageUiStore
 from tianzhou_agent_platform.aina.package.models import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     McpToolDescriptor,
@@ -43,6 +45,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
     InstallationRequest,
     Publisher,
 )
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetCanvas, WidgetDefinition
 from tianzhou_agent_platform.aina.security.destinations import require_approved_destination
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.base import utc_now
@@ -70,11 +73,13 @@ class AinaPackageService:
         repository: PackageRegistry,
         settings: AgentSettings,
         mcp: McpToolClient | None = None,
+        ui: PackageUiStore | None = None,
         enforce_destination_policy: bool = False,
     ) -> None:
         self.repository = repository
         self.settings = settings
         self.mcp = mcp or McpToolClient()
+        self.ui = ui
         self.enforce_destination_policy = enforce_destination_policy
         self.box = SecretBox.from_settings(settings)
         self.tokens = ContextTokenSigner.from_settings(settings)
@@ -127,6 +132,9 @@ class AinaPackageService:
             server_name=info.name,
             server_version=info.version,
         )
+        if self.ui is not None:
+            # Canvas, widget and asset files are served from the stored archive (design §9.1).
+            await self.ui.save(manifest.aina.id, runtime.archive_sha256, payload)
         record = AinaRecord(
             manifest=project_manifest(manifest, runtime),
             last_health={
@@ -277,6 +285,108 @@ class AinaPackageService:
         exposed = manifest.tools.expose.get(name)
         task = parse_task_start(result.meta) if exposed is not None and exposed.long_running else None
         return visible or {"content": ""}, task
+
+    async def call_app_tool(
+        self,
+        aina_id: str,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        tenant_id: str,
+        user_id: str,
+        source: Source,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        """A tool call from the AINA's own canvas or widget, made by the host shell for the signed-in user.
+
+        Only ``app``-visible tools are callable (design §6.1). Anything but a ``read`` tool needs the host's own
+        confirmation, which the shell asks for outside the iframe; the AINA's UI can never confirm for the user.
+        """
+        record, installation = await self._usable_installation(aina_id, tenant_id=tenant_id, user_id=user_id)
+        runtime = package_runtime(record)
+        snapshot = runtime.tool(name)
+        exposed = runtime.package.tools.expose.get(name)
+        if snapshot is None or exposed is None or "app" not in snapshot.visibility:
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                f"Tool {name!r} cannot be called from the AINA's UI",
+                status_code=403,
+                source="aina_package",
+            )
+        if exposed.long_running:
+            raise PlatformError(
+                "CONFLICT",
+                f"Long-running tool {name!r} can only be started from the conversation",
+                status_code=409,
+                source="aina_package",
+            )
+        if snapshot.effect != "read" and not confirmed:
+            raise PlatformError(
+                "CONFIRMATION_REQUIRED",
+                f"Tool {name!r} changes data and needs the user's confirmation",
+                status_code=428,
+                source="aina_package",
+            )
+        visible, _task = await self.call_tool(
+            record,
+            installation,
+            name,
+            arguments,
+            invocation_id=f"app_{uuid4().hex}",
+            conversation_id=None,
+            workspace_id=None,
+            source=source,
+        )
+        return visible
+
+    async def identity_token(self, aina_id: str, *, tenant_id: str, user_id: str) -> str:
+        """Design §9.1: a short-lived pairwise identity for a URL canvas's own backend; it carries no Host API scope."""
+        record, installation = await self._usable_installation(aina_id, tenant_id=tenant_id, user_id=user_id)
+        canvas = package_runtime(record).package.canvas
+        if canvas is None or canvas.url is None:
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                "Only a URL canvas can request an identity token",
+                status_code=403,
+                source="aina_package",
+            )
+        context = unibot_context(
+            secret=aina_key_material(self.settings),
+            manifest=package_runtime(record).package,
+            installation=installation,
+            invocation_id="identity",
+            source="canvas",
+            conversation_id=None,
+            workspace_id=None,
+        )
+        claims = {
+            "use": "identity",
+            "sub": context["user"]["id"],
+            "tenant": context["tenant_id"],
+            "installation_id": context["installation_id"],
+            "scopes": [],
+        }
+        reference = HostReference(tenant_id=tenant_id, user_id=user_id, aina_id=aina_id)
+        return self.tokens.mint(reference=reference, claims=claims)
+
+    async def _usable_installation(
+        self, aina_id: str, *, tenant_id: str, user_id: str
+    ) -> tuple[AinaRecord, AinaInstallation]:
+        record = await self.repository.get_aina(aina_id)
+        installation = await self._installation(aina_id, tenant_id=tenant_id, user_id=user_id)
+        runtime = package_runtime(record)
+        if (
+            installation is None
+            or installation.status != "active"
+            or runtime.package.required_scopes() - set(installation.granted_permissions)
+        ):
+            raise PlatformError(
+                "PERMISSION_DENIED",
+                f"AINA {aina_id!r} is not installed and authorized for this user",
+                status_code=403,
+                source="aina_package",
+            )
+        return record, installation
 
     def mint_token(self, installation: AinaInstallation, context: dict[str, Any]) -> str:
         """Context token carrying the same pairwise identity as ``context`` (design §8)."""
@@ -486,6 +596,26 @@ def project_manifest(manifest: AinaPackageManifest, runtime: PackageRuntimeDefin
             ],
         ),
         permissions=[item.scope for item in manifest.permissions],
+        main_widget=_canvas_widget(manifest),
+    )
+
+
+def _canvas_widget(manifest: AinaPackageManifest) -> WidgetDefinition | None:
+    """The host widget that embeds the package canvas (design §9.3) in the canvas pane."""
+    canvas = manifest.canvas
+    if canvas is None:
+        return None
+    return WidgetDefinition(
+        id=f"{manifest.aina.id}-canvas",
+        kind="aina_canvas",
+        title=canvas.title,
+        description=manifest.aina.description,
+        canvas=WidgetCanvas(
+            kind="url" if canvas.url is not None else "package",
+            version=manifest.aina.version,
+            entry=canvas.entry,
+            url=canvas.url,
+        ),
     )
 
 
