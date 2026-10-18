@@ -63,6 +63,8 @@ packages = ["src/tianzhou_agent_platform", "src/unibot_aina", "src/unibot_plugin
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# The ``aina init`` template has placeholders and is checked by rendering it (tests/test_aina_scaffold.py).
+extend-exclude = ["src/tianzhou_agent_platform/aina/package/template"]
 
 [tool.black]
 line-length = 120
@@ -73,6 +75,7 @@ python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+exclude = ["src/tianzhou_agent_platform/aina/package/template/"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  Sparkles,
   Search,
   ShieldAlert,
   Trash2,
@@ -24,17 +25,19 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
+import { PackageReviewDialog, PackageScaffoldForm } from "@/components/apps/PackageDeveloper";
 import { ActionMenu, AppIcon, PluginChip, PluginRow, PluginSection, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { ACTOR_QUERY, deleteAina, installAina, isSystemAina, openAina, uninstallAina } from "@/lib/plugins";
-import { classNames } from "@/lib/utils";
+import { classNames, downloadBlob } from "@/lib/utils";
 import type {
   AinaInstallation,
   AinaProjectRecord,
   AinaProjectScaffoldRequest,
   AinaRecord,
+  PackageValidationReport,
   SkillRecord,
   ToolRecord,
 } from "@/types";
@@ -167,6 +170,9 @@ export default function AllAppsPage() {
   const [scaffold, setScaffold] = useState<AinaProjectScaffoldRequest>(DEFAULT_PROJECT_SCAFFOLD);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const projectFileInput = useRef<HTMLInputElement>(null);
+  const packageFileInput = useRef<HTMLInputElement>(null);
+  const [packageFormOpen, setPackageFormOpen] = useState(false);
+  const [packageReview, setPackageReview] = useState<{ file: File; report: PackageValidationReport } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -232,6 +238,20 @@ export default function AllAppsPage() {
       setNotice({ tone: "error", text: apiErrorMessage(importError) });
     } finally {
       setProjectAction(null);
+    }
+  }
+
+  async function reviewPackage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      setPackageReview({ file, report: await api.postForm<PackageValidationReport>("/ainas/packages/validate", form) });
+    } catch (validateError) {
+      setNotice({ tone: "error", text: apiErrorMessage(validateError) });
     }
   }
 
@@ -398,11 +418,28 @@ export default function AllAppsPage() {
       }))
       : []),
     {
+      label: t("package.newMenu"),
+      icon: <Sparkles className="h-4 w-4" />,
+      onSelect: () => {
+        setView("developer");
+        setPackageFormOpen(true);
+        setScaffoldOpen(false);
+        setEditorOpen(false);
+        setNotice(null);
+      },
+    },
+    {
+      label: t("package.uploadMenu"),
+      icon: <PackageCheck className="h-4 w-4" />,
+      onSelect: () => packageFileInput.current?.click(),
+    },
+    {
       label: t("template"),
       icon: <FileArchive className="h-4 w-4" />,
       onSelect: () => {
         setView("developer");
         setScaffoldOpen(true);
+        setPackageFormOpen(false);
         setEditorOpen(false);
         setNotice(null);
       },
@@ -426,6 +463,20 @@ export default function AllAppsPage() {
           onInstalled={() => {
             setNotice({ tone: "success", text: t("notice.installed", { name: consentFor.manifest.aina.name }) });
             setConsentFor(null);
+            void load();
+          }}
+        />
+      ) : null}
+      {packageReview ? (
+        <PackageReviewDialog
+          file={packageReview.file}
+          report={packageReview.report}
+          canRegister={canManageRegistry}
+          onClose={() => setPackageReview(null)}
+          onRegistered={(record) => {
+            setPackageReview(null);
+            setNotice({ tone: "success", text: t("package.registered", { name: record.manifest.aina.name, version: record.manifest.aina.version }) });
+            setView("apps");
             void load();
           }}
         />
@@ -465,6 +516,14 @@ export default function AllAppsPage() {
                 triggerClassName="btn h-10 shrink-0 gap-1.5 rounded-full bg-ink px-4 text-white hover:bg-black"
                 items={addItems}
                 note={canManageRegistry ? undefined : t("adminOnly")}
+              />
+              <input
+                ref={packageFileInput}
+                type="file"
+                accept=".zip,application/zip"
+                aria-label={t("package.uploadAria")}
+                className="hidden"
+                onChange={(event) => void reviewPackage(event)}
               />
               <input
                 ref={projectFileInput}
@@ -527,6 +586,15 @@ export default function AllAppsPage() {
                     onLoadRiskySample={editorKind === "tools" ? () => setEditorText(JSON.stringify(SAMPLE_RISKY_TOOL, null, 2)) : undefined}
                     onClose={() => setEditorOpen(false)}
                     onSave={() => void registerDefinition()}
+                  />
+                ) : null}
+                {packageFormOpen ? (
+                  <PackageScaffoldForm
+                    onCancel={() => setPackageFormOpen(false)}
+                    onDone={(message) => {
+                      setPackageFormOpen(false);
+                      setNotice({ tone: "success", text: message });
+                    }}
                   />
                 ) : null}
                 {scaffoldOpen ? (
@@ -903,15 +971,4 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }

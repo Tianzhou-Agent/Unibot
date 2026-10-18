@@ -113,3 +113,28 @@ class AuthConfig(StrictModel):
     google_enabled: bool
     microsoft_enabled: bool
     apple_enabled: bool
+
+
+class DeveloperToken(StrictModel):
+    """A credential for the ``aina`` CLI: it can only validate, publish and refresh AINA packages (design §12)."""
+
+    id: str
+    user_id: str
+    tenant_id: str
+    name: str = Field(min_length=1, max_length=80)
+    # sha256 of the token; the token itself is shown once, when it is created.
+    token_hash: str = Field(exclude=True)
+    prefix: str
+    created_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    last_used_at: datetime | None = None
+
+
+class DeveloperTokenCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    expires_in_days: int = Field(default=90, ge=1, le=365)
+
+
+class CreatedDeveloperToken(StrictModel):
+    token: str
+    record: DeveloperToken

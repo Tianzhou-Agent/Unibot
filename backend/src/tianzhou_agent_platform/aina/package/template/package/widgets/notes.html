@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="./aina-ui.css">
+  <style>
+    body { padding: 10px 12px; }
+    ul { margin: 0; padding-left: 18px; }
+    footer { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <ul id="notes"></ul>
+  <footer><button type="button" id="open">Open notes</button></footer>
+  <script type="module">
+    // A result widget shows a tool's structuredContent under the agent's answer.
+    import { host } from "./aina-ui.js";
+    const { result } = await host.getContext();
+    const items = result?.structuredContent?.items ?? [];
+    document.getElementById("notes").replaceChildren(
+      ...items.slice(0, 5).map((note) => Object.assign(document.createElement("li"), { textContent: note.text })),
+    );
+    document.getElementById("open").addEventListener("click", () => host.openCanvas());
+    host.resize(document.documentElement.scrollHeight);
+  </script>
+</body>
+</html>

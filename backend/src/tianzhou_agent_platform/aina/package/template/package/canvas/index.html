@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes</title>
+  <link rel="stylesheet" href="./aina-ui.css">
+  <style>
+    main { max-width: 720px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 17px; margin: 0 0 12px; }
+    form { display: flex; gap: 8px; margin-bottom: 12px; }
+    form input { flex: 1; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--aina-border); }
+    li span { flex: 1; }
+    li.highlight { background: #fff4d6; }
+    #status { min-height: 18px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">Notes</h1>
+    <form id="add">
+      <input name="text" placeholder="Write a note" maxlength="500" required>
+      <button class="primary" type="submit">Add</button>
+    </form>
+    <ul id="notes"></ul>
+    <p id="status" class="aina-muted"></p>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -17,3 +17,14 @@ export function timeAgo(iso: string, now: Date = new Date()): string {
 export function uid(prefix = "id"): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
+
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
