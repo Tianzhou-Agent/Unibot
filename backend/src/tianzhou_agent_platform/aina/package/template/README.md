@@ -13,7 +13,12 @@ server/         the MCP server with the tools; you run and host it yourself
 pip install -r server/requirements.txt
 python server/main.py                 # serves __MCP_URL__
 aina validate package --live          # checks aina.json, files and the server's tools
+aina dev package                      # a local Unibot host at http://127.0.0.1:8790
 ```
+
+`aina dev` runs the real Unibot host on your machine. Its page shows your canvas and widgets as users will see
+them, lets you call tools as the agent and run canvas tools by hand, and lists every bridge message, MCP call and
+Host API call. It reloads when you edit `package/`; press Reload after restarting your server.
 
 The canvas and widgets talk to Unibot only through `aina-ui.js` (vendored next to them); they cannot reach the
 network themselves.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import pkgutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,9 +61,20 @@ def discover_bundled() -> list[BundledPlugin]:
         mcp_url = str(json.loads(files["aina.json"])["tools"]["mcp"]["url"])
         if not is_bundled_url(mcp_url):
             raise RuntimeError(f"Bundled plugin {module.name!r} must serve its MCP tools at https://{BUNDLED_HOST}/")
-        server = importlib.import_module(f"{PLUGINS_PACKAGE}.{module.name}.server").mcp
+        server = _import_server(f"{PLUGINS_PACKAGE}.{module.name}.server")
         plugins.append(BundledPlugin(module.name, build_project_archive(files), server, mcp_url))
     return plugins
+
+
+def _import_server(name: str) -> Any:
+    """A plugin's ``mcp`` server, imported without the MCP SDK's ``logging.basicConfig`` reconfiguring the host."""
+    root = logging.getLogger()
+    handlers, level = list(root.handlers), root.level
+    try:
+        return importlib.import_module(name).mcp
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(level)
 
 
 async def register_bundled(service: AinaPackageService) -> list[AinaRecord]:

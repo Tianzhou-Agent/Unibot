@@ -5,6 +5,7 @@
 ``--live`` also lists the tools of the package's MCP server and checks the exposed ones as registration would.
 ``aina pack DIR -o FILE`` validates a folder and writes a reproducible package archive.
 ``aina publish PATH --host URL`` registers (or upgrades) the package on a Unibot host with a developer token.
+``aina dev PATH`` runs a local host with a developer page for the package (see ``devhost``).
 """
 
 from __future__ import annotations
@@ -54,12 +55,18 @@ def main(argv: list[str] | None = None) -> int:
     publish.add_argument(
         "--credential", default=None, help="one-time credential for a bearer/api_key MCP server's tools/list"
     )
+    dev = commands.add_parser("dev", help="run a local Unibot host with a developer page for a package folder")
+    dev.add_argument("path", type=Path)
+    dev.add_argument("--host", default="127.0.0.1")
+    dev.add_argument("--port", type=int, default=8790)
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
             return _init(args)
         if args.command == "validate":
             return _validate(args.path, live=args.live)
+        if args.command == "dev":
+            return _dev(args.path, host=args.host, port=args.port)
         if args.command == "publish":
             return _publish(args.path, host=args.host, token=args.token, credential=args.credential)
         return _pack(args.path, args.output)
@@ -92,13 +99,31 @@ def _init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dev(path: Path, *, host: str, port: int) -> int:
+    import logging
+
+    import uvicorn
+
+    from tianzhou_agent_platform.aina.package.devhost import create_dev_app
+
+    # Importing the host builds its production app, whose span processor reports every span it cannot hand to the
+    # (never started) observability pipeline; the dev host has no such pipeline.
+    logging.getLogger("tianzhou_agent_platform.observability.telemetry").setLevel(logging.CRITICAL)
+
+    if not (path / "aina.json").is_file():
+        raise PlatformError("INVALID_REQUEST", f"{path} has no aina.json; pass the package folder")
+    print(f"aina dev: http://{host}:{port}  (package {path.resolve()}; Ctrl+C to stop)", flush=True)
+    uvicorn.run(create_dev_app(path, host=host, port=port), host=host, port=port, log_level="warning")
+    return 0
+
+
 def _publish(path: Path, *, host: str, token: str | None, credential: str | None) -> int:
     # A local host without sign-in needs no token.
     token = token or os.environ.get("UNIBOT_TOKEN")
     if path.is_file():
         archive = path.read_bytes()
     else:
-        files = _read_folder(path)
+        files = read_package_folder(path)
         if _print(validate_package_files(files)):
             return 1
         archive = build_project_archive(files)
@@ -124,7 +149,7 @@ def _publish(path: Path, *, host: str, token: str | None, credential: str | None
 
 def _validate(path: Path, *, live: bool) -> int:
     report = (
-        validate_package_archive(path.read_bytes()) if path.is_file() else validate_package_files(_read_folder(path))
+        validate_package_archive(path.read_bytes()) if path.is_file() else validate_package_files(read_package_folder(path))
     )
     if live and report.valid and report.manifest is not None:
         url = report.manifest.tools.mcp.url
@@ -138,7 +163,7 @@ def _validate(path: Path, *, live: bool) -> int:
 
 
 def _pack(path: Path, output: Path) -> int:
-    files = _read_folder(path)
+    files = read_package_folder(path)
     report = validate_package_files(files)
     if _print(report):
         return 1
@@ -147,7 +172,7 @@ def _pack(path: Path, output: Path) -> int:
     return 0
 
 
-def _read_folder(path: Path) -> dict[str, bytes]:
+def read_package_folder(path: Path) -> dict[str, bytes]:
     if not path.is_dir():
         raise PlatformError("INVALID_REQUEST", f"{path} is neither a package folder nor a file")
     return {
