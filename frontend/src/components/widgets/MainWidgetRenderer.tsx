@@ -4,6 +4,7 @@ import { Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
 import type { DocumentTaskContext, WidgetActionDefinition, WidgetDefinition } from "@/types";
+import { AinaCanvasFrame } from "./AinaCanvasFrame";
 import { DocumentWidget } from "./DocumentWidget";
 import { MemoryMainWidget } from "./MemoryMainWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
@@ -38,6 +39,9 @@ export function MainWidgetRenderer({
   refreshToken?: string | null;
 }) {
   const { t } = useTranslation("common");
+  if (widget.kind === "aina_canvas") {
+    return <AinaCanvasFrame ainaId={ainaId} widget={widget} refreshToken={refreshToken} onPrompt={onPrompt} />;
+  }
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
   if (ainaId === "unibot-code-runner") {
     return (

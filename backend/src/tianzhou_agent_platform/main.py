@@ -18,6 +18,7 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
+from tianzhou_agent_platform.aina.package.ui import PackageUiStore
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
@@ -29,6 +30,7 @@ from tianzhou_agent_platform.aina.project_service import (
 )
 from tianzhou_agent_platform.aina.scheduler import AinaScheduler
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, JWKS_PATH
+from tianzhou_agent_platform.api.aina_ui import AINA_UI_PREFIX
 from tianzhou_agent_platform.api.errors import install_exception_handlers
 from tianzhou_agent_platform.api.auth import SESSION_COOKIE
 from tianzhou_agent_platform.api.dependencies import RequestActor
@@ -255,6 +257,7 @@ def create_app(
         repository=resolved_repository,
         settings=resolved_settings,
         mcp=mcp_client,
+        ui=PackageUiStore(resolved_aina_project_artifact_store),
         enforce_destination_policy=enforce_auth,
     )
     vision_client = VisionClient(
@@ -510,4 +513,6 @@ def _is_public_path(path: str) -> bool:
         path in {"/health", "/openapi.json", "/docs", "/redoc", JWKS_PATH}
         or path.startswith("/auth/")
         or path.startswith(f"{HOST_API_PREFIX}/")
+        # Packaged UI files are public package content, served to sandboxed frames without a session.
+        or path.startswith(f"{AINA_UI_PREFIX}/")
     )
