@@ -139,7 +139,13 @@
       "properties": {
         "type": { "enum": ["none", "bearer", "api_key", "oauth2"] },
         "secret": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
-        "header": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }
+        "header": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" },
+        "scopes": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,128}$" }
+        }
       },
       "allOf": [
         {
@@ -149,6 +155,10 @@
         {
           "if": { "properties": { "type": { "enum": ["none", "oauth2"] } } },
           "then": { "not": { "anyOf": [{ "required": ["secret"] }, { "required": ["header"] }] } }
+        },
+        {
+          "if": { "properties": { "type": { "not": { "const": "oauth2" } } } },
+          "then": { "not": { "required": ["scopes"] } }
         }
       ]
     },

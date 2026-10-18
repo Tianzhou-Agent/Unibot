@@ -53,6 +53,8 @@ class McpAuth(StrictModel):
     type: Literal["none", "bearer", "api_key", "oauth2"]
     secret: str | None = None
     header: str | None = None
+    # ``oauth2``: the scopes to ask for; by default those the server's protected resource metadata lists.
+    scopes: list[str] | None = None
 
 
 class McpServer(StrictModel):

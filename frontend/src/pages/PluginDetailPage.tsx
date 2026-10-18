@@ -1,14 +1,14 @@
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
-import { AppWindow, ChevronRight, Download, Trash2, Unplug } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { AppWindow, ChevronRight, Download, LogIn, LogOut, Trash2, Unplug } from "lucide-react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AinaCapabilitySections } from "@/components/apps/AinaCapabilities";
 import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
 import { ActionMenu, AppIcon, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { ACTOR_QUERY, deleteAina, installAina, isSystemAina, openAina, uninstallAina } from "@/lib/plugins";
+import { ACTOR_QUERY, connectAina, deleteAina, disconnectAina, installAina, isSystemAina, openAina, uninstallAina } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type { AinaInstallation, AinaRecord } from "@/types";
 
@@ -23,6 +23,11 @@ export default function PluginDetailPage() {
   const [installed, setInstalled] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
   const [paused, setPaused] = useState<AinaInstallation | null>(null);
+  const [disconnected, setDisconnected] = useState<AinaInstallation | null>(null);
+  const [connectedAccount, setConnectedAccount] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // The outcome of signing in to an OAuth tool server (``/aina-oauth/callback`` sends the user back here).
+  const [oauthOutcome] = useState(() => ({ status: searchParams.get("aina_oauth"), message: searchParams.get("message") }));
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +41,8 @@ export default function PluginDetailPage() {
       setRecord(ainas.find((item) => item.manifest.aina.id === ainaId) ?? null);
       setInstalled(installations.some((item) => item.aina_id === ainaId && item.status === "active"));
       setPaused(installations.find((item) => item.aina_id === ainaId && item.status === "consent_required") ?? null);
+      setDisconnected(installations.find((item) => item.aina_id === ainaId && item.status === "authorization_required") ?? null);
+      setConnectedAccount(installations.some((item) => item.aina_id === ainaId && item.oauth_connected));
     } catch (loadError) {
       setError(apiErrorMessage(loadError));
     } finally {
@@ -46,6 +53,10 @@ export default function PluginDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (searchParams.has("aina_oauth")) setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   async function run(action: () => Promise<unknown>, after?: () => void) {
     setBusy(true);
@@ -65,7 +76,10 @@ export default function PluginDetailPage() {
   const builtin = manifest ? isSystemAina(manifest.runtime) : false;
   const usable = builtin || installed;
   const menuItems: MenuItem[] = [];
-  if (manifest && installed && !builtin) {
+  if (manifest && connectedAccount) {
+    menuItems.push({ label: t("detail.disconnect"), icon: <LogOut className="h-4 w-4" />, onSelect: () => void run(() => disconnectAina(ainaId)) });
+  }
+  if (manifest && (installed || disconnected) && !builtin) {
     menuItems.push({ label: t("aina.uninstall"), icon: <Unplug className="h-4 w-4" />, onSelect: () => void run(() => uninstallAina(ainaId)) });
   }
   if (manifest && canManageRegistry && !builtin && manifest.runtime.type !== "managed") {
@@ -96,6 +110,22 @@ export default function PluginDetailPage() {
 
           {error ? <p role="alert" className="mt-4 rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger-deep">{error}</p> : null}
           {loading ? <div className="mt-8 h-40 animate-pulse rounded-2xl bg-line/60" /> : null}
+          {oauthOutcome.status === "connected" ? (
+            <p role="status" className="mt-4 rounded-lg bg-success-soft px-3 py-2 text-[13px] text-success-deep">{t("detail.connected")}</p>
+          ) : null}
+          {oauthOutcome.status === "failed" ? (
+            <p role="alert" className="mt-4 rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger-deep">
+              {t("detail.connectFailed", { message: oauthOutcome.message ?? "" })}
+            </p>
+          ) : null}
+          {disconnected && record ? (
+            <section role="alert" className="mt-4 rounded-xl border border-warning-ring bg-warning-soft px-4 py-3 text-[13px] text-warning-deep">
+              <p className="font-semibold">{t("detail.connectRequired", { name: record.manifest.aina.name })}</p>
+              <button type="button" disabled={busy} onClick={() => void run(() => connectAina(ainaId), () => undefined)} className="btn mt-2 h-8 rounded-full bg-ink px-3.5 text-[12px] text-white hover:bg-black">
+                <LogIn className="h-3.5 w-3.5" />{t("detail.connect")}
+              </button>
+            </section>
+          ) : null}
           {paused && record ? (
             <section role="alert" className="mt-4 rounded-xl border border-warning-ring bg-warning-soft px-4 py-3 text-[13px] text-warning-deep">
               <p className="font-semibold">{t("detail.consentRequired")}</p>
@@ -138,7 +168,7 @@ export default function PluginDetailPage() {
                         {manifest.aina.id === "unibot-scheduler" ? t("aina.manageTasks") : t("aina.open")}
                       </button>
                     ) : null}
-                    {!usable ? (
+                    {!usable && !disconnected ? (
                       <button
                         type="button"
                         disabled={busy}

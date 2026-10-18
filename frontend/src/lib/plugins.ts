@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import type { AinaCanvasResponse, AinaRecord } from "@/types";
+import type { AinaCanvasResponse, AinaInstallation, AinaRecord } from "@/types";
 
 // The plugin pages act as the shared demo actor, as the registry page always has.
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
@@ -18,9 +18,25 @@ export function installAina(aina: AinaRecord) {
   });
 }
 
+/**
+ * Sends the user to the sign-in page of an AINA's OAuth tool server; they come back to ``returnTo`` with
+ * ``?aina_oauth=connected`` or ``?aina_oauth=failed&message=…``.
+ */
+export async function connectAina(ainaId: string, returnTo = window.location.pathname) {
+  const { authorization_url } = await api.post<{ authorization_url: string }>(
+    `/ainas/${encodeURIComponent(ainaId)}/oauth/authorize`,
+    { return_to: returnTo },
+  );
+  window.location.assign(authorization_url);
+}
+
+export function disconnectAina(ainaId: string) {
+  return api.post<AinaInstallation>(`/ainas/${encodeURIComponent(ainaId)}/oauth/disconnect`);
+}
+
 /** Installs an AINA 2.0 package with the scopes and settings the user consented to. */
 export function installPackage(aina: AinaRecord, grantedPermissions: string[], configuration: Record<string, unknown>) {
-  return api.post(`/ainas/${aina.manifest.aina.id}/install`, {
+  return api.post<AinaInstallation>(`/ainas/${aina.manifest.aina.id}/install`, {
     ...ACTOR,
     granted_permissions: grantedPermissions,
     configuration,

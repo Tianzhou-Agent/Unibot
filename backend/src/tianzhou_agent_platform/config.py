@@ -238,6 +238,11 @@ class AgentSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("UNIBOT_GITHUB_CLIENT_SECRET", "github_oauth_client_secret"),
     )
+    aina_oauth_callback_url: str = Field(
+        default="http://127.0.0.1:5173/api/aina-oauth/callback",
+        validation_alias=AliasChoices("UNIBOT_AINA_OAUTH_CALLBACK_URL", "aina_oauth_callback_url"),
+        description="Where authorization servers of OAuth MCP servers send users back (the backend's callback route).",
+    )
     github_oauth_callback_url: str = Field(
         default="http://127.0.0.1:5173/api/auth/github/callback",
         validation_alias=AliasChoices("UNIBOT_GITHUB_CALLBACK_URL", "github_oauth_callback_url"),

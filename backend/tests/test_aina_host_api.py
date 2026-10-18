@@ -286,7 +286,7 @@ def test_uninstall_deletes_private_storage_unless_kept() -> None:
             {
                 key: value
                 for key, value in client.post(f"/ainas/{AINA_ID}/install", json={}).json().items()
-                if key != "configured_secrets"
+                if key not in {"configured_secrets", "oauth_connected"}  # computed, not inputs
             }
         )
         client.put(f"{KV}/kept", json={"value": 1}, headers=_bearer(_token(app, installed)))

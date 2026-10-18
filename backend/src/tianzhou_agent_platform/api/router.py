@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from tianzhou_agent_platform.api.aina_canvas import create_aina_canvas_router
 from tianzhou_agent_platform.api.aina_host import create_aina_host_router
 from tianzhou_agent_platform.api.aina_host_services import create_aina_host_services_router
+from tianzhou_agent_platform.api.aina_oauth import create_aina_oauth_router
 from tianzhou_agent_platform.api.aina_ui import create_aina_ui_router
 from tianzhou_agent_platform.api.aina_projects import create_aina_project_router
 from tianzhou_agent_platform.api.auth import create_auth_router
@@ -40,6 +41,7 @@ def create_router() -> APIRouter:
     router.include_router(create_aina_host_router())
     router.include_router(create_aina_host_services_router())
     router.include_router(create_aina_ui_router())
+    router.include_router(create_aina_oauth_router())
     router.include_router(create_aina_canvas_router())
     router.include_router(create_schedule_router())
     router.include_router(create_sandbox_router())

@@ -41,8 +41,9 @@ class McpToolClient:
     async def list_tools(
         self, url: str, *, headers: Mapping[str, str] | None = None, timeout: float = 30.0
     ) -> McpServerInfo:
+        seen: list[int] = []
         try:
-            async with self._connect(url, headers=headers, timeout=timeout) as client:
+            async with self._connect(url, headers=headers, timeout=timeout, seen=seen) as client:
                 tools: list[McpToolDescriptor] = []
                 cursor: str | None = None
                 while True:
@@ -74,7 +75,7 @@ class McpToolClient:
         except PlatformError:
             raise
         except Exception as exc:
-            raise _failure(exc, "The MCP server could not list its tools") from exc
+            raise _failure(exc, "The MCP server could not list its tools", seen) from exc
 
     async def call_tool(
         self,
@@ -86,15 +87,16 @@ class McpToolClient:
         headers: Mapping[str, str] | None = None,
         timeout: float = 30.0,
     ) -> McpCallResult:
+        seen: list[int] = []
         try:
-            async with self._connect(url, headers=headers, timeout=timeout) as client:
+            async with self._connect(url, headers=headers, timeout=timeout, seen=seen) as client:
                 result = await client.call_tool(
                     name, arguments, read_timeout_seconds=timeout, meta=cast(RequestParamsMeta, meta)
                 )
         except PlatformError:
             raise
         except Exception as exc:
-            raise _failure(exc, f"MCP tool {name!r} could not be called") from exc
+            raise _failure(exc, f"MCP tool {name!r} could not be called", seen) from exc
         return McpCallResult(
             content=[item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in result.content],
             structured_content=result.structured_content,
@@ -109,28 +111,35 @@ class McpToolClient:
         *,
         headers: Mapping[str, str] | None,
         timeout: float,
+        seen: list[int] | None = None,
     ) -> AsyncIterator[Client]:
+        """``seen`` collects the HTTP status of every response: the SDK reports a refused request without it."""
         server = self.servers.get(url)
         if server is not None:
             async with Client(server, raise_exceptions=True, read_timeout_seconds=timeout) as client:
                 yield client
             return
+        async def record(response: httpx2.Response) -> None:
+            if seen is not None:
+                seen.append(response.status_code)
+
         async with httpx2.AsyncClient(
             headers=dict(headers or {}),
             timeout=httpx2.Timeout(timeout),
             follow_redirects=False,
+            event_hooks={"response": [record]},
         ) as http_client:
             transport = streamable_http_client(url, http_client=http_client)
             async with Client(transport, raise_exceptions=True, read_timeout_seconds=timeout) as client:
                 yield client
 
 
-def _failure(exc: BaseException, message: str) -> PlatformError:
+def _failure(exc: BaseException, message: str, seen: list[int] | None = None) -> PlatformError:
     if isinstance(exc, TimeoutError) or any(isinstance(item, TimeoutError) for item in _leaves(exc)):
         return PlatformError("TIMEOUT", message, status_code=504, retryable=True, source="mcp")
     status = next(
         (item.response.status_code for item in _leaves(exc) if isinstance(item, httpx2.HTTPStatusError)),
-        None,
+        next((code for code in reversed(seen or []) if code >= 400), None),
     )
     if status in {401, 403}:
         return PlatformError("AUTHENTICATION_FAILED", message, status_code=502, source="mcp")

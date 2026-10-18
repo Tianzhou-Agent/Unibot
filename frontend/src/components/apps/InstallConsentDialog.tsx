@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck, X } from "lucide-react";
 import { apiErrorMessage } from "@/lib/api";
-import { installPackage } from "@/lib/plugins";
+import { connectAina, installPackage } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type { AinaConfigField, AinaInstallation, AinaRecord } from "@/types";
 
@@ -62,8 +62,12 @@ export function InstallConsentDialog({
       .filter((item) => !item.optional || optional.has(item.scope))
       .map((item) => item.scope);
     try {
-      await installPackage(record, granted, configuration);
-      onInstalled();
+      const installed = await installPackage(record, granted, configuration);
+      // An OAuth tool server lists its tools as the user, so they sign in to it right away.
+      // The user comes back to the app's page, which shows whether connecting worked.
+      const detail = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/plugin/${encodeURIComponent(record.manifest.aina.id)}`;
+      if (installed.status === "authorization_required") await connectAina(record.manifest.aina.id, detail);
+      else onInstalled();
     } catch (installError) {
       setError(apiErrorMessage(installError));
       setSaving(false);
@@ -99,6 +103,7 @@ export function InstallConsentDialog({
             <h3 className="font-bold">{t("server")}</h3>
             <p className="mt-1 font-mono text-[11px]">{origin}</p>
             <p className="mt-0.5 text-ink-muted">{t("serverHint")}</p>
+            {pkg.tools.mcp.auth.type === "oauth2" ? <p className="mt-1 text-ink-muted">{t("oauthNext", { origin })}</p> : null}
             {pkg.canvas?.url ? (
               <p className="mt-1.5"><span className="font-bold">{t("canvas")}:</span> <span className="font-mono text-[11px]">{safeOrigin(pkg.canvas.url)}</span></p>
             ) : null}

@@ -93,6 +93,7 @@ def create_app(
     huawei_auth_http_client: httpx.AsyncClient | None = None,
     oidc_auth_http_client: httpx.AsyncClient | None = None,
     mcp_client: McpToolClient | None = None,
+    aina_oauth_http_client: httpx.AsyncClient | None = None,
     enforce_auth: bool = False,
 ) -> FastAPI:
     resolved_settings = settings or AgentSettings()
@@ -261,6 +262,7 @@ def create_app(
         mcp=mcp_client,
         ui=PackageUiStore(resolved_aina_project_artifact_store),
         enforce_destination_policy=enforce_auth,
+        oauth_http=aina_oauth_http_client,
     )
     auth_service = AuthService(
         settings=resolved_settings,
