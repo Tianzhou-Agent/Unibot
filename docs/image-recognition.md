@@ -1,24 +1,35 @@
 # 图片识别 AINA
 
-`unibot-image-recognition` 是宿主内置的纯目标检测 AINA。用户可以在 Canvas 中粘贴、拖入或选择
-JPEG、PNG、WebP 图片，前端会自动调用 YOLO26m，并显示目标框、中英文类别、置信度、目标数量、
-推理耗时和实际运行设备。
+`unibot.image-recognition` 是随 Unibot 一起发布的第一方 AINA 2.0 包（设计 §11）。用户可以在 Canvas 中粘贴、
+拖入或选择 JPEG、PNG、WebP 图片，Canvas 会自动调用 YOLO26m，并显示目标框、中英文类别、置信度、目标数量、
+推理耗时和实际运行设备。它对所有用户可用，无需安装。
 
 ## 架构
 
 ```text
 Browser
-  └─ POST /vision/detect (multipart)
-       └─ Unibot FastAPI
-            └─ POST /v1/detect (multipart)
-                 └─ unibot/vision-service
-                      └─ Ultralytics YOLO26m
-                           ├─ CUDA GPU（可用时优先）
-                           └─ CPU（自动回退）
+  └─ Canvas（沙箱 iframe，aina-ui 桥接）
+       └─ callTool("detect", {image_base64, content_type, filename})
+            └─ Unibot FastAPI  POST /ainas/unibot.image-recognition/app-tools/detect
+                 └─ 进程内 MCP 服务器  backend/src/unibot_plugins/image_recognition/server.py
+                      └─ POST /v1/detect (multipart)
+                           └─ unibot/vision-service
+                                └─ Ultralytics YOLO26m
+                                     ├─ CUDA GPU（可用时优先）
+                                     └─ CPU（自动回退）
 ```
 
-浏览器只访问 Unibot 后端，不直接暴露推理服务。后端限制上传 MIME 类型和大小，推理服务还会校验
-图片格式和最大像素数。图片仅保存在请求内存中用于本次推理，不写入数据库、NAS 或对象存储。
+Canvas 运行在不能访问网络的沙箱 iframe 中，只能通过宿主调用插件的 `detect` 和 `vision_status` 工具；两者都是
+只读工具，仅供 Canvas 使用，不暴露给模型。MCP 服务器限制图片类型和大小，推理服务还会校验图片格式和最大像素数。
+图片仅保存在请求内存中用于本次推理，不写入数据库、NAS 或对象存储。
+
+| 位置 | 内容 |
+| --- | --- |
+| `backend/src/unibot_plugins/image_recognition/package/` | `aina.json` 与构建好的 Canvas |
+| `backend/src/unibot_plugins/image_recognition/server.py` | MCP 服务器（只依赖 MCP SDK，不导入平台代码） |
+| `frontend/src/aina-canvases/image-recognition/` | Canvas 的 React 源码与中英文文案 |
+
+修改 Canvas 源码后，在 `frontend/` 执行 `npm run build:canvases` 重新构建，并提交 `package/canvas/` 下的产物。
 
 ## 本地启动
 
@@ -43,7 +54,7 @@ docker compose -f backend/docker-compose.vision.yml ps
 Invoke-RestMethod http://127.0.0.1:18081/healthz
 ```
 
-后端默认通过 `http://127.0.0.1:18081` 访问服务。可维护以下基础设置：
+插件的 MCP 服务器默认通过 `http://127.0.0.1:18081` 访问服务，并从环境变量或 `backend/.env` 读取以下设置：
 
 ```dotenv
 UNIBOT_VISION_BASE_URL=http://127.0.0.1:18081

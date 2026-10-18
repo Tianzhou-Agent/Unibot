@@ -62,6 +62,8 @@ class PackageRuntimeDefinition(StrictModel):
     server_name: str | None = None
     server_version: str | None = None
     tools_checked_at: datetime = Field(default_factory=utc_now)
+    # A first-party package shipped with Unibot (design §11): served in process and available to every user.
+    bundled: bool = False
 
     def tool(self, name: str) -> ToolSnapshot | None:
         return next((tool for tool in self.tools if tool.name == name), None)

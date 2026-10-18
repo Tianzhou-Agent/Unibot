@@ -183,6 +183,11 @@ def _archive(manifest: dict[str, Any], **files: str) -> bytes:
     )
 
 
+
+def _project_artifacts(artifacts: Any) -> dict[str, bytes]:
+    """Stored project archives, without the bundled packages' UI archives (design §11) saved at startup."""
+    return {key: value for key, value in artifacts.artifacts.items() if not key.startswith("aina-packages/")}
+
 def test_scaffold_is_deterministic_and_platform_can_validate_it() -> None:
     payload = {
         "aina_id": "com.example.scaffold",
@@ -336,7 +341,7 @@ def test_imported_managed_project_can_be_listed_downloaded_and_deleted_without_r
     assert deleted.status_code == 204
     assert after_delete.json() == []
     assert missing.status_code == 404
-    assert artifacts.artifacts == {}
+    assert _project_artifacts(artifacts) == {}
 
 
 def test_managed_project_can_be_deployed_installed_invoked_and_undeployed(tmp_path: Path) -> None:
@@ -497,7 +502,7 @@ def test_project_import_rejects_remote_runtime_without_registering_it() -> None:
     assert imported.status_code == 422
     assert "registration API" in imported.json()["error"]["message"]
     assert projects.json() == []
-    assert artifacts.artifacts == {}
+    assert _project_artifacts(artifacts) == {}
 
 
 def test_project_archive_download_fails_closed_when_blob_is_tampered() -> None:
@@ -515,7 +520,7 @@ def test_project_archive_download_fails_closed_when_blob_is_tampered() -> None:
             "/aina-projects",
             files={"file": ("managed.zip", archive, "application/zip")},
         )
-        artifact_path = next(iter(artifacts.artifacts))
+        artifact_path = next(iter(_project_artifacts(artifacts)))
         artifacts.artifacts[artifact_path] = b"tampered"
         downloaded = client.get(f"/aina-projects/{imported.json()['id']}/archive")
 
@@ -615,7 +620,7 @@ async def test_metadata_reservation_failure_does_not_write_project_blob() -> Non
         )
 
     assert await repository.list_aina_projects(user_id="user-a", tenant_id="tenant-a") == []
-    assert artifacts.artifacts == {}
+    assert _project_artifacts(artifacts) == {}
 
 
 async def test_failed_validation_transition_is_visible_and_resumes_same_import() -> None:
@@ -697,7 +702,7 @@ async def test_blob_delete_failure_keeps_project_metadata_for_retry() -> None:
         tenant_id="tenant-a",
     )
     assert await service.list_projects(user_id="user-a", tenant_id="tenant-a") == []
-    assert artifacts.artifacts == {}
+    assert _project_artifacts(artifacts) == {}
 
 
 async def test_nas_artifact_store_concurrent_writes_publish_one_complete_archive(tmp_path: Path) -> None:

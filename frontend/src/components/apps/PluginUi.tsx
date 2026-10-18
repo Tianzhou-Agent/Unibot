@@ -26,7 +26,7 @@ const BUILTIN_ICONS: Record<string, typeof FileText> = {
   "unibot-scheduler": CalendarClock,
   "unibot-memory": Brain,
   "unibot-code-runner": TerminalSquare,
-  "unibot-image-recognition": ImageIcon,
+  "unibot.image-recognition": ImageIcon,
 };
 
 /** Manifests carry no icon, so each plugin gets a stable colored tile: a glyph for known built-ins, else its initial. */

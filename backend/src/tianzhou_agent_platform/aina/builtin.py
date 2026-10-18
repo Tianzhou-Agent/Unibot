@@ -33,10 +33,6 @@ from tianzhou_agent_platform.aina.schedule.builtin import (
     UNIBOT_SCHEDULER_ID,
     unibot_scheduler_record,
 )
-from tianzhou_agent_platform.aina.vision.builtin import (
-    UNIBOT_IMAGE_RECOGNITION_ID,
-    unibot_image_recognition_record,
-)
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
@@ -47,10 +43,10 @@ BUILTIN_AINA_IDS = {
     UNIBOT_DOCUMENTS_ID,
     UNIBOT_SCHEDULER_ID,
     UNIBOT_CODE_RUNNER_ID,
-    UNIBOT_IMAGE_RECOGNITION_ID,
 }
 
-_LEGACY_UNIBOT_ASSISTANT_ID = "unibot-assistant"
+# Retired built-ins; Image Recognition is now the bundled ``unibot.image-recognition`` package.
+_LEGACY_AINA_IDS = ("unibot-assistant", "unibot-image-recognition")
 
 
 async def ensure_builtin_ainas(
@@ -62,15 +58,15 @@ async def ensure_builtin_ainas(
         (UNIBOT_MEMORY_ID, unibot_memory_record),
         (UNIBOT_SCHEDULER_ID, unibot_scheduler_record),
         (UNIBOT_CODE_RUNNER_ID, unibot_code_runner_record),
-        (UNIBOT_IMAGE_RECOGNITION_ID, unibot_image_recognition_record),
     ]
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
-    try:
-        await repository.remove_aina(_LEGACY_UNIBOT_ASSISTANT_ID)
-    except PlatformError as exc:
-        if exc.code != "RESOURCE_NOT_FOUND":
-            raise
+    for legacy_id in _LEGACY_AINA_IDS:
+        try:
+            await repository.remove_aina(legacy_id)
+        except PlatformError as exc:
+            if exc.code != "RESOURCE_NOT_FOUND":
+                raise
     for aina_id, factory in builtins:
         definition = factory()
         try:
@@ -226,12 +222,10 @@ __all__ = [
     "UNIBOT_MEMORY_ID",
     "UNIBOT_SCHEDULER_ID",
     "UNIBOT_CODE_RUNNER_ID",
-    "UNIBOT_IMAGE_RECOGNITION_ID",
     "ensure_builtin_ainas",
     "invoke_builtin",
     "unibot_documents_record",
     "unibot_memory_record",
     "unibot_scheduler_record",
     "unibot_code_runner_record",
-    "unibot_image_recognition_record",
 ]

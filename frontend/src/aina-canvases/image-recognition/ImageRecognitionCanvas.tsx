@@ -13,15 +13,16 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { api, apiErrorMessage } from "@/lib/api";
+import { host } from "@aina-ui";
 import { classNames } from "@/lib/utils";
-import type { VisionDetectionResponse, VisionHealth } from "@/types";
+import i18n from "i18next";
+import type { VisionDetectionResponse, VisionHealth } from "./types";
 
 const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const BOX_COLORS = ["#2563eb", "#e11d48", "#16a34a", "#9333ea", "#ea580c", "#0891b2"];
 
-export function ImageRecognitionMainWidget() {
+export function ImageRecognitionCanvas() {
   const { t } = useTranslation("imageRec");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
@@ -36,10 +37,10 @@ export function ImageRecognitionMainWidget() {
   const checkHealth = useCallback(async () => {
     setHealthError(null);
     try {
-      setHealth(await api.get<VisionHealth>("/vision/health"));
+      setHealth(await callTool<VisionHealth>("vision_status"));
     } catch (reason) {
       setHealth(null);
-      setHealthError(apiErrorMessage(reason));
+      setHealthError(toolErrorMessage(reason));
     }
   }, []);
 
@@ -59,13 +60,15 @@ export function ImageRecognitionMainWidget() {
     setDetecting(true);
     setError(null);
     setResult(null);
-    const form = new FormData();
-    form.append("image", file, file.name || "clipboard-image.png");
     try {
-      const response = await api.postForm<VisionDetectionResponse>("/vision/detect", form);
+      const response = await callTool<VisionDetectionResponse>("detect", {
+        image_base64: await fileBase64(file),
+        content_type: file.type,
+        filename: file.name || "clipboard-image.png",
+      });
       if (requestId === requestIdRef.current) setResult(response);
     } catch (reason) {
-      if (requestId === requestIdRef.current) setError(apiErrorMessage(reason));
+      if (requestId === requestIdRef.current) setError(toolErrorMessage(reason));
     } finally {
       if (requestId === requestIdRef.current) setDetecting(false);
     }
@@ -413,6 +416,28 @@ function ResultMetric({ icon, label, value }: { icon: React.ReactNode; label: st
       <div className="mt-1 truncate text-[11.5px] font-bold text-ink" title={value}>{value}</div>
     </div>
   );
+}
+
+// The plugin's tools answer through the UI bridge; their errors start with a code (``TOO_LARGE: ...``).
+async function callTool<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  const result = await host.callTool<T>(name, args);
+  if (result.structuredContent === undefined) throw new Error(result.content || "FAILED: no result");
+  return result.structuredContent;
+}
+
+function toolErrorMessage(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const code = /\b(UNSUPPORTED_TYPE|TOO_LARGE|INVALID_IMAGE|TIMEOUT|UNAVAILABLE|FAILED):/.exec(message)?.[1];
+  return code ? i18n.t(`imageRec:err.${code}`) : message;
+}
+
+function fileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(",") + 1));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
 }
 
 function formatFileSize(bytes: number): string {

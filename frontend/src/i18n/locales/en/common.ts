@@ -63,7 +63,6 @@ export default {
     openApp: "Open {{name}}",
     noApps: "No AINA apps are currently available.",
     loadingEditor: "Loading code editor…",
-    loadingImage: "Loading image recognition…",
   },
   language: "Language",
 };

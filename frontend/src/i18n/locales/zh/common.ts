@@ -63,7 +63,6 @@ export default {
     openApp: "打开 {{name}}",
     noApps: "当前没有可用的 AINA 应用。",
     loadingEditor: "正在加载代码编辑器…",
-    loadingImage: "正在加载图片识别…",
   },
   language: "语言",
 };

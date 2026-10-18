@@ -337,6 +337,8 @@ export interface AinaManifest {
         // AINA Protocol 2.0 package: tools served by the publisher's MCP server, reviewed at registration.
         type: "package";
         archive_sha256: string;
+        // A first-party package shipped with Unibot: available to every user, never installed.
+        bundled?: boolean;
         package: AinaPackageManifest;
         tools: {
           name: string;
@@ -492,41 +494,6 @@ export interface AinaCanvasResponse {
   conversation_id?: string | null;
   route: string;
   main_widget: WidgetDefinition;
-}
-
-export interface VisionHealth {
-  status: string;
-  model: string;
-  device: string;
-  requested_device: string;
-  gpu_name?: string | null;
-}
-
-export interface VisionBoundingBox {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-export interface VisionDetection {
-  class_id: number;
-  label: string;
-  label_zh: string;
-  confidence: number;
-  box: VisionBoundingBox;
-}
-
-export interface VisionDetectionResponse {
-  model: string;
-  device: string;
-  image: {
-    width: number;
-    height: number;
-  };
-  detections: VisionDetection[];
-  summary: Record<string, number>;
-  inference_ms: number;
 }
 
 export type SandboxStatus = "provisioning" | "ready" | "busy" | "stopped" | "error";

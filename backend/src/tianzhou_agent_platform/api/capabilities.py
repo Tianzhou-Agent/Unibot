@@ -2,6 +2,7 @@ from fastapi import APIRouter, Body, File, Form, Query, Request, Response, Uploa
 from pydantic import SecretStr
 
 from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS
+from tianzhou_agent_platform.aina.package.bundled import is_bundled
 from tianzhou_agent_platform.aina.package.validation import PackageValidationReport, validate_package_archive
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCanvasResponse,
@@ -176,10 +177,10 @@ def create_capability_router() -> APIRouter:
     @router.delete("/ainas/{aina_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_aina(aina_id: str, request: Request) -> Response:
         require_platform_admin(request)
-        if aina_id in BUILTIN_AINA_IDS:
-            raise PlatformError("PERMISSION_DENIED", "The system AINA cannot be deleted", status_code=403)
         data_repository = repository(request)
         record = await data_repository.get_aina(aina_id)
+        if aina_id in BUILTIN_AINA_IDS or is_bundled(record):
+            raise PlatformError("PERMISSION_DENIED", "The system AINA cannot be deleted", status_code=403)
         if record.manifest.runtime.type == "managed":
             raise PlatformError(
                 "CONFLICT",
@@ -197,10 +198,10 @@ def create_capability_router() -> APIRouter:
         request: Request,
     ) -> AinaInstallation:
         scoped = bind_actor(request, payload)
-        if aina_id in BUILTIN_AINA_IDS:
-            raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         data_repository = repository(request)
         record = await data_repository.get_aina(aina_id)
+        if aina_id in BUILTIN_AINA_IDS or is_bundled(record):
+            raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         if record.manifest.runtime.type == "package":
             return await aina_packages(request).install(aina_id, scoped)
         _validate_permission_subset(record, scoped.granted_permissions)

@@ -5,6 +5,11 @@ import type { AinaCanvasResponse, AinaRecord } from "@/types";
 const ACTOR = { user_id: "anonymous", tenant_id: "default" };
 export const ACTOR_QUERY = `user_id=${ACTOR.user_id}&tenant_id=${ACTOR.tenant_id}`;
 
+/** Built-in and bundled first-party AINAs are available to every user without an installation. */
+export function isSystemAina(runtime: AinaRecord["manifest"]["runtime"]): boolean {
+  return runtime.type === "builtin" || (runtime.type === "package" && Boolean(runtime.bundled));
+}
+
 export function installAina(aina: AinaRecord) {
   return api.post(`/ainas/${aina.manifest.aina.id}/install`, {
     ...ACTOR,

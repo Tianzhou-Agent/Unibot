@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
+from unibot_aina import set_default_transport
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -17,6 +18,7 @@ from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker
+from tianzhou_agent_platform.aina.package.bundled import register_bundled
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.ui import PackageUiStore
@@ -70,7 +72,6 @@ from tianzhou_agent_platform.store.runtime_check import (
 from tianzhou_agent_platform.store.settings import StorageSettings
 from tianzhou_agent_platform.sandbox.factory import create_sandbox_service
 from tianzhou_agent_platform.sandbox.service import SandboxService
-from tianzhou_agent_platform.vision.client import VisionClient
 from tianzhou_agent_platform.auth.service import AuthService
 from tianzhou_agent_platform.tasks.service import TaskEventBroker, TaskService
 from tianzhou_agent_platform.tasks.store import InMemorySessionTaskStore, MySqlSessionTaskStore
@@ -87,7 +88,6 @@ def create_app(
     document_service: DocumentService | None = None,
     aina_project_artifact_store: AinaProjectArtifactStore | None = None,
     sandbox_service: SandboxService | None = None,
-    vision_http_client: httpx.AsyncClient | None = None,
     github_auth_http_client: httpx.AsyncClient | None = None,
     huawei_auth_http_client: httpx.AsyncClient | None = None,
     oidc_auth_http_client: httpx.AsyncClient | None = None,
@@ -261,11 +261,6 @@ def create_app(
         ui=PackageUiStore(resolved_aina_project_artifact_store),
         enforce_destination_policy=enforce_auth,
     )
-    vision_client = VisionClient(
-        base_url=resolved_settings.vision_base_url,
-        timeout_seconds=resolved_settings.vision_timeout_seconds,
-        http_client=vision_http_client,
-    )
     auth_service = AuthService(
         settings=resolved_settings,
         repository=resolved_repository,
@@ -313,6 +308,9 @@ def create_app(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
             )
+            # Bundled servers reach the Host API in process, through this app.
+            set_default_transport(httpx.ASGITransport(app=lifespan_app), api_base=f"http://unibot{HOST_API_PREFIX}")
+            await register_bundled(aina_packages)
             scheduler_task = asyncio.create_task(scheduler.run())
             lifespan_app.state.background_tasks.add(scheduler_task)
             if document_edit_worker is not None:
@@ -340,7 +338,6 @@ def create_app(
                 await obs_store.close()
             await gateway.aclose()
             await resolved_sandbox_service.aclose()
-            await vision_client.aclose()
             await auth_service.aclose()
             if model_health_http_client is None:
                 await health_client.aclose()
@@ -444,7 +441,6 @@ def create_app(
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service
-    app.state.vision_client = vision_client
     app.state.auth_service = auth_service
     app.state.task_service = task_service
     app.state.auth_enforced = enforce_auth
