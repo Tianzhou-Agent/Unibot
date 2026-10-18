@@ -85,6 +85,7 @@ interface ModelDraft {
   model: string;
   enabled: boolean;
   contextWindowTokens: number;
+  acceptsImages: boolean;
 }
 
 /** Step one of adding a provider: pick its type, then the drawer opens prefilled with that preset. */
@@ -193,6 +194,7 @@ export function ProviderEditor({
       ...model,
       key: model.id,
       contextWindowTokens: model.context_window_tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+      acceptsImages: model.accepts_images ?? false,
     })) ?? preset.models.map((model) => ({ ...emptyModel(), ...model })),
   );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -321,12 +323,13 @@ export function ProviderEditor({
       base_url: baseUrl.trim(),
       api_key: apiKey,
       timeout_seconds: timeoutSeconds,
-      models: models.map(({ id, name: modelName, model, enabled, contextWindowTokens }) => ({
+      models: models.map(({ id, name: modelName, model, enabled, contextWindowTokens, acceptsImages }) => ({
         ...(id ? { id } : {}),
         name: modelName.trim(),
         model: model.trim(),
         enabled,
         context_window_tokens: contextWindowTokens,
+        accepts_images: acceptsImages,
       })),
     });
   }
@@ -480,7 +483,17 @@ export function ProviderEditor({
                             aria-label={t("contextAria", { n })}
                           />
                         </Field>
-                        <div className="flex items-end justify-end">
+                        <label className="col-span-2 flex items-start gap-2 text-[11.5px] text-ink-muted">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={model.acceptsImages}
+                            onChange={(event) => updateModel(model.key, { acceptsImages: event.target.checked })}
+                            aria-label={t("acceptsImagesAria", { n })}
+                          />
+                          <span><span className="font-semibold text-ink">{t("acceptsImages")}</span> · {t("acceptsImagesHint")}</span>
+                        </label>
+                        <div className="col-span-2 flex items-end justify-end">
                           <button
                             type="button"
                             onClick={() => setModels((current) => current.filter((item) => item.key !== model.key))}
@@ -591,5 +604,6 @@ function emptyModel(): ModelDraft {
     model: "",
     enabled: true,
     contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+    acceptsImages: false,
   };
 }

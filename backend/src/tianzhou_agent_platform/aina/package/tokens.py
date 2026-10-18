@@ -7,12 +7,17 @@ keeping per-token state and the AINA learns nothing from it.
 
 The signing key comes from ``UNIBOT_AINA_SIGNING_KEY`` (PEM, P-256). When unset it is derived from the AINA key
 material, so every node that shares that secret signs with the same key.
+
+Rotation: keys in ``UNIBOT_AINA_PREVIOUS_SIGNING_KEYS`` are no longer used to sign, but tokens they signed are still
+accepted and their public keys stay in the JWKS, so MCP servers keep verifying tokens minted before the switch. Keep
+an old key there for at least the token lifetime (10 minutes) plus the time MCP servers cache the JWKS.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from time import time
 from typing import Any
@@ -56,7 +61,14 @@ class VerifiedToken:
 
 
 class ContextTokenSigner:
-    def __init__(self, *, issuer: str, private_key: ec.EllipticCurvePrivateKey, box: SecretBox) -> None:
+    def __init__(
+        self,
+        *,
+        issuer: str,
+        private_key: ec.EllipticCurvePrivateKey,
+        box: SecretBox,
+        previous_keys: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.issuer = issuer
         self._box = box
         self._private_pem = private_key.private_bytes(
@@ -69,12 +81,11 @@ class ContextTokenSigner:
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
         self.kid = hashlib.sha256(public_pem).hexdigest()[:16]
-        self._public_jwk = {
-            **jwk.construct(public_pem.decode("ascii"), ALGORITHM).to_dict(),
-            "kid": self.kid,
-            "use": "sig",
-            "alg": ALGORITHM,
-        }
+        self._public_jwk = _public_jwk(public_pem.decode("ascii"))
+        # Every key a token may be verified with, by key id: the current one first, then those being rotated out.
+        self._verification_keys = {self.kid: self._public_jwk}
+        for previous in previous_keys or []:
+            self._verification_keys.setdefault(str(previous["kid"]), previous)
 
     @classmethod
     def from_settings(cls, settings: AgentSettings) -> ContextTokenSigner:
@@ -87,10 +98,16 @@ class ContextTokenSigner:
         else:
             seed = int.from_bytes(derive_key(aina_key_material(settings), "unibot-aina-signing-key-v1", 48), "big")
             private_key = ec.derive_private_key(seed % (_P256_ORDER - 1) + 1, ec.SECP256R1())
-        return cls(issuer=settings.aina_host_api_base, private_key=private_key, box=SecretBox.from_settings(settings))
+        previous = settings.aina_previous_signing_keys
+        return cls(
+            issuer=settings.aina_host_api_base,
+            private_key=private_key,
+            box=SecretBox.from_settings(settings),
+            previous_keys=previous_verification_keys(previous.get_secret_value()) if previous is not None else [],
+        )
 
     def jwks(self) -> dict[str, Any]:
-        return {"keys": [self._public_jwk]}
+        return {"keys": list(self._verification_keys.values())}
 
     def mint(self, *, reference: HostReference, claims: dict[str, Any], ttl_seconds: int = MAX_TOKEN_SECONDS) -> str:
         now = int(time())
@@ -121,9 +138,12 @@ class ContextTokenSigner:
     def verify(self, token: str, *, allow_expired: bool = False) -> VerifiedToken:
         """``allow_expired`` accepts a correctly signed token past its ``exp``; only token refresh uses it."""
         try:
+            key = self._verification_keys.get(str(jwt.get_unverified_header(token).get("kid") or self.kid))
+            if key is None:
+                raise invalid_token()
             claims: dict[str, Any] = jwt.decode(
                 token,
-                self._public_jwk,
+                key,
                 algorithms=[ALGORITHM],
                 issuer=self.issuer,
                 # python-jose turns verify_exp back on for a required exp; its presence is checked below.
@@ -149,6 +169,38 @@ class ContextTokenSigner:
             workspace_id=workspace_id,
         )
         return VerifiedToken(reference, claims)
+
+
+def _public_jwk(public_pem: str) -> dict[str, Any]:
+    kid = hashlib.sha256(public_pem.encode("ascii")).hexdigest()[:16]
+    return {**jwk.construct(public_pem, ALGORITHM).to_dict(), "kid": kid, "use": "sig", "alg": ALGORITHM}
+
+
+def previous_verification_keys(value: str) -> list[dict[str, Any]]:
+    """Keys being rotated out: PEM keys (private or public, concatenated) or the host's JWKS JSON as published."""
+    value = value.strip()
+    if not value:
+        return []
+    if value.startswith("{"):
+        keys = json.loads(value).get("keys") or []
+        if not all(key.get("kty") == "EC" and key.get("crv") == "P-256" and key.get("kid") for key in keys):
+            raise ValueError("UNIBOT_AINA_PREVIOUS_SIGNING_KEYS must hold P-256 EC keys with a kid")
+        return [{**key, "use": "sig", "alg": ALGORITHM} for key in keys]
+    found: list[dict[str, Any]] = []
+    for block in re.findall(r"-----BEGIN [A-Z ]+-----.+?-----END [A-Z ]+-----", value, flags=re.DOTALL):
+        data = block.encode("ascii")
+        loaded: Any = (
+            serialization.load_pem_private_key(data, None).public_key()
+            if "PRIVATE KEY" in block
+            else serialization.load_pem_public_key(data)
+        )
+        if not isinstance(loaded, ec.EllipticCurvePublicKey) or loaded.curve.name != "secp256r1":
+            raise ValueError("UNIBOT_AINA_PREVIOUS_SIGNING_KEYS must hold P-256 EC keys")
+        pem = loaded.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        found.append(_public_jwk(pem.decode("ascii")))
+    if not found:
+        raise ValueError("UNIBOT_AINA_PREVIOUS_SIGNING_KEYS holds no PEM key or JWKS")
+    return found
 
 
 def invalid_token() -> PlatformError:

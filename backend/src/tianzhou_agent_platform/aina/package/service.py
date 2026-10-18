@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
@@ -403,7 +403,7 @@ class AinaPackageService:
             if widget_id is not None and task is None
             else None
         )
-        return ToolOutcome(visible=visible or {"content": ""}, task=task, widget=widget)
+        return ToolOutcome(visible=visible or {"content": ""}, task=task, widget=widget, images=tool_images(result.content))
 
     async def call_app_tool(
         self,
@@ -708,6 +708,8 @@ class ToolOutcome:
     visible: dict[str, Any]
     task: TaskStart | None = None
     widget: WidgetAinaUi | None = None
+    # Image content blocks of the result (``data`` base64, ``mimeType``), for a model that reads images.
+    images: list[dict[str, str]] = field(default_factory=list)
 
 
 def consent_changes(previous: PackageRuntimeDefinition, current: PackageRuntimeDefinition) -> list[str]:
@@ -909,6 +911,26 @@ def _canvas_widget(manifest: AinaPackageManifest) -> WidgetDefinition | None:
             url=canvas.url,
         ),
     )
+
+
+MAX_TOOL_IMAGES = 3
+MAX_TOOL_IMAGE_BYTES = 1024 * 1024
+TOOL_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+
+
+def tool_images(content: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The result's images a vision model may see: common types, at most 3 of at most 1 MiB each."""
+    images: list[dict[str, str]] = []
+    for item in content:
+        data, mime = item.get("data"), item.get("mimeType")
+        if item.get("type") != "image" or not isinstance(data, str) or mime not in TOOL_IMAGE_TYPES:
+            continue
+        if len(data) * 3 // 4 > MAX_TOOL_IMAGE_BYTES:
+            continue
+        images.append({"data": data, "mimeType": str(mime)})
+        if len(images) == MAX_TOOL_IMAGES:
+            break
+    return images
 
 
 def content_text(content: list[dict[str, Any]]) -> str:

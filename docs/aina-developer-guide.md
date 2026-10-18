@@ -166,8 +166,9 @@ The default is both. App-only tools (for example `sync_bank`) are never shown to
 
 ### Results and errors
 
-- **`content`:** the text is what the model reads. Image and resource blocks reach it only as a placeholder line
-  for now.
+- **`content`:** the text is what the model reads. Image blocks (PNG, JPEG, WebP or GIF, at most 3 of at most
+  1 MiB each) are shown to the model too when the user's model accepts images. Otherwise, and for resources, the
+  model gets a placeholder line.
 - **`structuredContent`:** passed to the model as JSON, and to the tool's result widget as data.
 - **`isError: true`:** for problems the model should read and fix, such as "unknown category". The model sees a
   tool error with your text.
