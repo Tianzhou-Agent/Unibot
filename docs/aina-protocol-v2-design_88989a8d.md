@@ -916,9 +916,9 @@ runtime type only, never on an AINA id.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
-- Host API: `storage/kv`, the task callbacks, `token/refresh`, `documents`, `memory`, `llm` and `notifications` are
-  built. The storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per
-  value, 10 MiB and 10 000 keys per installation. `storage/files`, `files` and `sandbox` are not built. Audit is a
+- Host API: `storage/kv`, `storage/files`, the task callbacks, `token/refresh`, `documents`, `memory`, `llm` and
+  `notifications` are built. The storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per
+  value, 10 MiB and 10 000 keys per installation. `files/{file_ref}` (needs file attachments in chat, which Unibot does not have yet) and `sandbox` are not built. Audit is a
   structured log line per call, not a trace span.
   - `POST /notifications` `{title ≤ 120, body ≤ 500, opens: app|conversation}` (scope `notify`, auto-granted) puts a
     plain-text entry in the user's inbox: a bell in the sidebar with the unread count
@@ -929,6 +929,16 @@ runtime type only, never on an AINA id.
     - **Cleanup:** an uninstall removes the user's entries from that AINA; deleting the AINA removes them all.
     - **Shell routes:** `GET /notifications`, `POST /notifications/{id}/read`, `POST /notifications/read-all`.
     - **Not built yet:** push to other devices, email and per-app muting.
+  - `storage/files` (scope `storage`; [`aina/package/files.py`](../backend/src/tianzhou_agent_platform/aina/package/files.py)):
+    - **Routes:** `PUT /storage/files/{path}` takes the raw bytes and `Content-Type`. `GET` returns them with that
+      type and an `ETag` (sha256). There are also `DELETE` and `GET /storage/files?prefix=&limit=`.
+    - **Paths:** relative, `/`-separated, without empty, `.` or `..` segments or control characters, at most 512
+      characters.
+    - **Limits:** 10 MiB per file, and 100 MiB and 1 000 files per installation (`413`). Replacing a file does not
+      count as a new one.
+    - **Storage:** metadata is in `unibot_aina_files`. The bytes are on the NAS (`aina-files/<installation>/<id>`)
+      when storage is configured, in memory otherwise.
+    - **Cleanup:** an uninstall removes them unless `keep_data`; deleting the AINA removes all of them.
   - The token's encrypted host reference also carries the invocation's raw conversation and workspace. Documents
     are read and written in that workspace (the personal root when there is none), like the built-in document tools.
   - `GET /documents[?query=]`, `GET /documents/{name}[/outline]`, `PUT /documents/{name}` (creates or replaces),

@@ -11,6 +11,7 @@ from tianzhou_agent_platform.auth.models import DeveloperToken, OidcProvider, Us
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
+from tianzhou_agent_platform.aina.package.files import AinaFile
 from tianzhou_agent_platform.aina.package.notifications import AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -65,6 +66,7 @@ from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.store.aina_storage_store import AinaStorageStore
 from tianzhou_agent_platform.store.developer_token_store import DeveloperTokenStore
 from tianzhou_agent_platform.store.aina_notification_store import AinaNotificationStore
+from tianzhou_agent_platform.store.aina_file_store import AinaFileStore
 from tianzhou_agent_platform.store.aina_task_store import AinaTaskStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
 from tianzhou_agent_platform.store.registry_store import RegistryStore
@@ -124,6 +126,7 @@ class PersistentRepository(InMemoryRepository):
         self._aina_storage_store = AinaStorageStore(stores.mysql)
         self._developer_token_store = DeveloperTokenStore(stores.mysql)
         self._aina_notification_store = AinaNotificationStore(stores.mysql)
+        self._aina_file_store = AinaFileStore(stores.mysql)
         self._aina_task_store = AinaTaskStore(stores.mysql)
 
     async def initialize(self) -> None:
@@ -480,6 +483,27 @@ class PersistentRepository(InMemoryRepository):
     async def remove_aina(self, aina_id: str) -> None:
         if not await self._registry_store.remove_aina(aina_id):
             raise not_found("AINA", aina_id)
+
+    async def get_aina_file(self, installation_key: str, path: str) -> AinaFile | None:
+        return await self._aina_file_store.get(installation_key, path)
+
+    async def put_aina_file(self, file: AinaFile) -> AinaFile:
+        await self._aina_file_store.put(file)
+        return self._copy(file)
+
+    async def delete_aina_file(self, installation_key: str, path: str) -> AinaFile | None:
+        return await self._aina_file_store.delete(installation_key, path)
+
+    async def list_aina_files(self, installation_key: str, *, prefix: str, limit: int) -> list[AinaFile]:
+        return await self._aina_file_store.list_files(installation_key, prefix=prefix, limit=limit)
+
+    async def aina_file_usage(self, installation_key: str) -> tuple[int, int]:
+        return await self._aina_file_store.usage(installation_key)
+
+    async def delete_aina_files(
+        self, *, installation_key: str | None = None, aina_id: str | None = None
+    ) -> list[AinaFile]:
+        return await self._aina_file_store.delete_all(installation_key=installation_key, aina_id=aina_id)
 
     async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
         await self._aina_notification_store.create(notification)

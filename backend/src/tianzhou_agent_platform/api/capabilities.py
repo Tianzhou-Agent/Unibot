@@ -19,8 +19,10 @@ from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
 from tianzhou_agent_platform.api.aina_projects import read_archive_upload
 from tianzhou_agent_platform.api.dependencies import (
-    actor_scope, aina_packages, bind_actor, gateway, repository, request_actor, require_platform_admin, settings,
+    actor_scope, aina_file_blobs, aina_packages, bind_actor, gateway, repository, request_actor, require_platform_admin,
+    settings,
 )
+from tianzhou_agent_platform.aina.package.files import blob_key
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.memory_repository import installation_record_id
 from tianzhou_agent_platform.services.platform_tools import open_aina
@@ -200,6 +202,7 @@ def create_capability_router() -> APIRouter:
         await data_repository.remove_aina(aina_id)
         await data_repository.delete_aina_storage(aina_id=aina_id)
         await data_repository.delete_aina_notifications(aina_id=aina_id)
+        await _delete_files(request, aina_id=aina_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/ainas/{aina_id}/install", response_model=AinaInstallation)
@@ -260,9 +263,9 @@ def create_capability_router() -> APIRouter:
             aina_id=aina_id, tenant_id=actor.tenant_id, user_id=actor.user_id
         )
         if not keep_data:
-            await data_repository.delete_aina_storage(
-                installation_key=installation_record_id(actor.tenant_id, actor.user_id, aina_id)
-            )
+            installation_key = installation_record_id(actor.tenant_id, actor.user_id, aina_id)
+            await data_repository.delete_aina_storage(installation_key=installation_key)
+            await _delete_files(request, installation_key=installation_key)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/installations", response_model=list[AinaInstallation])
@@ -275,6 +278,13 @@ def create_capability_router() -> APIRouter:
         return await repository(request).list_installations(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     return router
+
+
+async def _delete_files(request: Request, *, installation_key: str | None = None, aina_id: str | None = None) -> None:
+    """An AINA's private files: their metadata, then their bytes."""
+    blobs = aina_file_blobs(request)
+    for removed in await repository(request).delete_aina_files(installation_key=installation_key, aina_id=aina_id):
+        await blobs.delete(blob_key(removed))
 
 
 def _visible(request: Request, record: ToolRecord | SkillRecord) -> bool:

@@ -51,6 +51,7 @@ from tianzhou_agent_platform.observability.query import ObsQueryService
 from tianzhou_agent_platform.observability.stream import RedisObsIngestWorker
 from tianzhou_agent_platform.observability.analytics import OperationsAnalyticsService
 from tianzhou_agent_platform.observability.logging import ObservationLogHandler
+from tianzhou_agent_platform.store.aina_file_blobs import MemoryFileBlobs, NasFileBlobs
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.observability.telemetry import (
     DurableBufferSpanProcessor,
@@ -374,6 +375,8 @@ def create_app(
     app.state.document_service = resolved_document_service
     app.state.aina_project_service = aina_project_service
     app.state.aina_packages = aina_packages
+    # Plugin-private files (Host API storage/files): on the NAS when storage is configured.
+    app.state.aina_file_blobs = NasFileBlobs(storage_stores.nas) if storage_stores is not None else MemoryFileBlobs()
     app.state.aina_tasks = aina_tasks
     canvas_calls = CanvasCallBroker(storage_stores.redis if storage_stores is not None else None)
     app.state.canvas_calls = canvas_calls

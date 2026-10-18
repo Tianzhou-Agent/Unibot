@@ -15,6 +15,7 @@ from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
+from tianzhou_agent_platform.aina.package.files import AinaFile, file_record_id
 from tianzhou_agent_platform.aina.package.notifications import KEEP_PER_USER, AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -109,6 +110,7 @@ class InMemoryRepository:
         self._aina_storage: dict[str, AinaStorageItem] = {}
         self._developer_tokens: dict[str, DeveloperToken] = {}
         self._aina_notifications: dict[str, AinaNotification] = {}
+        self._aina_files: dict[str, AinaFile] = {}
         self._aina_tasks: dict[str, AinaTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
@@ -1280,6 +1282,46 @@ class InMemoryRepository:
             for key in [key for key in self._installations if key[2] == aina_id]:
                 del self._installations[key]
                 await self._delete_record(INSTALLATIONS_RESOURCE, installation_record_id(*key))
+
+    async def get_aina_file(self, installation_key: str, path: str) -> AinaFile | None:
+        async with self._lock:
+            found = self._aina_files.get(file_record_id(installation_key, path))
+            return self._copy(found) if found is not None else None
+
+    async def put_aina_file(self, file: AinaFile) -> AinaFile:
+        async with self._lock:
+            self._aina_files[file.id] = self._copy(file)
+            return self._copy(file)
+
+    async def delete_aina_file(self, installation_key: str, path: str) -> AinaFile | None:
+        async with self._lock:
+            return self._aina_files.pop(file_record_id(installation_key, path), None)
+
+    async def list_aina_files(self, installation_key: str, *, prefix: str, limit: int) -> list[AinaFile]:
+        async with self._lock:
+            owned = [
+                f for f in self._aina_files.values() if f.installation_key == installation_key and f.path.startswith(prefix)
+            ]
+            return [self._copy(f) for f in sorted(owned, key=lambda f: f.path)[:limit]]
+
+    async def aina_file_usage(self, installation_key: str) -> tuple[int, int]:
+        async with self._lock:
+            owned = [f for f in self._aina_files.values() if f.installation_key == installation_key]
+            return sum(f.size_bytes for f in owned), len(owned)
+
+    async def delete_aina_files(
+        self, *, installation_key: str | None = None, aina_id: str | None = None
+    ) -> list[AinaFile]:
+        async with self._lock:
+            doomed = [
+                f
+                for f in self._aina_files.values()
+                if (installation_key is None or f.installation_key == installation_key)
+                and (aina_id is None or f.aina_id == aina_id)
+            ]
+            for f in doomed:
+                del self._aina_files[f.id]
+            return doomed
 
     async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
         async with self._lock:

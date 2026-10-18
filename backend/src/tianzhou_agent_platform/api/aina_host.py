@@ -11,6 +11,7 @@ that started it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,12 +21,26 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import ConfigDict, Field
 
 from tianzhou_agent_platform.aina.package.bundled import effective_installation
+from tianzhou_agent_platform.aina.package.files import (
+    DEFAULT_TYPE,
+    MAX_FILE_BYTES,
+    MAX_FILES,
+    MAX_PATH_CHARS,
+    AinaFile,
+    FileList,
+    FileView,
+    blob_key,
+    check_path,
+    check_quota,
+    file_record_id,
+    file_view,
+)
 from tianzhou_agent_platform.aina.package.service import content_text
 from tianzhou_agent_platform.aina.package.storage import MAX_LIST_ITEMS, storage_item
 from tianzhou_agent_platform.aina.package.tasks import MAX_MESSAGE_CHARS, AinaTask
 from tianzhou_agent_platform.aina.package.tokens import MAX_TOKEN_SECONDS, VerifiedToken, invalid_token
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
-from tianzhou_agent_platform.api.dependencies import aina_packages, aina_tasks, repository
+from tianzhou_agent_platform.api.dependencies import aina_file_blobs, aina_packages, aina_tasks, repository
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.store.memory_repository import installation_record_id
@@ -218,6 +233,72 @@ def create_aina_host_router() -> APIRouter:
         require_scope(caller, "storage", "storage.delete")
         if not await repository(request).delete_aina_storage_item(caller.installation_key, key):
             raise not_found("Storage key", key)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- storage/files: plugin-private files (files.py) -----------------------------------------------------------
+
+    @router.get(f"{HOST_API_PREFIX}/storage/files", response_model=FileList)
+    async def list_files(
+        request: Request,
+        prefix: str = Query(default="", max_length=MAX_PATH_CHARS),
+        limit: int = Query(default=100, ge=1, le=MAX_FILES),
+        caller: HostCaller = Depends(host_caller),
+    ) -> FileList:
+        require_scope(caller, "storage", "storage.files.list")
+        found = await repository(request).list_aina_files(caller.installation_key, prefix=prefix, limit=limit)
+        return FileList(items=[file_view(item) for item in found])
+
+    @router.get(
+        f"{HOST_API_PREFIX}/storage/files/{{path:path}}",
+        response_class=Response,
+        responses={200: {"content": {"application/octet-stream": {}}, "description": "The file's bytes"}},
+    )
+    async def get_file(path: str, request: Request, caller: HostCaller = Depends(host_caller)) -> Response:
+        require_scope(caller, "storage", "storage.files.get")
+        found = await repository(request).get_aina_file(caller.installation_key, check_path(path))
+        if found is None:
+            raise not_found("File", path)
+        payload = await aina_file_blobs(request).read(blob_key(found))
+        return Response(payload, media_type=found.content_type, headers={"ETag": f'"{found.sha256}"'})
+
+    @router.put(
+        f"{HOST_API_PREFIX}/storage/files/{{path:path}}",
+        response_model=FileView,
+        openapi_extra={"requestBody": {"required": True, "content": {"application/octet-stream": {}}}},
+    )
+    async def put_file(path: str, request: Request, caller: HostCaller = Depends(host_caller)) -> FileView:
+        """Create or replace a file; the body is its bytes and ``Content-Type`` its type."""
+        require_scope(caller, "storage", "storage.files.put")
+        check_path(path)
+        declared = int(request.headers.get("content-length") or 0)
+        if declared > MAX_FILE_BYTES:
+            check_quota(used_bytes=0, used_files=0, replaced=None, size=declared)
+        payload = await request.body()
+        repo = repository(request)
+        replaced = await repo.get_aina_file(caller.installation_key, path)
+        used_bytes, used_files = await repo.aina_file_usage(caller.installation_key)
+        check_quota(used_bytes=used_bytes, used_files=used_files, replaced=replaced, size=len(payload))
+        content_type = (request.headers.get("content-type") or DEFAULT_TYPE).split(";")[0].strip()[:160] or DEFAULT_TYPE
+        stored = AinaFile(
+            id=file_record_id(caller.installation_key, path),
+            installation_key=caller.installation_key,
+            aina_id=caller.installation.aina_id,
+            path=path,
+            size_bytes=len(payload),
+            content_type=content_type,
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        # The bytes first: a file is listed only once they are stored.
+        await aina_file_blobs(request).write(blob_key(stored), payload)
+        return file_view(await repo.put_aina_file(stored))
+
+    @router.delete(f"{HOST_API_PREFIX}/storage/files/{{path:path}}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_file(path: str, request: Request, caller: HostCaller = Depends(host_caller)) -> Response:
+        require_scope(caller, "storage", "storage.files.delete")
+        removed = await repository(request).delete_aina_file(caller.installation_key, check_path(path))
+        if removed is None:
+            raise not_found("File", path)
+        await aina_file_blobs(request).delete(blob_key(removed))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post(f"{HOST_API_PREFIX}/tasks/{{task_id}}/progress", response_model=TaskState)
