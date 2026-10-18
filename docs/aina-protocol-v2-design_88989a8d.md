@@ -1,6 +1,6 @@
 # AINA Protocol 2.0 — Plugin Contract Design
 
-Status: **Accepted; P0, P1, P3, P6 and P2 (except MCP OAuth and notifications) implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+Status: **Accepted; P0, P1, P3, P6 and P2 (except notifications) implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
 differs.
 
 Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
@@ -882,7 +882,29 @@ runtime type only, never on an AINA id.
 ### Where the implementation differs from or narrows this design
 
 - `tools.mcp.url` also accepts plain `http://` for loopback hosts, so a developer can register a local server.
-- MCP `oauth2` authorization is not implemented yet; registration rejects it. `none`, `bearer` and `api_key` work.
+- MCP `oauth2` authorization ([`aina/package/oauth.py`](../backend/src/tianzhou_agent_platform/aina/package/oauth.py),
+  [`api/aina_oauth.py`](../backend/src/tianzhou_agent_platform/api/aina_oauth.py)):
+  - **Discovery:** the protected resource metadata comes from the server's `401` challenge, or from the path-aware
+    and root well-known URLs. The authorization server metadata comes from RFC 8414 or OIDC discovery (issuers with
+    a path included), and must list PKCE `S256`.
+  - **Client registration:** Unibot registers once per AINA with dynamic client registration, as a public client
+    (`token_endpoint_auth_method: none`, with a sealed secret if the server issues one anyway). The registration
+    is stored on the package runtime (`oauth`) and kept across upgrades while the MCP URL stays the same.
+    Pre-registered clients and Client ID Metadata Documents are not supported.
+  - **Installing:** an install without a connection has status `authorization_required` and skips the tool check.
+    `POST /ainas/{id}/oauth/authorize` returns the authorization URL: code + PKCE + `resource` + scopes
+    (`auth.scopes`, else `scopes_supported`), with a sealed `state` bound to the user and valid for 10 minutes.
+  - **Callback:** `GET /aina-oauth/callback` (`UNIBOT_AINA_OAUTH_CALLBACK_URL`) exchanges the code, seals the
+    tokens in the installation's secrets (`@oauth`, shown as `oauth_connected`), checks the tools as the user, and
+    redirects to the shell with `?aina_oauth=connected|failed`.
+  - **Tokens over time:** tokens are refreshed 60 s before they expire. A `401` from the MCP server forces one
+    refresh. A failed refresh drops the tokens and sets `authorization_required`. Re-installs keep the connection,
+    and `POST /ainas/{id}/oauth/disconnect` drops it.
+  - **Registration:** an OAuth server that lists tools only to authorized clients needs an admin access token as
+    the one-time `credential`.
+  - **Destinations:** every request the host makes (metadata, registration, tokens) passes the destination policy.
+  - **401 detection:** the MCP SDK reports a refused request without its HTTP status, so the MCP client records
+    response statuses itself to recognise a `401`/`403` as `AUTHENTICATION_FAILED`.
 - The drift check runs before every new installation and on `POST /ainas/{id}/tools/refresh`; it is not yet on a
   periodic schedule.
 - `_meta["unibot/context"]` has no user `locale`/`timezone` yet. The MCP SDK's own OpenTelemetry spans join the
@@ -1018,7 +1040,7 @@ runtime type only, never on an AINA id.
 
 ### Next
 
-Still open from P2: MCP OAuth 2.0 and notifications. Also still open:
+Still open from P2: notifications. Also still open:
 restricting what posted task Markdown can load, image results reaching vision-capable models, and from P4 releasing
 `unibot-aina` to PyPI and `@unibot/aina-ui` to npm (both are ready to build) and the design's outsider test with a real
 outside developer; the steps of the guide were checked in fresh environments. `aina dev` has no model: chat with a

@@ -75,7 +75,7 @@ def mcp_auth_headers(
     if auth.type == "none":
         return {}
     if auth.type == "oauth2":
-        raise _invalid("MCP OAuth 2.0 authorization is not supported yet")
+        raise _invalid("OAuth MCP servers are authorized per user with their connected account")
     value = credential
     if value is None and installation is not None and auth.secret is not None:
         sealed = installation.secrets.get(auth.secret)

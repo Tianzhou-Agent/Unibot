@@ -3,6 +3,7 @@ export default {
   subtitle: "{{publisher}} · version {{version}}",
   close: "Close",
   server: "Tool server",
+  oauthNext: "Next, you sign in to {{origin}} with your own account; Unibot keeps the access it grants, encrypted.",
   serverHint: "Your requests to this AINA are sent to this server.",
   canvas: "Canvas web app",
   tools: "What it can do",

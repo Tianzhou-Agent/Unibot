@@ -353,7 +353,7 @@ def test_registration_snapshots_exposed_tools_and_projects_the_record() -> None:
     assert "com.example.expenses" in {item["manifest"]["aina"]["id"] for item in listed}
 
 
-def test_registration_rejects_missing_tools_changed_content_and_unsupported_auth() -> None:
+def test_registration_rejects_missing_tools_and_changed_content() -> None:
     server = _example_server()
     partial = MCPServer("partial")
 
@@ -364,7 +364,6 @@ def test_registration_rejects_missing_tools_changed_content_and_unsupported_auth
 
     files = _example_files()
     changed = _with_manifest(files, _set("aina.description", "Track expenses."))
-    oauth = _with_manifest(files, _set("tools.mcp.auth", {"type": "oauth2"}))
     with TestClient(
         create_app(settings=_settings(), llm=ScriptedLLM([]), mcp_client=McpToolClient(servers={MCP_URL: partial}))
     ) as client:
@@ -376,15 +375,12 @@ def test_registration_rejects_missing_tools_changed_content_and_unsupported_auth
     ) as client:
         first = _register(client, files)
         conflict = _register(client, changed)
-        unsupported = _register(client, _with_manifest(oauth, _set("aina.version", "2.0.0")))
 
     assert missing.status_code == 422
     assert "does not list a tool named 'list_expenses'" in missing.json()["error"]["message"]
     assert first.status_code == 201
     assert conflict.status_code == 409
     assert "publish a new version" in conflict.json()["error"]["message"]
-    assert unsupported.status_code == 422
-    assert "MCP OAuth 2.0 authorization is not supported yet" in unsupported.json()["error"]["message"]
 
 
 # --- P1: scope, skills, effects and approvals ----------------------------------------------------------------

@@ -109,7 +109,9 @@ export function PackageReviewDialog({
   const [error, setError] = useState<string | null>(null);
   const manifest = report.manifest;
   const valid = Boolean(manifest) && report.errors.length === 0;
-  const needsCredential = manifest ? ["bearer", "api_key"].includes(manifest.tools.mcp.auth.type) : false;
+  const authType = manifest?.tools.mcp.auth.type;
+  // A bearer/api_key server's credential, or an access token for an OAuth server, to list its tools once.
+  const needsCredential = authType === "bearer" || authType === "api_key" || authType === "oauth2";
 
   async function register() {
     setBusy(true);
@@ -182,7 +184,7 @@ export function PackageReviewDialog({
             <label className="block">
               <span className="mb-1 block font-bold">{t("package.credential")}</span>
               <input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} className="input-soft" autoComplete="off" />
-              <span className="mt-1 block text-ink-muted">{t("package.credentialHint")}</span>
+              <span className="mt-1 block text-ink-muted">{t(authType === "oauth2" ? "package.credentialHintOauth" : "package.credentialHint")}</span>
             </label>
           ) : null}
           {valid && !canRegister ? <p className="text-ink-muted">{t("package.adminOnly")}</p> : null}

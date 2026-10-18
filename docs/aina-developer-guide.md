@@ -172,8 +172,27 @@ The default is both. App-only tools (for example `sync_bank`) are never shown to
   tool error with your text.
 - **Timeouts:** the default timeout is 30 seconds. Set `timeout_seconds` (at most 120) on the exposed tool. Longer
   work must use a long-running tool (§8).
-- **Server authentication:** `tools.mcp.auth` is `none`, `bearer` or `api_key`. The credential comes from a secret
-  setting (§7). MCP OAuth 2.0 is not supported yet.
+- **Server authentication:** `tools.mcp.auth` is `none`, `bearer`, `api_key` or `oauth2`. A `bearer` or `api_key`
+  credential comes from a secret setting (§7).
+
+### OAuth servers
+
+With `"auth": {"type": "oauth2"}` each user connects their own account, following the MCP authorization spec:
+
+- **What your server must publish:**
+  - a `401` with `WWW-Authenticate: Bearer resource_metadata="…"`, or protected resource metadata at
+    `/.well-known/oauth-protected-resource[/path]` (RFC 9728);
+  - authorization server metadata (RFC 8414 or OpenID Connect discovery) with `S256` in
+    `code_challenge_methods_supported`;
+  - dynamic client registration (RFC 7591).
+- **What Unibot does:**
+  - registers itself once per app as a public client, with redirect URI `<unibot>/api/aina-oauth/callback`;
+  - signs the user in with authorization code + PKCE and the `resource` indicator (RFC 8707);
+  - asks for the scopes in `auth.scopes`, or else your metadata's `scopes_supported`;
+  - sends `Authorization: Bearer <token>` and refreshes the token before it expires;
+  - when a refresh fails, asks the user to connect again.
+- **Allowlist:** on hosts with a destination allowlist, an admin must allow your authorization server's origin too.
+- **Not supported yet:** pre-registered clients and Client ID Metadata Documents.
 
 ## 4. The call context and the Host API
 
@@ -376,6 +395,8 @@ The rules:
   - `aina publish`, or **Upload app package**, registers a version. Registering needs a platform admin.
   - For a `bearer` or `api_key` server, pass `--credential` (or fill the field in the dialog). It is used once to
     list your tools and is not stored.
+  - For an `oauth2` server that lists its tools only to an authorized client, pass an access token for the server
+    the same way.
 - **Versions:** publishing the same version with different content is refused. Bump `aina.version`.
 - **Upgrades that need consent again:** if a new version widens what your app can do, each installation pauses
   until its user approves again. That includes:

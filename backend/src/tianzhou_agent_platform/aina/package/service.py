@@ -14,14 +14,16 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+import httpx
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 
-from tianzhou_agent_platform.aina.package.configuration import mcp_auth_headers, prepare_configuration
+from tianzhou_agent_platform.aina.package.configuration import mcp_auth_headers, prepare_configuration, secret_context
 from tianzhou_agent_platform.aina.package.context import CONTEXT_META_KEY, Source, unibot_context
 from tianzhou_agent_platform.aina.package.manifest import EFFECT_ORDER, AinaPackageManifest, Effect
 from tianzhou_agent_platform.aina.package.bundled import BUNDLED_HOST, effective_installation, is_bundled_url
 from tianzhou_agent_platform.aina.package.mcp_client import McpServerInfo, McpToolClient
+from tianzhou_agent_platform.aina.package.oauth import OAUTH_SECRET, McpOAuth, OAuthServer
 from tianzhou_agent_platform.aina.package.secrets import SecretBox, aina_key_material
 from tianzhou_agent_platform.aina.package.tasks import TaskStart, parse_task_start
 from tianzhou_agent_platform.aina.package.tokens import ContextTokenSigner, HostReference
@@ -82,6 +84,7 @@ class AinaPackageService:
         mcp: McpToolClient | None = None,
         ui: PackageUiStore | None = None,
         enforce_destination_policy: bool = False,
+        oauth_http: httpx.AsyncClient | None = None,
     ) -> None:
         self.repository = repository
         self.settings = settings
@@ -90,26 +93,25 @@ class AinaPackageService:
         self.enforce_destination_policy = enforce_destination_policy
         self.box = SecretBox.from_settings(settings)
         self.tokens = ContextTokenSigner.from_settings(settings)
+        self.oauth = McpOAuth(
+            box=self.box,
+            redirect_uri=settings.aina_oauth_callback_url,
+            require_destination=lambda url: self._require_destination(url, settings.capability_allowed_origins),
+            http=oauth_http,
+        )
 
     async def register(
         self, payload: bytes, *, credential: str | None = None, bundled: bool = False, replace: bool = False
     ) -> AinaRecord:
         """Validate a package, snapshot its exposed MCP tools and register (or upgrade) the AINA.
 
-        ``credential`` authenticates the registration-time ``tools/list`` of a ``bearer``/``api_key`` server; it
-        is used once and never stored. ``bundled`` registers a first-party package shipped with Unibot (design §11),
+        ``credential`` authenticates the registration-time ``tools/list`` of a ``bearer``/``api_key`` server, or is
+        an access token for an ``oauth2`` one; it is used once and never stored. ``bundled`` registers a first-party package shipped with Unibot (design §11),
         whose content may change without a version bump between releases. ``replace`` (``aina dev``) re-registers the
         same version with new content and a fresh tool snapshot.
         """
         report = validate_package_archive(payload)
         manifest = require_valid_package(report)
-        if manifest.tools.mcp.auth.type == "oauth2":
-            raise PlatformError(
-                "INVALID_REQUEST",
-                "MCP OAuth 2.0 authorization is not supported yet; use auth type none, bearer or api_key",
-                status_code=422,
-                source="aina_package",
-            )
         if is_bundled_url(manifest.tools.mcp.url) != bundled:
             raise PlatformError(
                 "INVALID_REQUEST",
@@ -132,7 +134,18 @@ class AinaPackageService:
                     f"AINA {manifest.aina.id!r} version {manifest.aina.version!r} was already registered with "
                     "different content; publish a new version"
                 )
-        info = await self._list_tools(manifest, self._discovery_headers(manifest, credential=credential))
+        try:
+            info = await self._list_tools(manifest, self._discovery_headers(manifest, credential=credential))
+        except PlatformError as exc:
+            if exc.code != "AUTHENTICATION_FAILED" or manifest.tools.mcp.auth.type != "oauth2" or credential:
+                raise
+            raise PlatformError(
+                "AUTHENTICATION_FAILED",
+                "This OAuth MCP server lists its tools only to an authorized client: register it with an access token "
+                "for the server as the one-time credential (aina publish --credential, or the upload dialog)",
+                status_code=422,
+                source="aina_package",
+            ) from exc
         snapshots, errors, warnings = snapshot_tools(manifest, info.tools)
         if errors:
             raise PlatformError(
@@ -150,6 +163,7 @@ class AinaPackageService:
             server_name=info.name,
             server_version=info.version,
             bundled=bundled,
+            oauth=_kept_oauth(existing, manifest),
         )
         if existing is not None and bundled and _same_package(existing, runtime):
             return existing
@@ -218,6 +232,9 @@ class AinaPackageService:
             user_id=request.user_id,
             previous=previous,
         )
+        oauth = manifest.tools.mcp.auth.type == "oauth2"
+        if oauth and previous is not None and OAUTH_SECRET in previous.secrets:
+            sealed[OAUTH_SECRET] = previous.secrets[OAUTH_SECRET]  # the user's connection outlives a re-install
         installation = AinaInstallation(
             user_id=request.user_id,
             tenant_id=request.tenant_id,
@@ -226,9 +243,12 @@ class AinaPackageService:
             secrets=sealed,
             aina_id=aina_id,
             installed_version=record.manifest.aina.version,
+            # An OAuth server's tools are listed as the user, so they connect their account first.
+            status="authorization_required" if oauth and OAUTH_SECRET not in sealed else "active",
         )
-        # Design §6.1: the tool snapshot is re-checked before every new installation, as this user.
-        await self.refresh_tools(aina_id, installation=installation)
+        if installation.status == "active":
+            # Design §6.1: the tool snapshot is re-checked before every new installation, as this user.
+            await self.refresh_tools(aina_id, installation=installation)
         return await self.repository.put_installation(installation)
 
     async def refresh_tools(
@@ -242,7 +262,7 @@ class AinaPackageService:
         record = await self.repository.get_aina(aina_id)
         runtime = package_runtime(record)
         headers = (
-            mcp_auth_headers(runtime.package.tools.mcp.auth, installation, box=self.box)
+            await self._auth_headers(record, installation)
             if installation is not None
             else self._discovery_headers(runtime.package, credential=credential)
         )
@@ -300,7 +320,7 @@ class AinaPackageService:
         validate_arguments(snapshot, arguments)
         manifest = runtime.package
         self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
-        headers = mcp_auth_headers(manifest.tools.mcp.auth, installation, box=self.box)
+        headers = await self._auth_headers(record, installation)
         context = unibot_context(
             secret=aina_key_material(self.settings),
             manifest=manifest,
@@ -314,14 +334,16 @@ class AinaPackageService:
         context["token"] = self.mint_token(
             installation, context, conversation_id=conversation_id, workspace_id=workspace_id
         )
-        result = await self.mcp.call_tool(
-            manifest.tools.mcp.url,
-            name,
-            arguments,
-            meta={"progressToken": invocation_id, CONTEXT_META_KEY: context},
-            headers=headers,
-            timeout=snapshot.timeout_seconds,
-        )
+        meta = {"progressToken": invocation_id, CONTEXT_META_KEY: context}
+        url, timeout = manifest.tools.mcp.url, snapshot.timeout_seconds
+        try:
+            result = await self.mcp.call_tool(url, name, arguments, meta=meta, headers=headers, timeout=timeout)
+        except PlatformError as exc:
+            if exc.code != "AUTHENTICATION_FAILED" or manifest.tools.mcp.auth.type != "oauth2":
+                raise
+            # The server rejected the user's token: refresh it once (a failed refresh asks the user to reconnect).
+            headers = await self._auth_headers(record, installation, force_refresh=True)
+            result = await self.mcp.call_tool(url, name, arguments, meta=meta, headers=headers, timeout=timeout)
         text = content_text(result.content)
         if result.is_error:
             raise PlatformError(
@@ -497,7 +519,104 @@ class AinaPackageService:
     def _discovery_headers(self, manifest: AinaPackageManifest, *, credential: str | None) -> dict[str, str]:
         if manifest.tools.mcp.auth.type == "none" or credential is None:
             return {}
+        if manifest.tools.mcp.auth.type == "oauth2":
+            return {"Authorization": f"Bearer {credential}"}  # an access token the admin got from the server
         return mcp_auth_headers(manifest.tools.mcp.auth, None, box=self.box, credential=credential)
+
+    # --- OAuth MCP servers (oauth.py) -------------------------------------------------------------------------
+
+    async def _auth_headers(
+        self, record: AinaRecord, installation: AinaInstallation, *, force_refresh: bool = False
+    ) -> dict[str, str]:
+        manifest = package_runtime(record).package
+        if manifest.tools.mcp.auth.type != "oauth2":
+            return mcp_auth_headers(manifest.tools.mcp.auth, installation, box=self.box)
+        return {"Authorization": f"Bearer {await self._access_token(record, installation, force_refresh=force_refresh)}"}
+
+    async def _access_token(self, record: AinaRecord, installation: AinaInstallation, *, force_refresh: bool) -> str:
+        server = package_runtime(record).oauth
+        sealed = installation.secrets.get(OAUTH_SECRET)
+        if server is None or sealed is None:
+            raise self._needs_connection(record)
+        context = _installation_context(installation)
+        tokens = self.oauth.open_tokens(sealed, context=context)
+        if not (force_refresh or tokens.expiring):
+            return tokens.access_token
+        try:
+            tokens = await self.oauth.refresh(server, aina_id=installation.aina_id, tokens=tokens)
+        except PlatformError as exc:
+            await self._disconnect(installation)
+            raise self._needs_connection(record) from exc
+        current = await self._installation(installation.aina_id, tenant_id=installation.tenant_id, user_id=installation.user_id)
+        if current is not None:
+            secrets = {**current.secrets, OAUTH_SECRET: self.oauth.seal_tokens(tokens, context=context)}
+            await self.repository.put_installation(current.model_copy(update={"secrets": secrets}))
+        return tokens.access_token
+
+    def _needs_connection(self, record: AinaRecord) -> PlatformError:
+        name = record.manifest.aina.name
+        return PlatformError(
+            "AUTHENTICATION_FAILED",
+            f"{name} needs the user to connect their account again (Plugins → {name} → Connect)",
+            status_code=409,
+            source="mcp_oauth",
+            user_message=f"Connect your {name} account to use it.",
+        )
+
+    async def _disconnect(self, installation: AinaInstallation) -> AinaInstallation:
+        current = await self._installation(installation.aina_id, tenant_id=installation.tenant_id, user_id=installation.user_id)
+        current = current or installation
+        secrets = {key: value for key, value in current.secrets.items() if key != OAUTH_SECRET}
+        status = "authorization_required" if current.status == "active" else current.status
+        return await self.repository.put_installation(current.model_copy(update={"secrets": secrets, "status": status}))
+
+    async def start_authorization(self, aina_id: str, *, tenant_id: str, user_id: str, return_to: str) -> str:
+        """The URL that sends the user to the OAuth MCP server's authorization page (registering Unibot first)."""
+        record = await self.repository.get_aina(aina_id)
+        runtime = package_runtime(record)
+        auth = runtime.package.tools.mcp.auth
+        if auth.type != "oauth2":
+            raise PlatformError("INVALID_REQUEST", f"AINA {aina_id!r} does not use OAuth", status_code=409)
+        if await self._installation(aina_id, tenant_id=tenant_id, user_id=user_id) is None:
+            raise PlatformError("INVALID_REQUEST", "Install the AINA before connecting it", status_code=409)
+        server = runtime.oauth
+        if server is None or server.redirect_uri != self.oauth.redirect_uri:
+            server = await self.oauth.register_client(
+                aina_id=aina_id, mcp_url=runtime.package.tools.mcp.url, scopes=list(auth.scopes or [])
+            )
+            updated = runtime.model_copy(update={"oauth": server})
+            record = await self.repository.upsert_aina(
+                record.model_copy(update={"manifest": project_manifest(runtime.package, updated)})
+            )
+        return self.oauth.authorization_url(
+            server, aina_id=aina_id, tenant_id=tenant_id, user_id=user_id, return_to=return_to
+        )
+
+    async def complete_authorization(self, *, code: str, state: str, tenant_id: str, user_id: str) -> tuple[str, str]:
+        """Store the user's tokens from the authorization response; returns the AINA id and where to send the user."""
+        opened = self.oauth.open_state(state)
+        if (opened.tenant_id, opened.user_id) != (tenant_id, user_id):
+            raise PlatformError("PERMISSION_DENIED", "This authorization was started by another user", status_code=403)
+        record = await self.repository.get_aina(opened.aina_id)
+        server = package_runtime(record).oauth
+        installation = await self._installation(opened.aina_id, tenant_id=tenant_id, user_id=user_id)
+        if server is None or installation is None:
+            raise PlatformError("CONFLICT", "The AINA was uninstalled or upgraded meanwhile; connect again", status_code=409)
+        tokens = await self.oauth.exchange(server, aina_id=opened.aina_id, code=code, verifier=opened.verifier)
+        secrets = {**installation.secrets, OAUTH_SECRET: self.oauth.seal_tokens(tokens, context=_installation_context(installation))}
+        status = "active" if installation.status == "authorization_required" else installation.status
+        connected = installation.model_copy(update={"secrets": secrets, "status": status})
+        if status == "active":
+            # Design §6.1: the tool snapshot is re-checked before an installation is used, as this user.
+            await self.refresh_tools(opened.aina_id, installation=connected)
+        await self.repository.put_installation(connected)
+        return opened.aina_id, opened.return_to
+
+    async def disconnect(self, aina_id: str, *, tenant_id: str, user_id: str) -> AinaInstallation:
+        installation = await self._installation(aina_id, tenant_id=tenant_id, user_id=user_id)
+        if installation is None:
+            raise PlatformError("RESOURCE_NOT_FOUND", f"AINA {aina_id!r} is not installed", status_code=404)
+        return await self._disconnect(installation)
 
     async def _existing(self, aina_id: str) -> AinaRecord | None:
         try:
@@ -519,6 +638,20 @@ class AinaPackageService:
         # Only bundled packages may use the bundled host (``register``), and their servers run in process.
         if self.enforce_destination_policy and not is_bundled_url(url):
             require_approved_destination(url, allowed_origins)
+
+
+def _kept_oauth(existing: AinaRecord | None, manifest: AinaPackageManifest) -> OAuthServer | None:
+    """An upgrade keeps Unibot's client registration while the MCP server stays the same, so tokens keep working."""
+    if existing is None or manifest.tools.mcp.auth.type != "oauth2":
+        return None
+    previous = existing.manifest.runtime
+    if not isinstance(previous, PackageRuntimeDefinition) or previous.package.tools.mcp.url != manifest.tools.mcp.url:
+        return None
+    return previous.oauth
+
+
+def _installation_context(installation: AinaInstallation) -> str:
+    return secret_context(tenant_id=installation.tenant_id, user_id=installation.user_id, aina_id=installation.aina_id)
 
 
 def _same_package(record: AinaRecord, runtime: PackageRuntimeDefinition) -> bool:

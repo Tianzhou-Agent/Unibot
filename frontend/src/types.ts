@@ -404,7 +404,9 @@ export interface AinaInstallation {
   // Names of secret settings that have a value; secret values are never returned.
   configured_secrets?: string[];
   // ``consent_required``: an upgrade widened what the AINA can do; it is paused until the user approves again.
-  status: "active" | "disabled" | "consent_required";
+  // ``authorization_required``: its OAuth tool server needs the user to connect their account first (again).
+  status: "active" | "disabled" | "consent_required" | "authorization_required";
+  oauth_connected?: boolean;
   consent_changes?: string[];
   installed_at: string;
 }

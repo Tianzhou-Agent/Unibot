@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tianzhou_agent_platform.aina.package.manifest import AinaPackageManifest, Effect, Visibility
+from tianzhou_agent_platform.aina.package.oauth import OAuthServer
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 
 DEFAULT_TOOL_TIMEOUT_SECONDS = 30.0
@@ -64,6 +65,8 @@ class PackageRuntimeDefinition(StrictModel):
     tools_checked_at: datetime = Field(default_factory=utc_now)
     # A first-party package shipped with Unibot (design §11): served in process and available to every user.
     bundled: bool = False
+    # ``oauth2`` MCP servers: the authorization server and the client Unibot registered there (kept across upgrades).
+    oauth: OAuthServer | None = None
 
     def tool(self, name: str) -> ToolSnapshot | None:
         return next((tool for tool in self.tools if tool.name == name), None)

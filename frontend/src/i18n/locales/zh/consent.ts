@@ -3,6 +3,7 @@ export default {
   subtitle: "{{publisher}} · 版本 {{version}}",
   close: "关闭",
   server: "工具服务器",
+  oauthNext: "接下来你将使用自己的账号登录 {{origin}}；Unibot 会加密保存它授予的访问权限。",
   serverHint: "你对该 AINA 的请求会发送到这个服务器。",
   canvas: "画布网页应用",
   tools: "它能做什么",

@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import AnyHttpUrl, Field, computed_field, field_validator, model_validator
 
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
+from tianzhou_agent_platform.aina.package.oauth import OAUTH_SECRET
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.security.models import Authentication
 from tianzhou_agent_platform.core.base import StrictModel, Usage, utc_now
@@ -145,7 +146,8 @@ class AinaInstallation(InstallationRequest):
     aina_id: str
     installed_version: str
     # ``consent_required``: an upgrade widened what the AINA can do; it is paused until the user approves again.
-    status: Literal["active", "disabled", "consent_required"] = "active"
+    # ``authorization_required``: its OAuth MCP server needs the user to connect their account (again).
+    status: Literal["active", "disabled", "consent_required", "authorization_required"] = "active"
     installed_at: datetime = Field(default_factory=utc_now)
     # What the upgrade that paused the installation changed, shown when the user is asked again.
     consent_changes: list[str] = Field(default_factory=list)
@@ -156,7 +158,13 @@ class AinaInstallation(InstallationRequest):
     @property
     def configured_secrets(self) -> list[str]:
         """Names of the secret settings that have a value (their values are never returned)."""
-        return sorted(self.secrets)
+        return sorted(name for name in self.secrets if name != OAUTH_SECRET)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def oauth_connected(self) -> bool:
+        """Whether the user connected their account of an OAuth MCP server."""
+        return OAUTH_SECRET in self.secrets
 
 
 class PermissionUpdate(StrictModel):
