@@ -22,6 +22,7 @@ export default function PluginDetailPage() {
   const [record, setRecord] = useState<AinaRecord | null>(null);
   const [installed, setInstalled] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
+  const [paused, setPaused] = useState<AinaInstallation | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export default function PluginDetailPage() {
       ]);
       setRecord(ainas.find((item) => item.manifest.aina.id === ainaId) ?? null);
       setInstalled(installations.some((item) => item.aina_id === ainaId && item.status === "active"));
+      setPaused(installations.find((item) => item.aina_id === ainaId && item.status === "consent_required") ?? null);
     } catch (loadError) {
       setError(apiErrorMessage(loadError));
     } finally {
@@ -75,6 +77,7 @@ export default function PluginDetailPage() {
       {consentOpen && record ? (
         <InstallConsentDialog
           record={record}
+          installation={paused}
           onClose={() => setConsentOpen(false)}
           onInstalled={() => {
             setConsentOpen(false);
@@ -93,6 +96,17 @@ export default function PluginDetailPage() {
 
           {error ? <p role="alert" className="mt-4 rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger-deep">{error}</p> : null}
           {loading ? <div className="mt-8 h-40 animate-pulse rounded-2xl bg-line/60" /> : null}
+          {paused && record ? (
+            <section role="alert" className="mt-4 rounded-xl border border-warning-ring bg-warning-soft px-4 py-3 text-[13px] text-warning-deep">
+              <p className="font-semibold">{t("detail.consentRequired")}</p>
+              <ul className="mt-1 list-disc pl-5">
+                {(paused.consent_changes ?? []).map((change) => <li key={change}>{change}</li>)}
+              </ul>
+              <button type="button" onClick={() => setConsentOpen(true)} className="btn mt-2 h-8 rounded-full bg-ink px-3.5 text-[12px] text-white hover:bg-black">
+                {t("detail.reviewUpdate")}
+              </button>
+            </section>
+          ) : null}
           {!loading && !manifest ? <p className="mt-10 text-center text-[14px] text-ink-muted">{t("detail.notFound")}</p> : null}
 
           {manifest && record ? (
