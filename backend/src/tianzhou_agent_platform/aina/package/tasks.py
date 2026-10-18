@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Callable, Literal, Protocol
 
@@ -34,7 +35,8 @@ MAX_RESULT_CHARS = 100_000
 MAX_STRUCTURED_BYTES = 256 * 1024
 MAX_MESSAGE_CHARS = 2_000
 
-AinaTaskStatus = Literal["running", "completed", "failed"]
+# ``cancelled``: the user stopped it; the AINA's later callbacks get 409 and ``GET /tasks/{id}`` tells it so.
+AinaTaskStatus = Literal["running", "completed", "failed", "cancelled"]
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +232,33 @@ class AinaTaskService:
             await self._update_live(installation_key, external_id, lambda task: _failed(task, error))
         )
 
+    async def state(self, installation_key: str, external_id: str) -> AinaTask:
+        """The installation's task in any state, for the AINA to see whether it should keep working."""
+        task = await self.repository.get_aina_task(task_record_id(installation_key, external_id))
+        if task is None:
+            raise not_found("Task", external_id)
+        return await self._expire_if_overdue(task)
+
+    async def cancel(self, conversation_id: str, task_id: str) -> AinaTask:
+        """The user stops a running task of this conversation; the cancellation is posted like a result."""
+        task = await self.repository.get_aina_task(task_id)
+        if task is None or task.conversation_id != conversation_id:
+            raise not_found("Task", task_id)
+        cancelled = False
+
+        def stop(current: AinaTask) -> AinaTask | None:
+            nonlocal cancelled
+            if not current.is_live():
+                return None
+            cancelled = True
+            now = utc_now()
+            return current.model_copy(update={"status": "cancelled", "updated_at": now, "finished_at": now})
+
+        updated = await self.repository.update_aina_task(task.id, stop)
+        if updated is None or not cancelled:
+            raise conflict(f"Task {task.title!r} is no longer running")
+        return await self._post(updated)
+
     async def list_for_conversation(self, conversation_id: str) -> list[AinaTask]:
         """The conversation's tasks; results held back while a turn ran are posted now."""
         tasks = [await self._expire_if_overdue(task) for task in await self.repository.list_aina_tasks(conversation_id)]
@@ -344,15 +373,31 @@ def result_text(task: AinaTask) -> str:
     """The conversation message that reports a finished task to the user."""
     if task.status == "failed":
         return f"**{task.title}** failed: {task.error or 'no details'}"
-    body = task.result or ""
+    if task.status == "cancelled":
+        return f"**{task.title}** was cancelled."
+    body = without_remote_images(task.result or "")
     if not body and task.structured_content is not None:
         body = f"```json\n{json.dumps(task.structured_content, ensure_ascii=False, indent=2)}\n```"
     return f"**{task.title}** finished.\n\n{body}".rstrip()
 
 
+_IMAGE = re.compile(r"(?<!\\)!(\[(?:[^\]\\]|\\.)*\])(?=[(\[])")
+
+
+def without_remote_images(markdown: str) -> str:
+    """An AINA's Markdown as links instead of images: a posted result never loads anything until the user clicks.
+
+    The shell renders Markdown without raw HTML, so images are the only thing that would load by themselves (and
+    could tell the AINA's server when the user read the result).
+    """
+    return _IMAGE.sub(r"\1", markdown)
+
+
 def model_result_text(task: AinaTask) -> str:
     """The same report for the model: delimited, and marked as third-party output."""
     parts = [task.error or "no details"] if task.status == "failed" else []
+    if task.status == "cancelled":
+        parts = ["The user cancelled it."]
     if task.status == "completed":
         if task.result:
             parts.append(task.result)

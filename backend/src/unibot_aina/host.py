@@ -124,6 +124,10 @@ class HostApi:
             "POST", f"/tasks/{_path(task_id)}/progress", json={"progress": progress, "total": total, "message": message}
         )
 
+    async def task_state(self, task_id: str) -> dict[str, Any]:
+        """The task as Unibot sees it; stop working when its ``status`` is ``cancelled``."""
+        return cast(dict[str, Any], await self._request("GET", f"/tasks/{_path(task_id)}"))
+
     async def task_complete(self, task_id: str, text: str, structured: dict[str, Any] | None = None) -> None:
         body: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
         if structured is not None:

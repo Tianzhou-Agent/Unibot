@@ -48,6 +48,13 @@ def create_conversation_router() -> APIRouter:
         require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
         return await aina_tasks(request).list_for_conversation(conversation_id)
 
+    @router.post("/conversations/{conversation_id}/aina-tasks/{task_id}/cancel", response_model=AinaTask)
+    async def cancel_conversation_aina_task(conversation_id: str, task_id: str, request: Request) -> AinaTask:
+        """Stop a background task; the AINA learns it from its next callback or ``GET /tasks/{id}``."""
+        conversation = await conversation_service(request).get(conversation_id)
+        require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
+        return await aina_tasks(request).cancel(conversation_id, task_id)
+
     @router.patch("/conversations/{conversation_id}", response_model=Conversation)
     async def update_conversation(
         conversation_id: str,

@@ -301,6 +301,12 @@ def create_aina_host_router() -> APIRouter:
         await aina_file_blobs(request).delete(blob_key(removed))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @router.get(f"{HOST_API_PREFIX}/tasks/{{task_id}}", response_model=TaskState)
+    async def task_state(task_id: str, request: Request, caller: HostCaller = Depends(host_caller)) -> TaskState:
+        """The task as Unibot sees it: an AINA should stop working on one the user ``cancelled``."""
+        _audit(caller, "tasks.get", scope="tasks", allowed=True)
+        return _task_state(await aina_tasks(request).state(caller.installation_key, task_id))
+
     @router.post(f"{HOST_API_PREFIX}/tasks/{{task_id}}/progress", response_model=TaskState)
     async def task_progress(
         task_id: str, payload: TaskProgress, request: Request, caller: HostCaller = Depends(host_caller)

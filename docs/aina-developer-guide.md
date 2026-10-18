@@ -138,7 +138,8 @@ registered, Unibot calls `tools/list` and stores a **snapshot** of each exposed 
 schema, annotations. The agent only ever sees the snapshot, and arguments are checked against it.
 
 If the server later changes or removes an exposed tool, Unibot disables that tool for everyone until you publish a
-new version. Unibot checks again before every new installation and when an admin refreshes the package.
+new version. Unibot checks again before every new installation, when an admin refreshes the package, and every few
+hours (6 by default).
 
 ### Effect: when Unibot asks the user
 
@@ -204,6 +205,7 @@ Every `tools/call` carries `_meta["unibot/context"]`. Read it with `unibot_conte
 | `invocation_id` | The tool call; stable across Unibot's retries |
 | `source` | `agent`, `canvas`, `widget` or `schedule` (informational only; never use it for authorization) |
 | `conversation_id`, `workspace_id` | Pairwise ids of where the call happened, when there is one |
+| `locale`, `timezone` | The user's language (`zh`, `en-US`) and IANA time zone, when the call came from Unibot's UI (not for scheduled runs) |
 | `granted_permissions`, `config` | What the user allowed, and their non-secret settings |
 | `host.api_base`, `token` | The Host API address and this call's bearer token |
 
@@ -396,6 +398,11 @@ The rules:
   `{"task_id"}`; that route accepts the expired token of a task that is still running.
 - **Deadline:** a task must end within 24 hours.
 - **Where tasks start:** long-running tools start only from the conversation, never from your UI.
+- **Cancelling:**
+  - The user can cancel a running task from Unibot's task list.
+  - Your next callback then gets `409`. `unibot.host.task_state(id)` (`GET /tasks/{id}`) returns `cancelled`, so
+    check it between steps of long work and stop.
+- **Results:** posted results are Markdown. Images in them are shown as links, so nothing loads until the user clicks.
 
 ## 9. Publishing and upgrades
 

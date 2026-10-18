@@ -893,6 +893,51 @@
         ]
       }
     },
+    "/tasks/{task_id}": {
+      "get": {
+        "summary": "Task State",
+        "description": "The task as Unibot sees it: an AINA should stop working on one the user ``cancelled``.",
+        "operationId": "task_state_aina_host_v1_tasks__task_id__get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      }
+    },
     "/tasks/{task_id}/complete": {
       "post": {
         "summary": "Task Complete",

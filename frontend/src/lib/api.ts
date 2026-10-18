@@ -18,8 +18,19 @@ export class ApiError extends Error {
   }
 }
 
+/** The user's language and time zone, so apps' tools can answer in them (AINA call context). */
+function withClientHeaders(headers: Headers): Headers {
+  headers.set("X-Unibot-Locale", i18n.resolvedLanguage ?? i18n.language ?? "en");
+  try {
+    headers.set("X-Unibot-Timezone", Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } catch {
+    // An environment without Intl time zones sends none.
+  }
+  return headers;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+  const headers = withClientHeaders(new Headers(init.headers));
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -43,7 +54,7 @@ export interface BlobResponse {
 }
 
 async function requestBlob(path: string, init: RequestInit = {}): Promise<BlobResponse> {
-  const headers = new Headers(init.headers);
+  const headers = withClientHeaders(new Headers(init.headers));
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -121,7 +132,7 @@ async function streamEvents(
 ): Promise<void> {
   const response = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withClientHeaders(new Headers({ "Content-Type": "application/json" })),
     body: JSON.stringify(payload),
     signal,
     credentials: "include",

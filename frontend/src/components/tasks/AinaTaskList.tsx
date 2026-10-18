@@ -67,16 +67,28 @@ export function AinaTaskList({
         <strong className="text-[13px] text-ink">{t("background.title")}</strong>
       </div>
       <div className="max-h-40 space-y-1 overflow-y-auto px-3 pb-2 pt-1">
-        {tasks.map((task) => <AinaTaskRow key={task.id} task={task} />)}
+        {tasks.map((task) => (
+          <AinaTaskRow
+            key={task.id}
+            task={task}
+            onCancel={async () => {
+              if (!conversationId) return;
+              await api
+                .post(`/conversations/${encodeURIComponent(conversationId)}/aina-tasks/${encodeURIComponent(task.id)}/cancel`)
+                .catch(() => undefined);
+              await load();
+            }}
+          />
+        ))}
       </div>
     </section>
   );
 }
 
-function AinaTaskRow({ task }: { task: AinaTask }) {
+function AinaTaskRow({ task, onCancel }: { task: AinaTask; onCancel: () => Promise<void> }) {
   const { t } = useTranslation("tasks");
-  const Icon = task.status === "completed" ? CheckCircle2 : task.status === "failed" ? XCircle : LoaderCircle;
-  const tone = task.status === "completed" ? "text-success" : task.status === "failed" ? "text-danger" : "text-accent";
+  const Icon = task.status === "completed" ? CheckCircle2 : task.status === "running" ? LoaderCircle : XCircle;
+  const tone = { running: "text-accent", completed: "text-success", failed: "text-danger", cancelled: "text-ink-subtle" }[task.status];
   const percent = task.status === "running" && task.progress !== null && task.total
     ? Math.min(100, Math.round((task.progress / task.total) * 100))
     : null;
@@ -93,6 +105,16 @@ function AinaTaskRow({ task }: { task: AinaTask }) {
         </div>
         {detail ? <p className="mt-0.5 line-clamp-2 text-[10.5px] text-ink-muted">{detail}</p> : null}
       </div>
+      {task.status === "running" ? (
+        <button
+          type="button"
+          onClick={() => void onCancel()}
+          className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10.5px] text-ink-muted hover:border-danger-ring hover:text-danger"
+          aria-label={t("background.cancelNamed", { title: task.title })}
+        >
+          {t("background.cancel")}
+        </button>
+      ) : null}
     </div>
   );
 }

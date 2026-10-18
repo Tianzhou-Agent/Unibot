@@ -20,6 +20,7 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker
 from tianzhou_agent_platform.aina.package.bundled import register_bundled
+from tianzhou_agent_platform.core.client_preferences import LOCALE_HEADER, TIMEZONE_HEADER, remember_client_preferences
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.ui import PackageUiStore
@@ -317,12 +318,21 @@ def create_app(
             await register_bundled(aina_packages)
             scheduler_task = asyncio.create_task(scheduler.run())
             lifespan_app.state.background_tasks.add(scheduler_task)
+            if resolved_settings.aina_tool_check_hours > 0:
+                # Not in background_tasks: it never ends by itself, so shutdown cancels it.
+                lifespan_app.state.tool_check_task = asyncio.create_task(
+                    _check_package_tools(aina_packages, resolved_settings.aina_tool_check_hours * 3600)
+                )
             if document_edit_worker is not None:
                 document_worker_task = asyncio.create_task(document_edit_worker.run())
                 lifespan_app.state.background_tasks.add(document_worker_task)
             yield
         finally:
             scheduler.stop()
+            tool_check_task = getattr(lifespan_app.state, "tool_check_task", None)
+            if tool_check_task is not None:
+                tool_check_task.cancel()
+                await asyncio.gather(tool_check_task, return_exceptions=True)
             if document_edit_worker is not None:
                 document_edit_worker.stop()
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
@@ -454,6 +464,7 @@ def create_app(
     @app.middleware("http")
     async def attach_request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
         request.state.request_trace_id = request.headers.get("X-Trace-ID") or f"request_{uuid4().hex}"
+        remember_client_preferences(request.headers.get(LOCALE_HEADER), request.headers.get(TIMEZONE_HEADER))
         user = await auth_service.resolve_session(request.cookies.get(SESSION_COOKIE))
         if user is None and request.method == "POST" and _DEVELOPER_TOKEN_PATHS.match(request.url.path):
             user = await auth_service.resolve_developer_token(request.headers.get("authorization"))
@@ -509,6 +520,21 @@ def _resolve_obs_trace_status(store: ObservabilityStore | None, trace_id: str) -
         return trace["status"] if trace else None
 
     return resolver()
+
+
+async def _check_package_tools(packages: AinaPackageService, interval_seconds: float) -> None:
+    """Re-check every package's tools on a schedule (design §6.1), until the app stops."""
+    log = logging.getLogger("tianzhou_agent_platform.aina.tool_check")
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            outcomes = await packages.check_all_tools()
+        except Exception:  # noqa: BLE001 - the next round tries again
+            log.exception("AINA tool check failed")
+            continue
+        for aina_id, outcome in outcomes.items():
+            if outcome != "ok":
+                log.warning("AINA %s tool check: %s", aina_id, outcome)
 
 
 def run() -> None:

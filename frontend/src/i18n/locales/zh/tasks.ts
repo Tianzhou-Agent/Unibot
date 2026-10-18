@@ -21,6 +21,9 @@ export default {
       running: "运行中",
       completed: "已完成",
       failed: "失败",
+      cancelled: "已取消",
     },
+    cancel: "取消",
+    cancelNamed: "取消 {{title}}",
   },
 };
