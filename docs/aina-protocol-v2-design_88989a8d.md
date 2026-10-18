@@ -1,6 +1,6 @@
 # AINA Protocol 2.0 — Plugin Contract Design
 
-Status: **Accepted; P0, P1, P3, P6 and P2 (except notifications) implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+Status: **Accepted; P0, P1, P2, P3 and P6 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
 differs.
 
 Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
@@ -916,10 +916,19 @@ runtime type only, never on an AINA id.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
-- Host API: `storage/kv`, the task callbacks, `token/refresh`, `documents`, `memory` and `llm` are built. The
-  storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per value, 10 MiB
-  and 10 000 keys per installation. `storage/files`, `files`, `sandbox` (with P5's Code Runner) and `notifications`
-  are not built: Unibot has no notification surface yet. Audit is a structured log line per call, not a trace span.
+- Host API: `storage/kv`, the task callbacks, `token/refresh`, `documents`, `memory`, `llm` and `notifications` are
+  built. The storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per
+  value, 10 MiB and 10 000 keys per installation. `storage/files`, `files` and `sandbox` are not built. Audit is a
+  structured log line per call, not a trace span.
+  - `POST /notifications` `{title ≤ 120, body ≤ 500, opens: app|conversation}` (scope `notify`, auto-granted) puts a
+    plain-text entry in the user's inbox: a bell in the sidebar with the unread count
+    ([`NotificationBell.tsx`](../frontend/src/features/notifications/NotificationBell.tsx)), polled every 30 s.
+    - **Links:** an AINA cannot choose one. An entry opens the AINA's app, or the conversation of the token's
+      invocation (`422` when the token has none).
+    - **Limits:** at most 30 per installation per hour (`429`), and the newest 200 per user are kept.
+    - **Cleanup:** an uninstall removes the user's entries from that AINA; deleting the AINA removes them all.
+    - **Shell routes:** `GET /notifications`, `POST /notifications/{id}/read`, `POST /notifications/read-all`.
+    - **Not built yet:** push to other devices, email and per-app muting.
   - The token's encrypted host reference also carries the invocation's raw conversation and workspace. Documents
     are read and written in that workspace (the personal root when there is none), like the built-in document tools.
   - `GET /documents[?query=]`, `GET /documents/{name}[/outline]`, `PUT /documents/{name}` (creates or replaces),
@@ -1040,7 +1049,7 @@ runtime type only, never on an AINA id.
 
 ### Next
 
-Still open from P2: notifications. Also still open:
+Also still open:
 restricting what posted task Markdown can load, image results reaching vision-capable models, and from P4 releasing
 `unibot-aina` to PyPI and `@unibot/aina-ui` to npm (both are ready to build) and the design's outsider test with a real
 outside developer; the steps of the guide were checked in fresh environments. `aina dev` has no model: chat with a

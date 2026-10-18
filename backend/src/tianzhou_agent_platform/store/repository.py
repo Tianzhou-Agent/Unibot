@@ -11,6 +11,7 @@ from tianzhou_agent_platform.auth.models import DeveloperToken, OidcProvider, Us
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
+from tianzhou_agent_platform.aina.package.notifications import AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -63,6 +64,7 @@ from tianzhou_agent_platform.aina.package.storage import AinaStorageItem
 from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.store.aina_storage_store import AinaStorageStore
 from tianzhou_agent_platform.store.developer_token_store import DeveloperTokenStore
+from tianzhou_agent_platform.store.aina_notification_store import AinaNotificationStore
 from tianzhou_agent_platform.store.aina_task_store import AinaTaskStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
 from tianzhou_agent_platform.store.registry_store import RegistryStore
@@ -121,6 +123,7 @@ class PersistentRepository(InMemoryRepository):
         self._registry_store = RegistryStore(stores.mysql)
         self._aina_storage_store = AinaStorageStore(stores.mysql)
         self._developer_token_store = DeveloperTokenStore(stores.mysql)
+        self._aina_notification_store = AinaNotificationStore(stores.mysql)
         self._aina_task_store = AinaTaskStore(stores.mysql)
 
     async def initialize(self) -> None:
@@ -477,6 +480,30 @@ class PersistentRepository(InMemoryRepository):
     async def remove_aina(self, aina_id: str) -> None:
         if not await self._registry_store.remove_aina(aina_id):
             raise not_found("AINA", aina_id)
+
+    async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
+        await self._aina_notification_store.create(notification)
+        return self._copy(notification)
+
+    async def list_aina_notifications(self, *, tenant_id: str, user_id: str, limit: int) -> list[AinaNotification]:
+        return await self._aina_notification_store.list(tenant_id=tenant_id, user_id=user_id, limit=limit)
+
+    async def count_aina_notifications(
+        self, *, tenant_id: str, user_id: str, unread: bool = False, aina_id: str | None = None, since: datetime | None = None
+    ) -> int:
+        return await self._aina_notification_store.count(
+            tenant_id=tenant_id, user_id=user_id, unread=unread, aina_id=aina_id, since=since
+        )
+
+    async def mark_aina_notifications_read(
+        self, *, tenant_id: str, user_id: str, at: datetime, notification_id: str | None = None
+    ) -> int:
+        return await self._aina_notification_store.mark_read(
+            tenant_id=tenant_id, user_id=user_id, at=at, notification_id=notification_id
+        )
+
+    async def delete_aina_notifications(self, *, aina_id: str, tenant_id: str | None = None, user_id: str | None = None) -> int:
+        return await self._aina_notification_store.delete(tenant_id=tenant_id, user_id=user_id, aina_id=aina_id)
 
     async def create_developer_token(self, token: DeveloperToken) -> DeveloperToken:
         await self._developer_token_store.create(token)

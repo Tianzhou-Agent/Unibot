@@ -15,6 +15,7 @@ from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
+from tianzhou_agent_platform.aina.package.notifications import KEEP_PER_USER, AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
@@ -107,6 +108,7 @@ class InMemoryRepository:
         self._feedbacks: dict[str, FeedbackRecord] = {}
         self._aina_storage: dict[str, AinaStorageItem] = {}
         self._developer_tokens: dict[str, DeveloperToken] = {}
+        self._aina_notifications: dict[str, AinaNotification] = {}
         self._aina_tasks: dict[str, AinaTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
@@ -1278,6 +1280,61 @@ class InMemoryRepository:
             for key in [key for key in self._installations if key[2] == aina_id]:
                 del self._installations[key]
                 await self._delete_record(INSTALLATIONS_RESOURCE, installation_record_id(*key))
+
+    async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
+        async with self._lock:
+            self._aina_notifications[notification.id] = self._copy(notification)
+            owned = sorted(
+                (n for n in self._aina_notifications.values() if (n.tenant_id, n.user_id) == (notification.tenant_id, notification.user_id)),
+                key=lambda n: n.created_at,
+                reverse=True,
+            )
+            for stale in owned[KEEP_PER_USER:]:
+                del self._aina_notifications[stale.id]
+            return self._copy(notification)
+
+    async def list_aina_notifications(self, *, tenant_id: str, user_id: str, limit: int) -> list[AinaNotification]:
+        async with self._lock:
+            owned = [n for n in self._aina_notifications.values() if (n.tenant_id, n.user_id) == (tenant_id, user_id)]
+            return [self._copy(n) for n in sorted(owned, key=lambda n: n.created_at, reverse=True)[:limit]]
+
+    async def count_aina_notifications(
+        self, *, tenant_id: str, user_id: str, unread: bool = False, aina_id: str | None = None, since: datetime | None = None
+    ) -> int:
+        async with self._lock:
+            return sum(
+                1
+                for n in self._aina_notifications.values()
+                if (n.tenant_id, n.user_id) == (tenant_id, user_id)
+                and (not unread or n.read_at is None)
+                and (aina_id is None or n.aina_id == aina_id)
+                and (since is None or n.created_at >= since)
+            )
+
+    async def mark_aina_notifications_read(
+        self, *, tenant_id: str, user_id: str, at: datetime, notification_id: str | None = None
+    ) -> int:
+        async with self._lock:
+            marked = 0
+            for key, n in list(self._aina_notifications.items()):
+                if (n.tenant_id, n.user_id) != (tenant_id, user_id) or n.read_at is not None:
+                    continue
+                if notification_id is not None and n.id != notification_id:
+                    continue
+                self._aina_notifications[key] = n.model_copy(update={"read_at": at})
+                marked += 1
+            return marked
+
+    async def delete_aina_notifications(self, *, aina_id: str, tenant_id: str | None = None, user_id: str | None = None) -> int:
+        async with self._lock:
+            doomed = [
+                key
+                for key, n in self._aina_notifications.items()
+                if n.aina_id == aina_id and (tenant_id is None or (n.tenant_id, n.user_id) == (tenant_id, user_id))
+            ]
+            for key in doomed:
+                del self._aina_notifications[key]
+            return len(doomed)
 
     async def create_developer_token(self, token: DeveloperToken) -> DeveloperToken:
         async with self._lock:

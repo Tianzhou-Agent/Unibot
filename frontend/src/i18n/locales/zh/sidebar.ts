@@ -1,4 +1,12 @@
 export default {
+  notifications: {
+    label: "通知",
+    labelUnread: "通知，{{count}} 条未读",
+    title: "通知",
+    markAll: "全部标为已读",
+    empty: "还没有通知。你安装的应用可以在这里给你发送更新。",
+    unread: "未读",
+  },
   runStatus: {
     running: "运行中",
     approval_required: "等待你的确认",

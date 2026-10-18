@@ -199,6 +199,7 @@ def create_capability_router() -> APIRouter:
             )
         await data_repository.remove_aina(aina_id)
         await data_repository.delete_aina_storage(aina_id=aina_id)
+        await data_repository.delete_aina_notifications(aina_id=aina_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/ainas/{aina_id}/install", response_model=AinaInstallation)
@@ -254,6 +255,9 @@ def create_capability_router() -> APIRouter:
             tenant_id=actor.tenant_id,
             user_id=actor.user_id,
             aina_id=aina_id,
+        )
+        await data_repository.delete_aina_notifications(
+            aina_id=aina_id, tenant_id=actor.tenant_id, user_id=actor.user_id
         )
         if not keep_data:
             await data_repository.delete_aina_storage(

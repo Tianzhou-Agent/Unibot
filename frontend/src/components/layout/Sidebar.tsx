@@ -10,6 +10,7 @@ import type { ConversationRecord } from "@/types";
 import { useMockSession } from "@/lib/mockSession";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace, workspaceChatPath, workspaceHomePath } from "@/lib/workspace";
+import { NotificationBell } from "@/features/notifications/NotificationBell";
 
 export const CONVERSATIONS_CHANGED_EVENT = "unibot:conversations-changed";
 
@@ -190,9 +191,12 @@ export function Sidebar() {
     <aside className="fixed inset-y-0 left-0 z-30 flex h-full w-[264px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg text-ink md:relative md:z-20">
       <div className="flex items-center justify-between gap-2 px-[18px] pb-2 pt-[18px]">
         <Brand />
-        <button type="button" onClick={() => setNavigationOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label={t("collapseNav")}>
-          <PanelLeftOpen className="h-4 w-4 rotate-180" />
-        </button>
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <button type="button" onClick={() => setNavigationOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-subtle hover:bg-sidebar-hover hover:text-ink" aria-label={t("collapseNav")}>
+            <PanelLeftOpen className="h-4 w-4 rotate-180" />
+          </button>
+        </div>
       </div>
 
       <nav className="space-y-0.5 px-3 pb-2" aria-label={t("mainNav")}>
@@ -386,6 +390,7 @@ function IconRail({
         <Plus className="h-[19px] w-[19px]" />
       </button>
       <span className="flex-1" />
+      <NotificationBell placement="right" compact />
       <RailLink to="/settings" label={t("nav.settings")} icon={<SettingsIcon className="h-[19px] w-[19px]" />} />
       <button
         type="button"
