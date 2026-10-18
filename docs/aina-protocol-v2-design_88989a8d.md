@@ -1,0 +1,874 @@
+# AINA Protocol 2.0 — Plugin Contract Design
+
+Status: **Accepted; P0, P1 and most of P2 implemented** · rev 4, 2026-10-17 · See §17 for what is built and where it
+differs.
+
+Revision 2: an AINA package is now four developer-provided parts — **tools** (remote MCP only), **canvas**,
+**skills** and **widgets** — described by a JSON manifest (`aina.json`). The custom plugin RPC and the managed runtime
+from rev 1 are dropped.
+
+Revision 4: every open decision in §16 is resolved as recommended, and implementation of P0 (spec, validator,
+example) and P1 (tools and skills) has started (§17).
+
+Revision 3: skills are folders (`<skill_name>/SKILL.md` or `skill.md`); a canvas may be an embedded URL (iframe) as
+well as a packaged bundle; and the end state adds **canvas tools** — tools implemented by the open canvas, so the
+agent can change what the user sees (for example `draw_circle` on an Excalidraw canvas, §9.5).
+
+## 0. Summary
+
+Today an AINA can only reach the depth of Memory, Documents or Code Runner if it is written *inside* Unibot: those
+"built-in" AINAs are wired by hard-coded IDs through the capability catalog, executor, prompt builder and frontend.
+A third-party AINA gets a much thinner contract — one black-box `input: string` entry, no tools of its own, no access
+to host services, and only four generic widget kinds.
+
+This design replaces that split with **one package format that every AINA uses, including Unibot's own**. A developer
+provides:
+
+| Part | What it is | Where it runs |
+|---|---|---|
+| **Tools** | A remote MCP server (Streamable HTTP). Its tools are what the host agent can call. | Developer's server |
+| **Canvas** | The AINA's main interface (e.g. a document editor or a whiteboard): a static web bundle in the package, or an external web app embedded by URL. It may also implement **canvas tools** the agent can call. | Sandboxed iframe in the canvas pane |
+| **Skills** | Skill folders (`<skill_name>/SKILL.md`) with Markdown workflows that teach the agent how to use the tools for a task. | Loaded into the agent's context on demand |
+| **Widgets** | Small web UIs shown in the conversation, e.g. a confirmation before a tool runs or a result card. | Sandboxed iframe inline in chat |
+
+All metadata lives in **`aina.json`**. The canvas and widgets talk to the host only through a `postMessage` bridge.
+The MCP server may call back into Unibot through a permission-scoped **Host API**. The agent changes durable data
+through MCP tools and changes what is on screen through canvas tools, so the conversation can drive the canvas
+directly. A developer needs the published spec, any
+MCP SDK, a small UI SDK and a CLI — never Unibot's source. First-party AINAs are rebuilt on the same format; the
+`builtin` runtime type and every per-AINA branch in host code are removed.
+
+## 1. Problem: where the implementation diverges from the architecture
+
+The intended architecture ([MVP requirements](../.docs/unibot-mvp/requirements.md) §1, §2.1, §7) says AINA Protocol
+"decouples the Agent framework from concrete applications", must be language-agnostic, support structured UI and
+fine-grained permissions, and let the framework grow "without modifying the Agent core logic". The README's iPhone
+analogy says the same: system capabilities plus installable apps.
+
+| # | Divergence | Evidence |
+|---|---|---|
+| 1 | Built-in AINAs get scoped, fine-grained tools; the scope is chosen by hard-coded ID branches. | [capabilities.py:179-190](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py:179), [:321](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py:321), [:710](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py:710) |
+| 2 | Third-party AINAs are a single opaque `{input: string}` call; their manifest `tools` can only reference tools *already published in the platform registry*, not tools the AINA implements. | [capabilities.py:192-197](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py:192), [:309](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py:309), [gateway.py `invoke_aina`](../backend/src/tianzhou_agent_platform/aina/gateway.py) |
+| 3 | Built-in tool execution is a dispatcher that imports domain services directly. | [builtin.py `invoke_builtin`](../backend/src/tianzhou_agent_platform/aina/builtin.py), [executor.py:104](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py:104), [:166](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py:166) |
+| 4 | Product behaviour keyed to specific AINAs inside the agent layer (document prompt, edit-task direct reply). | [prompts.py:62](../backend/src/tianzhou_agent_platform/services/agent_integration/prompts.py:62), [executor.py:180](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py:180) |
+| 5 | Widget kinds are a closed enum that includes built-in-only kinds (`memory`, `document`, `document_outline`). | [widgets.py:47](../backend/src/tianzhou_agent_platform/aina/protocol/widgets.py:47), [models.py:81](../backend/src/tianzhou_agent_platform/aina/protocol/models.py:81) |
+| 6 | Rich canvases are host React components selected by `ainaId`; they call bespoke host REST APIs (`/memories`, `/sandboxes`, `/vision`, `/documents`). | [MainWidgetRenderer.tsx:41-57](../frontend/src/components/widgets/MainWidgetRenderer.tsx:41), [PluginUi.tsx:25](../frontend/src/components/apps/PluginUi.tsx:25) |
+| 7 | No host services exist for plugins: no plugin storage, no document/memory/LLM/sandbox access, no config schema, no secrets. | `InstallationRequest.configuration` is an untyped dict; `permissions` are free strings |
+| 8 | Skills are a manifest field that only feeds one prompt string; there is no way to ship a reusable workflow. | `AinaCapability.instructions` in [models.py](../backend/src/tianzhou_agent_platform/aina/protocol/models.py) |
+| 9 | Managed AINAs hand-roll a custom envelope (`request_id`, `trace_id`, `usage`) in every handler. | [examples/hello-aina/src/main.py](../examples/hello-aina/src/main.py) |
+
+The root cause is the same in every row: **the protocol is too thin to express what Unibot's own apps need, so those
+apps bypass it.** Fixing this means making the protocol rich enough that they no longer need to. Special-casing more IDs
+would not fix it.
+
+## 2. Goals and non-goals
+
+**Goals**
+
+- G1. A developer can build, test, package and ship an AINA using only the public spec, an MCP SDK, the UI SDK and CLI.
+- G2. One package format for first-party and third-party AINAs; host code contains no AINA IDs.
+- G3. AINAs expose their own tools to the host agent, with per-tool effects and approvals.
+- G4. AINAs provide their own canvas and conversation widgets without shipping code into the host's origin.
+- G5. AINAs ship skills that guide the agent through multi-step workflows over their tools.
+- G6. AINAs reach host data and services only through declared, user-granted, auditable permissions.
+- G7. Language- and model-vendor-agnostic: tools are standard MCP, so any MCP server implementation works.
+- G8. The agent can operate an open canvas through tools the canvas provides, with the same schemas, effects and
+  approvals as any other tool.
+
+**Non-goals (2.0)**
+
+- Unibot hosting developer backend code (the 1.0 managed runtime); local/stdio MCP servers.
+- MCP resources, prompts, sampling and elicitation (skills, widgets and the Host API cover these needs).
+- Marketplace, billing, review workflow, publisher signing PKI.
+- AINA-to-AINA direct calls (the host agent remains the only orchestrator).
+- Replacing the host agent loop; AINAs never receive the host's model loop or full conversation by default.
+
+## 3. Design principles
+
+1. **The host owns the agent.** AINAs contribute tools, skills and UI; Unibot decides when to use them.
+2. **Contract, not code.** Everything an AINA can do is in the spec. A first-party AINA that needs something new must
+   get it added to the spec, so third parties get it too.
+3. **Standard where a standard exists.** Tools are plain MCP; Unibot adds only what MCP lacks (install, consent,
+   skills, canvas, widgets, Host API).
+4. **Least privilege, explicit consent.** Every host resource sits behind a permission scope; every scope is shown at
+   install; tokens carry only granted scopes and expire quickly.
+5. **The package is the security boundary.** Exposed tools, UI files, skills and permissions are fixed per version;
+   a live MCP server cannot add tools or rewrite descriptions without a new version (no rug-pull, no tool poisoning).
+6. **AINA output is untrusted data.** Tool results and widgets never become host instructions; skills only enter the
+   context while that AINA is active, inside a delimited block. Approval decisions are always host-owned controls.
+
+## 4. Architecture overview
+
+```mermaid
+flowchart LR
+    subgraph Package["AINA package (uploaded to Unibot)"]
+        Manifest["aina.json"]
+        Skills["skills/{name}/SKILL.md"]
+        Canvas["canvas/ bundle<br/>(or canvas.url)"]
+        Widgets["widgets/*.html"]
+    end
+
+    subgraph Host["Unibot host"]
+        Agent["Agent runtime<br/>(LangChain / LangGraph)"]
+        PH["Plugin Host<br/>catalog · scope · approvals<br/>MCP client · tool snapshot"]
+        HAPI["Host API gateway<br/>/aina-host/v1 · token + scope check"]
+        Services["Host services<br/>storage · documents · memory<br/>LLM · sandbox · tasks · notify"]
+        Shell["Frontend shell<br/>chat · approval card · canvas pane"]
+        Agent <--> PH
+        HAPI --> Services
+    end
+
+    MCP["Developer's remote MCP server<br/>(any language)"]
+
+    Manifest --> PH
+    Skills --> PH
+    Canvas -. "served from aina-ui origin" .-> Shell
+    Widgets -. "served from aina-ui origin" .-> Shell
+    PH -- "MCP Streamable HTTP<br/>tools/list · tools/call + _meta context" --> MCP
+    MCP -- "Host API + context token" --> HAPI
+    Shell -- "UI Bridge (postMessage)<br/>callTool → Plugin Host" --> PH
+    PH -- "canvas tool call<br/>(SSE event → bridge)" --> Shell
+    WebApp["Developer's web app<br/>(canvas.url)"] -. "iframe" .-> Shell
+```
+
+| Channel | Direction | Transport | Purpose |
+|---|---|---|---|
+| Package | upload | zip: `aina.json` + static files | Identity, tool policy, skills, UI files, config, permissions |
+| Tools | host → MCP server | MCP Streamable HTTP | Discover (at registration) and call tools |
+| Host API | MCP server → host | HTTPS REST, bearer context token | Use host data and services within granted scopes |
+| UI Bridge | canvas/widget iframe ↔ host | `postMessage` JSON-RPC | Read context, call tools, send prompts, confirm edits |
+| Canvas tools | host → open canvas | SSE event to the shell, then bridge into the iframe; result posted back | The agent changes what the canvas shows (§9.5) |
+
+Packaged canvases and widgets **never** talk to the MCP server directly and never see a host token. They call tools
+through the host, which applies the same authorization, approval and tracing as agent calls. A URL canvas is the
+developer's own web app and may also talk to its own backend (§9.1).
+
+## 5. Package and manifest
+
+### 5.1 Package layout
+
+```text
+com.example.expenses-1.2.0.aina.zip
+├── aina.json                 # the only manifest; JSON
+├── README.md
+├── assets/
+│   └── icon.svg
+├── skills/
+│   ├── record-expense/
+│   │   └── SKILL.md          # SKILL.md or skill.md, exactly one
+│   └── monthly-close/
+│       ├── SKILL.md
+│       └── references/
+│           └── categories.md # optional supporting files, read on demand
+├── canvas/                   # optional; static files only (omit when canvas.url is used)
+│   ├── index.html
+│   └── app.js
+└── widgets/                  # optional; static files only
+    ├── confirm-expense.html
+    └── expense-card.html
+```
+
+The package contains no backend code; tools are served by the developer's MCP server. Packaged UI files may reference
+only other files inside the package (no remote scripts), so the reviewed package is exactly what runs. A canvas that
+must load remote content is declared as a URL canvas instead (§9.1).
+
+### 5.2 `aina.json` example
+
+```json
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "com.example.expenses",
+    "version": "1.2.0",
+    "name": "Expenses",
+    "description": "Record, categorize and summarize the user's expenses.",
+    "publisher": { "id": "example", "name": "Example Inc.", "url": "https://example.com" },
+    "icon": "assets/icon.svg",
+    "locales": {
+      "zh-CN": { "name": "报销助手", "description": "记录、分类并汇总用户的支出。" }
+    }
+  },
+
+  "tools": {
+    "mcp": {
+      "url": "https://expenses.example.com/mcp",
+      "auth": { "type": "bearer", "secret": "api_token" }
+    },
+    "expose": {
+      "add_expense": {
+        "effect": "write",
+        "visibility": ["model", "app"],
+        "confirm_widget": "confirm-expense",
+        "result_widget": "expense-card"
+      },
+      "list_expenses": { "effect": "read", "visibility": ["model", "app"] },
+      "delete_expense": { "effect": "destructive", "visibility": ["model", "app"] },
+      "sync_bank": { "effect": "write", "visibility": ["app"] }
+    }
+  },
+
+  "skills": [
+    {
+      "id": "record-expense",
+      "name": "Record an expense",
+      "description": "Use when the user mentions money they spent and wants it recorded.",
+      "path": "skills/record-expense",
+      "tools": ["add_expense", "list_expenses"]
+    },
+    {
+      "id": "monthly-close",
+      "name": "Monthly close",
+      "description": "Use when the user wants to reconcile and summarize one month of expenses.",
+      "path": "skills/monthly-close",
+      "tools": ["list_expenses", "delete_expense", "highlight_rows"]
+    }
+  ],
+
+  "canvas": {
+    "entry": "canvas/index.html",
+    "title": "Expenses",
+    "tools": [
+      {
+        "name": "highlight_rows",
+        "description": "Highlight expense rows in the open Expenses canvas so the user can review them.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "expense_ids": { "type": "array", "items": { "type": "string" }, "maxItems": 200 } },
+          "required": ["expense_ids"],
+          "additionalProperties": false
+        },
+        "effect": "read"
+      }
+    ]
+  },
+
+  "widgets": [
+    { "id": "confirm-expense", "purpose": "confirmation", "entry": "widgets/confirm-expense.html", "height": 160 },
+    { "id": "expense-card", "purpose": "result", "entry": "widgets/expense-card.html", "height": 120 }
+  ],
+
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "currency": { "type": "string", "default": "CNY", "title": "Default currency" },
+        "api_token": { "type": "string", "title": "Expenses API token", "x-secret": true }
+      },
+      "required": ["api_token"]
+    }
+  },
+
+  "permissions": [
+    { "scope": "storage" },
+    { "scope": "documents.read", "reason": "Import receipts that you saved as documents." },
+    { "scope": "llm", "reason": "Categorize free-text receipts." }
+  ]
+}
+```
+
+### 5.3 Field reference
+
+| Field | Required | Notes |
+|---|---|---|
+| `protocol_version` | yes | `"2.0"` |
+| `aina.id` | yes | Reverse-DNS, `^[a-z0-9]+(\.[a-z0-9-]+)+$`, immutable |
+| `aina.version` | yes | Semver; any change to the package or exposed tool set requires a new version |
+| `aina.name` · `description` · `publisher` | yes | `description` is model-facing routing text |
+| `aina.icon` · `locales` | no | `locales` holds display strings only and is never sent to the model |
+| `tools.mcp.url` | yes | HTTPS Streamable HTTP endpoint; origin must pass the admin allowlist |
+| `tools.mcp.auth` | yes | `none` · `bearer`/`api_key` (value from a secret config field) · `oauth2` (per user, MCP authorization spec) |
+| `tools.expose` | yes | Allowlist; only these MCP tools are ever exposed (§6.1) |
+| `tools.expose.*.effect` | no | `read` · `write` · `destructive`; default derived from MCP annotations (§6.1) |
+| `tools.expose.*.visibility` | no | `model` (agent may call) and/or `app` (canvas/widgets may call); default both |
+| `tools.expose.*.confirm_widget` · `result_widget` | no | IDs from `widgets` (§9.2) |
+| `tools.expose.*.long_running` | no | Tool may return a task handle (§7.3) |
+| `skills[]` | no | `id`, `name`, `description` (when to use, model-facing), `path` (skill folder in the package), `tools` (exposed or canvas tool names it uses) |
+| `canvas` | no | `title` plus exactly one of `entry` (HTML in package) or `url` (HTTPS web app, embedded by iframe) |
+| `canvas.tools[]` | no | Canvas tools (§9.5): MCP-shaped `name`, `title`, `description`, `inputSchema`, `outputSchema`, plus `effect`, `timeout_seconds` (≤ 30) |
+| `widgets[]` | no | `id`, `purpose` (`confirmation` · `result` · `display`), `entry` (HTML in package), `height` (initial px, ≤ 480) |
+| `config.schema` | no | JSON Schema for per-installation settings; `x-secret: true` fields are stored encrypted |
+| `permissions[]` | no | `scope` (§10), `reason`, `optional` |
+
+### 5.4 Validation rules
+
+- The package has exactly one `aina.json` at the root; YAML manifests are not accepted for 2.0.
+- `aina.json` is validated against the published JSON Schema (`spec/aina/2.0/aina.schema.json`); the CLI and the
+  host run the same validation.
+- Every referenced file (`icon`, `canvas.entry`, `widgets[].entry`) exists in the package; every
+  `skills[].tools` and widget binding refers to an exposed tool, a canvas tool or a declared widget; a
+  `confirm_widget` must have `purpose: confirmation`.
+- Each `skills[].path` is a folder containing exactly one of `SKILL.md` or `skill.md`; any other files in the folder
+  are supporting references (§6.3). Skill folders contain no executable scripts; Unibot never runs skill files.
+- `aina.json` is the source of skill metadata. A `SKILL.md` may keep a YAML frontmatter block for compatibility with
+  existing Agent Skills folders. If present, its `name` and `description` must match `aina.json`, and the host strips
+  the block before loading.
+- `canvas.url` must be HTTPS, must pass the admin origin allowlist, and must not be a Unibot or `aina-ui` origin.
+- Tool names are unique across `tools.expose` and `canvas.tools`.
+- **Model-facing text** (`aina.description`, `skills[].description`, skill bodies, MCP and canvas tool descriptions)
+  must be English; the validator warns on non-ASCII model-facing text.
+- **Budgets** protect the host's context window: ≤ 32 exposed tools plus ≤ 16 canvas tools, ≤ 16 skills, skill
+  `description` ≤ 300 chars, `SKILL.md` ≤ 20 000 chars, each supporting file ≤ 50 000 chars, tool description
+  ≤ 1 000 chars.
+- Archive safety rules from 1.0 still apply (no absolute paths, traversal, symlinks, zip bombs); total size ≤ 20 MB.
+
+## 6. Agent integration semantics
+
+```mermaid
+sequenceDiagram
+    participant M as Host model
+    participant PH as Plugin Host
+    participant UI as Chat UI
+    participant S as MCP server
+    Note over M,PH: Turn start — host tools + one entry per installed AINA (aina.description)
+    M->>PH: call aina_<id> (no args)
+    PH->>PH: activate scope: exposed model tools + skill index
+    M->>PH: load_skill("record-expense")
+    PH-->>M: skill body (delimited)
+    M->>PH: add_expense{amount, category}
+    PH->>PH: validate snapshot schema · effect policy
+    PH->>UI: approval card with confirm-expense widget
+    UI-->>PH: host Approve (optionally edited args)
+    PH->>S: tools/call + _meta["unibot/context"]
+    S-->>PH: content + structuredContent
+    PH-->>M: content (untrusted tool result)
+    PH->>UI: expense-card widget with the result
+```
+
+### 6.1 Tools
+
+- **Discovery is at registration, not per turn.** When a package version is registered, the host connects to the
+  MCP server, calls `tools/list`, and checks that every `tools.expose` entry exists. It stores a **snapshot** of each
+  exposed tool's `title`, `description`, `inputSchema`, `outputSchema` and `annotations`. Tools on the server that are
+  not in `expose` are ignored.
+- **The snapshot is what the model sees.** At call time the host validates arguments against the snapshot schema.
+  It re-runs `tools/list` periodically and before each new installation. If an exposed tool disappears or its schema
+  or description drifts, that tool is disabled for all installations and the publisher must ship a new version.
+  This stops a server from changing what the model is told after review.
+- **Effect** decides approvals. Default: `destructiveHint: true` → `destructive`; `readOnlyHint: true` → `read`;
+  otherwise `write`. If both the manifest and annotations give a value, the stricter wins.
+  - `destructive`: per-call confirmation, always.
+  - `write`: per the user's installation policy (default: confirm the first call in a conversation).
+  - `read`: never asks; only `read` tools may be retried automatically (matches today's retry rule).
+- **Visibility:** `model` tools are advertised to the agent while the scope is active; `app`-only tools (for example
+  `sync_bank`) are callable only from the canvas and widgets.
+
+### 6.2 Scope activation
+
+The first model turn sees host tools plus one argument-less entry per installed AINA, described by
+`aina.description`. Calling the entry activates the scope. This is today's built-in behaviour, now driven only by the
+package. The scope contains:
+
+- the AINA's exposed `model` tools;
+- its canvas tools (§9.5), if it has a canvas;
+- a **skill index** in the system prompt — `id`, `name`, `description` for each skill — and the host tool
+  `load_skill(id, file?)`;
+- the host task tools and the entries of other AINAs (to switch).
+
+### 6.3 Skills
+
+A skill is a folder whose `SKILL.md` (or `skill.md`) holds a Markdown workflow, such as "how to close a month: list,
+flag duplicates, highlight them on the canvas, ask before deleting, summarize". Other files in the folder are
+supporting references, for example a category glossary or a worked example. The host loads skills with
+**progressive disclosure**:
+
+1. While the scope is active, only the skill index is in context (cheap).
+2. The model calls `load_skill(id)` when a skill matches the task. The host returns the `SKILL.md` body, with any
+   frontmatter stripped, wrapped as `<aina-skill aina="com.example.expenses" id="monthly-close">…</aina-skill>`,
+   followed by the list of supporting files in the folder.
+3. If the body refers to a supporting file, the model calls `load_skill(id, file="references/categories.md")`. Only
+   files inside that skill's folder can be read, and only text files.
+4. Loaded skill text stays in context for the rest of the scope and is re-summarized by the existing summarization
+   middleware like any other message.
+
+A skill may name only tools listed in its `tools` field, and the validator checks those names. Skills cannot add
+tools, widen permissions or override host safety rules; the host system prompt states that skill text is guidance from
+a third party.
+
+### 6.4 Context passed to the MCP server
+
+Every `tools/call` carries the Unibot context in the MCP request `_meta`:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "add_expense",
+    "arguments": { "amount": 42.5, "category": "food" },
+    "_meta": {
+      "progressToken": "call_8f2c",
+      "unibot/context": {
+        "invocation_id": "call_8f2c",
+        "source": "agent",
+        "user": { "id": "pu_7Q2…", "locale": "zh-CN", "timezone": "Asia/Shanghai" },
+        "tenant_id": "pt_k91…",
+        "installation_id": "inst_31a",
+        "conversation_id": "conv_19d",
+        "workspace_id": "ws_02",
+        "granted_permissions": ["storage", "documents.read", "llm"],
+        "config": { "currency": "CNY" },
+        "host": { "api_base": "https://unibot.example.com/aina-host/v1" },
+        "token": "eyJ…"
+      }
+    }
+  }
+}
+```
+
+- `source` ∈ `agent | canvas | widget | schedule`; the server may adapt, but authorization never depends on it.
+- `user.id` and `tenant_id` are **pairwise identifiers**, stable per (AINA, user), so two AINAs cannot correlate a
+  user and internal IDs never leak.
+- `config` contains non-secret settings only. Secret fields are used by the host for `tools.mcp.auth` and are not
+  repeated in `_meta`.
+- `token` is the **context token** (§8): a host-signed JWT that carries the same identity claims. The server verifies it
+  with the host's JWKS to trust the context, and uses it as the Host API bearer. The SDK helper does both.
+- `traceparent` is sent as an HTTP header, so remote spans join Unibot's trace.
+
+## 7. Tool results
+
+### 7.1 Model and UI separation
+
+The host uses the standard MCP result fields:
+
+- `content` (text, image, embedded resource) is what the **model** sees.
+- `structuredContent` (validated against `outputSchema` if present) is passed to the model as JSON **and** to the
+  tool's `result_widget` as data.
+- `isError: true` is a domain failure the model should read and correct ("category unknown"). Transport and auth
+  failures are mapped to the platform error vocabulary (`DEPENDENCY_FAILED`, `TIMEOUT`, `AUTHENTICATION_FAILED`, …),
+  and stack traces are never shown to users.
+
+A result may choose a different declared widget with `_meta["unibot/widget"] = "<widget id>"`, or suppress the default
+one with `null`. Undeclared widget IDs are rejected.
+
+### 7.2 Timeouts, retries and idempotency
+
+The default call timeout is 30 s (configurable per tool, ≤ 120 s); longer work must use tasks. `invocation_id` is stable
+across host retries, and `write`/`destructive` tools should de-duplicate on it. MCP `notifications/progress` with the
+`progressToken` is shown in the tool-call card.
+
+### 7.3 Long-running tasks
+
+A `long_running` tool may return `_meta["unibot/task"] = {"id": "t_1", "title": "Spending report · 2026-09"}` with a
+short `content` acknowledgement. The host then:
+
+1. Registers the task in its task system, where it appears in the Tasks pane.
+2. Gives the model the acknowledgement and may end the turn without another model call. This replaces the document
+   edit-task `direct_reply` special case ([executor.py:180](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py:180)).
+3. Receives progress and completion from the server on the Host API (`POST /tasks/{id}/progress|complete|fail`).
+4. On completion, posts the result into the conversation (rendered with the tool's `result_widget` if any) and lets the
+   user open the canvas for review.
+
+## 8. Host API (MCP server → host)
+
+Base: `unibot/context.host.api_base` (`/aina-host/v1`). Auth: `Authorization: Bearer <unibot/context.token>`.
+
+**Context token:** a host-signed JWT (keys published at `/.well-known/aina-host-jwks.json`) with claims `aud`
+(= AINA id), `installation_id`, pairwise `sub`, `tenant`, `conversation`, `workspace`, `scopes` (= granted
+permissions), `exp` ≤ 10 min, `jti`. Tokens are minted per invocation; tokens for long-running tasks can be refreshed
+with `POST /token/refresh` while the task is live.
+
+| Endpoint | Scope | Notes |
+|---|---|---|
+| `GET/PUT/DELETE /storage/kv/{key}` · `GET /storage/kv?prefix=` | `storage` | Plugin-private, per installation; quota-limited |
+| `GET/PUT/DELETE /storage/files/{path}` | `storage` | Plugin-private files on NAS |
+| `GET /files/{file_ref}` | implicit | Read a file the user passed in this invocation (upload, picker) |
+| `GET /documents` · `GET /documents/{path}` · `GET /documents/{path}/outline` | `documents.read` | Workspace-scoped like today's document tools |
+| `PUT/POST/DELETE /documents/…` | `documents.write` | High-risk scope |
+| `GET /memory/search` | `memory.read` | |
+| `POST/PATCH/DELETE /memory/…` | `memory.write` | |
+| `POST /llm/chat` | `llm` | The user's configured model; no tools; metered and traced under the invocation |
+| `POST /sandbox/exec` · files | `sandbox.exec` | The user's sandbox; same limits as Code Runner today |
+| `POST /tasks/{id}/progress` · `/complete` · `/fail` | implicit (own tasks) | §7.3 |
+| `POST /notifications` | `notify` | Notify the user outside a turn |
+
+Every call is traced as a child span of the invocation and audited with AINA id, scope and pairwise user.
+
+## 9. UI: canvas and widgets
+
+Canvas and widgets are rendered in sandboxed iframes and connected to the host by the same bridge SDK
+(`@unibot/aina-ui`). Widgets are always packaged. A canvas is either packaged (`canvas.entry`) or a URL canvas
+(`canvas.url`): the developer's own hosted web app, embedded by iframe.
+
+### 9.1 Isolation
+
+| | Packaged canvas and widgets | URL canvas |
+|---|---|---|
+| Served from | `https://aina-ui.<host>/<aina_id>/<version>/…` (separate, cookieless origin) | The developer's declared HTTPS origin |
+| iframe `sandbox` | `allow-scripts allow-forms allow-downloads` — **no** `allow-same-origin` | `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads` |
+| Why | Packages share the `aina-ui` origin, so each runs with an opaque origin and cannot read another AINA's storage | The app runs on its own origin, which is never Unibot's, so it can keep its own storage and session without reaching Unibot's cookies, storage or DOM |
+| Network | CSP `default-src 'self'; connect-src 'none'`; all data goes through the bridge | The app may call its own backend; Unibot data still comes only through the bridge |
+| Review | Exactly the packaged files | The origin is reviewed and shown at install; content can change without a new version, so admins allowlist URL-canvas origins separately |
+
+Both kinds: the host sets `frame-ancestors`/`frame-src` so only declared origins load, accepts bridge messages only
+from the expected origin, and posts to that origin only. Unibot passes theme tokens as CSS custom properties, and the
+SDK ships a small stylesheet so AINAs look native.
+
+A URL canvas often needs to know who the user is in order to load data from its own backend. `getIdentityToken()`
+returns a short-lived JWT for the pairwise user (`aud` = AINA id). It carries no Host API scopes, and the developer's
+backend verifies it with the host JWKS.
+
+> This intentionally changes the current rule in [code-boundaries.md §2](code-boundaries.md) that "the host provides
+> components; no React code is downloaded from an AINA".
+
+### 9.2 Widgets (in the conversation)
+
+| `purpose` | When the host renders it | Data it receives |
+|---|---|---|
+| `confirmation` | Inside the host approval card, before a tool bound by `confirm_widget` runs | Tool name and proposed `arguments` |
+| `result` | Under the tool-call card after a tool bound by `result_widget` (or `_meta["unibot/widget"]`) completes | `arguments`, `structuredContent`, `content` |
+| `display` | Only when a result names it via `_meta["unibot/widget"]` | Same as `result` |
+
+**Confirmation flow.** The developer's widget renders the preview (for example "42.50 CNY · food · today") and may let
+the user adjust it. **Approve and Deny are host controls** drawn by the approval card outside the iframe, so a widget
+can never approve on the user's behalf. The widget can only propose edited arguments with
+`proposeArguments(args)`. The host validates them against the snapshot schema, marks the card "edited", and on Approve
+resumes the paused run with the edited arguments through the existing interrupt/resume flow. Tools with
+`effect: destructive` and no `confirm_widget` get the host's default confirmation card.
+
+**Lifecycle.** A widget is a pure view of its input plus `callTool`. It must not depend on in-iframe state surviving:
+when a conversation is reopened, widgets are re-rendered from the archived tool call and result. Widgets are
+lazy-loaded when scrolled into view, have a fixed initial height and may grow up to 480 px with `resize()`.
+
+### 9.3 Canvas (the main interface)
+
+The canvas opens beside the conversation (today's canvas pane and tabs). It is the AINA's full app, such as a document
+editor, a whiteboard or an image annotator. It calls `app`-visible tools for durable data, can push text into the
+conversation, and is told when the agent changed data in chat (replacing today's `refreshToken` plumbing). The agent
+can affect a canvas in two ways:
+
+| Pattern | How it works | Use for |
+|---|---|---|
+| **Server state + sync** | The agent calls an MCP tool; the server changes the data; the canvas gets `tool_result` and reloads or applies the change | Durable data that must change even when no canvas is open (documents, records) |
+| **Canvas tools** (§9.5) | The agent calls a tool the canvas implements; the canvas changes its own state and returns a result | State that lives in the browser (a whiteboard scene, selection, viewport, highlights) |
+
+### 9.4 Bridge API
+
+| Method / event | Canvas | Widget | Purpose |
+|---|---|---|---|
+| `getContext()` | ✓ | ✓ | Locale, theme, workspace, non-secret config; for widgets also `purpose`, tool name, `arguments`, result |
+| `callTool(name, args)` | ✓ | ✓ | Call an `app`-visible tool through the host (effects and approvals apply) |
+| `sendPrompt(text)` | ✓ | ✓ | Send a user message into the conversation |
+| `proposeArguments(args)` | | confirmation only | Propose edited arguments for the pending call |
+| `openCanvas(state?)` | | ✓ | Open this AINA's canvas, optionally at a state |
+| `resize(height)` | | ✓ | Request a height ≤ 480 px |
+| `pickFile({accept})` → `file_ref` · `download(file_ref \| blob)` | ✓ | ✓ | Host-mediated file in and out |
+| `setTitle(text)` · `notify(text)` | ✓ | | Shell integration |
+| `on("tool_result")` · `on("context_changed")` · `on("task_updated")` | ✓ | | Refresh when the agent or a task changed data |
+| `registerTool(name, handler)` | ✓ | | Implement a canvas tool declared in `canvas.tools` (§9.5) |
+| `setModelContext(value)` | ✓ | | Publish a compact summary of the canvas state for the agent (§9.5) |
+| `getIdentityToken()` | URL canvas only | | Pairwise identity for the canvas's own backend (§9.1) |
+
+### 9.5 Canvas tools (agent-driven canvas)
+
+Canvas tools let the agent operate the canvas the user is looking at. Example: an Excalidraw AINA whose canvas
+declares `draw_circle`, so "draw a circle around the login box" is drawn live on the user's whiteboard.
+
+**Declaration** (`aina.json`). Canvas tools use the MCP tool shape, so they look the same to the agent as MCP tools:
+
+```json
+"canvas": {
+  "entry": "canvas/index.html",
+  "title": "Whiteboard",
+  "tools": [
+    {
+      "name": "draw_circle",
+      "description": "Draw a circle on the open whiteboard. Coordinates are scene pixels; use get_scene to find shapes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": { "type": "number" }, "y": { "type": "number" },
+          "radius": { "type": "number", "exclusiveMinimum": 0 },
+          "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+        },
+        "required": ["x", "y", "radius"],
+        "additionalProperties": false
+      },
+      "effect": "write"
+    },
+    { "name": "get_scene", "description": "Return the shapes on the whiteboard with ids, types, positions and text.",
+      "inputSchema": { "type": "object", "properties": {} }, "effect": "read" },
+    { "name": "clear_scene", "description": "Remove every shape from the whiteboard.",
+      "inputSchema": { "type": "object", "properties": {} }, "effect": "destructive" }
+  ]
+}
+```
+
+**Implementation** (canvas code):
+
+```ts
+import { host } from "@unibot/aina-ui";
+import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
+
+host.registerTool("draw_circle", async ({ x, y, radius, color = "#1e1e1e" }) => {
+  const [circle] = convertToExcalidrawElements([
+    { type: "ellipse", x: x - radius, y: y - radius, width: radius * 2, height: radius * 2, strokeColor: color },
+  ]);
+  excalidrawAPI.updateScene({ elements: [...excalidrawAPI.getSceneElements(), circle] });
+  return { structuredContent: { element_id: circle.id } };
+});
+
+// Keep the agent oriented without a get_scene call on every turn.
+excalidrawAPI.onChange((elements) => host.setModelContext(summarizeScene(elements)));
+```
+
+**Call flow:**
+
+```mermaid
+sequenceDiagram
+    participant M as Host model
+    participant PH as Plugin Host (backend)
+    participant Sh as Chat shell (browser)
+    participant C as Canvas iframe
+    M->>PH: draw_circle{x, y, radius}
+    PH->>PH: validate schema · effect policy (approval if needed)
+    PH->>Sh: SSE canvas.tool.requested {call_id, aina, name, arguments}
+    Sh->>Sh: open the canvas if it is not open; wait for registerTool (≤ 10 s)
+    Sh->>C: bridge: invoke draw_circle
+    C-->>Sh: {structuredContent: {element_id}}
+    Sh->>PH: POST /conversations/{id}/canvas-calls/{call_id}
+    PH-->>M: tool result
+```
+
+**Rules:**
+
+- **Routing to one viewer.** The shell reports which conversation and canvas it shows, with a client id and a
+  heartbeat. The host sends a canvas call to the most recently active viewer only, so two open tabs never both draw.
+- **No viewer.** If no client is connected to the conversation (the SSE stream is closed, or the run is a scheduled
+  run), the call returns `isError: true` with "The Whiteboard canvas is not open", and the model tells the user. Canvas
+  tools are never queued for later replay.
+- **Waiting.** The backend run awaits the posted result through a Redis-backed future keyed by `call_id`, so the
+  result may arrive at any node. Timeout is `timeout_seconds` (default 10 s, ≤ 30 s). A late result is discarded.
+- **Same policy as other tools.** Arguments are validated against `inputSchema` before dispatch; `effect` drives
+  approvals (`clear_scene` asks the user first); results are untrusted tool output; calls are traced like MCP calls.
+- **Result size.** `content` may include one PNG snapshot (≤ 1 MB) for vision-capable models; `structuredContent`
+  ≤ 64 KB.
+- **Model context.** The latest `setModelContext` value (≤ 4 000 chars) is attached to each model call while the scope
+  is active, as delimited untrusted data: `<aina-canvas-state aina="…">…</aina-canvas-state>`.
+- **Persistence is the canvas's job.** Canvas tools change browser state only. A canvas that must survive reloads saves
+  through an `app` MCP tool or its own backend. When a conversation is reopened, past canvas tool calls are shown in the
+  transcript but not replayed.
+- **User edits at the same time** are the canvas's concern. The host only guarantees that calls for one canvas are
+  delivered in order, one at a time.
+
+## 10. Permissions, consent and configuration
+
+| Scope | Grants | Risk | Consent |
+|---|---|---|---|
+| `storage` | Plugin-private KV and files | low | Shown, auto-granted |
+| `notify` | Out-of-turn notifications | low | Shown, auto-granted |
+| `documents.read` | Read workspace documents | medium | Explicit |
+| `memory.read` | Search the user's memories | medium | Explicit |
+| `llm` | Use the user's model and quota | medium | Explicit |
+| `documents.write` | Create, edit and delete documents | high | Explicit, highlighted |
+| `memory.write` | Change the user's memories | high | Explicit, highlighted |
+| `sandbox.exec` | Run code in the user's sandbox | high | Explicit, highlighted |
+
+- Install shows identity, publisher, the MCP server origin, the URL-canvas origin if any, exposed and canvas tools with
+  their effects, scopes with their `reason`, and the config form (rendered from `config.schema`). For `oauth2` servers, the user completes the MCP
+  authorization flow during install.
+- The user may decline `optional` scopes; tools then get `PERMISSION_DENIED` from the Host API.
+- An **upgrade** that adds scopes, exposed tools or a stricter-to-looser effect change needs re-consent; until then
+  the installation stays pinned to the consented version.
+- `x-secret` config fields are stored encrypted, shown masked, never logged, and used only for `tools.mcp.auth`.
+- **Uninstall** revokes tokens and deletes plugin-private storage by default; the user can keep the data.
+
+## 11. Where each part runs
+
+| Part | Third-party AINA | First-party (bundled) AINA |
+|---|---|---|
+| Tools | Developer's remote MCP server (Streamable HTTP) | In-process MCP server built with the same MCP SDK, connected by in-memory transport |
+| Canvas | `aina-ui.<host>` from the package, or the developer's origin (`canvas.url`) | `aina-ui.<host>` from the package |
+| Canvas tools | In the user's browser, inside the canvas iframe | Same |
+| Widgets | `aina-ui.<host>` from the package | Same |
+| Skills | Loaded from the package | Same |
+| Host API | HTTPS | In-process adapter of the same client interface |
+
+First-party AINAs live in `plugins/<id>/` with their own `aina.json`. Their MCP server code may import **only** the MCP
+SDK and the Unibot AINA helper — never `tianzhou_agent_platform` — and an import-boundary test enforces this. Moving a
+bundled AINA to a standalone remote MCP server must need no code change apart from its transport.
+
+## 12. Developer experience
+
+None of this requires reading Unibot's source:
+
+- **Spec:** this contract plus JSON Schemas (`aina.schema.json`, bridge messages) and the Host API OpenAPI, versioned
+  under `spec/aina/2.0/`.
+- **Tools:** any MCP server SDK (official Python, TypeScript, Java, Go, C# SDKs, …). The optional helper
+  `unibot-aina` / `@unibot/aina` reads `_meta["unibot/context"]`, verifies the context token and provides a typed
+  Host API client.
+- **UI:** `@unibot/aina-ui` for canvas and widgets (bridge client + theme stylesheet).
+- **CLI** `aina`: `init` (scaffold `aina.json`, a skill folder, a canvas and a widget), `validate` (schema, files,
+  budgets, and a live `tools/list` check against your MCP server), `dev` (local mock host that renders your canvas and
+  widgets against your local MCP server, lets you fire canvas tool calls by hand or from a scripted model, and shows
+  every request), `pack`, `publish`.
+
+A complete tool backend with the official MCP Python SDK:
+
+```python
+from mcp.server.mcpserver import Context, MCPServer   # MCP Python SDK 2.x (FastMCP in 1.x)
+from unibot_aina import unibot_context
+
+mcp = MCPServer("expenses")
+
+@mcp.tool()
+async def add_expense(amount: float, category: str, ctx: Context, note: str = "") -> dict:
+    """Record one expense for the user."""
+    unibot = unibot_context(ctx)            # verified pairwise user, locale, config, Host API client
+    items = await unibot.host.storage.get("expenses", default=[])
+    expense = {"id": f"e_{len(items) + 1}", "amount": amount, "category": category, "note": note}
+    await unibot.host.storage.put("expenses", [*items, expense])
+    return {**expense, "currency": unibot.config["currency"]}   # structuredContent → expense-card widget
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http")
+```
+
+A confirmation widget:
+
+```html
+<div id="preview"></div>
+<script type="module">
+  import { host } from "./aina-ui.js";           // vendored into the package by `aina init`
+  const { arguments: args, config } = await host.getContext();
+  document.getElementById("preview").textContent =
+    `${args.amount.toFixed(2)} ${config.currency} · ${args.category}`;
+</script>
+```
+
+Any existing remote MCP server can become an AINA with an `aina.json` that has only `aina` and `tools`.
+
+## 13. First-party migration
+
+| Today | Becomes | Package parts |
+|---|---|---|
+| `unibot-image-recognition` | Bundled AINA | Tool `detect` (calls vision-service); canvas with image + boxes; result widget with thumbnails |
+| `unibot-code-runner` | Bundled AINA | Tools `run_python/bash/node` (Host API `sandbox.exec`); editor canvas; result widget with stdout/stderr |
+| `unibot-documents` | Bundled AINA over the host Documents service | Document tools (`documents.*`), edit task as a long-running tool (`llm`); editor canvas; outline result widget; skill "edit a long document section by section" |
+| `unibot-memory` | **Host core service**, not an AINA | Memory feeds every turn regardless of installation; AINAs use it through `memory.*` |
+| `unibot-scheduler` | **Host feature** | It has no tools; it runs other AINAs' tools with `source: schedule` |
+
+After migration the host no longer has `BuiltinRuntimeDefinition`, `invoke_builtin`, `BUILTIN_AINA_IDS`, the per-ID
+branches in `capabilities.py`/`prompts.py`/`platform_tools.py`, the `memory`/`document`/`document_outline` widget
+kinds, or `ainaId` branches in `MainWidgetRenderer`/`PluginUi`. Host-internal widgets (app suggestions, clarification
+form, default approval card) stay host-owned and are not part of the AINA contract.
+
+## 14. Compatibility
+
+- **AINA 1.0** (remote `/invoke`, A2A and managed projects) keeps running on the existing code path, unchanged and
+  marked deprecated. New 1.0 registrations stop when 2.0 ships, and the 1.0 path is removed one release later. There
+  is no automatic conversion: a 1.0 AINA migrates by putting its logic behind an MCP server and adding `aina.json`.
+- **Standalone MCP servers in Settings** (removed on `feature/remove-mcp`) are not reintroduced. An MCP server reaches
+  users only inside an AINA package, which gives it install consent, effects, skills and UI.
+- **Later runtimes** (Unibot-hosted MCP servers, which would replace 1.0 managed) can be added as a new `tools`
+  source without changing the other three parts.
+
+## 15. Phased plan
+
+Each phase is independently shippable and has a verification gate.
+
+| Phase | Scope | Verify |
+|---|---|---|
+| P0 Spec | Freeze this doc; publish `aina.schema.json`, bridge spec and Host API OpenAPI; `aina validate`; Expenses example package | Schema validates the example; validator rejects each rule in §5.4 with a clear error |
+| P1 Tools + skills | Package import for 2.0; MCP client (Streamable HTTP, reuse `aina/mcp/client.py` before it is deleted); tool snapshot and drift check; manifest-driven scope; `effect` approvals; skill index + `load_skill` | A v2 AINA's own MCP tools appear in its scope; drifted tools are disabled; third-party path has no ID branches; 1.0 examples still pass |
+| P2 Host API | Context token + JWKS, scope vocabulary, consent UI, config and secrets, MCP auth (bearer, OAuth), plugin storage, tasks | Security tests: scope enforcement, expiry, cross-user and cross-AINA isolation, pairwise IDs, secret redaction in OBS |
+| P3 UI | `aina-ui` origin, canvas iframe, result and confirmation widgets in the approval card, bridge SDK | Browser tests: canvas calls a tool; a widget cannot approve; edited arguments are re-validated; iframe cannot read cookies or parent DOM; widgets re-render on reload |
+| P4 DX | `unibot-aina` helpers (Python, TS), `@unibot/aina-ui`, `aina` CLI (`init/dev/pack/publish`), docs | "Outsider test": someone without repo access builds and installs the Expenses example from the docs alone |
+| P5 Migration | Image recognition → Code Runner → Documents as bundled AINAs; Memory and Scheduler reclassified as host | Import-boundary test; grep finds no first-party AINA IDs in host code; `builtin` runtime type removed; existing e2e flows still pass |
+| P6 Canvas tools (end state) | `canvas.tools`, `registerTool`, viewer routing and heartbeat, SSE `canvas.tool.requested`, result endpoint with Redis future, `setModelContext`; reference Excalidraw AINA | E2E: "draw a circle around X" draws on the open whiteboard; `clear_scene` asks for approval; with two tabs open only the active one draws; with the canvas closed the shell opens it, and with no client the model gets a clear error; a result posted to another node resumes the run |
+
+P0 already freezes the `canvas.tools` and URL-canvas schemas, so packages written before P6 do not change when canvas
+tools ship. URL canvases themselves ship with P3.
+
+## 16. Decisions
+
+Resolved in rev 2:
+
+- Tools are **remote MCP only**; the custom plugin RPC and managed runtime are dropped from 2.0.
+- The package is **tools + canvas + skills + widgets**; metadata is **JSON** (`aina.json`).
+- Canvas is a plugin-supplied web bundle in a sandboxed iframe.
+
+Resolved in rev 3:
+
+- Skills are folders: `<skill_name>/SKILL.md` or `<skill_name>/skill.md`.
+- A canvas may be a URL embedded by iframe, as well as a packaged bundle.
+- The end state includes canvas tools that let the agent change canvas state (§9.5).
+
+Resolved in rev 4 (each as recommended in rev 3):
+
+| # | Decision |
+|---|---|
+| S1 | `aina.json` is authoritative for skill metadata; `SKILL.md` frontmatter is optional and must match it |
+| C1 | Canvas tools are a live round trip with a timeout (≤ 30 s) |
+| C2 | The shell opens a closed canvas automatically before running a canvas tool call |
+| C3 | URL-canvas origins have their own admin allowlist (`UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS`) |
+| W1 | Widgets are HTML bundles in sandboxed iframes, on the same bridge as the canvas |
+| W2 | Skills load by progressive disclosure (`load_skill`) |
+| W3 | Tools are pinned by the `expose` allowlist and the registration snapshot; drift disables the tool |
+| D3 | Memory is a host core service and Scheduler a host feature, not AINAs |
+| D4 | First-party tools run as in-process MCP servers, platform-signed, with an import-boundary test |
+| D6 | User, tenant, installation, conversation and workspace ids are pairwise per AINA |
+
+## 17. Implementation status
+
+### What is built (P0, P1, P2)
+
+| Part | Where |
+|---|---|
+| JSON Schema | [`aina.schema.json`](../backend/src/tianzhou_agent_platform/aina/package/aina.schema.json), linked at `spec/aina/2.0/aina.schema.json` |
+| Validator (§5.4), shared by host and CLI | [`aina/package/validation.py`](../backend/src/tianzhou_agent_platform/aina/package/validation.py) |
+| CLI `aina validate [--live]` · `aina pack` | [`aina/package/cli.py`](../backend/src/tianzhou_agent_platform/aina/package/cli.py) |
+| Expenses example (package + MCP server) | [`examples/expenses-aina`](../examples/expenses-aina) |
+| MCP client (Streamable HTTP, or in-process server) | [`aina/package/mcp_client.py`](../backend/src/tianzhou_agent_platform/aina/package/mcp_client.py) |
+| Registration, snapshot, drift check, tool calls, `load_skill` | [`aina/package/service.py`](../backend/src/tianzhou_agent_platform/aina/package/service.py) |
+| `_meta["unibot/context"]` with pairwise ids | [`aina/package/context.py`](../backend/src/tianzhou_agent_platform/aina/package/context.py) |
+| Manifest-driven scope, `effect` approvals, read-only retries | `package_capabilities` in [capabilities.py](../backend/src/tianzhou_agent_platform/services/agent_integration/capabilities.py), [approvals.py](../backend/src/tianzhou_agent_platform/services/agent_integration/approvals.py), [retries.py](../backend/src/tianzhou_agent_platform/services/agent_integration/retries.py) |
+| Skill index in the scope prompt | `_package_prompt` in [prompts.py](../backend/src/tianzhou_agent_platform/services/agent_integration/prompts.py) |
+| Context token (ES256) and JWKS at `/.well-known/aina-host-jwks.json` | [`aina/package/tokens.py`](../backend/src/tianzhou_agent_platform/aina/package/tokens.py) |
+| Host API gateway (`/aina-host/v1`) with token, installation and scope checks; `storage/kv` | [`api/aina_host.py`](../backend/src/tianzhou_agent_platform/api/aina_host.py), [`aina/package/storage.py`](../backend/src/tianzhou_agent_platform/aina/package/storage.py) |
+| `config.schema` validation, sealed `x-secret` values, `bearer`/`api_key` MCP auth | [`aina/package/configuration.py`](../backend/src/tianzhou_agent_platform/aina/package/configuration.py), [`aina/package/secrets.py`](../backend/src/tianzhou_agent_platform/aina/package/secrets.py) |
+| Install consent (server origin, tools and effects, scopes with reasons and risk, settings form) | [`InstallConsentDialog.tsx`](../frontend/src/components/apps/InstallConsentDialog.tsx) |
+| Tests | [`tests/test_aina_package.py`](../backend/tests/test_aina_package.py), [`tests/test_aina_host_api.py`](../backend/tests/test_aina_host_api.py) |
+
+API: `POST /ainas/packages/validate` (anyone), `POST /ainas/packages` and `POST /ainas/{id}/tools/refresh`
+(platform admin; both take an optional one-time `credential` for an authenticated server's `tools/list`, never
+stored). Installing a package validates its settings, seals secrets, grants `storage`/`notify` automatically and
+re-checks the tools as the installing user. Uninstall deletes the AINA's private storage unless `keep_data=true`. A package is stored as an ordinary `AinaRecord` whose runtime is `package`; the record's 1.0 fields
+are a projection of `aina.json`, so listing, install and grants keep one code path. The 2.0 path branches on the
+runtime type only, never on an AINA id.
+
+### Where the implementation differs from or narrows this design
+
+- `tools.mcp.url` also accepts plain `http://` for loopback hosts, so a developer can register a local server.
+- MCP `oauth2` authorization is not implemented yet; registration rejects it. `none`, `bearer` and `api_key` work.
+- The drift check runs before every new installation and on `POST /ainas/{id}/tools/refresh`; it is not yet on a
+  periodic schedule.
+- `_meta["unibot/context"]` has no user `locale`/`timezone` yet. The MCP SDK's own OpenTelemetry spans join the
+  platform trace as children of the tool span, so no separate `traceparent` work was needed.
+- The context token's identity claims are the pairwise ids. A `ref` claim holds the host's own installation
+  reference, encrypted, so the Host API needs no per-token state. The signing key is derived from the AINA key
+  material (`UNIBOT_AINA_SECRET_KEY`, else the auth secret), so all nodes share it; `UNIBOT_AINA_SIGNING_KEY`
+  (P-256 PEM) overrides it. Key rotation is not implemented.
+- A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
+  the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
+  at token expiry.
+- Host API: only `storage/kv` is built. Its quota is soft under concurrent writers (checked before each write);
+  limits are 256 KiB per value, 10 MiB and 10 000 keys per installation. `storage/files`, `files`, `documents`,
+  `memory`, `llm`, `sandbox`, `notifications`, `token/refresh` and task callbacks are not built yet. Audit is a
+  structured log line per call, not a trace span.
+- Long-running tools (§7.3) are not built. Unibot's task system is the agent's plan tree, so AINA tasks need their
+  own background-task record, Tasks-pane entry and out-of-turn conversation posting.
+- Upgrade re-consent is not built: a new version keeps existing grants, and a new required scope hides the AINA
+  until the user grants it.
+- "Confirm the first `write` call in a conversation" is decided from the conversation's checkpointed messages; after
+  history summarization the host may ask again, never less often.
+- Non-text MCP content blocks (images, resources) reach the model as a placeholder line. Text content that repeats
+  `structuredContent` exactly is dropped, so the model does not read the result twice.
+- Skill folders may contain only UTF-8 text files. A frontmatter `name` may match either the skill `id` (the Agent
+  Skills convention) or its `name`. Skill text is limited to 1 000 000 characters per package in total.
+- The bridge message schema and Host API OpenAPI are written with the phases that implement them (P3, P2).
+
+### Next
+
+Remaining P2: long-running tasks (§7.3), MCP OAuth 2.0, upgrade re-consent, and the other Host API endpoints. Then
+P3 (canvas and widgets), which canvas tools (P6) build on.

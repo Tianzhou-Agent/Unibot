@@ -58,6 +58,30 @@ class AgentSettings(BaseSettings):
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_ALLOWED_ORIGINS", "capability_allowed_origins"),
         description="Comma-separated approved HTTP(S) origins for remote Tools and AINA; empty denies all.",
     )
+    aina_secret_key: SecretStr | None = Field(
+        default=None,
+        min_length=32,
+        validation_alias=AliasChoices("UNIBOT_AINA_SECRET_KEY", "aina_secret_key"),
+        description="Key material for AINA secrets at rest and context-token signing; defaults to the auth secret.",
+    )
+    aina_signing_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_AINA_SIGNING_KEY", "aina_signing_key"),
+        description="P-256 private key (PEM) for AINA context tokens; derived from the AINA key material if unset.",
+    )
+    aina_host_api_base: str = Field(
+        default="http://127.0.0.1:8000/aina-host/v1",
+        validation_alias=AliasChoices("UNIBOT_AINA_HOST_API_BASE", "aina_host_api_base"),
+        description="Public base URL of the AINA Host API; sent to MCP servers and used as the token issuer.",
+    )
+    aina_canvas_allowed_origins: str = Field(
+        default="",
+        validation_alias=AliasChoices("UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS", "aina_canvas_allowed_origins"),
+        description=(
+            "Comma-separated approved HTTPS origins for AINA URL canvases. Kept apart from the capability allowlist "
+            "because a URL canvas can change after review; empty denies all."
+        ),
+    )
     max_agent_iterations: int = Field(
         # One iteration is one model call. 20 matches CrewAI's max_iter and smolagents' max_steps; OpenAI Agents
         # SDK (10) and LangChain AgentExecutor (15) are lower. 8 cut off multi-document tasks mid-way.

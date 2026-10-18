@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
+from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.core.base import StrictModel
@@ -115,6 +116,10 @@ def gateway(request: Request) -> RemoteCapabilityGateway:
 
 def aina_projects(request: Request) -> AinaProjectService:
     return cast(AinaProjectService, request.app.state.aina_project_service)
+
+
+def aina_packages(request: Request) -> AinaPackageService:
+    return cast(AinaPackageService, request.app.state.aina_packages)
 
 
 def managed_ainas(request: Request) -> ManagedAinaRuntime:

@@ -129,34 +129,7 @@ def build_project_archive(files: Mapping[str, str | bytes]) -> bytes:
 
 
 def validate_project_archive(payload: bytes) -> AinaProjectValidationReport:
-    if not payload:
-        raise _invalid_project("AINA project archive is empty")
-    if len(payload) > MAX_PROJECT_ARCHIVE_BYTES:
-        raise _invalid_project("AINA project archive is too large")
-    files: dict[str, bytes] = {}
-    uncompressed_size = 0
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload), mode="r") as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
-            if len(infos) > MAX_PROJECT_FILES:
-                raise _invalid_project(f"AINA project cannot contain more than {MAX_PROJECT_FILES} files")
-            for info in infos:
-                name = _validate_archive_path(info.filename)
-                if name in files:
-                    raise _invalid_project(f"AINA project contains duplicate file {name!r}")
-                if info.flag_bits & 0x1:
-                    raise _invalid_project(f"Encrypted AINA project file {name!r} is not supported")
-                mode = info.external_attr >> 16
-                if stat.S_ISLNK(mode):
-                    raise _invalid_project(f"AINA project cannot contain symbolic link {name!r}")
-                if info.file_size > MAX_PROJECT_FILE_BYTES:
-                    raise _invalid_project(f"AINA project file {name!r} is too large")
-                uncompressed_size += info.file_size
-                if uncompressed_size > MAX_PROJECT_UNCOMPRESSED_BYTES:
-                    raise _invalid_project("AINA project expands beyond the allowed size")
-                files[name] = archive.read(info)
-    except zipfile.BadZipFile as exc:
-        raise _invalid_project("AINA project must be a valid ZIP archive") from exc
+    files, uncompressed_size = read_project_archive(payload)
 
     manifest_paths = [name for name in AINA_PROJECT_MANIFEST_NAMES if name in files]
     if len(manifest_paths) != 1:
@@ -190,6 +163,39 @@ def validate_project_archive(payload: bytes) -> AinaProjectValidationReport:
         ready_for_registration=manifest.runtime.type == "remote",
         warnings=warnings,
     )
+
+
+def read_project_archive(payload: bytes) -> tuple[dict[str, bytes], int]:
+    """Files of a package ZIP and their uncompressed size, after the archive safety checks."""
+    if not payload:
+        raise _invalid_project("AINA project archive is empty")
+    if len(payload) > MAX_PROJECT_ARCHIVE_BYTES:
+        raise _invalid_project("AINA project archive is too large")
+    files: dict[str, bytes] = {}
+    uncompressed_size = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload), mode="r") as archive:
+            infos = [info for info in archive.infolist() if not info.is_dir()]
+            if len(infos) > MAX_PROJECT_FILES:
+                raise _invalid_project(f"AINA project cannot contain more than {MAX_PROJECT_FILES} files")
+            for info in infos:
+                name = _validate_archive_path(info.filename)
+                if name in files:
+                    raise _invalid_project(f"AINA project contains duplicate file {name!r}")
+                if info.flag_bits & 0x1:
+                    raise _invalid_project(f"Encrypted AINA project file {name!r} is not supported")
+                mode = info.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise _invalid_project(f"AINA project cannot contain symbolic link {name!r}")
+                if info.file_size > MAX_PROJECT_FILE_BYTES:
+                    raise _invalid_project(f"AINA project file {name!r} is too large")
+                uncompressed_size += info.file_size
+                if uncompressed_size > MAX_PROJECT_UNCOMPRESSED_BYTES:
+                    raise _invalid_project("AINA project expands beyond the allowed size")
+                files[name] = archive.read(info)
+    except zipfile.BadZipFile as exc:
+        raise _invalid_project("AINA project must be a valid ZIP archive") from exc
+    return files, uncompressed_size
 
 
 def _load_manifest(content: bytes, path: str) -> AinaManifest:
