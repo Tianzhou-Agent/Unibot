@@ -76,6 +76,16 @@ class HostApi:
             dict[str, Any], await self._request("POST", "/memory", json={"content": content, "category": category})
         )
 
+    # --- notify -------------------------------------------------------------------------------------------------
+
+    async def notify(self, title: str, body: str = "", *, opens: str = "app") -> dict[str, Any]:
+        """Put a plain-text entry in the user's inbox; it opens your app, or with ``opens="conversation"`` the
+        conversation of this call. At most 30 per hour."""
+        return cast(
+            dict[str, Any],
+            await self._request("POST", "/notifications", json={"title": title, "body": body, "opens": opens}),
+        )
+
     # --- llm ----------------------------------------------------------------------------------------------------
 
     async def chat(self, messages: list[dict[str, str]], *, max_tokens: int | None = None) -> str:

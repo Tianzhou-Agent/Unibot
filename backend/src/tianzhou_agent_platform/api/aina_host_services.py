@@ -1,4 +1,4 @@
-"""Host API services for AINA MCP servers (design §8): the user's documents, memory and model.
+"""Host API services for AINA MCP servers (design §8): the user's documents, memory, model and inbox.
 
 Every route is authorized by the context token (see ``aina_host``) and one scope. Documents are read in the workspace
 of the invocation that minted the token, like the built-in document tools; memory is the user's own. Responses
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -16,9 +17,17 @@ from pydantic import Field, field_validator
 
 from tianzhou_agent_platform.aina.document.models import DocumentOutline
 from tianzhou_agent_platform.aina.memory.models import MemoryCategory, MemoryCreate, MemoryUpdate
+from tianzhou_agent_platform.aina.package.notifications import (
+    MAX_PER_HOUR,
+    RATE_WINDOW,
+    AinaNotification,
+    NotificationInput,
+    NotificationReceipt,
+    rate_limited,
+)
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, HostCaller, host_caller, require_scope
 from tianzhou_agent_platform.api.dependencies import chat_service, documents, model_provider_service, repository
-from tianzhou_agent_platform.core.base import StrictModel
+from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
 from tianzhou_agent_platform.store.errors import StorageNotFoundError
@@ -241,6 +250,48 @@ def create_aina_host_services_router() -> APIRouter:
         await own_memory(request, caller, memory_id)
         await repository(request).remove_memory(memory_id, **actor(caller))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- notify -------------------------------------------------------------------------------------------------
+
+    @router.post(
+        f"{HOST_API_PREFIX}/notifications", response_model=NotificationReceipt, status_code=status.HTTP_201_CREATED
+    )
+    async def send_notification(
+        payload: NotificationInput, request: Request, caller: HostCaller = Depends(host_caller)
+    ) -> NotificationReceipt:
+        """A plain-text entry in the user's inbox that opens this AINA, or the conversation of the call."""
+        require_scope(caller, "notify", "notifications.create")
+        conversation_id = caller.token.reference.conversation_id
+        if payload.opens == "conversation" and conversation_id is None:
+            raise PlatformError(
+                "INVALID_REQUEST",
+                "This token's call was not made in a conversation; open the app instead",
+                status_code=422,
+                source="aina_host",
+            )
+        repo = repository(request)
+        installation = caller.installation
+        recent = await repo.count_aina_notifications(
+            tenant_id=installation.tenant_id,
+            user_id=installation.user_id,
+            aina_id=installation.aina_id,
+            since=utc_now() - RATE_WINDOW,
+        )
+        if recent >= MAX_PER_HOUR:
+            raise rate_limited()
+        stored = await repo.create_aina_notification(
+            AinaNotification(
+                id=f"ntf_{uuid4().hex}",
+                tenant_id=installation.tenant_id,
+                user_id=installation.user_id,
+                aina_id=installation.aina_id,
+                title=payload.title,
+                body=payload.body,
+                opens=payload.opens,
+                conversation_id=conversation_id if payload.opens == "conversation" else None,
+            )
+        )
+        return NotificationReceipt(id=stored.id, created_at=stored.created_at)
 
     # --- llm ------------------------------------------------------------------------------------------------------
 

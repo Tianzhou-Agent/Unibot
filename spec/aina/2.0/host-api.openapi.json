@@ -478,6 +478,50 @@
         ]
       }
     },
+    "/notifications": {
+      "post": {
+        "summary": "Send Notification",
+        "description": "A plain-text entry in the user's inbox that opens this AINA, or the conversation of the call.",
+        "operationId": "send_notification_aina_host_v1_notifications_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReceipt"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      }
+    },
     "/storage/kv": {
       "get": {
         "summary": "List Storage",
@@ -1258,6 +1302,58 @@
           "content"
         ],
         "title": "MemoryInput"
+      },
+      "NotificationInput": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Body",
+            "default": ""
+          },
+          "opens": {
+            "type": "string",
+            "enum": [
+              "app",
+              "conversation"
+            ],
+            "title": "Opens",
+            "default": "app"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "NotificationInput",
+        "description": "``POST /aina-host/v1/notifications``."
+      },
+      "NotificationReceipt": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "NotificationReceipt"
       },
       "RefreshedToken": {
         "properties": {

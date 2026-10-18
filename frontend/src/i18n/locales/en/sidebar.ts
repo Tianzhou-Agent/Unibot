@@ -1,4 +1,12 @@
 export default {
+  notifications: {
+    label: "Notifications",
+    labelUnread: "Notifications, {{count}} unread",
+    title: "Notifications",
+    markAll: "Mark all read",
+    empty: "No notifications yet. Apps you install can send you updates here.",
+    unread: "Unread",
+  },
   runStatus: {
     running: "Running",
     approval_required: "Waiting for your approval",

@@ -244,6 +244,7 @@ or paused app stop working at once.
 | `search_memory(query)` | `GET /memory/search` | `memory.read`: the user's own memories |
 | `remember(content)` | `POST /memory` (and `PATCH`/`DELETE /memory/{id}`) | `memory.write` |
 | `chat(messages)` | `POST /llm/chat` | `llm`: the user's own model, without tools |
+| `notify(title, body, opens=)` | `POST /notifications` | `notify` (granted automatically): an entry in the user's inbox; at most 30 per hour |
 | `task_progress/complete/fail` | `/tasks/{id}/…` | the task's own invocation (§8) |
 
 The full API is described in [`host-api.openapi.json`](../spec/aina/2.0/host-api.openapi.json).
@@ -350,8 +351,14 @@ Declare what your app needs. Users see each scope with your `reason` before they
 ]
 ```
 
-The scopes with a Host API today are `storage`, `documents.read`, `documents.write`, `memory.read`, `memory.write` and
-`llm`. Users may decline optional scopes, so check `granted_permissions` before you use one.
+The scopes with a Host API today are `storage`, `notify`, `documents.read`, `documents.write`, `memory.read`,
+`memory.write` and `llm`. Users may decline optional scopes, so check `granted_permissions` before you use one.
+
+`notify` sends the user a plain-text entry (title up to 120 characters, body up to 500) to the bell in Unibot's
+sidebar. You cannot choose a link: an entry opens your app, or with `opens="conversation"` the conversation of the
+tool call whose token sent it. Use it for things the user would want to know outside the conversation, such as a
+finished background job. Unibot keeps the newest 200 entries per user, and removes your app's entries when the user
+uninstalls it.
 
 Per-user settings are a JSON Schema under `config.schema`. Unibot shows them as a form when the user installs.
 

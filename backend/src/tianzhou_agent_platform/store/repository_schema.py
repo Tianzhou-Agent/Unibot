@@ -304,6 +304,22 @@ aina_projects_table = _table(
     Index("ix_unibot_aina_projects_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
+aina_notifications_table = Table(
+    "unibot_aina_notifications",
+    repository_metadata,
+    Column("id", String(64), primary_key=True),
+    Column("tenant_id", ACTOR, nullable=False),
+    Column("user_id", ACTOR, nullable=False),
+    Column("aina_id", String(160), nullable=False),
+    Column("title", String(120), nullable=False),
+    Column("body", Text, nullable=False),
+    Column("opens", String(16), nullable=False),
+    Column("conversation_id", String(160), nullable=True),
+    Column("created_at", TIMESTAMP, nullable=False),
+    Column("read_at", TIMESTAMP, nullable=True),
+    Index("ix_unibot_aina_notifications_user", "tenant_id", "user_id", "created_at"),
+)
+
 developer_tokens_table = Table(
     "unibot_developer_tokens",
     repository_metadata,
