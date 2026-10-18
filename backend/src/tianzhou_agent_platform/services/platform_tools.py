@@ -5,6 +5,7 @@ import re
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from tianzhou_agent_platform.aina.package.bundled import effective_installation, with_bundled
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
 from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import (
@@ -67,7 +68,12 @@ async def _available_apps(
     }
     installations = {
         item.aina_id: item
-        for item in await repository.list_installations(tenant_id=tenant_id, user_id=user_id)
+        for item in await with_bundled(
+            repository,
+            await repository.list_installations(tenant_id=tenant_id, user_id=user_id),
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         if item.status == "active"
     }
     apps: list[WidgetApp] = []
@@ -148,11 +154,9 @@ async def open_aina(
     if record.status != "registered":
         raise PlatformError("PERMISSION_DENIED", "The selected AINA is disabled", status_code=403)
     if record.manifest.runtime.type != "builtin":
-        installation = await repository.get_installation(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            aina_id=aina_id,
-        )
+        installation = await effective_installation(repository, record, tenant_id=tenant_id, user_id=user_id)
+        if installation is None:
+            raise PlatformError("RESOURCE_NOT_FOUND", f"AINA {aina_id!r} is not installed", status_code=404)
         if installation.status != "active":
             raise PlatformError("PERMISSION_DENIED", "The selected AINA is not active", status_code=403)
         runtime = record.manifest.runtime

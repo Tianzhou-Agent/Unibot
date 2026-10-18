@@ -19,6 +19,7 @@ import {
 import { Link } from "react-router-dom";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
+import { isSystemAina } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type {
   AinaInstallation,
@@ -105,7 +106,7 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
     () =>
       ainas.filter(
         (item) => item.status === "registered" && !["unibot-assistant", "unibot-scheduler"].includes(item.manifest.aina.id)
-          && (item.manifest.runtime.type === "builtin" || installedIds.has(item.manifest.aina.id)),
+          && (isSystemAina(item.manifest.runtime) || installedIds.has(item.manifest.aina.id)),
       ),
     [ainas, installedIds],
   );

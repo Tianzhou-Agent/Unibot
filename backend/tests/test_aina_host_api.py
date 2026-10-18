@@ -26,6 +26,7 @@ from tests.test_aina_package import (
     _with_manifest,
 )
 from tianzhou_agent_platform.aina.package.context import unibot_context
+from tianzhou_agent_platform.aina.package.bundled import is_bundled_url
 from tianzhou_agent_platform.aina.package.mcp_client import McpCallResult, McpServerInfo, McpToolClient
 from tianzhou_agent_platform.aina.package.secrets import aina_key_material
 from tianzhou_agent_platform.aina.package.service import AinaPackageService, package_runtime
@@ -53,7 +54,8 @@ class RecordingMcp(McpToolClient):
         self.metas: list[dict[str, Any]] = []
 
     async def list_tools(self, url: str, *, headers: Any = None, timeout: float = 30.0) -> McpServerInfo:
-        self.list_headers.append(dict(headers or {}))
+        if not is_bundled_url(url):  # bundled first-party servers are registered at every startup
+            self.list_headers.append(dict(headers or {}))
         return await super().list_tools(url, headers=headers, timeout=timeout)
 
     async def call_tool(

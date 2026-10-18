@@ -28,7 +28,7 @@ import { ActionMenu, AppIcon, PluginChip, PluginRow, PluginSection, type MenuIte
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { ACTOR_QUERY, deleteAina, installAina, openAina, uninstallAina } from "@/lib/plugins";
+import { ACTOR_QUERY, deleteAina, installAina, isSystemAina, openAina, uninstallAina } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type {
   AinaInstallation,
@@ -384,7 +384,7 @@ export default function AllAppsPage() {
     return !needle || fields.some((field) => field.toLowerCase().includes(needle));
   };
   const visibleAinas = ainas.filter(({ manifest }) => matches(manifest.aina.name, manifest.aina.description, manifest.aina.id));
-  const usable = (record: AinaRecord) => record.manifest.runtime.type === "builtin" || installedIds.has(record.manifest.aina.id);
+  const usable = (record: AinaRecord) => isSystemAina(record.manifest.runtime) || installedIds.has(record.manifest.aina.id);
   const visibleProjects = projects.filter(({ manifest }) => matches(manifest.aina.name, manifest.aina.description, manifest.aina.id));
   const visibleTools = tools.filter((tool) => matches(tool.name, tool.description, tool.tool_id));
   const visibleSkills = skills.filter((skill) => matches(skill.name, skill.description, skill.skill_id));
@@ -712,7 +712,7 @@ function AinaRow({ record, installed, canDelete, onInstall, onUninstall, onOpen,
 }) {
   const { t } = useTranslation("apps");
   const { aina, runtime, permissions, main_widget } = record.manifest;
-  const builtin = runtime.type === "builtin";
+  const builtin = isSystemAina(runtime);
   const items: MenuItem[] = [];
   if (builtin || (installed && main_widget)) {
     items.push({ label: aina.id === "unibot-scheduler" ? t("aina.manageTasks") : t("aina.open"), icon: <AppWindow className="h-4 w-4" />, onSelect: onOpen });

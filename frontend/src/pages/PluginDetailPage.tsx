@@ -8,7 +8,7 @@ import { ActionMenu, AppIcon, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { ACTOR_QUERY, deleteAina, installAina, openAina, uninstallAina } from "@/lib/plugins";
+import { ACTOR_QUERY, deleteAina, installAina, isSystemAina, openAina, uninstallAina } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type { AinaInstallation, AinaRecord } from "@/types";
 
@@ -62,7 +62,7 @@ export default function PluginDetailPage() {
   }
 
   const manifest = record?.manifest;
-  const builtin = manifest?.runtime.type === "builtin";
+  const builtin = manifest ? isSystemAina(manifest.runtime) : false;
   const usable = builtin || installed;
   const menuItems: MenuItem[] = [];
   if (manifest && installed && !builtin) {

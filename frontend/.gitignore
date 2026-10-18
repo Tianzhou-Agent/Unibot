@@ -27,3 +27,5 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+vite.canvas.config.js
+vite.canvas.config.d.ts

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from tianzhou_agent_platform.aina.package.bundled import with_bundled
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
 from tianzhou_agent_platform.conversations.models import Conversation
 
@@ -26,7 +27,9 @@ async def aina_graph(
     )
     installations = {
         item.aina_id: item
-        for item in await repository.list_installations(
+        for item in await with_bundled(
+            repository,
+            await repository.list_installations(tenant_id=conversation.tenant_id, user_id=conversation.user_id),
             tenant_id=conversation.tenant_id,
             user_id=conversation.user_id,
         )

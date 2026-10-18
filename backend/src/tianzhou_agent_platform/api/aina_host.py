@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
 from pydantic import ConfigDict, Field
 
+from tianzhou_agent_platform.aina.package.bundled import effective_installation
 from tianzhou_agent_platform.aina.package.service import content_text
 from tianzhou_agent_platform.aina.package.storage import MAX_LIST_ITEMS, storage_item
 from tianzhou_agent_platform.aina.package.tasks import MAX_MESSAGE_CHARS, AinaTask
@@ -112,16 +113,16 @@ async def _caller(request: Request, *, allow_expired: bool) -> HostCaller:
         raise invalid_token()  # an identity token only proves who the user is to the AINA's own backend
     reference = verified.reference
     try:
-        installation = await repository(request).get_installation(
-            tenant_id=reference.tenant_id,
-            user_id=reference.user_id,
-            aina_id=reference.aina_id,
-        )
+        record = await repository(request).get_aina(reference.aina_id)
     except PlatformError as exc:
         if exc.code == "RESOURCE_NOT_FOUND":
-            raise invalid_token() from exc  # uninstalled: every token of the installation is revoked
+            raise invalid_token() from exc
         raise
-    if installation.status != "active":
+    installation = await effective_installation(
+        repository(request), record, tenant_id=reference.tenant_id, user_id=reference.user_id
+    )
+    # Uninstalled or paused: every token of the installation is revoked.
+    if installation is None or installation.status != "active":
         raise invalid_token()
     return HostCaller(token=verified, installation=installation)
 

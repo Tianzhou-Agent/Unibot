@@ -384,11 +384,11 @@ def test_tool_loop_executes_remote_tool_and_records_trace() -> None:
     assert discovery["aina_graph"]["available_count"] == 4
     assert {item["id"] for item in discovery["aina_graph"]["available"]} == {
         "unibot-code-runner",
-        "unibot-image-recognition",
         "unibot-memory",
         "unibot-scheduler",
+        "unibot.image-recognition",
     }
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 4, "remote_aina": 0}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 0}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
         "remote_aina": 0,

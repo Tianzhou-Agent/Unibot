@@ -17,7 +17,6 @@ from tianzhou_agent_platform.aina.builtin import (
     RECALL_TOOL_ID,
     REMEMBER_TOOL_ID,
     UNIBOT_CODE_RUNNER_ID,
-    UNIBOT_IMAGE_RECOGNITION_ID,
     UNIBOT_MEMORY_ID,
     UNIBOT_SCHEDULER_ID,
     UPDATE_TOOL_ID,
@@ -30,6 +29,7 @@ from tianzhou_agent_platform.aina.document.builtin import (
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
+from tianzhou_agent_platform.aina.package.bundled import with_bundled
 from tianzhou_agent_platform.aina.package.manifest import CanvasTool
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition, ToolSnapshot
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
@@ -200,7 +200,7 @@ class CapabilityCatalog:
             }, aina
         if aina_id == UNIBOT_CODE_RUNNER_ID:
             return {**self._sandbox(), **task_capabilities, **switch_capabilities}, aina
-        if aina_id in {UNIBOT_SCHEDULER_ID, UNIBOT_IMAGE_RECOGNITION_ID}:
+        if aina_id == UNIBOT_SCHEDULER_ID:
             return {**task_capabilities, **switch_capabilities}, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
         capabilities = {selected.function_name: selected, **task_capabilities, **switch_capabilities}
@@ -265,7 +265,9 @@ class CapabilityCatalog:
 
     async def _aina_entries(self, conversation: Conversation) -> dict[str, Capability]:
         capabilities: dict[str, Capability] = {}
-        installations = await self.registry.list_installations(
+        installations = await with_bundled(
+            self.registry,
+            await self.registry.list_installations(tenant_id=conversation.tenant_id, user_id=conversation.user_id),
             tenant_id=conversation.tenant_id,
             user_id=conversation.user_id,
         )
@@ -327,7 +329,6 @@ class CapabilityCatalog:
             UNIBOT_SCHEDULER_ID,
             UNIBOT_DOCUMENTS_ID,
             UNIBOT_CODE_RUNNER_ID,
-            UNIBOT_IMAGE_RECOGNITION_ID,
         ):
             capabilities.update(await self._builtin_aina(conversation, aina_id))
         return capabilities
@@ -779,7 +780,12 @@ def is_routable_aina(capability: Capability) -> bool:
     if capability.kind != "aina":
         return False
     aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
-    if aina.manifest.runtime.type in {"remote", "managed", "package"}:
+    runtime = aina.manifest.runtime
+    if isinstance(runtime, PackageRuntimeDefinition):
+        # A package only its UI drives (app tools, no skills or canvas tools) gives the agent nothing to route to.
+        canvas = runtime.package.canvas
+        return any(tool.model_visible for tool in runtime.tools) or bool(runtime.skills) or bool(canvas and canvas.tools)
+    if runtime.type in {"remote", "managed"}:
         return True
     return aina.manifest.aina.id in {UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID, UNIBOT_CODE_RUNNER_ID}
 

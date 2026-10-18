@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import { AppIcon } from "@/components/apps/PluginUi";
 import { api, apiErrorMessage } from "@/lib/api";
+import { isSystemAina } from "@/lib/plugins";
 import { useMockSession } from "@/lib/mockSession";
 import type { AinaInstallation, AinaRecord } from "@/types";
 
@@ -30,11 +31,11 @@ export function AinaLauncher({ conversationAinaIds, openAinaIds, onSelect }: {
     ])
       .then(([records, installations]) => {
         if (!active) return;
-        // Mirrors the backend's openable check: builtin, or installed with every permission granted.
+        // Mirrors the backend's openable check: built-in or bundled, or installed with every permission granted.
         const installed = new Map(installations.filter((item) => item.status === "active").map((item) => [item.aina_id, item]));
         setAinas(records.filter((record) => {
           if (record.status !== "registered") return false;
-          if (record.manifest.runtime.type === "builtin") return true;
+          if (isSystemAina(record.manifest.runtime)) return true;
           const installation = installed.get(record.manifest.aina.id);
           return Boolean(installation) && record.manifest.permissions.every((permission) => installation?.granted_permissions.includes(permission));
         }));

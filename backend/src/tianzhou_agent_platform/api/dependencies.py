@@ -14,7 +14,6 @@ from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
-from tianzhou_agent_platform.vision.client import VisionClient
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.auth.service import AuthService
 from tianzhou_agent_platform.tasks.service import TaskService
@@ -133,10 +132,6 @@ def managed_ainas(request: Request) -> ManagedAinaRuntime:
 
 def sandboxes(request: Request) -> SandboxService:
     return cast(SandboxService, request.app.state.sandbox_service)
-
-
-def vision(request: Request) -> VisionClient:
-    return cast(VisionClient, request.app.state.vision_client)
 
 
 def auth(request: Request) -> AuthService:

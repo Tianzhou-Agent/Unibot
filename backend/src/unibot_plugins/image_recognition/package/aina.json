@@ -1,0 +1,25 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "unibot.image-recognition",
+    "version": "2.0.0",
+    "name": "Image Recognition",
+    "description": "Paste or pick an image and detect its objects, counts, positions and confidence with YOLO26m.",
+    "publisher": { "id": "unibot", "name": "Unibot" }
+  },
+
+  "tools": {
+    "mcp": { "url": "https://bundled.unibot.invalid/unibot.image-recognition/mcp", "auth": { "type": "none" } },
+    "expose": {
+      "detect": { "effect": "read", "visibility": ["app"], "timeout_seconds": 90 },
+      "vision_status": { "effect": "read", "visibility": ["app"] }
+    }
+  },
+
+  "canvas": {
+    "entry": "canvas/index.html",
+    "title": "Image Recognition"
+  }
+}

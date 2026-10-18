@@ -684,9 +684,18 @@ sequenceDiagram
 | Skills | Loaded from the package | Same |
 | Host API | HTTPS | In-process adapter of the same client interface |
 
-First-party AINAs live in `plugins/<id>/` with their own `aina.json`. Their MCP server code may import **only** the MCP
-SDK and the Unibot AINA helper — never `tianzhou_agent_platform` — and an import-boundary test enforces this. Moving a
-bundled AINA to a standalone remote MCP server must need no code change apart from its transport.
+First-party AINAs live in `backend/src/unibot_plugins/<name>/`: `package/` is an ordinary AINA 2.0 package folder and
+`server.py` its MCP server (an `mcp` object). Their MCP server code may import **only** the MCP SDK and the Unibot AINA
+helper (`unibot_aina`) — never `tianzhou_agent_platform` — and an import-boundary test enforces this. Moving a bundled
+AINA to a standalone remote MCP server must need no code change apart from its transport.
+
+At startup the host registers every bundled package (`runtime.bundled: true`) and serves its MCP URL, which must use
+the never-resolving host `bundled.unibot.invalid`, in process; no other package may use that host or a bundled AINA's
+id. Bundled packages are platform-signed: every user has them with all declared scopes, without an installation or
+consent dialog, and they cannot be installed, uninstalled or deleted. Their canvases are built from the frontend's
+React code (`frontend/src/aina-canvases/<canvas>/`, `npm run build:canvases`) into `package/canvas/` and committed, so
+the backend needs no Node toolchain. A package whose tools are all app-only and that has no skills or canvas tools is
+not offered to the model as an entry point.
 
 ## 12. Developer experience
 

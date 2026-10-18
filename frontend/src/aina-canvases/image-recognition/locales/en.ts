@@ -2,6 +2,12 @@ export default {
   err: {
     type: "Only JPEG, PNG, or WebP images are supported.",
     size: "Images must be 10 MB or smaller.",
+    UNSUPPORTED_TYPE: "Only JPEG, PNG, or WebP images are supported.",
+    TOO_LARGE: "The image exceeds the size limit.",
+    INVALID_IMAGE: "The image data is invalid or unsafe.",
+    TIMEOUT: "Detection timed out. Please try again later.",
+    UNAVAILABLE: "The detection service is temporarily unavailable.",
+    FAILED: "Detection failed. Please try again later.",
   },
   title: "YOLO26m object detection",
   subtitle: "Paste or choose an image to detect objects, positions, and confidence",

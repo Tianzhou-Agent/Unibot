@@ -2,6 +2,12 @@ export default {
   err: {
     type: "仅支持 JPEG、PNG 或 WebP 图片。",
     size: "图片不能超过 10 MB。",
+    UNSUPPORTED_TYPE: "仅支持 JPEG、PNG 和 WebP 图片。",
+    TOO_LARGE: "图片超过配置的大小限制。",
+    INVALID_IMAGE: "图片数据无效或不安全。",
+    TIMEOUT: "图片识别超时，请稍后重试。",
+    UNAVAILABLE: "图片识别服务暂时不可用。",
+    FAILED: "图片识别服务执行失败，请稍后重试。",
   },
   title: "YOLO26m 目标检测",
   subtitle: "粘贴或选择图片，自动识别目标、位置与置信度",

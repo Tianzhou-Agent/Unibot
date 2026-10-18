@@ -20,6 +20,7 @@ from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 from tianzhou_agent_platform.aina.package.configuration import mcp_auth_headers, prepare_configuration
 from tianzhou_agent_platform.aina.package.context import CONTEXT_META_KEY, Source, unibot_context
 from tianzhou_agent_platform.aina.package.manifest import EFFECT_ORDER, AinaPackageManifest, Effect
+from tianzhou_agent_platform.aina.package.bundled import BUNDLED_HOST, effective_installation, is_bundled_url
 from tianzhou_agent_platform.aina.package.mcp_client import McpServerInfo, McpToolClient
 from tianzhou_agent_platform.aina.package.secrets import SecretBox, aina_key_material
 from tianzhou_agent_platform.aina.package.tasks import TaskStart, parse_task_start
@@ -90,11 +91,12 @@ class AinaPackageService:
         self.box = SecretBox.from_settings(settings)
         self.tokens = ContextTokenSigner.from_settings(settings)
 
-    async def register(self, payload: bytes, *, credential: str | None = None) -> AinaRecord:
+    async def register(self, payload: bytes, *, credential: str | None = None, bundled: bool = False) -> AinaRecord:
         """Validate a package, snapshot its exposed MCP tools and register (or upgrade) the AINA.
 
         ``credential`` authenticates the registration-time ``tools/list`` of a ``bearer``/``api_key`` server; it
-        is used once and never stored.
+        is used once and never stored. ``bundled`` registers a first-party package shipped with Unibot (design §11),
+        whose content may change without a version bump between releases.
         """
         report = validate_package_archive(payload)
         manifest = require_valid_package(report)
@@ -105,15 +107,22 @@ class AinaPackageService:
                 status_code=422,
                 source="aina_package",
             )
+        if is_bundled_url(manifest.tools.mcp.url) != bundled:
+            raise PlatformError(
+                "INVALID_REQUEST",
+                f"Only packages bundled with Unibot serve their MCP tools at {BUNDLED_HOST}",
+                status_code=422,
+                source="aina_package",
+            )
         self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
         if manifest.canvas is not None and manifest.canvas.url is not None:
             self._require_destination(manifest.canvas.url, self.settings.aina_canvas_allowed_origins)
         existing = await self._existing(manifest.aina.id)
         if existing is not None:
             runtime = existing.manifest.runtime
-            if not isinstance(runtime, PackageRuntimeDefinition):
+            if not isinstance(runtime, PackageRuntimeDefinition) or runtime.bundled != bundled:
                 raise conflict(f"AINA {manifest.aina.id!r} is already registered with another runtime")
-            if existing.manifest.aina.version == manifest.aina.version:
+            if existing.manifest.aina.version == manifest.aina.version and not bundled:
                 if runtime.archive_sha256 == report.archive_sha256:
                     return existing
                 raise conflict(
@@ -137,7 +146,10 @@ class AinaPackageService:
             skills=report.skills,
             server_name=info.name,
             server_version=info.version,
+            bundled=bundled,
         )
+        if existing is not None and bundled and _same_package(existing, runtime):
+            return existing
         if self.ui is not None:
             # Canvas, widget and asset files are served from the stored archive (design §9.1).
             await self.ui.save(manifest.aina.id, runtime.archive_sha256, payload)
@@ -183,6 +195,8 @@ class AinaPackageService:
     async def install(self, aina_id: str, request: InstallationRequest) -> AinaInstallation:
         """Install a package for one user: configuration, sealed secrets, scopes and a fresh tool check."""
         record = await self.repository.get_aina(aina_id)
+        if package_runtime(record).bundled:
+            raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         manifest = package_runtime(record).package
         declared = {item.scope for item in manifest.permissions}
         undeclared = set(request.granted_permissions) - declared
@@ -423,7 +437,7 @@ class AinaPackageService:
         self, aina_id: str, *, tenant_id: str, user_id: str
     ) -> tuple[AinaRecord, AinaInstallation]:
         record = await self.repository.get_aina(aina_id)
-        installation = await self._installation(aina_id, tenant_id=tenant_id, user_id=user_id)
+        installation = await effective_installation(self.repository, record, tenant_id=tenant_id, user_id=user_id)
         runtime = package_runtime(record)
         if (
             installation is None
@@ -499,8 +513,17 @@ class AinaPackageService:
         )
 
     def _require_destination(self, url: str, allowed_origins: str) -> None:
-        if self.enforce_destination_policy:
+        # Only bundled packages may use the bundled host (``register``), and their servers run in process.
+        if self.enforce_destination_policy and not is_bundled_url(url):
             require_approved_destination(url, allowed_origins)
+
+
+def _same_package(record: AinaRecord, runtime: PackageRuntimeDefinition) -> bool:
+    """A bundled package is unchanged when its archive and its server's tools are (``tools_checked_at`` aside)."""
+    current = record.manifest.runtime
+    return isinstance(current, PackageRuntimeDefinition) and current.model_dump(
+        exclude={"tools_checked_at"}
+    ) == runtime.model_dump(exclude={"tools_checked_at"})
 
 
 def package_runtime(record: AinaRecord) -> PackageRuntimeDefinition:
