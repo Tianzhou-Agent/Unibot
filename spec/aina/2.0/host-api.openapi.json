@@ -522,6 +522,188 @@
         ]
       }
     },
+    "/storage/files": {
+      "get": {
+        "summary": "List Files",
+        "operationId": "list_files_aina_host_v1_storage_files_get",
+        "parameters": [
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 512,
+              "default": "",
+              "title": "Prefix"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      }
+    },
+    "/storage/files/{path}": {
+      "get": {
+        "summary": "Get File",
+        "operationId": "get_file_aina_host_v1_storage_files__path__get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Put File",
+        "description": "Create or replace a file; the body is its bytes and ``Content-Type`` its type.",
+        "operationId": "put_file_aina_host_v1_storage_files__path__put",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {}
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete File",
+        "operationId": "delete_file_aina_host_v1_storage_files__path__delete",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      }
+    },
     "/storage/kv": {
       "get": {
         "summary": "List Storage",
@@ -1064,6 +1246,59 @@
           "headings"
         ],
         "title": "DocumentOutline"
+      },
+      "FileList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FileView"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "FileList"
+      },
+      "FileView": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "size_bytes",
+          "content_type",
+          "sha256",
+          "updated_at"
+        ],
+        "title": "FileView",
+        "description": "A file as the Host API describes it."
       },
       "HTTPValidationError": {
         "properties": {

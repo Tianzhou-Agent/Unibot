@@ -48,6 +48,27 @@ class HostApi:
         result = await self._request("GET", "/storage/kv", params={"prefix": prefix, "limit": limit})
         return list(result["items"])
 
+    async def put_file(self, path: str, data: bytes, content_type: str = "application/octet-stream") -> dict[str, Any]:
+        """Create or replace a private file of this installation (at most 10 MiB; 100 MiB and 1000 files in all)."""
+        return cast(
+            dict[str, Any],
+            await self._request(
+                "PUT", f"/storage/files/{_path(path)}", content=data, headers={"Content-Type": content_type}
+            ),
+        )
+
+    async def get_file(self, path: str) -> bytes | None:
+        """A private file's bytes, or ``None`` when there is no such file."""
+        response = await self._request("GET", f"/storage/files/{_path(path)}", missing_ok=True, raw=True)
+        return None if response is None else bytes(response.content)
+
+    async def delete_file(self, path: str) -> None:
+        await self._request("DELETE", f"/storage/files/{_path(path)}", missing_ok=True)
+
+    async def list_files(self, prefix: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        result = await self._request("GET", "/storage/files", params={"prefix": prefix, "limit": limit})
+        return list(result["items"])
+
     # --- documents ----------------------------------------------------------------------------------------------
 
     async def documents(self, query: str | None = None) -> list[dict[str, Any]]:
@@ -112,7 +133,9 @@ class HostApi:
     async def task_fail(self, task_id: str, error: str) -> None:
         await self._request("POST", f"/tasks/{_path(task_id)}/fail", json={"error": error})
 
-    async def _request(self, method: str, path: str, *, missing_ok: bool = False, **kwargs: Any) -> Any:
+    async def _request(
+        self, method: str, path: str, *, missing_ok: bool = False, raw: bool = False, **kwargs: Any
+    ) -> Any:
         transport, api_base = _in_process or (None, self.api_base)
         async with httpx.AsyncClient(
             base_url=api_base,
@@ -128,6 +151,8 @@ class HostApi:
             raise HostApiError(
                 response.status_code, str(error.get("code") or "ERROR"), str(error.get("message") or response.text)
             )
+        if raw:
+            return response
         return response.json() if response.content else None
 
 

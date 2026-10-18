@@ -304,6 +304,21 @@ aina_projects_table = _table(
     Index("ix_unibot_aina_projects_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
+aina_files_table = Table(
+    "unibot_aina_files",
+    repository_metadata,
+    Column("id", String(64), primary_key=True),  # sha256 of (installation_key, path)
+    Column("installation_key", String(64), nullable=False),
+    Column("aina_id", String(160), nullable=False),
+    Column("path", String(512), nullable=False),
+    Column("size_bytes", Integer, nullable=False),
+    Column("content_type", String(160), nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("updated_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_aina_files_installation", "installation_key", "path"),
+    Index("ix_unibot_aina_files_aina", "aina_id"),
+)
+
 aina_notifications_table = Table(
     "unibot_aina_notifications",
     repository_metadata,

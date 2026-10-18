@@ -239,6 +239,7 @@ or paused app stop working at once.
 | Client method | Route | Permission |
 |---|---|---|
 | `storage_get/put/delete/list` | `/storage/kv[/{key}]` | `storage`: private to this installation; 256 KiB per value, 10 MiB and 10,000 keys in total |
+| `put_file/get_file/delete_file/list_files` | `/storage/files[/{path}]` | `storage`: private files of this installation (raw bytes with a `Content-Type`); 10 MiB per file, 100 MiB and 1,000 files in total |
 | `documents(query)`, `document(name)`, `document_outline(name)` | `GET /documents…` | `documents.read`, in the workspace of the call |
 | `put_document`, `delete_document` | `PUT/DELETE /documents/{name}` | `documents.write` |
 | `search_memory(query)` | `GET /memory/search` | `memory.read`: the user's own memories |
