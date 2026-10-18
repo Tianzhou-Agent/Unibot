@@ -92,6 +92,8 @@ export default {
     newTitle: "新建 AINA 2.0 应用",
     newDesc: "下载起步项目：Unibot 安装的应用包，以及提供工具的 Python MCP 服务器。",
     id: "应用 ID",
+    idHint: "反向域名格式、小写，例如 com.example.notes，发布后不可更改。",
+    idInvalid: "请使用至少包含一个点的反向域名 ID，只含小写字母、数字和连字符，例如 com.example.notes。",
     name: "名称",
     description: "描述",
     descriptionPlaceholder: "这个应用能为用户做什么？",

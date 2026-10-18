@@ -8,11 +8,21 @@
         items = await unibot.host.storage_get("expenses", default=[])
         ...
 
-It depends only on the MCP SDK and httpx, never on Unibot's own code, so a bundled first-party server can move to its
-own process unchanged.
+``ContextVerifier`` checks that a call was signed by your Unibot host. The package depends only on httpx and
+cryptography, never on Unibot's own code, so a bundled first-party server can move to its own process unchanged.
+It is published as ``unibot-aina`` from ``sdk/python``.
 """
 
 from unibot_aina.context import UnibotContext, unibot_context
 from unibot_aina.host import HostApi, HostApiError, set_default_transport
+from unibot_aina.verify import ContextError, ContextVerifier
 
-__all__ = ["HostApi", "HostApiError", "UnibotContext", "set_default_transport", "unibot_context"]
+__all__ = [
+    "ContextError",
+    "ContextVerifier",
+    "HostApi",
+    "HostApiError",
+    "UnibotContext",
+    "set_default_transport",
+    "unibot_context",
+]

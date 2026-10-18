@@ -830,6 +830,10 @@ Resolved in rev 4 (each as recommended in rev 3):
 | `aina init` template (Notes app: tools of each effect, skill, canvas with a canvas tool, result widget, Host API storage) | [`aina/package/template/`](../backend/src/tianzhou_agent_platform/aina/package/template), [`aina/package/scaffold.py`](../backend/src/tianzhou_agent_platform/aina/package/scaffold.py) |
 | Developer tokens for `aina publish` (Settings → Developer) | [`api/developer_tokens.py`](../backend/src/tianzhou_agent_platform/api/developer_tokens.py), [`DeveloperTokensPanel.tsx`](../frontend/src/features/developer/DeveloperTokensPanel.tsx) |
 | `aina dev`: the real host in process with a developer page (canvas and widgets over the bridge, agent and canvas tools by hand, a log of bridge, MCP and Host API requests, reload on edit) | [`aina/package/devhost.py`](../backend/src/tianzhou_agent_platform/aina/package/devhost.py), [`devhost_static/`](../backend/src/tianzhou_agent_platform/aina/package/devhost_static) |
+| Developer guide | [`aina-developer-guide.md`](aina-developer-guide.md) |
+| `unibot-aina` Python SDK (context, Host API client, `ContextVerifier` for context and identity tokens) | [`sdk/python`](../sdk/python) (`src/unibot_aina` links to [`backend/src/unibot_aina`](../backend/src/unibot_aina)) |
+| `@unibot/aina-ui` npm package (bridge, theme, types) | [`spec/aina/2.0/ui/`](../spec/aina/2.0/ui) |
+| Host API OpenAPI, generated from the routes and checked by a test | [`spec/aina/2.0/host-api.openapi.json`](../spec/aina/2.0/host-api.openapi.json), [`aina/package/openapi.py`](../backend/src/tianzhou_agent_platform/aina/package/openapi.py) |
 | In-app creation: new-app project download, package upload review and registration | [`PackageDeveloper.tsx`](../frontend/src/components/apps/PackageDeveloper.tsx) |
 | Expenses example (package + MCP server) | [`examples/expenses-aina`](../examples/expenses-aina) |
 | MCP client (Streamable HTTP, or in-process server) | [`aina/package/mcp_client.py`](../backend/src/tianzhou_agent_platform/aina/package/mcp_client.py) |
@@ -942,7 +946,7 @@ runtime type only, never on an AINA id.
   `structuredContent` exactly is dropped, so the model does not read the result twice.
 - Skill folders may contain only UTF-8 text files. A frontmatter `name` may match either the skill `id` (the Agent
   Skills convention) or its `name`. Skill text is limited to 1 000 000 characters per package in total.
-- The Host API OpenAPI is not written yet. The bridge protocol is defined by `spec/aina/2.0/ui/aina-ui.js`: JSON-RPC
+- The bridge protocol is defined by `spec/aina/2.0/ui/aina-ui.js` (types in `aina-ui.d.ts`): JSON-RPC
   2.0 messages tagged `"unibot": "aina-ui/2.0"`; requests `initialize`, `callTool`, `sendPrompt`, `setTitle`, `notify`,
   `getIdentityToken`, `registerTool`, `setModelContext`, and for widgets `resize`, `proposeArguments`, `openCanvas`;
   host notifications `event` with `{type, data}`; host requests `invokeTool` `{name, arguments}`, answered by the
@@ -1015,7 +1019,8 @@ runtime type only, never on an AINA id.
 ### Next
 
 Still open from P2: MCP OAuth 2.0 and notifications. Also still open:
-restricting what posted task Markdown can load, image results reaching vision-capable models, and from P4 the
-published `unibot-aina` / `@unibot/aina-ui` packages (the generated server's `requirements.txt` already names
-`unibot-aina`) and the Host API OpenAPI. `aina dev` has no model: chat with a scripted or real model is not built. P5 stops after Image Recognition: the remaining first-party AINAs
+restricting what posted task Markdown can load, image results reaching vision-capable models, and from P4 releasing
+`unibot-aina` to PyPI and `@unibot/aina-ui` to npm (both are ready to build) and the design's outsider test with a real
+outside developer; the steps of the guide were checked in fresh environments. `aina dev` has no model: chat with a
+scripted or real model is not built. The `aina` CLI still ships with the backend package. P5 stops after Image Recognition: the remaining first-party AINAs
 stay built in.

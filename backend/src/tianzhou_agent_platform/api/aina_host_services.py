@@ -82,7 +82,7 @@ class ChatMessage(StrictModel):
     content: str = Field(max_length=50_000)
 
 
-class ChatRequest(StrictModel):
+class LlmChatRequest(StrictModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=MAX_LLM_MESSAGES)
     max_tokens: int | None = Field(default=None, ge=1, le=MAX_LLM_OUTPUT_TOKENS)
 
@@ -246,7 +246,7 @@ def create_aina_host_services_router() -> APIRouter:
 
     @router.post(f"{HOST_API_PREFIX}/llm/chat", response_model=ChatReply)
     async def llm_chat(
-        request: Request, payload: ChatRequest = Body(...), caller: HostCaller = Depends(host_caller)
+        request: Request, payload: LlmChatRequest = Body(...), caller: HostCaller = Depends(host_caller)
     ) -> ChatReply:
         """The user's own configured model, without tools (design §8 ``llm``)."""
         require_scope(caller, "llm", "llm.chat")
