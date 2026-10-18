@@ -1,10 +1,48 @@
 <!doctype html>
-<meta charset="utf-8">
-<link rel="stylesheet" href="./aina-ui.css">
-<div id="preview"></div>
-<script type="module">
-  import { host } from "./aina-ui.js";
-  const { arguments: args, config } = await host.getContext();
-  document.getElementById("preview").textContent =
-    `${args.amount.toFixed(2)} ${config.currency ?? "CNY"} · ${args.category}`;
-</script>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="./aina-ui.css">
+  <style>
+    body { padding: 10px 12px; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .amount { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    input[name="amount"] { width: 90px; }
+    .hint { margin-top: 6px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <span class="amount" id="preview"></span>
+    <input name="amount" type="number" min="0.01" step="0.01" aria-label="Amount">
+    <select name="category" aria-label="Category">
+      <option>food</option><option>transport</option><option>housing</option><option>shopping</option>
+      <option>health</option><option>entertainment</option><option>other</option>
+    </select>
+  </div>
+  <p class="hint aina-muted">Adjust before you allow it; Unibot checks the values again.</p>
+  <script type="module">
+    // A confirmation widget only proposes arguments; Allow and Deny are Unibot's own buttons.
+    import { host } from "./aina-ui.js";
+    const { arguments: args, config } = await host.getContext();
+    const amount = document.querySelector('input[name="amount"]');
+    const category = document.querySelector('select[name="category"]');
+    const preview = document.getElementById("preview");
+    const currency = config.currency ?? "CNY";
+    amount.value = String(args.amount);
+    category.value = args.category;
+    function show() {
+      preview.textContent = `${Number(amount.value || 0).toFixed(2)} ${currency}`;
+    }
+    function propose() {
+      show();
+      const value = Number(amount.value);
+      if (value > 0) host.proposeArguments({ ...args, amount: value, category: category.value });
+    }
+    amount.addEventListener("change", propose);
+    category.addEventListener("change", propose);
+    show();
+    host.resize(document.documentElement.scrollHeight);
+  </script>
+</body>
+</html>

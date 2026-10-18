@@ -5,6 +5,7 @@ import re
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
 from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import (
     WidgetAction,
@@ -154,7 +155,13 @@ async def open_aina(
         )
         if installation.status != "active":
             raise PlatformError("PERMISSION_DENIED", "The selected AINA is not active", status_code=403)
-        missing = set(record.manifest.permissions) - set(installation.granted_permissions)
+        runtime = record.manifest.runtime
+        required = (
+            runtime.package.required_scopes()
+            if isinstance(runtime, PackageRuntimeDefinition)
+            else set(record.manifest.permissions)
+        )
+        missing = required - set(installation.granted_permissions)
         if missing:
             raise PlatformError(
                 "PERMISSION_DENIED",

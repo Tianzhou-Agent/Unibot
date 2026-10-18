@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.aina.protocol.widgets import WidgetAinaUi, WidgetDefinition
 from tianzhou_agent_platform.core.base import StrictModel, Usage, utc_now
 
 
@@ -38,6 +38,8 @@ class ChatRequest(StrictModel):
 class ApprovalAction(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
+    # Arguments a confirmation widget proposed, by tool call id (design §9.2); the host validates them again.
+    edited_arguments: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class ConversationAction(StrictModel):
@@ -64,6 +66,8 @@ class ApprovalRecord(StrictModel):
     # approvals stay readable by the previous release (whose strict model forbids unknown keys) on rollback.
     runtime_ref: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     run_generation: int = Field(default=0, exclude_if=lambda value: value == 0)
+    # AINA 2.0 confirmation widgets (design §9.2) of the paused calls, shown inside the approval card.
+    widgets: list[WidgetAinaUi] = Field(default_factory=list, exclude_if=lambda value: not value)
 
 
 class ChatResponse(StrictModel):

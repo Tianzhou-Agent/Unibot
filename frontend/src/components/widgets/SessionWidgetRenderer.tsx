@@ -5,6 +5,7 @@ import { AppIcon } from "@/components/apps/PluginUi";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
 import type { WidgetActionDefinition, WidgetDefinition } from "@/types";
+import { AinaWidgetFrame } from "./AinaWidgetFrame";
 import { DocumentOutlineWidget } from "./DocumentOutlineWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
 
@@ -21,6 +22,9 @@ export function isClarificationWidget(widget: WidgetDefinition): boolean {
 }
 
 export function SessionWidgetRenderer(props: SessionWidgetRendererProps) {
+  if (props.widget.kind === "aina_widget") {
+    return props.widget.aina_widget ? <AinaWidgetFrame widget={props.widget.aina_widget} onPrompt={props.onPrompt} onOpenAina={props.onOpenAina} /> : null;
+  }
   if (props.widget.kind === "document_outline") {
     return <DocumentOutlineWidget widget={props.widget} workspaceId={props.workspaceId} />;
   }

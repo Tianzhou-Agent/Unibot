@@ -34,7 +34,18 @@ MAX_SKILL_FILE_CHARS = 50_000
 MAX_SKILL_TEXT_CHARS = 1_000_000
 MAX_TOOL_DESCRIPTION_CHARS = 1_000
 _EXECUTABLE_SUFFIXES = {
-    ".bat", ".cjs", ".cmd", ".exe", ".js", ".mjs", ".pl", ".ps1", ".py", ".rb", ".sh", ".ts",
+    ".bat",
+    ".cjs",
+    ".cmd",
+    ".exe",
+    ".js",
+    ".mjs",
+    ".pl",
+    ".ps1",
+    ".py",
+    ".rb",
+    ".sh",
+    ".ts",
 }
 
 
@@ -184,7 +195,7 @@ def _check_config(manifest: AinaPackageManifest, errors: list[str]) -> None:
             errors.append("config.schema: the configuration schema must have type 'object'")
     secret = manifest.tools.mcp.auth.secret
     if secret is not None and secret not in manifest.secret_config_fields():
-        errors.append(f"tools.mcp.auth.secret: {secret!r} must be a config.schema property with \"x-secret\": true")
+        errors.append(f'tools.mcp.auth.secret: {secret!r} must be a config.schema property with "x-secret": true')
 
 
 def _load_skills(
@@ -198,7 +209,7 @@ def _load_skills(
         label = f"skills/{index} ({declared.id})"
         folder = declared.path.rstrip("/")
         prefix = f"{folder}/"
-        members = {name[len(prefix):]: content for name, content in files.items() if name.startswith(prefix)}
+        members = {name[len(prefix) :]: content for name, content in files.items() if name.startswith(prefix)}
         if not members:
             errors.append(f"{label}: skill folder {folder!r} is missing from the package")
             continue
@@ -263,7 +274,7 @@ def _strip_frontmatter(
         errors.append(f"{label}: frontmatter name {metadata['name']!r} does not match aina.json")
     if "description" in metadata and str(metadata["description"]).strip() != description.strip():
         errors.append(f"{label}: frontmatter description does not match aina.json")
-    return "".join(lines[closing + 1:]).lstrip("\n")
+    return "".join(lines[closing + 1 :]).lstrip("\n")
 
 
 def _model_text_warnings(manifest: AinaPackageManifest, skills: list[PackagedSkill]) -> list[str]:

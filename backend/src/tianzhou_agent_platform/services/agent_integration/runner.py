@@ -82,7 +82,9 @@ from tianzhou_agent_platform.services.agent_integration.approvals import (
     DENIED_TOOL_RESULT,
     approval_record,
     build_approval_middleware,
+    confirmation_widgets,
     resume_decisions,
+    validated_edits,
 )
 from tianzhou_agent_platform.services.agent_integration.capabilities import (
     Capability,
@@ -176,6 +178,7 @@ class ApprovalContinuation:
         invocation: _Invocation,
         interrupt: Interrupt | None,
         known_ids: set[str | None],
+        edits: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._runner = runner
         self._conversation = conversation
@@ -184,13 +187,16 @@ class ApprovalContinuation:
         self._invocation = invocation
         self._interrupt = interrupt
         self._known_ids = known_ids
+        self._edits = edits
 
     async def run(self, stop: TurnStop | None = None) -> ChatResponse:
         if self._interrupt is None:
             return await self._runner._close_denied_without_interrupt(self._conversation, self._approval)
         return await self._runner._invoke(
             self._invocation,
-            Command(resume=resume_decisions(self._interrupt, approve=self._approve)),
+            Command(
+                resume=resume_decisions(self._interrupt, approve=self._approve, approval=self._approval, edits=self._edits)
+            ),
             known_ids=self._known_ids,
             resumed=True,
             stop=stop,
@@ -335,6 +341,7 @@ class AgentRunner:
         approval: ApprovalRecord,
         *,
         approve: bool,
+        edited_arguments: dict[str, dict[str, Any]] | None = None,
     ) -> ApprovalContinuation:
         """Load the batch an approval paused, before the approval is resolved.
 
@@ -370,6 +377,8 @@ class AgentRunner:
                 status_code=409,
                 user_message="该审批已失效，请重新发起请求。",
             )
+        # Arguments a confirmation widget proposed are validated before the approval is resolved.
+        edits = validated_edits(approval, edited_arguments, run.registry) if approve and edited_arguments else None
         return ApprovalContinuation(
             self,
             conversation,
@@ -378,6 +387,7 @@ class AgentRunner:
             invocation=invocation,
             interrupt=interrupt,
             known_ids={message.id for message in state.values.get("messages") or []},
+            edits=edits,
         )
 
     async def delete_working_memory(self, conversation_id: str) -> None:
@@ -638,6 +648,7 @@ class AgentRunner:
                 trace_id=run.trace_id,
                 thread_id=thread_id_for(run.conversation_id),
             )
+            approval = confirmation_widgets(approval, state.interrupts[0], run.registry)
             content = f"Approval is required before running: {', '.join(approval.capability_names)}."
         elif invocation.call_budget.exceeded is not None:
             status = "failed"

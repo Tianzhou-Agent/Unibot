@@ -173,6 +173,7 @@ approvals_table = _table(
     Column("resolved_at", TIMESTAMP, nullable=True),
     Column("runtime_ref", NULLABLE_JSON, nullable=True),
     Column("run_generation", Integer, nullable=False),
+    Column("widgets", JSON, nullable=False),
     Index("ix_unibot_approvals_conversation_status", "conversation_id", "status"),
     Index("ix_unibot_approvals_owner_created", "tenant_id", "user_id", "created_at"),
 )

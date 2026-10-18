@@ -48,7 +48,7 @@ class SecretBox:
     def open(self, token: str, *, context: str) -> str:
         if not token.startswith(_PREFIX):
             raise _undecryptable()
-        raw = token[len(_PREFIX):]
+        raw = token[len(_PREFIX) :]
         try:
             payload = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
             plaintext = self._aead.decrypt(payload[:12], payload[12:], context.encode("utf-8"))

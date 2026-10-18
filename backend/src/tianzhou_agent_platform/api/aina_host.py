@@ -42,9 +42,7 @@ class HostCaller:
 
     @property
     def installation_key(self) -> str:
-        return installation_record_id(
-            self.installation.tenant_id, self.installation.user_id, self.installation.aina_id
-        )
+        return installation_record_id(self.installation.tenant_id, self.installation.user_id, self.installation.aina_id)
 
 
 class StorageValue(StrictModel):
@@ -110,6 +108,8 @@ async def _caller(request: Request, *, allow_expired: bool) -> HostCaller:
     if scheme.lower() != "bearer" or not token:
         raise invalid_token()
     verified = aina_packages(request).tokens.verify(token.strip(), allow_expired=allow_expired)
+    if verified.claims.get("use") == "identity":
+        raise invalid_token()  # an identity token only proves who the user is to the AINA's own backend
     reference = verified.reference
     try:
         installation = await repository(request).get_installation(

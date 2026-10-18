@@ -19,4 +19,17 @@ export default {
   },
   context: "Conversation context: {{task}} / {{section}}",
   placeholderEdit: "Describe how the AI should continue revising the current section",
+  ainaFrame: {
+    confirmTitle: "Allow this change?",
+    confirmWrite: "{{app}} wants to run {{tool}}, which changes your data.",
+    confirmDestructive: "{{app}} wants to run {{tool}}, which deletes data. This cannot be undone.",
+    allow: "Allow",
+    deny: "Deny",
+    declined: "You declined this action.",
+    notCallable: "Tool {{name}} cannot be called from this app.",
+    urlOnly: "Only a web-app canvas can request an identity token.",
+    unsupported: "{{method}} is not available here.",
+    proposeOnly: "Only a confirmation widget can propose arguments.",
+    widgetTitle: "{{tool}} widget",
+  },
 };

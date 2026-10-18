@@ -118,11 +118,7 @@ class PackageConfig(StrictModel):
         properties = self.json_schema.get("properties")
         if not isinstance(properties, dict):
             return set()
-        return {
-            name
-            for name, field in properties.items()
-            if isinstance(field, dict) and field.get("x-secret") is True
-        }
+        return {name for name, field in properties.items() if isinstance(field, dict) and field.get("x-secret") is True}
 
 
 class PackagePermission(StrictModel):

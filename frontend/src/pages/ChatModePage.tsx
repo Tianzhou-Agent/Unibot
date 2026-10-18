@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AinaLauncher } from "@/components/canvas/AinaLauncher";
-import { ApprovalCard } from "@/components/chat/ApprovalCard";
+import { ApprovalCard, type EditedArguments } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/components/chat/LiveTurn";
@@ -582,7 +582,7 @@ export default function ChatModePage() {
     }
   }
 
-  async function resolveApproval(action: "confirm" | "deny") {
+  async function resolveApproval(action: "confirm" | "deny", edited: EditedArguments = {}) {
     if (!approval) return;
     const decided = approval;
     // The decision is made: drop the card now rather than after the approved calls finish running.
@@ -592,7 +592,7 @@ export default function ChatModePage() {
     setActivity(action === "confirm" ? t("activity.runningApproved") : t("activity.cancelling"));
     try {
       if (action === "confirm") {
-        const response = await api.post<ChatResponse>(`/approvals/${decided.id}/confirm`, actor);
+        const response = await api.post<ChatResponse>(`/approvals/${decided.id}/confirm`, { ...actor, edited_arguments: edited });
         setLastRun(response);
       } else {
         await api.post(`/approvals/${decided.id}/deny`, actor);
@@ -835,10 +835,11 @@ export default function ChatModePage() {
               {sending ? <ThinkingIndicator label={activity} /> : null}
               {approval && !deleted ? (
                 <ApprovalCard
+                  key={approval.id}
                   approval={approval}
                   disabled={sending}
                   debugMode={debugMode}
-                  onConfirm={() => void resolveApproval("confirm")}
+                  onConfirm={(edited) => void resolveApproval("confirm", edited)}
                   onDeny={() => void resolveApproval("deny")}
                 />
               ) : null}
