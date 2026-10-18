@@ -14,7 +14,6 @@ import {
   X,
 } from "lucide-react";
 import { host } from "@aina-ui";
-import { classNames } from "@/lib/utils";
 import i18n from "i18next";
 import type { VisionDetectionResponse, VisionHealth } from "./types";
 
@@ -438,6 +437,11 @@ function fileBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+// The app's own helpers import its i18n, which a canvas must not bundle.
+function classNames(...parts: Array<string | false | null | undefined>): string {
+  return parts.filter(Boolean).join(" ");
 }
 
 function formatFileSize(bytes: number): string {

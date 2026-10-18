@@ -92,6 +92,8 @@ export default {
     newTitle: "New AINA 2.0 app",
     newDesc: "Download a starter project: the package Unibot installs and a Python MCP server with its tools.",
     id: "App ID",
+    idHint: "Reverse domain, lowercase, e.g. com.example.notes. It never changes.",
+    idInvalid: "Use a reverse-domain ID with at least one dot, lowercase letters, digits and hyphens, e.g. com.example.notes.",
     name: "Name",
     description: "Description",
     descriptionPlaceholder: "What does this app do for the user?",

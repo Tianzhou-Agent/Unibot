@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import ConfigDict, Field
 
 from tianzhou_agent_platform.aina.package.bundled import effective_installation
@@ -50,6 +50,10 @@ class StorageValue(StrictModel):
     key: str
     value: Any
     updated_at: datetime
+
+
+class StorageWrite(StrictModel):
+    value: Any = Field(...)  # any JSON value, null included
 
 
 class StorageList(StrictModel):
@@ -196,7 +200,7 @@ def create_aina_host_router() -> APIRouter:
     async def put_storage(
         key: str,
         request: Request,
-        value: Any = Body(..., embed=True),
+        payload: StorageWrite,
         caller: HostCaller = Depends(host_caller),
     ) -> StorageValue:
         require_scope(caller, "storage", "storage.put")
@@ -204,7 +208,7 @@ def create_aina_host_router() -> APIRouter:
             installation_key=caller.installation_key,
             aina_id=caller.installation.aina_id,
             key=key,
-            value=value,
+            value=payload.value,
         )
         stored = await repository(request).put_aina_storage_item(item)
         return StorageValue(key=stored.key, value=stored.value, updated_at=stored.updated_at)

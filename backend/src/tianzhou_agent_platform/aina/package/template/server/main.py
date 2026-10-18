@@ -7,7 +7,7 @@ Notes are kept in the user's private AINA storage through the Unibot Host API (t
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -42,7 +42,7 @@ async def list_notes(ctx: Context) -> Notes:
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False))
 async def add_note(text: Annotated[str, Field(min_length=1, max_length=500)], ctx: Context) -> Note:
     """Save one short note for the user."""
-    note = Note(id=f"n_{uuid.uuid4().hex[:8]}", text=text.strip(), created_at=datetime.now(UTC).isoformat())
+    note = Note(id=f"n_{uuid.uuid4().hex[:8]}", text=text.strip(), created_at=datetime.now(timezone.utc).isoformat())
     await unibot_context(ctx).host.storage_put("notes", [*await _notes(ctx), note.model_dump()])
     return note
 

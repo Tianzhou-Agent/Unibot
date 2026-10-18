@@ -70,9 +70,16 @@ test("FE-E2E-CREATE-01 a new app's starter project is downloaded from Plugins", 
   await page.getByRole("menuitem", { name: "新建应用（AINA 2.0）" }).click();
 
   const form = page.getByRole("form", { name: "新建 AINA 2.0 应用" });
-  await form.getByLabel("应用 ID").fill(AINA);
+  const appId = form.getByRole("textbox", { name: "应用 ID" });
+  await expect(form.getByText("反向域名格式、小写，例如 com.example.notes")).toBeVisible();
+  await appId.fill("note");
   await form.getByLabel("名称").fill("Acme Notes");
   await form.getByLabel("描述").fill("Short notes.");
+  // An id without a dot is refused in the browser with a precise message; nothing is sent.
+  await form.getByRole("button", { name: "下载项目" }).click();
+  expect(await appId.evaluate((input: HTMLInputElement) => input.validationMessage)).toContain("反向域名 ID");
+  expect(calls).toHaveLength(0);
+  await appId.fill(AINA);
   const download = page.waitForEvent("download");
   await form.getByRole("button", { name: "下载项目" }).click();
 

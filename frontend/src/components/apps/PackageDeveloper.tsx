@@ -30,16 +30,29 @@ export function PackageScaffoldForm({ onDone, onCancel }: { onDone: (message: st
     }
   }
 
-  const field = (key: keyof typeof DEFAULT_SCAFFOLD, label: string, placeholder: string, wide = false) => (
+  const field = (
+    key: keyof typeof DEFAULT_SCAFFOLD,
+    label: string,
+    placeholder: string,
+    { wide = false, pattern, hint, invalid }: { wide?: boolean; pattern?: string; hint?: string; invalid?: string } = {},
+  ) => (
     <label className={classNames("block", wide && "sm:col-span-2")}>
       <span className="mb-1.5 block text-[11px] font-bold text-ink-muted">{label}</span>
       <input
         required
+        pattern={pattern}
         value={value[key]}
-        onChange={(event) => setValue({ ...value, [key]: event.target.value })}
+        onChange={(event) => {
+          event.currentTarget.setCustomValidity("");
+          setValue({ ...value, [key]: event.target.value });
+        }}
+        onInvalid={(event) => {
+          if (invalid && event.currentTarget.validity.patternMismatch) event.currentTarget.setCustomValidity(invalid);
+        }}
         className="input-soft"
         placeholder={placeholder}
       />
+      {hint ? <span className="mt-1 block text-[10.5px] text-ink-muted">{hint}</span> : null}
     </label>
   );
 
@@ -53,10 +66,15 @@ export function PackageScaffoldForm({ onDone, onCancel }: { onDone: (message: st
         </div>
       </div>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {field("aina_id", t("package.id"), "com.example.notes")}
+        {field("aina_id", t("package.id"), "com.example.notes", {
+          // aina.schema.json: a reverse-domain id, lowercase.
+          pattern: "[a-z0-9]+(\\.[a-z0-9\\-]+)+",
+          hint: t("package.idHint"),
+          invalid: t("package.idInvalid"),
+        })}
         {field("name", t("package.name"), "Notes")}
-        {field("description", t("package.description"), t("package.descriptionPlaceholder"), true)}
-        {field("mcp_url", t("package.mcpUrl"), "http://127.0.0.1:8770/mcp", true)}
+        {field("description", t("package.description"), t("package.descriptionPlaceholder"), { wide: true })}
+        {field("mcp_url", t("package.mcpUrl"), "http://127.0.0.1:8770/mcp", { wide: true })}
       </div>
       <p className="mt-3 text-[11px] leading-5 text-ink-muted">{t("package.cliHint")} <code className="font-mono">aina init</code></p>
       {error ? <p className="mt-2 text-[11.5px] text-danger" role="alert">{error}</p> : null}

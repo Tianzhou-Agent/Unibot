@@ -1,0 +1,16 @@
+{
+  "name": "@unibot/aina-ui",
+  "version": "0.1.0",
+  "description": "The UI bridge for Unibot AINA Protocol 2.0 canvases and widgets.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./aina-ui.js",
+  "types": "./aina-ui.d.ts",
+  "style": "./aina-ui.css",
+  "exports": {
+    ".": { "types": "./aina-ui.d.ts", "default": "./aina-ui.js" },
+    "./aina-ui.css": "./aina-ui.css"
+  },
+  "files": ["aina-ui.js", "aina-ui.d.ts", "aina-ui.css", "README.md"],
+  "sideEffects": true
+}
