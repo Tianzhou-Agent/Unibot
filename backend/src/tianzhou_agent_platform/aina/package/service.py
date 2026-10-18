@@ -20,6 +20,7 @@ from tianzhou_agent_platform.aina.package.context import CONTEXT_META_KEY, Sourc
 from tianzhou_agent_platform.aina.package.manifest import EFFECT_ORDER, AinaPackageManifest, Effect
 from tianzhou_agent_platform.aina.package.mcp_client import McpServerInfo, McpToolClient
 from tianzhou_agent_platform.aina.package.secrets import SecretBox, aina_key_material
+from tianzhou_agent_platform.aina.package.tasks import TaskStart, parse_task_start
 from tianzhou_agent_platform.aina.package.tokens import ContextTokenSigner, HostReference
 from tianzhou_agent_platform.aina.package.models import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
@@ -225,8 +226,9 @@ class AinaPackageService:
         conversation_id: str | None,
         workspace_id: str | None,
         source: Source = "agent",
-    ) -> dict[str, Any]:
-        """Call one exposed MCP tool; the result is what the model sees (design §7.1)."""
+    ) -> tuple[dict[str, Any], TaskStart | None]:
+        """Call one exposed MCP tool: what the model sees (design §7.1), and the background task a
+        ``long_running`` tool started (design §7.3), if any."""
         runtime = package_runtime(record)
         snapshot = runtime.tool(name)
         if snapshot is None or snapshot.status != "active":
@@ -259,7 +261,7 @@ class AinaPackageService:
             headers=headers,
             timeout=snapshot.timeout_seconds,
         )
-        text = _content_text(result.content)
+        text = content_text(result.content)
         if result.is_error:
             raise PlatformError(
                 "TOOL_ERROR",
@@ -272,7 +274,9 @@ class AinaPackageService:
             visible["structuredContent"] = result.structured_content
         if text and not _same_json(text, result.structured_content):
             visible["content"] = text
-        return visible or {"content": ""}
+        exposed = manifest.tools.expose.get(name)
+        task = parse_task_start(result.meta) if exposed is not None and exposed.long_running else None
+        return visible or {"content": ""}, task
 
     def mint_token(self, installation: AinaInstallation, context: dict[str, Any]) -> str:
         """Context token carrying the same pairwise identity as ``context`` (design §8)."""
@@ -485,7 +489,7 @@ def project_manifest(manifest: AinaPackageManifest, runtime: PackageRuntimeDefin
     )
 
 
-def _content_text(content: list[dict[str, Any]]) -> str:
+def content_text(content: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for item in content:
         if item.get("type") == "text":

@@ -33,5 +33,10 @@ change as later phases land:
 - **P0–P2 (implemented):** validation, MCP tool snapshot and drift check, manifest-driven scope, effect-based
   approvals, skills, the context token, and Host API `storage`. The server keeps no data of its own: every expense is
   read and written through `storage`, scoped by the token to the calling user.
+- **Long-running tool:** `monthly_report` is `long_running`. It answers at once with `_meta["unibot/task"]`, which
+  ends the turn, then builds the report in the background and reports on the Host API (`/tasks/{id}/progress`, then
+  `/complete` or `/fail`). It renews its context token with `/token/refresh` if the token expires. Unibot posts the
+  report to the conversation and shows the task in the Tasks pane. The jobs live in process memory, so a restart
+  loses them; a real server would use a durable queue.
 - **Later:** canvas, widgets and the `aina-ui.js` bridge the HTML files import (P3), and canvas tools such as
   `highlight_rows` (P6).

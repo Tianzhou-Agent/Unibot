@@ -32,6 +32,7 @@ import { announceConversationRunning, notifyConversationsChanged } from "@/compo
 import { Topbar } from "@/components/layout/Topbar";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
+import { AinaTaskList } from "@/components/tasks/AinaTaskList";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
@@ -856,9 +857,11 @@ export default function ChatModePage() {
               running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
+              messageCount={conversation?.messages.length ?? 0}
               context={activeCanvas?.main_widget.kind === "document" ? documentTaskContext : null}
               onSend={sendMessage}
               onStop={() => void stopRun()}
+              onBackgroundTaskSettled={() => { if (conversation?.id) void loadConversation(conversation.id, true); }}
             />
           ) : null}
         </div>
@@ -1103,17 +1106,21 @@ function ChatComposer({
   running,
   initialText,
   sessionId,
+  messageCount,
   context,
   onSend,
   onStop,
+  onBackgroundTaskSettled,
 }: {
   disabled: boolean;
   running: boolean;
   initialText: string;
   sessionId: string | null;
+  messageCount: number;
   context: DocumentTaskContext | null;
   onSend: (text: string) => Promise<boolean | undefined>;
   onStop: () => void;
+  onBackgroundTaskSettled: () => void;
 }) {
   const { t } = useTranslation("chatPage");
   const { t: tCanvas } = useTranslation("canvas");
@@ -1134,6 +1141,7 @@ function ChatComposer({
   return (
     <div className="bg-white px-4 pb-5 pt-3 md:px-6">
       <div className="mx-auto max-w-[760px] space-y-2">
+        <AinaTaskList conversationId={sessionId} refreshKey={messageCount} onSettled={onBackgroundTaskSettled} />
         <TaskTreeWidget sessionId={sessionId} />
         {sendFailed ? <p role="status" className="text-[11.5px] text-ink-muted">{t("sendFailed")}</p> : null}
         <form

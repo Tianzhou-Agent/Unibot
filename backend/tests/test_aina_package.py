@@ -338,6 +338,7 @@ def test_registration_snapshots_exposed_tools_and_projects_the_record() -> None:
         "add_expense": ("write", ["model", "app"]),
         "list_expenses": ("read", ["model", "app"]),
         "delete_expense": ("destructive", ["model", "app"]),
+        "monthly_report": ("read", ["model", "app"]),
         "sync_bank": ("write", ["app"]),
     }
     # The registry projection lists only model-visible tools, and permissions are the declared scopes.
@@ -345,6 +346,7 @@ def test_registration_snapshots_exposed_tools_and_projects_the_record() -> None:
         "add_expense",
         "list_expenses",
         "delete_expense",
+        "monthly_report",
     }
     assert record["manifest"]["permissions"] == ["storage", "documents.read", "llm"]
     assert again.status_code == 201 and again.json()["registered_at"] == record["registered_at"]

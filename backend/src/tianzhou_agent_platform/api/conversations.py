@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Request, Response, status
 
+from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
+    aina_tasks,
     bind_actor,
     chat_service,
     conversation_service,
@@ -38,6 +40,13 @@ def create_conversation_router() -> APIRouter:
         conversation = await conversation_service(request).get_reconciled(conversation_id)
         require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
         return conversation
+
+    @router.get("/conversations/{conversation_id}/aina-tasks", response_model=list[AinaTask])
+    async def list_conversation_aina_tasks(conversation_id: str, request: Request) -> list[AinaTask]:
+        """Background tasks that long-running AINA tools started in this conversation (design §7.3)."""
+        conversation = await conversation_service(request).get(conversation_id)
+        require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
+        return await aina_tasks(request).list_for_conversation(conversation_id)
 
     @router.patch("/conversations/{conversation_id}", response_model=Conversation)
     async def update_conversation(
