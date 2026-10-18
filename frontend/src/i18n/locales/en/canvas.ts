@@ -29,6 +29,7 @@ export default {
     notCallable: "Tool {{name}} cannot be called from this app.",
     urlOnly: "Only a web-app canvas can request an identity token.",
     unsupported: "{{method}} is not available here.",
+    undeclaredTool: "Canvas tool {{name}} is not declared in aina.json.",
     proposeOnly: "Only a confirmation widget can propose arguments.",
     widgetTitle: "{{tool}} widget",
   },

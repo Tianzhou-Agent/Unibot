@@ -29,6 +29,7 @@ export default {
     notCallable: "该应用不能调用工具 {{name}}。",
     urlOnly: "只有网页应用画布可以申请身份令牌。",
     unsupported: "此处不支持 {{method}}。",
+    undeclaredTool: "画布工具 {{name}} 未在 aina.json 中声明。",
     proposeOnly: "只有确认组件可以提议参数。",
     widgetTitle: "{{tool}} 组件",
   },

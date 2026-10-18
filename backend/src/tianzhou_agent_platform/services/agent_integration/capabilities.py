@@ -30,6 +30,7 @@ from tianzhou_agent_platform.aina.document.builtin import (
     UNIBOT_DOCUMENTS_ID,
     document_tool_capabilities,
 )
+from tianzhou_agent_platform.aina.package.manifest import CanvasTool
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition, ToolSnapshot
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
@@ -78,15 +79,22 @@ class CapabilityRegistry(Protocol):
 
 @dataclass(slots=True)
 class Capability:
-    # ``mcp`` is a tool exposed by an AINA 2.0 package and ``skill`` its ``load_skill`` host tool.
-    kind: Literal["tool", "aina", "builtin", "mcp", "skill"]
+    # ``mcp`` is a tool exposed by an AINA 2.0 package, ``canvas`` a tool its open canvas implements (design §9.5)
+    # and ``skill`` its ``load_skill`` host tool.
+    kind: Literal["tool", "aina", "builtin", "mcp", "canvas", "skill"]
     capability_id: str
     function_name: str
     display_name: str
     description: str
     input_schema: dict[str, Any]
     requires_confirmation: bool
-    value: ToolRecord | tuple[AinaRecord, AinaInstallation] | tuple[AinaRecord, AinaInstallation, ToolSnapshot] | str
+    value: (
+        ToolRecord
+        | tuple[AinaRecord, AinaInstallation]
+        | tuple[AinaRecord, AinaInstallation, ToolSnapshot]
+        | tuple[AinaRecord, AinaInstallation, CanvasTool]
+        | str
+    )
     owner_aina_id: str | None = None
     # Confirmation is asked only until one call of this capability has completed in the conversation.
     confirm_once: bool = False
@@ -620,6 +628,22 @@ def package_capabilities(aina: AinaRecord, installation: AinaInstallation) -> di
             owner_aina_id=aina_id,
             confirm_once=tool.effect == "write",
         )
+    canvas = runtime.package.canvas
+    for canvas_tool in canvas.tools if canvas is not None else []:
+        effect = canvas_tool.effect or "write"
+        name = function_name("canvas", f"{aina_id}.{canvas_tool.name}")
+        capabilities[name] = Capability(
+            kind="canvas",
+            capability_id=f"{aina_id}/canvas/{canvas_tool.name}",
+            function_name=name,
+            display_name=canvas_tool.title or canvas_tool.name,
+            description=canvas_tool.description,
+            input_schema=canvas_tool.input_schema,
+            requires_confirmation=effect != "read",
+            value=(aina, installation, canvas_tool),
+            owner_aina_id=aina_id,
+            confirm_once=effect == "write",
+        )
     if runtime.skills:
         name = load_skill_function_name(aina_id)
         capabilities[name] = Capability(
@@ -745,7 +769,7 @@ def tool_error_payload(
 def capability_version(capability: Capability) -> str | None:
     if capability.kind == "tool":
         return cast(ToolRecord, capability.value).version
-    if capability.kind in {"aina", "mcp", "skill"}:
+    if capability.kind in {"aina", "mcp", "canvas", "skill"}:
         aina = cast(tuple[AinaRecord, ...], capability.value)[0]
         return aina.manifest.aina.version
     return None

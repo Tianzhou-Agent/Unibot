@@ -16,7 +16,14 @@ from pydantic import ValidationError
 from tianzhou_agent_platform.aina.builtin import invoke_builtin
 from tianzhou_agent_platform.aina.document.builtin import CREATE_EDIT_TASK_TOOL_ID
 from tianzhou_agent_platform.aina.package.models import ToolSnapshot
-from tianzhou_agent_platform.aina.package.service import AinaPackageService, load_skill
+from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker, canvas_result
+from tianzhou_agent_platform.aina.package.manifest import CanvasTool
+from tianzhou_agent_platform.aina.package.service import (
+    AinaPackageService,
+    load_skill,
+    package_runtime,
+    validate_schema_arguments,
+)
 from tianzhou_agent_platform.aina.package.tasks import AinaTask, AinaTaskService
 from tianzhou_agent_platform.aina.package.widgets import aina_widget_definition
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
@@ -55,6 +62,7 @@ class CapabilityExecutor:
         task_service: Any | None = None,
         packages: AinaPackageService | None = None,
         aina_tasks: AinaTaskService | None = None,
+        canvas_calls: CanvasCallBroker | None = None,
     ) -> None:
         # The domain operations (platform tools, built-in AINAs) run against the repository they are written for.
         self.repository = repository
@@ -68,6 +76,7 @@ class CapabilityExecutor:
         self.task_service = task_service
         self.packages = packages
         self.aina_tasks = aina_tasks
+        self.canvas_calls = canvas_calls
 
     def tools(self, run: AgentRun) -> list[StructuredTool]:
         """One native tool per registered capability; the run scope decides which are advertised."""
@@ -139,6 +148,8 @@ class CapabilityExecutor:
                 # Design §7.3: the acknowledgement completes the turn; the result is posted when the task ends.
                 run.scope.direct_reply = _aina_task_reply(task)
             return outcome.visible
+        if capability.kind == "canvas":
+            return await self._call_canvas(run, capability, call_id, arguments)
         if capability.kind == "skill":
             aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
             return load_skill(aina, arguments["id"], arguments.get("file"))
@@ -229,6 +240,7 @@ class CapabilityExecutor:
         run.scope.visible = dict(scoped)
         run.scope.system_prompt = await self.prompts.build(conversation, aina, memory_context=run.memory_context)
         run.scope.activated_entries.add(capability.function_name)
+        run.active_aina_id = capability.capability_id
         run.registry.update(scoped)
         await run.emit({"type": "routing.completed", "kind": "aina", "id": capability.capability_id})
         await run.push(
@@ -253,6 +265,35 @@ class CapabilityExecutor:
         }
 
 
+    async def _call_canvas(
+        self,
+        run: AgentRun,
+        capability: Capability,
+        call_id: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Design §9.5: run a tool the AINA's open canvas implements, in the user's most recently active viewer."""
+        if self.canvas_calls is None:
+            raise PlatformError("DEPENDENCY_FAILED", "Canvas tools are not available", status_code=503)
+        aina, _installation, tool = cast(tuple[AinaRecord, AinaInstallation, CanvasTool], capability.value)
+        validate_schema_arguments(tool.name, tool.input_schema, arguments)
+        canvas = package_runtime(aina).package.canvas
+        timeout = min(tool.timeout_seconds or DEFAULT_CANVAS_TIMEOUT_SECONDS, MAX_CANVAS_TIMEOUT_SECONDS)
+        payload = await self.canvas_calls.dispatch(
+            run.conversation_id,
+            {
+                "call_id": call_id,
+                "aina_id": aina.manifest.aina.id,
+                "version": aina.manifest.aina.version,
+                "canvas_title": canvas.title if canvas is not None else aina.manifest.aina.name,
+                "name": tool.name,
+                "arguments": arguments,
+                "timeout_ms": int(timeout * 1000),
+            },
+            timeout=timeout,
+        )
+        return canvas_result(tool.name, payload)
+
     async def _offer_aina_ui(self, run: AgentRun, aina_id: str) -> None:
         """Suggest the routed AINA's application UI; the host lets the user choose whether to open it."""
         if any(widget.kind == "aina_chooser" for widget in run.scope.widgets):
@@ -269,6 +310,10 @@ class CapabilityExecutor:
             return
         if widget.apps[0].has_main_widget:
             run.scope.widgets.append(widget)
+
+
+DEFAULT_CANVAS_TIMEOUT_SECONDS = 10.0
+MAX_CANVAS_TIMEOUT_SECONDS = 30.0
 
 
 def _aina_task_reply(task: AinaTask) -> str:

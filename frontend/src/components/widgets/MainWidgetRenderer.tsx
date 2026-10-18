@@ -27,6 +27,7 @@ export function MainWidgetRenderer({
   onPrompt,
   onDocumentTaskContextChange,
   refreshToken,
+  conversationId,
 }: {
   ainaId: string;
   widget: WidgetDefinition;
@@ -37,10 +38,11 @@ export function MainWidgetRenderer({
   onPrompt?: (prompt: string) => void;
   onDocumentTaskContextChange?: (context: DocumentTaskContext | null) => void;
   refreshToken?: string | null;
+  conversationId?: string | null;
 }) {
   const { t } = useTranslation("common");
   if (widget.kind === "aina_canvas") {
-    return <AinaCanvasFrame ainaId={ainaId} widget={widget} refreshToken={refreshToken} onPrompt={onPrompt} />;
+    return <AinaCanvasFrame ainaId={ainaId} widget={widget} conversationId={conversationId} refreshToken={refreshToken} onPrompt={onPrompt} />;
   }
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
   if (ainaId === "unibot-code-runner") {
