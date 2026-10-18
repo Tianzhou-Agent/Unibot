@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, cast
 from uuid import uuid4
@@ -449,6 +450,8 @@ def create_app(
     async def attach_request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
         request.state.request_trace_id = request.headers.get("X-Trace-ID") or f"request_{uuid4().hex}"
         user = await auth_service.resolve_session(request.cookies.get(SESSION_COOKIE))
+        if user is None and request.method == "POST" and _DEVELOPER_TOKEN_PATHS.match(request.url.path):
+            user = await auth_service.resolve_developer_token(request.headers.get("authorization"))
         if user is None and resolved_settings.dev_auth_bypass:
             user = await auth_service.ensure_dev_user()
         if user is not None:
@@ -505,6 +508,10 @@ def _resolve_obs_trace_status(store: ObservabilityStore | None, trace_id: str) -
 
 def run() -> None:
     uvicorn.run("tianzhou_agent_platform.main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+# The only routes a developer token (``aina publish``) may call: package validation, registration and tool refresh.
+_DEVELOPER_TOKEN_PATHS = re.compile(r"^/ainas/(?:packages|packages/validate|[^/]+/tools/refresh)$")
 
 
 def _is_public_path(path: str) -> bool:

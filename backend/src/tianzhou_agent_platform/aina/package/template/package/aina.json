@@ -1,0 +1,53 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "__AINA_ID__",
+    "version": "__VERSION__",
+    "name": "__NAME__",
+    "description": "__DESCRIPTION__",
+    "publisher": { "id": "__PUBLISHER_ID__", "name": "__PUBLISHER_NAME__" }
+  },
+
+  "tools": {
+    "mcp": { "url": "__MCP_URL__", "auth": { "type": "none" } },
+    "expose": {
+      "list_notes": { "effect": "read", "visibility": ["model", "app"], "result_widget": "notes" },
+      "add_note": { "effect": "write", "visibility": ["model", "app"] },
+      "delete_note": { "effect": "destructive", "visibility": ["model", "app"] }
+    }
+  },
+
+  "skills": [
+    {
+      "id": "notes",
+      "name": "Keep notes",
+      "description": "Use when the user wants to write down, find or remove short notes.",
+      "path": "skills/notes",
+      "tools": ["list_notes", "add_note", "delete_note", "highlight_notes"]
+    }
+  ],
+
+  "canvas": {
+    "entry": "canvas/index.html",
+    "title": "__NAME__",
+    "tools": [
+      {
+        "name": "highlight_notes",
+        "description": "Highlight notes in the open canvas so the user can review them.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "note_ids": { "type": "array", "items": { "type": "string" }, "maxItems": 100 } },
+          "required": ["note_ids"],
+          "additionalProperties": false
+        },
+        "effect": "read"
+      }
+    ]
+  },
+
+  "widgets": [{ "id": "notes", "purpose": "result", "entry": "widgets/notes.html", "height": 160 }],
+
+  "permissions": [{ "scope": "storage" }]
+}

@@ -14,7 +14,12 @@ from jose import JWTError, jwt
 from pydantic import EmailStr, TypeAdapter
 from pwdlib import PasswordHash
 
-from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.models import (
+    CreatedDeveloperToken,
+    DeveloperToken,
+    DeveloperTokenCreate,
+    UserRecord,
+)
 from tianzhou_agent_platform.auth.oidc import OidcAuthService
 from tianzhou_agent_platform.config import DEV_USER_EMAIL, DEV_USER_ID, AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
@@ -22,6 +27,13 @@ from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 _SESSION_TOKEN_TYPE = "session"
 _OAUTH_TOKEN_TYPE = "github-oauth"
+
+
+DEVELOPER_TOKEN_PREFIX = "ubt_"
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 class AuthService:
@@ -55,6 +67,36 @@ class AuthService:
         if self._owns_huawei_client:
             await self._huawei_client.aclose()
         await self.oidc.aclose()
+
+    async def create_developer_token(
+        self, request: DeveloperTokenCreate, *, user_id: str, tenant_id: str
+    ) -> CreatedDeveloperToken:
+        """A new ``aina`` CLI token; only its hash is stored, so this is the one time it is shown."""
+        token = f"{DEVELOPER_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+        now = datetime.now(UTC)
+        record = DeveloperToken(
+            id=f"dtk_{uuid4().hex}",
+            user_id=user_id,
+            tenant_id=tenant_id,
+            name=request.name,
+            token_hash=_token_hash(token),
+            prefix=token[:12],
+            created_at=now,
+            expires_at=now + timedelta(days=request.expires_in_days),
+        )
+        return CreatedDeveloperToken(token=token, record=await self.repository.create_developer_token(record))
+
+    async def resolve_developer_token(self, authorization: str | None) -> UserRecord | None:
+        scheme, _, token = (authorization or "").partition(" ")
+        token = token.strip()
+        if scheme.lower() != "bearer" or not token.startswith(DEVELOPER_TOKEN_PREFIX):
+            return None
+        record = await self.repository.find_developer_token(_token_hash(token))
+        now = datetime.now(UTC)
+        if record is None or record.expires_at <= now:
+            return None
+        await self.repository.touch_developer_token(record.model_copy(update={"last_used_at": now}))
+        return await self.repository.find_user_by_id(record.user_id)
 
     async def register(self, *, email: str, password: str, name: str) -> UserRecord:
         if not self.settings.registration_enabled:

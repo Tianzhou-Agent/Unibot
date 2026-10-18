@@ -9,6 +9,7 @@ import {
   BarChart3,
   Globe,
   Info,
+  KeyRound,
   ShieldCheck,
   LogOut,
   UserRound,
@@ -17,6 +18,7 @@ import {
   Server,
 } from "lucide-react";
 import DebugPage from "@/pages/DebugPage";
+import { DeveloperTokensPanel } from "@/features/developer/DeveloperTokensPanel";
 import { ProviderEditor, ProviderTypePicker, formatContextTokens, healthText } from "@/features/model-settings/ProviderEditor";
 import type {
   ActiveModel,
@@ -34,12 +36,13 @@ import i18n, { LANGUAGES, currentLocale } from "@/i18n";
 import { useAuth } from "@/lib/auth";
 import { useMockSession } from "@/lib/mockSession";
 
-type SettingsTab = "general" | "overview" | "models" | "account";
+type SettingsTab = "general" | "overview" | "models" | "account" | "developer";
 const SETTINGS_TABS: Array<{ id: SettingsTab; icon: typeof Globe }> = [
   { id: "general", icon: Globe },
   { id: "overview", icon: BarChart3 },
   { id: "models", icon: Server },
   { id: "account", icon: UserRound },
+  { id: "developer", icon: KeyRound },
 ];
 
 export default function SettingsPage() {
@@ -190,6 +193,7 @@ export default function SettingsPage() {
           <div className="mx-auto w-full max-w-4xl">
           {tab === "general" ? <GeneralPanel /> : null}
           {tab === "account" ? <AccountPanel /> : null}
+          {tab === "developer" ? <DeveloperTokensPanel /> : null}
           {tab === "models" ? (
           <>
           <div className="mb-4 flex flex-wrap items-center gap-2">

@@ -3,6 +3,7 @@ from pydantic import SecretStr
 
 from tianzhou_agent_platform.aina.builtin import BUILTIN_AINA_IDS
 from tianzhou_agent_platform.aina.package.bundled import is_bundled
+from tianzhou_agent_platform.aina.package.scaffold import PackageScaffoldRequest, scaffold_archive
 from tianzhou_agent_platform.aina.package.validation import PackageValidationReport, validate_package_archive
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCanvasResponse,
@@ -100,6 +101,15 @@ def create_capability_router() -> APIRouter:
             validate_schema(capability.input_schema, label=f"capability {capability.id} input_schema")
         health = await gateway(request).probe_aina(payload)
         return await repository(request).register_aina(AinaRecord(manifest=payload, last_health=health))
+
+    @router.post("/ainas/packages/scaffold")
+    async def scaffold_aina_package(payload: PackageScaffoldRequest) -> Response:
+        """A new AINA 2.0 project as a zip (``package/`` and its MCP ``server/``), like ``aina init``."""
+        return Response(
+            scaffold_archive(payload),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{payload.aina_id}.zip"'},
+        )
 
     @router.post("/ainas/packages/validate", response_model=PackageValidationReport)
     async def validate_aina_package(file: UploadFile = File(...)) -> PackageValidationReport:

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
+from tianzhou_agent_platform.auth.models import DeveloperToken, OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
@@ -62,6 +62,7 @@ from tianzhou_agent_platform.store.document_task_store import DocumentTaskStore
 from tianzhou_agent_platform.aina.package.storage import AinaStorageItem
 from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.store.aina_storage_store import AinaStorageStore
+from tianzhou_agent_platform.store.developer_token_store import DeveloperTokenStore
 from tianzhou_agent_platform.store.aina_task_store import AinaTaskStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
 from tianzhou_agent_platform.store.registry_store import RegistryStore
@@ -119,6 +120,7 @@ class PersistentRepository(InMemoryRepository):
         self._aina_project_store = AinaProjectStore(stores.mysql)
         self._registry_store = RegistryStore(stores.mysql)
         self._aina_storage_store = AinaStorageStore(stores.mysql)
+        self._developer_token_store = DeveloperTokenStore(stores.mysql)
         self._aina_task_store = AinaTaskStore(stores.mysql)
 
     async def initialize(self) -> None:
@@ -475,6 +477,22 @@ class PersistentRepository(InMemoryRepository):
     async def remove_aina(self, aina_id: str) -> None:
         if not await self._registry_store.remove_aina(aina_id):
             raise not_found("AINA", aina_id)
+
+    async def create_developer_token(self, token: DeveloperToken) -> DeveloperToken:
+        await self._developer_token_store.create(token)
+        return self._copy(token)
+
+    async def list_developer_tokens(self, *, tenant_id: str, user_id: str) -> list[DeveloperToken]:
+        return await self._developer_token_store.list(tenant_id=tenant_id, user_id=user_id)
+
+    async def find_developer_token(self, token_hash: str) -> DeveloperToken | None:
+        return await self._developer_token_store.find(token_hash)
+
+    async def touch_developer_token(self, token: DeveloperToken) -> None:
+        await self._developer_token_store.touch(token)
+
+    async def delete_developer_token(self, token_id: str, *, tenant_id: str, user_id: str) -> bool:
+        return await self._developer_token_store.delete(token_id, tenant_id=tenant_id, user_id=user_id)
 
     async def get_aina_storage_item(self, installation_key: str, key: str) -> AinaStorageItem | None:
         return await self._aina_storage_store.get(installation_key, key)

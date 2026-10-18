@@ -9,6 +9,7 @@ from tianzhou_agent_platform.api.auth import create_auth_router
 from tianzhou_agent_platform.api.capabilities import create_capability_router
 from tianzhou_agent_platform.api.chat import create_chat_router
 from tianzhou_agent_platform.api.conversations import create_conversation_router
+from tianzhou_agent_platform.api.developer_tokens import create_developer_token_router
 from tianzhou_agent_platform.api.documents import create_document_router
 from tianzhou_agent_platform.api.feedback import create_feedback_router
 from tianzhou_agent_platform.api.document_tasks import create_document_task_router
@@ -24,6 +25,7 @@ from tianzhou_agent_platform.api.tasks import create_task_router
 def create_router() -> APIRouter:
     router = APIRouter()
     router.include_router(create_auth_router())
+    router.include_router(create_developer_token_router())
     router.include_router(create_operations_router())
     router.include_router(create_chat_router())
     router.include_router(create_workspace_router())

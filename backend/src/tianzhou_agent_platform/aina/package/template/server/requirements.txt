@@ -1,0 +1,2 @@
+mcp>=2.3,<3
+unibot-aina>=0.1

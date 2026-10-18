@@ -304,6 +304,21 @@ aina_projects_table = _table(
     Index("ix_unibot_aina_projects_owner_created", "tenant_id", "user_id", "created_at"),
 )
 
+developer_tokens_table = Table(
+    "unibot_developer_tokens",
+    repository_metadata,
+    Column("id", String(64), primary_key=True),
+    Column("user_id", ACTOR, nullable=False),
+    Column("tenant_id", ACTOR, nullable=False),
+    Column("name", String(80), nullable=False),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("prefix", String(16), nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    Column("expires_at", TIMESTAMP, nullable=False),
+    Column("last_used_at", TIMESTAMP, nullable=True),
+    Index("ix_unibot_developer_tokens_user", "tenant_id", "user_id"),
+)
+
 aina_storage_table = Table(
     "unibot_aina_storage",
     repository_metadata,

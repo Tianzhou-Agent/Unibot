@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any, Iterable
 from uuid import uuid4
 
-from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
+from tianzhou_agent_platform.auth.models import DeveloperToken, OidcProvider, UserRecord
 from tianzhou_agent_platform.aina.package.storage import AinaStorageItem, check_quota
 from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.aina.project import AinaProjectRecord
@@ -106,6 +106,7 @@ class InMemoryRepository:
         self._users: dict[str, UserRecord] = {}
         self._feedbacks: dict[str, FeedbackRecord] = {}
         self._aina_storage: dict[str, AinaStorageItem] = {}
+        self._developer_tokens: dict[str, DeveloperToken] = {}
         self._aina_tasks: dict[str, AinaTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
@@ -1277,6 +1278,34 @@ class InMemoryRepository:
             for key in [key for key in self._installations if key[2] == aina_id]:
                 del self._installations[key]
                 await self._delete_record(INSTALLATIONS_RESOURCE, installation_record_id(*key))
+
+    async def create_developer_token(self, token: DeveloperToken) -> DeveloperToken:
+        async with self._lock:
+            self._developer_tokens[token.id] = self._copy(token)
+            return self._copy(token)
+
+    async def list_developer_tokens(self, *, tenant_id: str, user_id: str) -> list[DeveloperToken]:
+        async with self._lock:
+            owned = [t for t in self._developer_tokens.values() if (t.tenant_id, t.user_id) == (tenant_id, user_id)]
+            return [self._copy(t) for t in sorted(owned, key=lambda t: t.created_at, reverse=True)]
+
+    async def find_developer_token(self, token_hash: str) -> DeveloperToken | None:
+        async with self._lock:
+            found = next((t for t in self._developer_tokens.values() if t.token_hash == token_hash), None)
+            return self._copy(found) if found is not None else None
+
+    async def touch_developer_token(self, token: DeveloperToken) -> None:
+        async with self._lock:
+            if token.id in self._developer_tokens:
+                self._developer_tokens[token.id] = self._copy(token)
+
+    async def delete_developer_token(self, token_id: str, *, tenant_id: str, user_id: str) -> bool:
+        async with self._lock:
+            token = self._developer_tokens.get(token_id)
+            if token is None or (token.tenant_id, token.user_id) != (tenant_id, user_id):
+                return False
+            del self._developer_tokens[token_id]
+            return True
 
     async def get_aina_storage_item(self, installation_key: str, key: str) -> AinaStorageItem | None:
         async with self._lock:

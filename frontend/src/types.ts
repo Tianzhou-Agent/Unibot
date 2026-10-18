@@ -847,10 +847,33 @@ export interface MemoryStatsResponse {
 /** The parts of an AINA 2.0 ``aina.json`` the install consent shows (design §10). */
 export interface AinaPackageManifest {
   aina: { id: string; name: string; version: string; publisher: { id: string; name: string; url?: string | null } };
-  tools: { mcp: { url: string; auth: { type: "none" | "bearer" | "api_key" | "oauth2" } } };
+  tools: {
+    mcp: { url: string; auth: { type: "none" | "bearer" | "api_key" | "oauth2" } };
+    expose?: Record<string, { effect: "read" | "write" | "destructive"; visibility: ("model" | "app")[]; long_running?: boolean }>;
+  };
   canvas?: { title: string; entry?: string | null; url?: string | null; tools?: { name: string }[] } | null;
   config?: { schema: AinaConfigSchema } | null;
   permissions: { scope: string; reason?: string | null; optional: boolean }[];
+}
+
+/** A credential of the `aina` CLI; it can only validate, publish and refresh app packages. */
+export interface DeveloperToken {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at?: string | null;
+}
+
+/** The host's checks of an uploaded AINA 2.0 package (``POST /ainas/packages/validate``). */
+export interface PackageValidationReport {
+  manifest: (AinaPackageManifest & { aina: { description?: string } }) | null;
+  files: string[];
+  skills: { id: string; name: string; description: string }[];
+  errors: string[];
+  warnings: string[];
+  archive_sha256?: string | null;
 }
 
 export interface AinaConfigField {
