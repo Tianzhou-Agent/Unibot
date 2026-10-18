@@ -7,6 +7,8 @@ never carry the host's raw user, tenant or workspace ids.
 
 from __future__ import annotations
 
+import logging
+import time
 from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
@@ -30,6 +32,7 @@ from tianzhou_agent_platform.api.dependencies import chat_service, documents, mo
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
+from tianzhou_agent_platform.observability.models import LLMCallRecord
 from tianzhou_agent_platform.store.errors import StorageNotFoundError
 
 MAX_LLM_MESSAGES = 50
@@ -311,9 +314,38 @@ def create_aina_host_services_router() -> APIRouter:
         if payload.max_tokens is not None:
             model = model.bind(max_tokens=payload.max_tokens)  # type: ignore[assignment]
         kinds: dict[str, type[BaseMessage]] = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
-        reply = await model.ainvoke([kinds[message.role](content=message.content) for message in payload.messages])
+        # Recorded like the agent's own model calls, attributed to the AINA and its invocation; the messages are the
+        # user's data and are not kept, only their size.
+        record = LLMCallRecord(
+            call_id=f"llm_aina_{uuid4().hex}",
+            context_type="aina_host",
+            context_id=f"{caller.installation.aina_id}:{caller.token.claims.get('invocation_id') or 'unknown'}",
+            endpoint="aina-host/llm/chat",
+            model=str(getattr(runtime, "model", None) or getattr(runtime, "model_name", None) or "default"),
+            request={
+                "aina_id": caller.installation.aina_id,
+                "messages": len(payload.messages),
+                "characters": sum(len(message.content) for message in payload.messages),
+                "max_tokens": payload.max_tokens,
+            },
+        )
+        started = time.perf_counter()
+        try:
+            reply = await model.ainvoke([kinds[message.role](content=message.content) for message in payload.messages])
+        except Exception as exc:
+            await _record_llm_call(request, record, started, error=type(exc).__name__)
+            raise
         usage = getattr(reply, "usage_metadata", None) or {}
         content = reply.content if isinstance(reply.content, str) else str(reply.content)
+        await _record_llm_call(
+            request,
+            record,
+            started,
+            response={
+                "input_tokens": int(usage.get("input_tokens") or 0),
+                "output_tokens": int(usage.get("output_tokens") or 0),
+            },
+        )
         return ChatReply(
             content=content,
             usage=ChatUsage(
@@ -322,3 +354,29 @@ def create_aina_host_services_router() -> APIRouter:
         )
 
     return router
+
+
+async def _record_llm_call(
+    request: Request,
+    record: LLMCallRecord,
+    started: float,
+    *,
+    response: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    observability = getattr(request.app.state, "observability", None)
+    if observability is None:
+        return
+    finished = record.model_copy(
+        update={
+            "status": "failed" if error else "completed",
+            "response": response,
+            "error": error,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+            "completed_at": utc_now(),
+        }
+    )
+    try:
+        await observability.record_llm_call(finished)
+    except Exception:  # noqa: BLE001 - recording must never fail the AINA's call
+        logging.getLogger(__name__).exception("Could not record a Host API model call")

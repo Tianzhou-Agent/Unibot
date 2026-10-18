@@ -937,7 +937,7 @@ export interface AinaTask {
   conversation_id: string;
   tool_name: string;
   title: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   progress: number | null;
   total: number | null;
   message: string | null;

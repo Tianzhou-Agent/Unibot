@@ -74,6 +74,8 @@ class PackageRegistry(Protocol):
         self, *, tenant_id: str | None = None, user_id: str | None = None
     ) -> list[AinaInstallation]: ...
 
+    async def list_ainas(self) -> list[AinaRecord]: ...
+
 
 class AinaPackageService:
     def __init__(
@@ -293,6 +295,34 @@ class AinaPackageService:
             }
         )
         return await self.repository.upsert_aina(updated)
+
+    async def check_all_tools(self) -> dict[str, str]:
+        """Design §6.1: re-check every package's tools on a schedule, as one of its active installations.
+
+        A server that needs per-user credentials is listed with that installation's; one that cannot be reached is
+        left as it is and reported. Returns each AINA's outcome.
+        """
+        outcomes: dict[str, str] = {}
+        installations = await self.repository.list_installations()
+        for record in await self.repository.list_ainas():
+            runtime = record.manifest.runtime
+            if record.status != "registered" or not isinstance(runtime, PackageRuntimeDefinition) or runtime.bundled:
+                continue
+            aina_id = record.manifest.aina.id
+            installation = next(
+                (item for item in installations if item.aina_id == aina_id and item.status == "active"), None
+            )
+            if installation is None and runtime.package.tools.mcp.auth.type != "none":
+                outcomes[aina_id] = "skipped: no active installation to list its tools with"
+                continue
+            try:
+                checked = await self.refresh_tools(aina_id, installation=installation)
+            except PlatformError as exc:
+                outcomes[aina_id] = f"unreachable: {exc.message}"
+                continue
+            disabled = checked.last_health.get("disabled_tools") or []
+            outcomes[aina_id] = f"disabled: {', '.join(disabled)}" if disabled else "ok"
+        return outcomes
 
     async def call_tool(
         self,

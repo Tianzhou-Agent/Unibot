@@ -238,6 +238,12 @@ class AgentSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("UNIBOT_GITHUB_CLIENT_SECRET", "github_oauth_client_secret"),
     )
+    aina_tool_check_hours: float = Field(
+        default=6.0,
+        ge=0,
+        validation_alias=AliasChoices("UNIBOT_AINA_TOOL_CHECK_HOURS", "aina_tool_check_hours"),
+        description="How often every package's MCP tools are re-checked against their review (0 turns it off).",
+    )
     aina_oauth_callback_url: str = Field(
         default="http://127.0.0.1:5173/api/aina-oauth/callback",
         validation_alias=AliasChoices("UNIBOT_AINA_OAUTH_CALLBACK_URL", "aina_oauth_callback_url"),

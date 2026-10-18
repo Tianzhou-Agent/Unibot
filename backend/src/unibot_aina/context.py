@@ -23,6 +23,9 @@ class UnibotContext:
     token: str | None
     conversation_id: str | None = None
     workspace_id: str | None = None
+    # The user's language (e.g. "zh") and IANA time zone, when Unibot knows them.
+    locale: str | None = None
+    timezone: str | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
@@ -51,5 +54,7 @@ def unibot_context(ctx: Any) -> UnibotContext:
         token=raw.get("token"),
         conversation_id=raw.get("conversation_id"),
         workspace_id=raw.get("workspace_id"),
+        locale=(raw.get("user") or {}).get("locale"),
+        timezone=(raw.get("user") or {}).get("timezone"),
         raw=raw,
     )

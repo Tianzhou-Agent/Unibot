@@ -21,6 +21,9 @@ export default {
       running: "Running",
       completed: "Completed",
       failed: "Failed",
+      cancelled: "Cancelled",
     },
+    cancel: "Cancel",
+    cancelNamed: "Cancel {{title}}",
   },
 };

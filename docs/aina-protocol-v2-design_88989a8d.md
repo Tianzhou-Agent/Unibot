@@ -905,10 +905,14 @@ runtime type only, never on an AINA id.
   - **Destinations:** every request the host makes (metadata, registration, tokens) passes the destination policy.
   - **401 detection:** the MCP SDK reports a refused request without its HTTP status, so the MCP client records
     response statuses itself to recognise a `401`/`403` as `AUTHENTICATION_FAILED`.
-- The drift check runs before every new installation and on `POST /ainas/{id}/tools/refresh`; it is not yet on a
-  periodic schedule.
-- `_meta["unibot/context"]` has no user `locale`/`timezone` yet. The MCP SDK's own OpenTelemetry spans join the
-  platform trace as children of the tool span, so no separate `traceparent` work was needed.
+- The drift check runs before every new installation, on `POST /ainas/{id}/tools/refresh`, and every
+  `UNIBOT_AINA_TOOL_CHECK_HOURS` (default 6, `0` turns it off). The scheduled check lists each package's tools as one
+  of its active installations, so per-user credentials and OAuth work. A package with credentials but no active
+  installation is skipped, and an unreachable server is left as it is. Both are logged.
+- `_meta["unibot/context"].user` carries `locale` and `timezone` when the call was started by a request from the
+  shell. The shell sends `X-Unibot-Locale` (its UI language) and `X-Unibot-Timezone` (IANA) on every API request;
+  malformed or unknown values are dropped. Scheduled runs have neither. The MCP SDK's own OpenTelemetry spans join
+  the platform trace as children of the tool span, so no separate `traceparent` work was needed.
 - The context token's identity claims are the pairwise ids. A `ref` claim holds the host's own installation
   reference, encrypted, so the Host API needs no per-token state. The signing key is derived from the AINA key
   material (`UNIBOT_AINA_SECRET_KEY`, else the auth secret), so all nodes share it; `UNIBOT_AINA_SIGNING_KEY`
@@ -947,8 +951,9 @@ runtime type only, never on an AINA id.
     user's own memories (another user's id is 404). Memory content goes through the memory store's usual rules,
     which reject unsafe instruction markers. New memories record the AINA and conversation that created them.
   - `POST /llm/chat` `{messages, max_tokens?}` runs the user's own selected model without tools: at most 50
-    messages, 200 000 characters and 4 096 output tokens. The reply carries token usage; the call is not yet
-    recorded in the platform trace.
+    messages, 200 000 characters and 4 096 output tokens. The reply carries token usage. The call is recorded as an LLM
+    call with context `aina_host` and `<aina id>:<invocation id>`, its usage and duration, and the size of the
+    request but not its messages.
 - Long-running tasks (§7.3) are their own record (`unibot_aina_tasks`), not nodes of the agent's plan tree. The
   chat lists them as "Background tasks" above the message box, polling every 3 s while one runs; a posted result is
   shown as its own message, never folded into the previous turn.
@@ -971,9 +976,14 @@ runtime type only, never on an AINA id.
   - The model sees the result at the start of the conversation's next turn, as an assistant message delimited as
     `<aina-task-result>` third-party output, also when working memory is rebuilt from the archive (which keeps the
     user-facing text). A finished task does not start a turn by itself.
-  - The posted Markdown is the AINA server's own text. Like model replies, it may contain links and remote images;
-    restricting what third-party Markdown can load is left for P3, together with result widgets.
-  - There is no cancel callback, and the user cannot cancel a task from the host yet.
+  - The posted Markdown is the AINA server's own text. Its images are posted as links
+    (`without_remote_images`), so a result loads nothing until the user clicks. The shell renders Markdown without
+    raw HTML, so images were the only content that loaded by itself.
+  - **Cancelling:** the user can cancel a running task from the task list
+    (`POST /conversations/{id}/aina-tasks/{task}/cancel`, status `cancelled`). The cancellation is posted to the
+    conversation and reported to the model like a result.
+  - The AINA learns of a cancellation from the `409` of its next callback, or from `GET /tasks/{id}`, which returns
+    the task in any state. An AINA ends its own task with `fail`.
 - Upgrade re-consent: registering a new version compares it with the previous one. A new tool, a tool newly
   visible to the agent, an effect that asks less often (for example `destructive` → `write`), a new URL-canvas
   origin, or a required scope the user has not granted pauses that installation (`status: consent_required`, with
@@ -1059,8 +1069,7 @@ runtime type only, never on an AINA id.
 
 ### Next
 
-Also still open:
-restricting what posted task Markdown can load, image results reaching vision-capable models, and from P4 releasing
+Also still open: image results reaching vision-capable models, signing-key rotation, and from P4 releasing
 `unibot-aina` to PyPI and `@unibot/aina-ui` to npm (both are ready to build) and the design's outsider test with a real
 outside developer; the steps of the guide were checked in fresh environments. `aina dev` has no model: chat with a
 scripted or real model is not built. The `aina` CLI still ships with the backend package. P5 stops after Image Recognition: the remaining first-party AINAs

@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from tianzhou_agent_platform.aina.package.manifest import AinaPackageManifest
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
+from tianzhou_agent_platform.core.client_preferences import client_locale, client_timezone
 
 CONTEXT_META_KEY = "unibot/context"
 Source = Literal["agent", "canvas", "widget", "schedule"]
@@ -58,6 +59,11 @@ def unibot_context(
         "granted_permissions": sorted(installation.granted_permissions),
         "config": {key: value for key, value in installation.configuration.items() if key not in secret_fields},
     }
+    # The user's language and time zone, when the call was started by a request from the shell.
+    if (locale := client_locale.get()) is not None:
+        context["user"]["locale"] = locale
+    if (timezone := client_timezone.get()) is not None:
+        context["user"]["timezone"] = timezone
     if conversation_id is not None:
         context["conversation_id"] = pairwise("conversation", conversation_id)
     if workspace_id is not None:
