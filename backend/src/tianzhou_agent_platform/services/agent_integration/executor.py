@@ -13,6 +13,7 @@ from uuid import uuid4
 from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 
+from tianzhou_agent_platform.model_providers.models import current_model_runtime
 from tianzhou_agent_platform.aina.builtin import invoke_builtin
 from tianzhou_agent_platform.aina.document.builtin import CREATE_EDIT_TASK_TOOL_ID
 from tianzhou_agent_platform.aina.package.models import ToolSnapshot
@@ -22,6 +23,7 @@ from tianzhou_agent_platform.aina.package.service import (
     AinaPackageService,
     load_skill,
     package_runtime,
+    tool_images,
     validate_schema_arguments,
 )
 from tianzhou_agent_platform.aina.package.tasks import AinaTask, AinaTaskService
@@ -131,6 +133,7 @@ class CapabilityExecutor:
                 conversation_id=run.conversation_id,
                 workspace_id=run.workspace_id,
             )
+            self._keep_images(run, call_id, tool.name, outcome.images)
             if outcome.widget is not None:
                 # Design §9.2: the AINA's result widget, shown with the turn's answer and kept with it.
                 run.scope.widgets.append(aina_widget_definition(outcome.widget))
@@ -292,7 +295,19 @@ class CapabilityExecutor:
             },
             timeout=timeout,
         )
-        return canvas_result(tool.name, payload)
+        visible = canvas_result(tool.name, payload)
+        result = payload.get("result")
+        content = result.get("content") if isinstance(result, dict) else None
+        self._keep_images(run, call_id, tool.name, tool_images(content if isinstance(content, list) else []))
+        return visible
+
+    def _keep_images(self, run: AgentRun, call_id: str, name: str, images: list[dict[str, str]]) -> None:
+        """A tool's images, for the model of this run if it reads images; never stored in the conversation."""
+        if not images or self.packages is None:
+            return
+        runtime = current_model_runtime()
+        if runtime.accepts_images if runtime is not None else self.packages.settings.llm_accepts_images:
+            run.scope.tool_images[call_id] = (name, images)
 
     async def _offer_aina_ui(self, run: AgentRun, aina_id: str) -> None:
         """Suggest the routed AINA's application UI; the host lets the user choose whether to open it."""

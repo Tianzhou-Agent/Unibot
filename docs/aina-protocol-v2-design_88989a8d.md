@@ -916,7 +916,15 @@ runtime type only, never on an AINA id.
 - The context token's identity claims are the pairwise ids. A `ref` claim holds the host's own installation
   reference, encrypted, so the Host API needs no per-token state. The signing key is derived from the AINA key
   material (`UNIBOT_AINA_SECRET_KEY`, else the auth secret), so all nodes share it; `UNIBOT_AINA_SIGNING_KEY`
-  (P-256 PEM) overrides it. Key rotation is not implemented.
+  (P-256 PEM) overrides it.
+  - **Rotating the key:**
+    1. Set the new key as `UNIBOT_AINA_SIGNING_KEY`.
+    2. Put the old one in `UNIBOT_AINA_PREVIOUS_SIGNING_KEYS`, as PEM, or as the JWKS JSON from
+       `/.well-known/aina-host-jwks.json`, which also works for a derived key.
+    3. Tokens it signed keep verifying, and its public key stays in the JWKS (current key first). Verification picks
+       the key by `kid`.
+    4. Remove the old key once tokens and MCP servers' JWKS caches have moved on: at least the 10-minute token
+       lifetime. `unibot-aina`'s `ContextVerifier` refetches the JWKS on an unknown `kid`, at most once a minute.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
@@ -993,7 +1001,16 @@ runtime type only, never on an AINA id.
   to "pause": only one version of a package is registered, and its MCP server serves only the current tools.
 - "Confirm the first `write` call in a conversation" is decided from the conversation's checkpointed messages; after
   history summarization the host may ask again, never less often.
-- Non-text MCP content blocks (images, resources) reach the model as a placeholder line. Text content that repeats
+- **Images in tool results:**
+  - Image blocks of MCP results and canvas results (PNG, JPEG, WebP or GIF, at most 3 of at most 1 MiB each) are
+    shown to the model when it accepts images. That is set per model ("Accepts images" in the provider settings),
+    or with `UNIBOT_LLM_ACCEPTS_IMAGES` for the `.env` model.
+  - They are kept on the run (`RunScope.tool_images`). Before every model call of that run, one user-role message
+    with `image_url` parts follows each group of tool results that returned images, because OpenAI-style tool
+    messages carry text only. The message is marked as third-party tool output.
+  - The images are never stored in the conversation or its checkpoints, so later turns see only the placeholder line.
+  - Other non-text blocks (resources, and images for a model without image input) reach the model as a placeholder
+    line. Text content that repeats
   `structuredContent` exactly is dropped, so the model does not read the result twice.
 - Skill folders may contain only UTF-8 text files. A frontmatter `name` may match either the skill `id` (the Agent
   Skills convention) or its `name`. Skill text is limited to 1 000 000 characters per package in total.
@@ -1062,14 +1079,14 @@ runtime type only, never on an AINA id.
   - **Model context:** `setModelContext` is stored per conversation and AINA (`PUT …/canvas-context/{aina}`,
     ≤ 4000 characters). It is added to every model request while that AINA's scope is active, as
     `<aina-canvas-state>` data.
-  - **Results:** `structuredContent` up to 64 KiB, and at most one image of up to 1 MiB, which reaches the model as a
-    placeholder line for now.
+  - **Results:** `structuredContent` up to 64 KiB, and at most one image of up to 1 MiB, which reaches the model as an
+    image when it accepts images (see "Images in tool results"), as a placeholder line otherwise.
   - **First turn:** in a brand-new conversation, the shell connects its viewer once the conversation id is known, so
     a canvas call in the very first model response can find no viewer.
 
 ### Next
 
-Also still open: image results reaching vision-capable models, signing-key rotation, and from P4 releasing
+Also still open: from P4, releasing
 `unibot-aina` to PyPI and `@unibot/aina-ui` to npm (both are ready to build) and the design's outsider test with a real
 outside developer; the steps of the guide were checked in fresh environments. `aina dev` has no model: chat with a
 scripted or real model is not built. The `aina` CLI still ships with the backend package. P5 stops after Image Recognition: the remaining first-party AINAs

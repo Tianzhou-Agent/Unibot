@@ -43,6 +43,11 @@ class AgentSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("UNIBOT_LLM_MODEL", "OPENAI_MODEL", "model"),
     )
+    llm_accepts_images: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNIBOT_LLM_ACCEPTS_IMAGES", "llm_accepts_images"),
+        description="The .env model reads images, so AINA tools' image results are shown to it.",
+    )
     llm_timeout_seconds: float = Field(
         default=60.0,
         gt=0,
@@ -68,6 +73,14 @@ class AgentSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("UNIBOT_AINA_SIGNING_KEY", "aina_signing_key"),
         description="P-256 private key (PEM) for AINA context tokens; derived from the AINA key material if unset.",
+    )
+    aina_previous_signing_keys: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UNIBOT_AINA_PREVIOUS_SIGNING_KEYS", "aina_previous_signing_keys"),
+        description=(
+            "Context-token keys being rotated out: still accepted and published, never used to sign. PEM keys "
+            "(concatenated) or the JWKS JSON from /.well-known/aina-host-jwks.json."
+        ),
     )
     aina_host_api_base: str = Field(
         default="http://127.0.0.1:8000/aina-host/v1",

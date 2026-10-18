@@ -1860,6 +1860,7 @@ def new_model_provider(data: ModelProviderCreate, *, existing_count: int) -> Mod
                 model=model.model,
                 enabled=model.enabled,
                 context_window_tokens=model.context_window_tokens,
+                accepts_images=model.accepts_images,
             )
             for model in data.models
         ],
@@ -1883,6 +1884,7 @@ def updated_model_provider(provider: ModelProviderRecord, data: ModelProviderUpd
             enabled=model.enabled,
             is_default=(current_models[model.id].is_default and model.enabled if model.id else False),
             context_window_tokens=model.context_window_tokens,
+            accepts_images=model.accepts_images,
         )
         for model in data.models
     ]
@@ -1940,6 +1942,7 @@ def default_model_runtime(providers: Iterable[ModelProviderRecord]) -> ModelRunt
                 model=model.model,
                 context_window_tokens=model.context_window_tokens,
                 timeout_seconds=provider.timeout_seconds,
+                accepts_images=model.accepts_images,
             )
     return None
 

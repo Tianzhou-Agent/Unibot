@@ -32,6 +32,8 @@ class ModelDefinitionInput(StrictModel):
         ge=MIN_CONTEXT_WINDOW_TOKENS,
         le=MAX_CONTEXT_WINDOW_TOKENS,
     )
+    # The model reads images (OpenAI-style ``image_url`` parts); AINA tools' image results are then shown to it.
+    accepts_images: bool = False
 
     @field_validator("name", "model")
     @classmethod
@@ -109,6 +111,8 @@ class ModelDefinition(StrictModel):
         ge=MIN_CONTEXT_WINDOW_TOKENS,
         le=MAX_CONTEXT_WINDOW_TOKENS,
     )
+    # The model reads images (OpenAI-style ``image_url`` parts); AINA tools' image results are then shown to it.
+    accepts_images: bool = False
 
 
 class ModelProviderRecord(StrictModel):
@@ -173,6 +177,7 @@ class ModelRuntimeConfig:
     model: str
     context_window_tokens: int
     timeout_seconds: float
+    accepts_images: bool = False
 
     @property
     def chat_completions_url(self) -> str:

@@ -7,6 +7,7 @@ export interface ModelDefinition {
   enabled: boolean;
   is_default: boolean;
   context_window_tokens: number;
+  accepts_images?: boolean;
 }
 
 export interface ModelProvider {
@@ -63,5 +64,6 @@ export interface ModelProviderPayload {
     model: string;
     enabled: boolean;
     context_window_tokens: number;
+    accepts_images: boolean;
   }>;
 }
