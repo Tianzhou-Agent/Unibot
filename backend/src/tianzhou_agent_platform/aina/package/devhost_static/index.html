@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aina dev</title>
+  <link rel="stylesheet" href="/dev/static/dev.css">
+</head>
+<body>
+  <header>
+    <strong id="app-name">aina dev</strong>
+    <span id="app-version" class="muted"></span>
+    <span id="status" class="chip">Loading…</span>
+    <span class="spacer"></span>
+    <span id="folder" class="muted mono"></span>
+    <button type="button" id="reload" title="Re-read the folder and list the MCP server's tools again">Reload</button>
+  </header>
+  <div id="problems" hidden></div>
+  <main>
+    <section id="canvas-pane" class="pane">
+      <h2 id="canvas-title">Canvas</h2>
+      <div id="canvas-box"><p class="muted">This package has no canvas.</p></div>
+    </section>
+    <aside>
+      <section class="pane">
+        <h2>Agent tools</h2>
+        <p class="muted">Call a tool as the agent would; its confirmation and result widgets render below.</p>
+        <select id="agent-tool" aria-label="Agent tool"></select>
+        <textarea id="agent-args" rows="5" spellcheck="false" aria-label="Agent tool arguments"></textarea>
+        <button type="button" id="agent-call" class="primary">Call as agent</button>
+        <div id="agent-out"></div>
+      </section>
+      <section class="pane">
+        <h2>Canvas tools</h2>
+        <p class="muted">Run a tool the open canvas registered, as the agent would.</p>
+        <select id="canvas-tool" aria-label="Canvas tool"></select>
+        <textarea id="canvas-args" rows="4" spellcheck="false" aria-label="Canvas tool arguments"></textarea>
+        <button type="button" id="canvas-call">Invoke on canvas</button>
+        <pre id="canvas-out" class="out" hidden></pre>
+        <h3>Model context</h3>
+        <pre id="model-context" class="out muted">(the canvas has not called setModelContext)</pre>
+      </section>
+      <section class="pane">
+        <h2>Installation</h2>
+        <p class="muted">Settings and permissions the dev user granted.</p>
+        <div id="scopes"></div>
+        <textarea id="config" rows="4" spellcheck="false" aria-label="Configuration (JSON)"></textarea>
+        <button type="button" id="install">Save and reinstall</button>
+      </section>
+    </aside>
+  </main>
+  <section id="log-pane" class="pane">
+    <h2>Requests <span class="muted">bridge, MCP and Host API</span></h2>
+    <ol id="log"></ol>
+  </section>
+  <script type="module" src="/dev/static/dev.js"></script>
+</body>
+</html>

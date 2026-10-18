@@ -133,6 +133,7 @@ export function DeveloperTokensPanel() {
           'aina init notes --id com.example.notes --name "Notes"',
           "python notes/server/main.py",
           "aina validate notes/package --live",
+          "aina dev notes/package",
           `aina publish notes/package --host ${hostUrl} --token <token>`,
         ].join("\n")}</pre>
       </section>

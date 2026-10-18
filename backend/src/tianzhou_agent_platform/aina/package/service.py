@@ -91,12 +91,15 @@ class AinaPackageService:
         self.box = SecretBox.from_settings(settings)
         self.tokens = ContextTokenSigner.from_settings(settings)
 
-    async def register(self, payload: bytes, *, credential: str | None = None, bundled: bool = False) -> AinaRecord:
+    async def register(
+        self, payload: bytes, *, credential: str | None = None, bundled: bool = False, replace: bool = False
+    ) -> AinaRecord:
         """Validate a package, snapshot its exposed MCP tools and register (or upgrade) the AINA.
 
         ``credential`` authenticates the registration-time ``tools/list`` of a ``bearer``/``api_key`` server; it
         is used once and never stored. ``bundled`` registers a first-party package shipped with Unibot (design §11),
-        whose content may change without a version bump between releases.
+        whose content may change without a version bump between releases. ``replace`` (``aina dev``) re-registers the
+        same version with new content and a fresh tool snapshot.
         """
         report = validate_package_archive(payload)
         manifest = require_valid_package(report)
@@ -122,7 +125,7 @@ class AinaPackageService:
             runtime = existing.manifest.runtime
             if not isinstance(runtime, PackageRuntimeDefinition) or runtime.bundled != bundled:
                 raise conflict(f"AINA {manifest.aina.id!r} is already registered with another runtime")
-            if existing.manifest.aina.version == manifest.aina.version and not bundled:
+            if existing.manifest.aina.version == manifest.aina.version and not (bundled or replace):
                 if runtime.archive_sha256 == report.archive_sha256:
                     return existing
                 raise conflict(

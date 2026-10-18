@@ -826,9 +826,10 @@ Resolved in rev 4 (each as recommended in rev 3):
 |---|---|
 | JSON Schema | [`aina.schema.json`](../backend/src/tianzhou_agent_platform/aina/package/aina.schema.json), linked at `spec/aina/2.0/aina.schema.json` |
 | Validator (§5.4), shared by host and CLI | [`aina/package/validation.py`](../backend/src/tianzhou_agent_platform/aina/package/validation.py) |
-| CLI `aina init` · `aina validate [--live]` · `aina pack` · `aina publish` | [`aina/package/cli.py`](../backend/src/tianzhou_agent_platform/aina/package/cli.py) |
+| CLI `aina init` · `aina validate [--live]` · `aina pack` · `aina publish` · `aina dev` | [`aina/package/cli.py`](../backend/src/tianzhou_agent_platform/aina/package/cli.py) |
 | `aina init` template (Notes app: tools of each effect, skill, canvas with a canvas tool, result widget, Host API storage) | [`aina/package/template/`](../backend/src/tianzhou_agent_platform/aina/package/template), [`aina/package/scaffold.py`](../backend/src/tianzhou_agent_platform/aina/package/scaffold.py) |
 | Developer tokens for `aina publish` (Settings → Developer) | [`api/developer_tokens.py`](../backend/src/tianzhou_agent_platform/api/developer_tokens.py), [`DeveloperTokensPanel.tsx`](../frontend/src/features/developer/DeveloperTokensPanel.tsx) |
+| `aina dev`: the real host in process with a developer page (canvas and widgets over the bridge, agent and canvas tools by hand, a log of bridge, MCP and Host API requests, reload on edit) | [`aina/package/devhost.py`](../backend/src/tianzhou_agent_platform/aina/package/devhost.py), [`devhost_static/`](../backend/src/tianzhou_agent_platform/aina/package/devhost_static) |
 | In-app creation: new-app project download, package upload review and registration | [`PackageDeveloper.tsx`](../frontend/src/components/apps/PackageDeveloper.tsx) |
 | Expenses example (package + MCP server) | [`examples/expenses-aina`](../examples/expenses-aina) |
 | MCP client (Streamable HTTP, or in-process server) | [`aina/package/mcp_client.py`](../backend/src/tianzhou_agent_platform/aina/package/mcp_client.py) |
@@ -860,7 +861,16 @@ publishes with `aina publish package --host <api base> --token <token>`; Plugins
 same checks and registers it from the browser. Developer tokens (`ubt_…`) are created in Settings → Developer, shown
 once, stored as a SHA-256 hash, expire after 30–365 days, and are accepted only on `POST` to the three package routes
 above, so they cannot read data or create other tokens. Registering still needs a platform admin; a local host without
-sign-in needs no token. Installing a package validates its settings, seals secrets, grants `storage`/`notify` automatically and
+sign-in needs no token.
+
+`aina dev package [--port 8790]` runs the full Unibot host in process (in-memory storage, no sign-in, no
+observability pipeline), registers the folder with `replace` (same version, new content, fresh tool snapshot) and
+installs it for the local user with every declared scope. Its page at `/` is a small host shell without a model: it
+embeds the canvas and widgets with the production bridge rules (app-visible tools only, confirmation before writes),
+calls model-visible tools as the agent would (approval with the confirmation widget, then the result widget and a
+`tool_result` event to the canvas; long-running tools start real tasks), invokes registered canvas tools, shows the
+canvas's model context, and edits settings and optional scopes. It re-registers when a file in the folder changes;
+Reload also lists the server's tools again. Packaged UI is served with `no-store` there. Installing a package validates its settings, seals secrets, grants `storage`/`notify` automatically and
 re-checks the tools as the installing user. Uninstall deletes the AINA's private storage unless `keep_data=true`. A package is stored as an ordinary `AinaRecord` whose runtime is `package`; the record's 1.0 fields
 are a projection of `aina.json`, so listing, install and grants keep one code path. The 2.0 path branches on the
 runtime type only, never on an AINA id.
@@ -1007,5 +1017,5 @@ runtime type only, never on an AINA id.
 Still open from P2: MCP OAuth 2.0 and notifications. Also still open:
 restricting what posted task Markdown can load, image results reaching vision-capable models, and from P4 the
 published `unibot-aina` / `@unibot/aina-ui` packages (the generated server's `requirements.txt` already names
-`unibot-aina`), `aina dev` and the Host API OpenAPI. P5 stops after Image Recognition: the remaining first-party AINAs
+`unibot-aina`) and the Host API OpenAPI. `aina dev` has no model: chat with a scripted or real model is not built. P5 stops after Image Recognition: the remaining first-party AINAs
 stay built in.
