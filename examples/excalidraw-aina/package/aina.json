@@ -4,7 +4,7 @@
 
   "aina": {
     "id": "local.excalidraw",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "name": "Excalidraw",
     "description": "Draw and edit diagrams on the local Excalidraw whiteboard at http://127.0.0.1:3000.",
     "publisher": { "id": "local", "name": "Local deployment" },
@@ -38,6 +38,9 @@
       "unlock_elements": { "effect": "write", "visibility": ["model"] },
       "set_viewport": { "effect": "write", "visibility": ["model"] },
       "snapshot_scene": { "effect": "write", "visibility": ["model"] },
+      "export_scene": { "effect": "write", "visibility": ["model"] },
+      "export_to_image": { "effect": "write", "visibility": ["model"], "timeout_seconds": 60 },
+      "import_scene": { "effect": "destructive", "visibility": ["model"] },
       "delete_element": { "effect": "destructive", "visibility": ["model"] },
       "restore_snapshot": { "effect": "destructive", "visibility": ["model"] },
       "clear_canvas": { "effect": "destructive", "visibility": ["model"] }
@@ -55,7 +58,15 @@
       "name": "Draw a diagram",
       "description": "Use when the user wants a flowchart, architecture sketch or other diagram drawn or changed on the whiteboard.",
       "path": "skills/draw-diagram",
-      "tools": ["read_diagram_guide", "describe_scene", "batch_create_elements", "create_from_mermaid", "set_viewport"]
+      "tools": [
+        "read_diagram_guide",
+        "describe_scene",
+        "batch_create_elements",
+        "create_from_mermaid",
+        "set_viewport",
+        "export_scene",
+        "export_to_image"
+      ]
     }
   ]
 }

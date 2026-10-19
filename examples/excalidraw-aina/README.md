@@ -30,9 +30,12 @@ Unibot must allow both origins: set `UNIBOT_CAPABILITY_ALLOWED_ORIGINS=http://12
 
 ## What is exposed
 
-22 of the server's 26 tools. Drawing and editing tools are `write`, so the user approves each call. Deleting
-elements, restoring a snapshot and clearing the board are `destructive`. These tools are left out:
+25 of the server's 26 tools:
 
-- `export_to_excalidraw_url`: uploads the diagram to excalidraw.com.
-- `export_scene`, `export_to_image` and `import_scene`: they read and write files on the machine that runs the
-  server.
+- **Read (never asks):** reading the guide, describing and querying the board, and taking a screenshot.
+- **Write (asks before the first call):** drawing and editing, snapshots, and saving the board as `.excalidraw`,
+  PNG or SVG. Files can only be saved in the Excalidraw checkout's `exports/` folder.
+- **Destructive (asks before every call):** deleting elements, restoring a snapshot, clearing the board, and
+  importing a scene, which can replace the board.
+
+`export_to_excalidraw_url` is left out, because it uploads the diagram to excalidraw.com.
