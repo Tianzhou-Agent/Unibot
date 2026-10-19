@@ -154,6 +154,7 @@ messages_table = Table(
     Column("tool_call_id", ID, nullable=True),
     Column("name", String(255), nullable=True),
     Column("widgets", JSON, nullable=False),
+    Column("attachments", JSON, nullable=False),
     Column("trace_id", ID, nullable=True),
     Column("created_at", TIMESTAMP, nullable=False),
     UniqueConstraint("conversation_id", "sequence_no", name="uq_unibot_messages_sequence"),
@@ -317,6 +318,22 @@ aina_files_table = Table(
     Column("updated_at", TIMESTAMP, nullable=False),
     Index("ix_unibot_aina_files_installation", "installation_key", "path"),
     Index("ix_unibot_aina_files_aina", "aina_id"),
+)
+
+# Files users attached to chat messages (conversations/attachments.py); the bytes live in the file blob store.
+chat_attachments_table = Table(
+    "unibot_chat_attachments",
+    repository_metadata,
+    Column("id", String(64), primary_key=True),  # the file_ref
+    Column("tenant_id", ACTOR, nullable=False),
+    Column("user_id", ACTOR, nullable=False),
+    Column("conversation_id", ID, nullable=False),
+    Column("name", String(255), nullable=False),
+    Column("content_type", String(160), nullable=False),
+    Column("size_bytes", Integer, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    Index("ix_unibot_chat_attachments_conversation", "conversation_id"),
 )
 
 aina_notifications_table = Table(

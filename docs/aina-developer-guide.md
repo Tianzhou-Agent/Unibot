@@ -249,7 +249,16 @@ or paused app stop working at once.
 | `remember(content)` | `POST /memory` (and `PATCH`/`DELETE /memory/{id}`) | `memory.write` |
 | `chat(messages)` | `POST /llm/chat` | `llm`: the user's own model, without tools |
 | `notify(title, body, opens=)` | `POST /notifications` | `notify` (granted automatically): an entry in the user's inbox; at most 30 per hour |
+| `passed_file(file_ref)` | `GET /files/{file_ref}` | none: a file the user attached, only when this call's arguments carried its `file_ref` |
 | `task_progress/complete/fail` | `/tasks/{id}/…` | the task's own invocation (§8) |
+
+**Files the user attaches.** The user can attach files (at most 10 per message, 20 MiB each) to a chat message. The
+model reads each file's name, type, size and `file_ref`, a string like `file_3f9c…`. To let a tool work on an
+attachment, give it a string argument for the file and describe it, for example
+`"file": {"type": "string", "description": "file_ref of the attached image"}`. The model then passes the ref, and the
+tool reads the file with `passed_file`, which returns its `name`, `content_type` and `data`. A tool can read only a
+file whose ref is somewhere in its own call's arguments, in the conversation of that call. Any other ref returns
+`None` (`404`). Refreshed task tokens keep the files of their call.
 
 The full API is described in [`host-api.openapi.json`](../spec/aina/2.0/host-api.openapi.json).
 

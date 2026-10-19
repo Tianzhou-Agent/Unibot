@@ -95,8 +95,17 @@ function BlockRenderer({ block }: { block: MessageBlock }) {
 }
 
 function FileChipPill({ file }: { file: FileChip }) {
+  const className = "inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border border-line bg-app-soft text-ink-muted text-[12px] font-semibold";
+  if (file.href) {
+    return (
+      <a href={file.href} download={file.name} className={classNames(className, "hover:text-accent")}>
+        <Paperclip className="w-3.5 h-3.5" />
+        {file.name}
+      </a>
+    );
+  }
   return (
-    <span className="inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border border-line bg-app-soft text-ink-muted text-[12px] font-semibold">
+    <span className={className}>
       <Paperclip className="w-3.5 h-3.5" />
       {file.name}
     </span>

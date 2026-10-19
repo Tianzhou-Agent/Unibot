@@ -39,6 +39,10 @@ export default {
   messageAria: "消息",
   stopAria: "停止生成",
   sendAria: "发送消息",
+  attachAria: "添加附件",
+  removeAttachment: "移除 {{name}}",
+  attachmentTooLarge: "{{name}} 超过 {{limit}} MB。",
+  tooManyAttachments: "每条消息最多附带 {{limit}} 个文件。",
   welcome: {
     title: "开始新对话",
     body: "Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",

@@ -244,6 +244,47 @@
         ]
       }
     },
+    "/files/{file_ref}": {
+      "get": {
+        "summary": "Passed File",
+        "description": "A file the user attached and this tool call was passed (its ``file_ref`` was in the call's arguments).\n\n``Content-Type`` is the file's type and ``Content-Disposition`` carries its name.",
+        "operationId": "passed_file_aina_host_v1_files__file_ref__get",
+        "parameters": [
+          {
+            "name": "file_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Ref"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "contextToken": []
+          }
+        ]
+      }
+    },
     "/llm/chat": {
       "post": {
         "summary": "Llm Chat",

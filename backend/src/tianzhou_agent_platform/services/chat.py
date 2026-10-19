@@ -56,6 +56,7 @@ class ChatService:
         trace_id: str | None = None,
     ) -> ChatResponse:
         conversation = await self._conversation(request)
+        attachments = await self.conversations.message_attachments(conversation, request.attachments)
         trace_id = trace_id or f"trace_{uuid4().hex}"
         await self.events.start(
             trace_id=trace_id,
@@ -84,7 +85,12 @@ class ChatService:
             async with self.stops.watch(conversation.id, trace_id) as stop:
                 with use_model_runtime(await self._model_runtime(request.user_id, request.tenant_id)):
                     response = await self.runner.run_turn(
-                        conversation, request, trace_id=trace_id, event_sink=event_sink, stop=stop
+                        conversation,
+                        request,
+                        trace_id=trace_id,
+                        event_sink=event_sink,
+                        stop=stop,
+                        attachments=attachments,
                     )
         except BaseException as exc:
             await self._fail_run(conversation.id, trace_id, exc)

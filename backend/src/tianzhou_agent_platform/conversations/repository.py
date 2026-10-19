@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
+from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.conversations.models import (
     Conversation,
     ConversationCreate,
@@ -38,6 +39,12 @@ class ConversationRepository(Protocol):
     ) -> list[Conversation]: ...
 
     async def require_workspace_actor(self, workspace_id: str, *, user_id: str, tenant_id: str) -> Workspace: ...
+
+    async def put_chat_attachment(self, attachment: Attachment) -> Attachment: ...
+
+    async def get_chat_attachment(self, file_ref: str) -> Attachment | None: ...
+
+    async def list_chat_attachments(self, file_refs: list[str]) -> list[Attachment]: ...
 
     async def append_messages(
         self, conversation_id: str, messages: Iterable[Message]

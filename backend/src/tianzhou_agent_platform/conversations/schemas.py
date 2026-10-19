@@ -11,11 +11,14 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetAinaUi, WidgetDefinition
+from tianzhou_agent_platform.conversations.attachments import MAX_ATTACHMENTS_PER_MESSAGE
 from tianzhou_agent_platform.core.base import StrictModel, Usage, utc_now
 
 
 class ChatRequest(StrictModel):
     message: str = Field(min_length=1)
+    # file_refs from POST /conversations/{id}/attachments; the files must belong to this conversation.
+    attachments: list[str] = Field(default_factory=list, max_length=MAX_ATTACHMENTS_PER_MESSAGE)
     ui_context: str | None = Field(
         default=None,
         max_length=4_000,

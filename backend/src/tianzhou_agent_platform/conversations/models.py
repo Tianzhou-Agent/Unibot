@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
+from tianzhou_agent_platform.conversations.attachments import MessageAttachment
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 
 
@@ -25,6 +26,8 @@ class Message(StrictModel):
     tool_call_id: str | None = None
     name: str | None = None
     widgets: list[WidgetDefinition] = Field(default_factory=list)
+    # Files the user attached to this message (user messages only).
+    attachments: list[MessageAttachment] = Field(default_factory=list, exclude_if=lambda value: not value)
     trace_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 

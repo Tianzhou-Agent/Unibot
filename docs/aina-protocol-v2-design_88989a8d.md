@@ -928,9 +928,15 @@ runtime type only, never on an AINA id.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
-- Host API: `storage/kv`, `storage/files`, the task callbacks, `token/refresh`, `documents`, `memory`, `llm` and
-  `notifications` are built. The storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per
-  value, 10 MiB and 10 000 keys per installation. `files/{file_ref}` (needs file attachments in chat, which Unibot does not have yet) and `sandbox` are not built. Audit is a
+- Chat attachments: the composer uploads files to `POST /conversations/{id}/attachments` (at most 10 per message,
+  20 MiB each) and the message names them by `file_ref`. The model sees an `<attachments>` block listing each file's
+  name, type, size and ref ([`attachments.py`](../backend/src/tianzhou_agent_platform/conversations/attachments.py)).
+  When a tool call's arguments contain refs of the conversation's attachments, its context token carries them in the
+  `files` claim. `GET /files/{file_ref}` serves only a ref in that claim, from the token's own conversation and user,
+  and answers `404` otherwise. `pickFile` and `download` on the UI bridge are not built.
+- Host API: `storage/kv`, `storage/files`, `files/{file_ref}`, the task callbacks, `token/refresh`, `documents`,
+  `memory`, `llm` and `notifications` are built. The storage quota is soft under concurrent writers (checked before each write); limits are 256 KiB per
+  value, 10 MiB and 10 000 keys per installation. `sandbox` is not built. Audit is a
   structured log line per call, not a trace span.
   - `POST /notifications` `{title ≤ 120, body ≤ 500, opens: app|conversation}` (scope `notify`, auto-granted) puts a
     plain-text entry in the user's inbox: a bell in the sidebar with the unread count

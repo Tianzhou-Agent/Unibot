@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -24,6 +26,15 @@ class HostApiError(Exception):
         super().__init__(message)
         self.status = status
         self.code = code
+
+
+@dataclass(frozen=True)
+class PassedFile:
+    """A file the user attached and this tool call was passed by its ``file_ref``."""
+
+    name: str
+    content_type: str
+    data: bytes
 
 
 class HostApi:
@@ -61,6 +72,17 @@ class HostApi:
         """A private file's bytes, or ``None`` when there is no such file."""
         response = await self._request("GET", f"/storage/files/{_path(path)}", missing_ok=True, raw=True)
         return None if response is None else bytes(response.content)
+
+    async def passed_file(self, file_ref: str) -> PassedFile | None:
+        """A file the user attached, when this call's arguments carried its ``file_ref``; else ``None``."""
+        response = await self._request("GET", f"/files/{_path(file_ref)}", missing_ok=True, raw=True)
+        if response is None:
+            return None
+        return PassedFile(
+            name=_file_name(response.headers.get("content-disposition", "")) or file_ref,
+            content_type=response.headers.get("content-type", "application/octet-stream").split(";")[0],
+            data=bytes(response.content),
+        )
 
     async def delete_file(self, path: str) -> None:
         await self._request("DELETE", f"/storage/files/{_path(path)}", missing_ok=True)
@@ -158,6 +180,14 @@ class HostApi:
         if raw:
             return response
         return response.json() if response.content else None
+
+
+def _file_name(disposition: str) -> str:
+    encoded = re.search(r"filename\*=UTF-8''([^;]+)", disposition)
+    if encoded:
+        return unquote(encoded.group(1).strip())
+    plain = re.search(r'filename="([^"]*)"', disposition)
+    return plain.group(1) if plain else ""
 
 
 def _path(value: str) -> str:
