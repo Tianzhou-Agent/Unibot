@@ -6,6 +6,12 @@ export default {
   pending: "待处理",
   failed: "失败",
   revision: "修订版本 {{revision}}",
+  panels: {
+    aria: "授权与任务",
+    approval: "授权确认",
+    previous: "上一个面板",
+    next: "下一个面板",
+  },
   status: {
     pending: "待处理",
     in_progress: "进行中",

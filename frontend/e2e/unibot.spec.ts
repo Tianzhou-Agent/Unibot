@@ -2258,6 +2258,105 @@ test("FE-E2E-004I 已完成的轮次折叠中间步骤并显示用时，停止�
   await expect(failedRow.getByText("调用参数", { exact: true })).toBeHidden();
 });
 
+test("running process stays on one updating line and expands after a reload", async ({ page }) => {
+  const message = (id: string, role: string, content: string, extra: JsonObject = {}) => ({
+    id, role, content, content_type: "text", widgets: [], created_at: NOW, ...extra,
+  });
+  const state = await installMockApi(page, {
+    conversations: [conversation({ run_status: "running", messages: [
+      message("user", "user", "Look up the workspace"),
+      message("progress", "assistant", "Checking workspace files.", {
+        reasoning: "Inspecting the available files.",
+        tool_calls: [{ id: "search", type: "function", function: { name: "browser.search", arguments: "{}" } }],
+      }),
+    ] })],
+  });
+  await page.goto("/chat/conv-e2e-1");
+  const toggle = page.getByRole("button", { name: "工具 联网搜索", exact: true });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("Checking workspace files.", { exact: true })).toBeHidden();
+  await expect(page.getByLabel("模型思考")).toBeHidden();
+  await expect(page.locator(".thinking-glow")).toHaveCount(1);
+  await toggle.click();
+  await expect(page.getByText("Checking workspace files.", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 browser.search 运行中", { exact: true })).toBeVisible();
+  await toggle.click();
+  (state.conversations[0].messages as JsonObject[]).push(message("next-step", "assistant", "Now reading the results."));
+  const updated = page.getByRole("button", { name: "回复中 Now reading the results.", exact: true });
+  await expect(updated).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".thinking-glow")).toHaveCount(1);
+  await page.reload();
+  await expect(updated).toHaveAttribute("aria-expanded", "false");
+  state.conversations[0].run_status = "idle";
+  (state.conversations[0].messages as JsonObject[]).push(message("answer", "assistant", "Here are the results."));
+  await expect(page.getByText("Here are the results.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^已完成/ })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("Now reading the results.", { exact: true })).toBeHidden();
+  await expect(page.locator(".thinking-glow")).toHaveCount(0);
+});
+
+test("streamed process updates a single collapsed line until expanded", async ({ page }) => {
+  await installMockApi(page, { conversations: [conversation()] });
+  await page.goto("/chat/conv-e2e-1");
+  await page.evaluate(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      if (!String(args[0]).endsWith("/chat/stream")) return originalFetch(...args);
+      return new Response(new ReadableStream({
+        start(controller) {
+          Object.assign(window, { sendProcessEvent: (event: Record<string, unknown>) => {
+            controller.enqueue(new TextEncoder().encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+          } });
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    };
+  });
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("Inspect my files");
+  await page.getByRole("button", { name: "发送消息" }).click();
+  await expect(page.locator(".thinking-glow")).toHaveCount(1);
+  const send = (event: JsonObject) => page.evaluate((payload) => {
+    (window as unknown as { sendProcessEvent: (event: Record<string, unknown>) => void }).sendProcessEvent(payload);
+  }, event);
+  await send({ type: "reasoning.delta", delta: "Checking available files" });
+  const thinking = page.getByRole("button", { name: "思考中 Checking available files", exact: true });
+  await expect(thinking).toHaveAttribute("aria-expanded", "false");
+  await send({ type: "reasoning.delta", delta: " and inspecting their contents" });
+  await expect(page.getByRole("button", { name: "思考中 Checking available files and inspecting their contents", exact: true })).toBeVisible();
+  await send({ type: "message.delta", delta: "I will search the workspace." });
+  await expect(page.getByRole("button", { name: "回复中 I will search the workspace.", exact: true })).toBeVisible();
+  await send({ type: "tool.requested", call_id: "search", name: "browser.search", arguments: "{}" });
+  const toggle = page.getByRole("button", { name: "工具 联网搜索", exact: true });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("I will search the workspace.", { exact: true })).toBeHidden();
+  await expect(page.locator(".thinking-glow")).toHaveCount(1);
+  await send({ type: "tool.completed", call_id: "search", status: "failed", result: JSON.stringify({ error: { code: "INVALID_REQUEST", message: "Expected a string argument" } }) });
+  await send({ type: "error", source: "capability", code: "INVALID_REQUEST" });
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await toggle.click();
+  await expect(page.getByText("I will search the workspace.", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("工具调用 browser.search 失败", { exact: true })).toContainText("Expected a string argument");
+  await toggle.click();
+  await send({ type: "reasoning.delta", delta: "I will correct the argument and try again." });
+  await expect(page.getByRole("button", { name: "思考中 I will correct the argument and try again.", exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await send({ type: "tool.requested", call_id: "read", name: "document.read", arguments: "{}" });
+  await expect(page.getByRole("button", { name: "工具 读取文档", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await send({ type: "message.delta", delta: "A very long progress update. ".repeat(100) });
+  const longToggle = page.getByRole("button", { name: /^回复中 A very long progress update/ });
+  await expect(longToggle).toHaveAttribute("aria-expanded", "false");
+  const typeLabel = longToggle.getByText("回复中", { exact: true });
+  await expect(typeLabel).toBeVisible();
+  await expect(typeLabel).toHaveCSS("flex-shrink", "0");
+  expect((await longToggle.boundingBox())!.height).toBeLessThan(40);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(typeLabel).toBeInViewport();
+  expect((await longToggle.boundingBox())!.height).toBeLessThan(40);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  // The same code in a terminal error envelope must still be shown.
+  await send({ type: "error", error: { code: "INVALID_REQUEST", message: "The run could not continue." } });
+  await expect(page.getByRole("alert")).toContainText("The run could not continue.");
+});
+
 test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page }) => {
   await installMockApi(page, {
     conversations: [conversation()],
@@ -3078,92 +3177,138 @@ test("FE-E2E-IR-004 历史消息的失败调用在对话中展示并跳转原始
   await expect(legacyTargetLog).toContainText(providerError);
 });
 
-test("FE-E2E-IR-005 能力调用失败在对话中持久展示并跳转原始日志", async ({ page }) => {
-  const conflictError = "The same capability call was already attempted in this run.";
-  await installMockApi(page, {
-    conversations: [conversation({
-      messages: [
-        { id: "msg-user-cap-fail", role: "user", content: "查看我的文档", content_type: "text", widgets: [], trace_id: "trace-cap-fail-e2e", created_at: NOW },
-        { id: "msg-asst-cap-fail", role: "assistant", content: "我查看了你的文档库，目前没有任何 Markdown 文档。", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
-      ],
-    })],
-    obsSessions: {
-      "conv-e2e-1": obsSessionDetail("conv-e2e-1", {
-        traces: [{
-          trace_id: "trace-cap-fail-e2e",
-          legacy_trace_id: null,
-          root_span_id: "span-cap-fail-e2e",
-          session_id: "conv-e2e-1",
-          user_id: "anonymous",
-          tenant_id: "default",
-          status: "completed",
-          started_at: NOW,
-          completed_at: NOW,
-          duration_ms: 120,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_read_tokens: 0,
-          message_count: 1,
-          compression_count: 0,
-          error_count: 1,
-          attributes: {},
-        }],
-        events: [
-          { event_id: "ev-cap-1", trace_id: "trace-cap-fail-e2e", span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "查看我的文档" } },
+for (const traceStatus of ["running", "completed", "failed"]) {
+  test(`FE-E2E-IR-005 only failed turns show capability error notices (${traceStatus})`, async ({ page }) => {
+    const conflictError = "The same capability call was already attempted in this run.";
+    await installMockApi(page, {
+      conversations: [conversation({
+        messages: [
+          { id: "msg-user-cap-fail", role: "user", content: "查看我的文档", content_type: "text", widgets: [], trace_id: "trace-cap-fail-e2e", created_at: NOW },
+          { id: "msg-asst-cap-fail", role: "assistant", content: "我查看了你的文档库，目前没有任何 Markdown 文档。", content_type: "text", widgets: [], trace_id: null, created_at: NOW },
         ],
-        spans: [
-          obsSpan({
-            span_id: "span-cap-fail-e2e",
-            otel_span_id: "otel-cap-fail-e2e",
+      })],
+      obsSessions: {
+        "conv-e2e-1": obsSessionDetail("conv-e2e-1", {
+          traces: [{
             trace_id: "trace-cap-fail-e2e",
-            parent_span_id: null,
-            sequence_no: 1,
-            kind: "tool",
-            name: "builtin_document_list_81bfc296",
-            target_id: "document.list",
-            status: "failed",
+            legacy_trace_id: null,
+            root_span_id: "span-cap-fail-e2e",
+            session_id: "conv-e2e-1",
+            user_id: "anonymous",
+            tenant_id: "default",
+            status: traceStatus,
+            started_at: NOW,
+            completed_at: NOW,
             duration_ms: 120,
-            input: { query: "all" },
-            output: null,
-            error: { code: "CONFLICT", message: conflictError, retryable: false },
-          }),
-        ],
-      }),
-    },
-  });
-  await page.route("**/api/traces*", (route) => json(route, [{
-    trace_id: "trace-cap-fail-e2e",
-    conversation_id: "conv-e2e-1",
-    user_id: "anonymous",
-    tenant_id: "default",
-    status: "completed",
-    events: [{ timestamp: NOW, kind: "user.request", status: "completed", details: { content: "查看我的文档" } }],
-    root_span_id: "span-cap-fail-e2e",
-    spans: [{
-      span_id: "span-cap-fail-e2e",
-      parent_span_id: null,
-      kind: "tool",
-      name: "builtin_document_list_81bfc296",
-      status: "failed",
-      target_id: "document.list",
-      started_at: NOW,
-      completed_at: NOW,
-      duration_ms: 120,
-      input: { query: "all" },
-      output: null,
-      attributes: {},
-      error: { code: "CONFLICT", message: conflictError, retryable: false },
-    }],
-  }]));
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            message_count: 1,
+            compression_count: 0,
+            error_count: 1,
+            attributes: {},
+          }],
+          events: [
+            { event_id: "ev-cap-1", trace_id: "trace-cap-fail-e2e", span_id: null, name: "user.request", status: "completed", occurred_at: NOW, attributes: { content: "查看我的文档" } },
+          ],
+          spans: [
+            obsSpan({
+              span_id: "span-cap-fail-e2e",
+              otel_span_id: "otel-cap-fail-e2e",
+              trace_id: "trace-cap-fail-e2e",
+              parent_span_id: null,
+              sequence_no: 1,
+              kind: "tool",
+              name: "builtin_document_list_81bfc296",
+              target_id: "document.list",
+              status: "failed",
+              duration_ms: 120,
+              input: { query: "all" },
+              output: null,
+              error: { code: "CONFLICT", message: conflictError, retryable: false },
+            }),
+          ],
+        }),
+      },
+    });
+    await page.route("**/api/traces*", (route) => json(route, [{
+      trace_id: "trace-cap-fail-e2e",
+      conversation_id: "conv-e2e-1",
+      user_id: "anonymous",
+      tenant_id: "default",
+      status: traceStatus,
+      events: [{ timestamp: NOW, kind: "user.request", status: "completed", details: { content: "查看我的文档" } }],
+      root_span_id: "span-cap-fail-e2e",
+      spans: [{
+        span_id: "span-cap-fail-e2e",
+        parent_span_id: null,
+        kind: "tool",
+        name: "builtin_document_list_81bfc296",
+        status: "failed",
+        target_id: "document.list",
+        started_at: NOW,
+        completed_at: NOW,
+        duration_ms: 120,
+        input: { query: "all" },
+        output: null,
+        attributes: {},
+        error: { code: "CONFLICT", message: conflictError, retryable: false },
+      }],
+    }]));
 
-  await page.goto("/chat/conv-e2e-1");
-  await expect(page.getByRole("alert")).toContainText(`document.list: ${conflictError}`);
-  await expect(page.getByRole("alert")).toContainText("CONFLICT");
-  const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
-  await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e");
-  await chatLogLink.click();
-  await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e$/);
-});
+    await page.goto("/chat/conv-e2e-1");
+    await expect(page.getByText("我查看了你的文档库，目前没有任何 Markdown 文档。", { exact: true })).toBeVisible();
+    if (traceStatus !== "failed") {
+      await expect(page.getByRole("alert")).toHaveCount(0);
+      await page.reload();
+      await expect(page.getByText("我查看了你的文档库，目前没有任何 Markdown 文档。", { exact: true })).toBeVisible();
+      await expect(page.getByRole("alert")).toHaveCount(0);
+      return;
+    }
+    await expect(page.getByRole("alert")).toContainText(`document.list: ${conflictError}`);
+    await expect(page.getByRole("alert")).toContainText("CONFLICT");
+    const chatLogLink = page.getByRole("link", { name: "查看原始日志", exact: true });
+    await expect(chatLogLink).toHaveAttribute("href", "/obs?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e");
+    await chatLogLink.click();
+    await expect(page).toHaveURL(/\/obs\?sessionId=conv-e2e-1&tab=logs&traceId=trace-cap-fail-e2e$/);
+  });
+}
+
+for (const runStatus of ["running", "approval_required", "stopped", "failed"]) {
+  test(`answer actions wait for the completed turn (${runStatus})`, async ({ page }) => {
+    const message = (id: string, role: string, content: string, extra: JsonObject = {}) => ({
+      id, role, content, content_type: "text", widgets: [], created_at: NOW, ...extra,
+    });
+    const messages = [
+      message("previous-user", "user", "Earlier question"),
+      message("previous-answer", "assistant", "Earlier completed answer"),
+      message("current-user", "user", "Draw a workflow"),
+      message("progress", "assistant", "First I will load the tools.", {
+        tool_calls: [{ id: "load-tools", type: "function", function: { name: "load_tools", arguments: "{}" } }],
+      }),
+      message("tool-result", "tool", "Tools loaded", { tool_call_id: "load-tools", name: "load_tools" }),
+      message("partial-answer", "assistant", "Now I will draw the workflow."),
+    ];
+    const state = await installMockApi(page, {
+      conversations: [conversation({ run_status: runStatus, messages })],
+    });
+    await page.goto("/chat/conv-e2e-1");
+    await expect(page.getByText("Now I will draw the workflow.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "点赞回答 previous-answer", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /(?:点赞|点踩)回答 (?:progress|partial-answer)$/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "复制", exact: true })).toHaveCount(1);
+
+    state.conversations[0].run_status = "idle";
+    messages.push(message("final-answer", "assistant", "The workflow is ready."));
+    await page.reload();
+    await expect(page.getByRole("button", { name: "点赞回答 final-answer", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "点踩回答 final-answer", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /^已完成/ }).click();
+    await expect(page.getByText("First I will load the tools.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /(?:点赞|点踩)回答 (?:progress|partial-answer)$/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "复制", exact: true })).toHaveCount(2);
+  });
+}
 
 test("FE-E2E-IR-002 普通用户提交、修改和取消回答反馈", async ({ page }) => {
   await installMockApi(page, {
@@ -3553,6 +3698,67 @@ test("FE-E2E-007 拒绝高风险审批并恢复空闲状态", async ({ page }) =
   await expect(page.locator("main").getByText("The requested operation was cancelled.", { exact: true })).toBeVisible();
   expect(state.approvals[0].status).toBe("denied");
 });
+
+for (const hasTasks of [false, true]) {
+  test(`approval occupies the todo slot and disappears on confirm (todos: ${hasTasks})`, async ({ page }) => {
+    const pendingApproval = {
+      id: "approval-panel", conversation_id: "conv-e2e-1", user_id: "anonymous", tenant_id: "default",
+      trace_id: "trace-approval-panel", status: "pending", created_at: NOW, resolved_at: null,
+      capability_names: ["Send message"],
+      tool_calls: [{ id: "send", type: "function", function: { name: "tool_demo_send", arguments: "{}" } }],
+    };
+    const state = await installMockApi(page, {
+      conversations: [conversation({ run_status: "approval_required" })], approvals: [pendingApproval],
+    });
+    await page.route("**/tasks?*", (route) => json(route, {
+      session_id: "conv-e2e-1", revision: 1,
+      tasks: hasTasks ? [{ task_id: "todo", title: "Send the report", status: "pending", depth: 0, children: [] }] : [],
+    }));
+    let finishApproval!: () => void;
+    const approvalGate = new Promise<void>((resolve) => { finishApproval = resolve; });
+    await page.route("**/approvals/approval-panel/confirm", async (route) => {
+      await approvalGate;
+      state.approvals[0].status = "approved";
+      state.conversations[0].run_status = "idle";
+      await json(route, { conversation_id: "conv-e2e-1", status: "completed", widgets: [], trace_id: "trace-approval-panel" });
+    });
+    await page.goto("/chat/conv-e2e-1");
+    const approval = page.getByRole("region", { name: "授权确认", exact: true });
+    const tasks = page.getByRole("region", { name: "任务进度", exact: true });
+    const pager = page.getByRole("navigation", { name: "授权与任务", exact: true });
+    const input = page.getByRole("textbox", { name: "消息", exact: true });
+    await expect(approval).toBeVisible();
+    await expect(page.locator("[aria-live=polite]").getByRole("region", { name: "授权确认", exact: true })).toHaveCount(0);
+    const approvalBox = (await approval.boundingBox())!;
+    expect(approvalBox.y + approvalBox.height).toBeLessThan((await input.boundingBox())!.y);
+    if (hasTasks) {
+      await expect(pager).toContainText("1 / 2");
+      await expect(tasks).toBeHidden();
+      await pager.getByRole("button", { name: "下一个面板" }).click();
+      await expect(tasks).toBeVisible();
+      await expect(approval).toBeHidden();
+      await expect(pager).toContainText("2 / 2");
+      await tasks.getByRole("button").click();
+      await expect(tasks.getByText("Send the report", { exact: true })).toBeVisible();
+      await pager.getByRole("button", { name: "上一个面板" }).click();
+      await expect(approval).toBeVisible();
+      await expect(tasks).toBeHidden();
+    } else {
+      await expect(pager).toHaveCount(0);
+    }
+    await approval.getByRole("button", { name: "允许", exact: true }).click();
+    await expect(approval).toHaveCount(0);
+    await expect(pager).toHaveCount(0);
+    if (hasTasks) {
+      await expect(tasks).toBeVisible();
+      await expect(tasks.getByText("Send the report", { exact: true })).toBeVisible();
+    }
+    finishApproval();
+    await expect.poll(() => state.approvals[0].status).toBe("approved");
+    await expect(input).toBeEnabled();
+    await expect(approval).toHaveCount(0);
+  });
+}
 
 test("FE-E2E-008 在章节 Widget 中选择并查看文档内容", async ({ page }) => {
   const outlineWidget = {

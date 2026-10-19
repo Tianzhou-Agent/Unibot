@@ -28,11 +28,13 @@ export function UserMessage({ content, files }: { content: string; files?: FileC
 export function AssistantMessage({
   message,
   conversationId,
+  showActions = true,
   onChoice,
   onConfirm,
 }: {
   message: ChatMessage;
   conversationId?: string;
+  showActions?: boolean;
   onChoice?: (choiceId: string) => void;
   onConfirm?: (action: "confirm" | "cancel") => void;
 }) {
@@ -53,7 +55,7 @@ export function AssistantMessage({
           }}
         />
       ) : null}
-      {message.role === "assistant" ? <AgentActions message={message} conversationId={conversationId} /> : null}
+      {message.role === "assistant" && showActions ? <AgentActions message={message} conversationId={conversationId} /> : null}
     </div>
   );
 }

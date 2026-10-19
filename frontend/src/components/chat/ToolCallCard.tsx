@@ -173,7 +173,7 @@ function ToolPayload({ label, value, compact, separated = false }: { label: stri
   );
 }
 
-function toolLabel(name: string): string {
+export function toolLabel(name: string): string {
   const value = name.toLowerCase();
   if (value.startsWith("aina_") || value.includes("open_app") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
   if (value.includes("list_app")) return i18n.t("chat:tool.label.listApps");

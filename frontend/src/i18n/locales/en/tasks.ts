@@ -6,6 +6,12 @@ export default {
   pending: "Pending",
   failed: "Failed",
   revision: "Revision {{revision}}",
+  panels: {
+    aria: "Approval and tasks",
+    approval: "Approval",
+    previous: "Previous panel",
+    next: "Next panel",
+  },
   status: {
     pending: "Pending",
     in_progress: "In progress",
