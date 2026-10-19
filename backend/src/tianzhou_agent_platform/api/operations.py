@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any, cast
+import logging
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Query, Request
 
@@ -19,6 +20,8 @@ from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.observability.query import ObsQueryService
 from tianzhou_agent_platform.observability.analytics import OperationsAnalyticsService, operations_bounds
 
+logger = logging.getLogger(__name__)
+
 
 def _obs_query(request: Request) -> ObsQueryService:
     query = getattr(request.app.state, "obs_query", None)
@@ -32,6 +35,50 @@ def _operations_analytics(request: Request) -> OperationsAnalyticsService:
     if service is None:
         raise RuntimeError("Operations analytics service is not initialized")
     return cast(OperationsAnalyticsService, service)
+
+
+async def _reconcile_schedule_approval(
+    request: Request,
+    approval: ApprovalRecord,
+    response: ChatResponse | None,
+    *,
+    status: Literal["succeeded", "failed", "approval_required"] | None = None,
+    error: str | None = None,
+) -> None:
+    """Update a scheduled run that paused for this approval; other approvals are a no-op."""
+    scheduler = getattr(request.app.state, "aina_scheduler", None)
+    if scheduler is None:
+        return
+    if response is not None:
+        if response.status == "completed":
+            status = "succeeded"
+        elif response.status == "approval_required":
+            status = "approval_required"
+        else:
+            status = "failed"
+        error = response.content if status == "failed" else None
+    result = (
+        response.model_dump(mode="json")
+        if response is not None
+        else {
+            "conversation_id": approval.conversation_id,
+            "status": "failed",
+            "content": error or "The scheduled operation was denied.",
+        }
+    )
+    try:
+        await scheduler.reconcile_approval(
+            approval.conversation_id,
+            user_id=approval.user_id,
+            tenant_id=approval.tenant_id,
+            status=status or "failed",
+            error=error,
+            result=result,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to reconcile schedule approval", extra={"approval_id": approval.id}
+        )
 
 
 def create_operations_router() -> APIRouter:
@@ -201,12 +248,15 @@ def create_operations_router() -> APIRouter:
         request: Request,
     ) -> ChatResponse:
         scoped = bind_actor(request, payload)
-        return await chat_service(request).confirm(
+        approval: ApprovalRecord = await conversation_service(request).get_approval(approval_id)
+        response: ChatResponse = await chat_service(request).confirm(
             approval_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
             edited_arguments=scoped.edited_arguments,
         )
+        await _reconcile_schedule_approval(request, approval, response)
+        return response
 
     @router.post("/approvals/{approval_id}/deny", response_model=ApprovalRecord)
     async def deny_approval(
@@ -215,11 +265,20 @@ def create_operations_router() -> APIRouter:
         request: Request,
     ) -> ApprovalRecord:
         scoped = bind_actor(request, payload)
-        return await chat_service(request).deny(
+        approval: ApprovalRecord = await conversation_service(request).get_approval(approval_id)
+        denied: ApprovalRecord = await chat_service(request).deny(
             approval_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
         )
+        await _reconcile_schedule_approval(
+            request,
+            approval,
+            None,
+            status="failed",
+            error="The scheduled operation was denied.",
+        )
+        return denied
 
     @router.get("/approvals", response_model=list[ApprovalRecord])
     async def list_approvals(

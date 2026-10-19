@@ -288,6 +288,61 @@ class AinaScheduler:
                 input_override=input_override,
             )
 
+    async def reconcile_approval(
+        self,
+        conversation_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        status: Literal["succeeded", "failed", "approval_required"],
+        error: str | None,
+        result: dict[str, Any] | None,
+    ) -> None:
+        """Carry a conversation approval outcome back to the schedule run that paused for it.
+
+        The schedule stores the dispatch-time snapshot, so a run that asked for approval first appears as
+        ``approval_required``. When the user confirms or denies it in any client, the task and its execution
+        record should show the outcome instead of staying pending forever. Only the snapshot that still points
+        at this conversation is updated; later scheduled runs are left alone.
+        """
+        finished = datetime.now(UTC)
+        for task in await self.repository.list_scheduled_aina_tasks(user_id=user_id, tenant_id=tenant_id):
+            snapshot = task.last_result or {}
+            if task.last_status != "approval_required" or snapshot.get("conversation_id") != conversation_id:
+                continue
+            await self.repository.put_scheduled_aina_task(
+                task.model_copy(
+                    update={
+                        "last_status": status,
+                        "last_error": error,
+                        "last_result": result,
+                        "updated_at": finished,
+                    },
+                    deep=True,
+                )
+            )
+            for execution in await self.repository.list_scheduled_aina_executions(task.id, limit=200):
+                execution_snapshot = execution.result or {}
+                if (
+                    execution.status != "approval_required"
+                    or execution_snapshot.get("conversation_id") != conversation_id
+                ):
+                    continue
+                await self.repository.put_scheduled_aina_execution(
+                    execution.model_copy(
+                        update={
+                            "status": status,
+                            "error": error,
+                            "result": result,
+                            "finished_at": finished,
+                            "duration_ms": max(
+                                0.0, (finished - execution.started_at).total_seconds() * 1000
+                            ),
+                        },
+                        deep=True,
+                    )
+                )
+
     async def validate_task(
         self,
         task: ScheduledAinaTask | ScheduledAinaTaskCreate,

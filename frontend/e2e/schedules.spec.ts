@@ -75,10 +75,26 @@ async function installScheduleApi(page: Page, options: { apps?: AinaRecord[]; ap
     if (task && method === "POST" && path.endsWith("/run")) {
       const payload = request.postDataJSON();
       state.debugInputs.push(payload);
+      const approval = options.approval
+        ? {
+            id: "approval-debug",
+            conversation_id: "conv-scheduled-run",
+            user_id: task.user_id,
+            tenant_id: task.tenant_id,
+            trace_id: "trace-scheduled-run",
+            tool_calls: [
+              { id: "call-debug", type: "function", function: { name: "run_python", arguments: "print(1)" } },
+            ],
+            capability_names: ["Run Python"],
+            status: "pending",
+            created_at: NOW,
+          }
+        : null;
       const result = {
         conversation_id: "conv-scheduled-run", trace_id: "trace-scheduled-run",
         content: options.approval ? "请确认本次操作。" : "已完成今天的摘要。",
         status: options.approval ? "approval_required" : "completed",
+        approval,
       };
       const execution: ScheduledAinaExecution = {
         id: "execution-debug", task_id: task.id, aina_id: task.aina_id,
@@ -90,6 +106,20 @@ async function installScheduleApi(page: Page, options: { apps?: AinaRecord[]; ap
       state.executions.unshift(execution);
       Object.assign(task, { last_status: execution.status, last_result: result, last_run_at: NOW });
       return json(route, task);
+    }
+    if (method === "POST" && path === "/approvals/approval-debug/confirm") {
+      const response = {
+        conversation_id: "conv-scheduled-run", message_id: "msg-after-approval",
+        content: "审批已通过，任务完成。", status: "completed", trace_id: "trace-scheduled-run",
+        iterations: 1, usage: { input_tokens: 1, output_tokens: 1, estimated: false },
+        approval: null, widgets: [],
+      };
+      const task = state.tasks[0];
+      if (task) Object.assign(task, { last_status: "succeeded", last_result: response, last_error: null });
+      if (state.executions[0]) {
+        Object.assign(state.executions[0], { status: "succeeded", result: response, finished_at: NOW, duration_ms: 1200 });
+      }
+      return json(route, response);
     }
     if (method === "GET") return json(route, []);
     return json(route, { error: { user_message: `Unhandled: ${method} ${path}` } }, 501);
@@ -163,7 +193,7 @@ test("指定内置、远程或托管应用并支持编辑切换为 Agent 模式"
   expect(state.patches.at(-1)?.aina_id).toBe("");
 });
 
-test("需要审批的任务显示待确认并提供继续确认入口", async ({ page }) => {
+test("需要审批的任务可在任务卡片直接确认，并把最终结果写回任务与历史", async ({ page }) => {
   await installScheduleApi(page, { approval: true });
   await page.goto("/schedules");
   await page.getByRole("button", { name: "新建任务", exact: true }).click();
@@ -171,8 +201,18 @@ test("需要审批的任务显示待确认并提供继续确认入口", async ({
   await page.getByRole("button", { name: "保存任务", exact: true }).click();
   await page.getByRole("button", { name: "立即调试", exact: true }).click();
   await page.getByRole("button", { name: "运行此任务", exact: true }).click();
-  await expect(page.getByText("任务需要确认，请打开运行对话处理审批。", { exact: true })).toBeVisible();
-  await expect(page.getByText("待确认", { exact: true })).toHaveCount(2);
+
+  await expect(page.getByText("1 个任务等待确认", { exact: true })).toBeVisible();
+  await expect(page.getByText("本次运行需要确认", { exact: true })).toBeVisible();
+  await expect(page.getByText("需要确认 · Run Python", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "打开运行对话并确认", exact: true })).toHaveAttribute("href", "/chat/conv-scheduled-run");
   await expect(page.getByText("任务调试失败。", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "允许", exact: true }).click();
+  await expect(page.getByText("已确认，任务继续执行并写回结果。", { exact: true })).toBeVisible();
+  await expect(page.getByText("审批已通过，任务完成。", { exact: true })).toBeVisible();
+  await expect(page.getByText("成功", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("1 个任务等待确认", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("本次运行需要确认", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "查看运行对话", exact: true })).toHaveAttribute("href", "/chat/conv-scheduled-run");
 });

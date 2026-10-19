@@ -296,6 +296,82 @@ def test_scheduled_agent_preserves_pending_approval_without_executing_the_tool()
     assert invoked == []
 
 
+def test_scheduled_approval_confirmation_updates_the_task_and_execution() -> None:
+    invoked: list[httpx.Request] = []
+
+    async def remote(request: httpx.Request) -> httpx.Response:
+        invoked.append(request)
+        return httpx.Response(200, json={"sent": True})
+
+    llm = ScriptedLLM([call_first_tool(description_contains="Scheduled high-risk send"), assistant("发送完成")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(remote))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        assert (
+            client.post(
+                "/tools",
+                json={
+                    "tool_id": "scheduled.send",
+                    "name": "Scheduled send",
+                    "description": "Scheduled high-risk send.",
+                    "input_schema": {"type": "object"},
+                    "endpoint": "https://tool.invalid/send",
+                    "side_effect_level": "high",
+                },
+            ).status_code
+            == 201
+        )
+        created = client.post("/aina-schedules", json={"name": "Approval Agent", "prompt": "Send a message"}).json()
+        pending = client.post(f"/aina-schedules/{created['id']}/run", json={}).json()
+        approval = pending["last_result"]["approval"]
+        confirmed = client.post(f"/approvals/{approval['id']}/confirm", json={})
+        stored = client.get("/aina-schedules").json()[0]
+        history = client.get(f"/aina-schedules/{created['id']}/executions").json()
+        conversation = client.get(f"/conversations/{pending['last_result']['conversation_id']}").json()
+
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "completed"
+    assert stored["last_status"] == "succeeded"
+    assert stored["last_result"]["status"] == "completed"
+    assert stored["last_result"]["content"] == "发送完成"
+    assert history[0]["status"] == "succeeded"
+    assert history[0]["result"] == stored["last_result"]
+    assert history[0]["finished_at"]
+    assert conversation["run_status"] == "idle"
+    assert len(invoked) == 1
+
+
+def test_scheduled_approval_denial_marks_the_run_failed() -> None:
+    llm = ScriptedLLM([call_first_tool(description_contains="Scheduled high-risk send")])
+    capability_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=capability_client)) as client:
+        assert (
+            client.post(
+                "/tools",
+                json={
+                    "tool_id": "scheduled.send",
+                    "name": "Scheduled send",
+                    "description": "Scheduled high-risk send.",
+                    "input_schema": {"type": "object"},
+                    "endpoint": "https://tool.invalid/send",
+                    "side_effect_level": "high",
+                },
+            ).status_code
+            == 201
+        )
+        created = client.post("/aina-schedules", json={"name": "Approval Agent", "prompt": "Send a message"}).json()
+        pending = client.post(f"/aina-schedules/{created['id']}/run", json={}).json()
+        approval = pending["last_result"]["approval"]
+        denied = client.post(f"/approvals/{approval['id']}/deny", json={})
+        stored = client.get("/aina-schedules").json()[0]
+        history = client.get(f"/aina-schedules/{created['id']}/executions").json()
+
+    assert denied.status_code == 200
+    assert stored["last_status"] == "failed"
+    assert stored["last_error"] == "The scheduled operation was denied."
+    assert history[0]["status"] == "failed"
+    assert history[0]["error"] == stored["last_error"]
+
+
 def test_schedule_owner_is_bound_to_authentication_and_isolates_execution_history() -> None:
     app = create_app(settings=_settings(), llm=ScriptedLLM([assistant("Owner result")]), enforce_auth=True)
     with TestClient(app) as client:
