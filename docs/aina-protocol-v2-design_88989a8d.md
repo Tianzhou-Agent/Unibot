@@ -304,7 +304,7 @@ must load remote content is declared as a URL canvas instead (§9.1).
 - `aina.json` is the source of skill metadata. A `SKILL.md` may keep a YAML frontmatter block for compatibility with
   existing Agent Skills folders. If present, its `name` and `description` must match `aina.json`, and the host strips
   the block before loading.
-- `canvas.url` must be HTTPS, must pass the admin origin allowlist, and must not be a Unibot or `aina-ui` origin.
+- `canvas.url` must be HTTPS (plain HTTP only on a loopback host, for development), must pass the admin origin allowlist, and must not be a Unibot or `aina-ui` origin.
 - Tool names are unique across `tools.expose` and `canvas.tools`.
 - **Model-facing text** (`aina.description`, `skills[].description`, skill bodies, MCP and canvas tool descriptions)
   must be English; the validator warns on non-ASCII model-facing text.

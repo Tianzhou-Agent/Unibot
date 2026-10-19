@@ -308,7 +308,7 @@ UI can never approve on the user's behalf. Use the `--aina-*` CSS variables (or 
 
 The canvas is the app's main screen, opened beside the conversation. Set `canvas.entry` to an HTML file in the package.
 
-You can set `canvas.url` instead, for a web app you host on HTTPS. That page gets a short-lived identity token from
+You can set `canvas.url` instead, for a web app you host on HTTPS (or plain HTTP on `localhost`/`127.0.0.1` while you develop). That page gets a short-lived identity token from
 `host.getIdentityToken()`; your backend checks it with `ContextVerifier.verify_identity_token`.
 
 ### Canvas tools

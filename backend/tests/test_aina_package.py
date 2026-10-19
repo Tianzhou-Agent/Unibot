@@ -261,6 +261,13 @@ def test_validator_rejects_skill_folder_and_file_rules(files: dict[str, bytes], 
     assert any(expected in error for error in report.errors), report.errors
 
 
+@pytest.mark.parametrize("url", ["http://127.0.0.1:3000/", "http://localhost:3000", "https://draw.example.com/"])
+def test_a_url_canvas_may_be_plain_http_only_on_loopback(url: str) -> None:
+    files = _with_manifest(_with_manifest(_example_files(), _drop("canvas.entry")), _set("canvas.url", url))
+
+    assert validate_package_files(files).valid
+
+
 def test_non_english_model_text_is_a_warning_not_an_error() -> None:
     files = _with_manifest(_example_files(), _set("aina.description", "记录用户的支出。"))
 

@@ -4,7 +4,7 @@
 
   "aina": {
     "id": "local.excalidraw",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "name": "Excalidraw",
     "description": "Draw and edit diagrams on the local Excalidraw whiteboard at http://127.0.0.1:3000.",
     "publisher": { "id": "local", "name": "Local deployment" },
@@ -42,6 +42,11 @@
       "restore_snapshot": { "effect": "destructive", "visibility": ["model"] },
       "clear_canvas": { "effect": "destructive", "visibility": ["model"] }
     }
+  },
+
+  "canvas": {
+    "url": "http://127.0.0.1:3000/",
+    "title": "Whiteboard"
   },
 
   "skills": [

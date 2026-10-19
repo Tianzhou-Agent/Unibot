@@ -8,7 +8,7 @@ Everything Unibot needs is in `package/aina.json` and one skill.
 |---|---|
 | Tools | The Excalidraw MCP server, served over HTTP by `bridge/serve-http.mjs` |
 | Skills | `package/skills/draw-diagram/` |
-| Canvas | None: open the whiteboard at http://127.0.0.1:3000. A URL canvas must be `https://` |
+| Canvas | The whiteboard itself, `http://127.0.0.1:3000/`, as a URL canvas |
 
 ## Why a bridge
 
@@ -24,7 +24,8 @@ aina validate examples/excalidraw-aina/package --live
 aina publish examples/excalidraw-aina/package --host http://127.0.0.1:8000 --token <developer token>
 ```
 
-Unibot must allow the MCP origin: set `UNIBOT_CAPABILITY_ALLOWED_ORIGINS=http://127.0.0.1:3001`. Then install
+Unibot must allow both origins: set `UNIBOT_CAPABILITY_ALLOWED_ORIGINS=http://127.0.0.1:3001` for the tools and
+`UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS=http://127.0.0.1:3000` for the whiteboard. Then install
 **Excalidraw** from the Plugins page and ask, for example, "draw our login flow on the whiteboard".
 
 ## What is exposed
