@@ -300,3 +300,34 @@ async def test_silent_timeouts_are_retried_a_bounded_number_of_times(monkeypatch
     with pytest.raises(openai.APITimeoutError):
         await _reasoning_model()._agenerate([HumanMessage(content="hi")])
     assert len(attempts) == 2
+
+
+def test_tool_results_still_follow_their_call_when_a_sibling_call_left_the_scope() -> None:
+    from tianzhou_agent_platform.services.agent_integration.capabilities import provider_messages_for_scope
+
+    messages = [
+        {"role": "user", "content": "Draw and save"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "old", "type": "function", "function": {"name": "left_scope", "arguments": "{}"}},
+                {"id": "new", "type": "function", "function": {"name": "in_scope", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "old", "content": "earlier result"},
+        {"role": "tool", "tool_call_id": "new", "content": "current result"},
+        {"role": "assistant", "content": "Done"},
+    ]
+
+    projected = provider_messages_for_scope(messages, active_function_names={"in_scope"})
+
+    assert [(item["role"], item.get("tool_call_id")) for item in projected] == [
+        ("user", None),
+        ("assistant", None),
+        ("tool", "new"),  # directly after the call
+        ("assistant", None),  # the converted sibling result comes after the batch
+        ("assistant", None),
+    ]
+    assert [call["id"] for call in projected[1]["tool_calls"]] == ["new"]
+    assert "earlier result" in projected[3]["content"]
