@@ -2464,9 +2464,98 @@ test("FE-E2E-004H 画布 + 像浏览器一样新建标签页，在标签页内�
     await page.getByRole("button", { name: `关闭 ${name}`, exact: true }).click();
   }
   await expect(newTab).toHaveAttribute("aria-selected", "true");
-  await expect(launcher.getByRole("heading", { name: "打开应用" })).toBeVisible();
+  await expect(launcher.getByRole("heading", { name: "接下来，做点什么？" })).toBeVisible();
   await page.getByRole("button", { name: "关闭 新标签页", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "已打开的应用" })).toHaveCount(0);
+});
+
+test("FE-E2E-CANVAS-01 拖动排序保留选中应用、编辑内容与路由，Escape 取消拖动", async ({ page }) => {
+  await installMockApi(page, { conversations: [conversation()] });
+  const opens: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/ainas\/[^/]+\/open$/.test(new URL(request.url()).pathname)) opens.push(request.url());
+  });
+  await page.goto("/chat/conv-e2e-1?aina=unibot-documents&aina=unibot-memory&document=guide.md");
+  const tabs = page.getByRole("tablist", { name: "已打开的应用" });
+  const draft = page.getByRole("textbox", { name: "新记忆", exact: true });
+  await draft.fill("排序后保留这段草稿");
+  const opensBeforeReorder = opens.length;
+  const doc = page.locator('[data-canvas-tab="unibot-documents"]');
+  const memory = page.locator('[data-canvas-tab="unibot-memory"]');
+  const from = (await doc.boundingBox())!;
+  const to = (await memory.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width - 4, to.y + to.height / 2, { steps: 10 });
+  await expect(doc).toHaveClass(/opacity-40/);
+  await page.mouse.up();
+  await expect(tabs.getByRole("tab")).toHaveText(["Unibot Memory", "unibot-documents"]);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(draft).toHaveValue("排序后保留这段草稿");
+  const query = new URL(page.url()).searchParams;
+  expect(query.getAll("aina")).toEqual(["unibot-memory", "unibot-documents"]);
+  expect(query.get("active")).toBe("unibot-memory");
+  expect(query.get("document")).toBe("guide.md");
+  expect(opens).toHaveLength(opensBeforeReorder);
+
+  const cancelFrom = (await memory.boundingBox())!;
+  const cancelTo = (await doc.boundingBox())!;
+  await page.mouse.move(cancelFrom.x + 30, cancelFrom.y + 18);
+  await page.mouse.down();
+  await page.mouse.move(cancelTo.x + cancelTo.width - 4, cancelTo.y + 18, { steps: 10 });
+  await expect(memory).toHaveClass(/opacity-40/);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(tabs.getByRole("tab")).toHaveText(["Unibot Memory", "unibot-documents"]);
+  await expect(draft).toHaveValue("排序后保留这段草稿");
+
+  await page.reload();
+  await expect(tabs.getByRole("tab")).toHaveText(["Unibot Memory", "unibot-documents"]);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+});
+
+test("FE-E2E-CANVAS-02 新标签页可用快捷键和菜单排序，展开与窄屏操作保持可用", async ({ page }, testInfo) => {
+  const aina = (id: string, name: string) => ({
+    manifest: { aina: { id, name, version: "1.0.0", description: `${name} 的说明` }, runtime: { type: "builtin" }, permissions: [] },
+    status: "registered",
+  });
+  await installMockApi(page, {
+    conversations: [conversation()],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory")],
+  });
+  await page.goto("/chat/conv-e2e-1?aina=unibot-documents&aina=unibot-memory");
+  const tabs = page.getByRole("tablist", { name: "已打开的应用" });
+  await page.getByRole("button", { name: "新标签页", exact: true }).click();
+  const newTab = page.getByRole("tab", { name: "新标签页", exact: true });
+  await newTab.press("Alt+ArrowLeft");
+  await expect(tabs.getByRole("tab")).toHaveText(["unibot-documents", "新标签页", "Unibot Memory"]);
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "全部标签与排序", exact: true }).click();
+  await page.getByRole("button", { name: "新标签页前移", exact: true }).click();
+  await expect(tabs.getByRole("tab")).toHaveText(["新标签页", "unibot-documents", "Unibot Memory"]);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "关闭 新标签页", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "展开画布", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeHidden();
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("canvas-expanded.png") });
+  await page.getByRole("button", { name: "恢复分栏", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "新标签页", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "接下来，做点什么？" })).toBeVisible();
+  await page.getByRole("button", { name: "全部标签与排序", exact: true }).click();
+  await page.getByRole("button", { name: "新标签页前移", exact: true }).click();
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.keyboard.press("Escape");
+  await page.screenshot({ path: testInfo.outputPath("canvas-mobile.png") });
+  await page.getByRole("button", { name: "关闭 unibot-documents", exact: true }).click();
+  await expect(tabs.getByRole("tab")).toHaveText(["新标签页", "Unibot Memory"]);
+  await expect(newTab).toHaveAttribute("aria-selected", "true");
 });
 
 test("FE-E2E-004B 用户菜单进入主页和设置，并切换默认模型", async ({ page }) => {

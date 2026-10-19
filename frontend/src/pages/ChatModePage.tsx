@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AinaLauncher } from "@/components/canvas/AinaLauncher";
+import { CanvasTabs, NEW_CANVAS_TAB } from "@/components/canvas/CanvasTabs";
 import { ApprovalCard, type EditedArguments } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
@@ -117,11 +118,15 @@ export default function ChatModePage() {
   const activeCanvas = activeAinaId ? canvases[activeAinaId] : undefined;
   // A browser-style "new tab" in the canvas: it shows the app launcher until the user picks an app.
   const [newTab, setNewTab] = useState<"active" | "background" | null>(null);
+  const [newTabIndex, setNewTabIndex] = useState<number | null>(null);
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
   const canvasOpen = ainaIds.length > 0 || newTab !== null;
   // The title-bar toggle hides the canvas without closing its tabs, so their state survives.
   const [canvasHidden, setCanvasHidden] = useState(false);
   const canvasVisible = canvasOpen && !canvasHidden;
   const newTabShown = newTab === "active" || (newTab !== null && !activeAinaId);
+  const canvasTabs = ainaIds.map((id) => ({ id, label: canvases[id]?.name ?? id, kind: canvases[id]?.main_widget.kind }));
+  if (newTab) canvasTabs.splice(Math.min(newTabIndex ?? ainaIds.length, ainaIds.length), 0, { id: NEW_CANVAS_TAB, label: tCanvas("launcher.newTab"), kind: "panel" });
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
@@ -265,6 +270,8 @@ export default function ChatModePage() {
     setDeleted(false);
     setUsedAinaIds([]);
     setNewTab(null);
+    setNewTabIndex(null);
+    setCanvasExpanded(false);
     setCanvasHidden(false);
     if (conversationId) {
       void loadConversation(conversationId);
@@ -349,8 +356,21 @@ export default function ChatModePage() {
     navigateCanvas({ ...canvasRouteRef.current, activeAinaId: id }, conversation?.id ?? conversationId ?? null, true);
   }
 
+  function reorderCanvasTabs(ids: string[]) {
+    const route = canvasRouteRef.current;
+    const reordered = ids.filter((id) => id !== NEW_CANVAS_TAB);
+    setNewTabIndex(newTab ? ids.indexOf(NEW_CANVAS_TAB) : null);
+    if (reordered.every((id, index) => id === route.ainaIds[index])) return;
+    navigateCanvas({ ...route, ainaIds: reordered }, conversation?.id ?? conversationId ?? null, true);
+  }
+
+  useEffect(() => {
+    if (!newTab) setNewTabIndex(null);
+  }, [newTab]);
+
   function closeAinas(ids: string[], replace = false) {
     const route = canvasRouteRef.current;
+    setNewTabIndex((index) => index === null ? null : index - route.ainaIds.slice(0, index).filter((id) => ids.includes(id)).length);
     const remaining = route.ainaIds.filter((id) => !ids.includes(id));
     let nextActive = route.activeAinaId;
     if (nextActive && ids.includes(nextActive)) {
@@ -711,7 +731,7 @@ export default function ChatModePage() {
         title={title}
         actions={!deleted ? (
           <div className="flex items-center gap-1">
-            {canvasVisible ? <CanvasPaneToggle pane={mobilePane} onChange={setMobilePane} /> : null}
+            {canvasVisible ? <CanvasPaneToggle pane={mobilePane} onChange={(pane) => { setMobilePane(pane); setCanvasExpanded(false); }} /> : null}
             {conversation?.id ? (
               <button
                 type="button"
@@ -778,11 +798,11 @@ export default function ChatModePage() {
 
       <div className={classNames(
         "min-h-0 flex-1",
-        canvasVisible ? "grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)]" : "flex flex-col",
+        canvasVisible ? classNames("grid grid-cols-1", !canvasExpanded && "lg:grid-cols-[400px_minmax(0,1fr)]") : "flex flex-col",
       )}>
       <div className={classNames(
         "min-h-0 flex-1 flex-col overflow-hidden",
-        canvasVisible ? classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
+        canvasVisible ? canvasExpanded ? "hidden" : classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
       )}>
         {/* `relative` keeps absolutely positioned descendants (sr-only labels) inside this scroller; otherwise they
             stretch the document and scrollIntoView scrolls the whole page, dragging the composer up. */}
@@ -871,51 +891,27 @@ export default function ChatModePage() {
           ) : null}
         </div>
         {canvasOpen ? (
-          // Inset as a window inside the conversation, so it reads as a closable add-on; one tab per open AINA.
           <section className={classNames(
-            "min-h-0 flex-col p-1.5 lg:py-2 lg:pl-0 lg:pr-2",
+            "min-h-0 min-w-0 flex-col border-l border-line bg-white",
             canvasHidden ? "hidden" : classNames("lg:flex", mobilePane === "app" ? "flex" : "hidden"),
           )}>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-soft">
-              <div className="flex h-10 shrink-0 items-end gap-1 border-b border-line bg-app-soft px-2">
-              <div role="tablist" aria-label={tCanvas("tabs")} className="flex h-full min-w-0 flex-1 items-end gap-1 overflow-x-auto">
-                {ainaIds.map((id) => {
-                  const name = canvases[id]?.name ?? id;
-                  return (
-                    <CanvasTab
-                      key={id}
-                      label={name}
-                      active={!newTabShown && id === activeAinaId}
-                      onSelect={() => selectAina(id)}
-                      onClose={() => closeAinas([id])}
-                    />
-                  );
-                })}
-                {newTab ? (
-                  <CanvasTab
-                    label={tCanvas("launcher.newTab")}
-                    active={newTabShown}
-                    onSelect={() => setNewTab("active")}
-                    onClose={() => setNewTab(null)}
-                  />
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => setNewTab("active")}
-                aria-label={tCanvas("launcher.newTab")}
-                title={tCanvas("launcher.newTab")}
-                className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-muted hover:bg-white hover:text-ink"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-              </div>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              <CanvasTabs
+                tabs={canvasTabs}
+                activeId={newTabShown ? NEW_CANVAS_TAB : activeAinaId}
+                expanded={canvasExpanded}
+                onSelect={(id) => id === NEW_CANVAS_TAB ? setNewTab("active") : selectAina(id)}
+                onClose={(id) => id === NEW_CANVAS_TAB ? setNewTab(null) : closeAinas([id])}
+                onReorder={reorderCanvasTabs}
+                onNew={() => setNewTab("active")}
+                onExpand={() => { setCanvasExpanded((expanded) => !expanded); setMobilePane("app"); }}
+              />
               <div className="relative min-h-0 flex-1">
                 {ainaIds.map((id) => {
                   const opened = canvases[id];
                   // Inactive tabs stay mounted so switching back keeps their state.
                   return (
-                    <div key={id} role="tabpanel" className={classNames("absolute inset-0 overflow-hidden", (newTabShown || id !== activeAinaId) && "hidden")}>
+                    <div key={id} role="tabpanel" id={`canvas-panel-${id}`} aria-labelledby={`canvas-tab-${id}`} className={classNames("absolute inset-0 overflow-hidden", (newTabShown || id !== activeAinaId) && "hidden")}>
                       {opened ? (
                         <MainWidgetRenderer
                           key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId ?? "independent"}:${opened.main_widget.id}`}
@@ -937,7 +933,7 @@ export default function ChatModePage() {
                   );
                 })}
                 {newTab ? (
-                  <div role="tabpanel" aria-label={tCanvas("launcher.newTab")} className={classNames("absolute inset-0 overflow-y-auto", !newTabShown && "hidden")}>
+                  <div role="tabpanel" id={`canvas-panel-${NEW_CANVAS_TAB}`} aria-labelledby={`canvas-tab-${NEW_CANVAS_TAB}`} aria-label={tCanvas("launcher.newTab")} className={classNames("absolute inset-0 overflow-y-auto", !newTabShown && "hidden")}>
                     <AinaLauncher
                       conversationAinaIds={[...(conversation?.active_aina_ids ?? []), ...usedAinaIds]}
                       openAinaIds={ainaIds}
@@ -1257,30 +1253,6 @@ function DeletedConversation({ title, onRestore }: { title: string; onRestore: (
 }
 
 const TITLE_ICON_BUTTON = "flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-app-soft hover:text-ink";
-
-function CanvasTab({ label, active, onSelect, onClose }: { label: string; active: boolean; onSelect: () => void; onClose: () => void }) {
-  const { t } = useTranslation("canvas");
-  return (
-    <div
-      className={classNames(
-        "flex h-8 max-w-[220px] shrink-0 items-center gap-1 rounded-t-lg border border-b-0 pl-3 pr-1 text-[12px]",
-        active ? "border-line bg-white font-semibold text-ink" : "border-transparent text-ink-muted hover:bg-white/60",
-      )}
-    >
-      <button type="button" role="tab" aria-selected={active} onClick={onSelect} className="min-w-0 truncate">
-        {label}
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
-        className="rounded p-1 text-ink-subtle hover:bg-line/60 hover:text-ink"
-        aria-label={t("close", { name: label })}
-      >
-        <X className="h-3 w-3" />
-      </button>
-    </div>
-  );
-}
 
 function CanvasPaneToggle({ pane, onChange }: { pane: "chat" | "app"; onChange: (pane: "chat" | "app") => void }) {
   const { t } = useTranslation("canvas");
