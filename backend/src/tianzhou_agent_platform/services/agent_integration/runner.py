@@ -50,6 +50,7 @@ from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.package.canvas_calls import canvas_state_block
 from tianzhou_agent_platform.aina.package.tasks import model_result_text, result_message_id
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY, MessageAttachment
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord, ChatRequest, ChatResponse
 from tianzhou_agent_platform.conversations.service import ConversationService
@@ -244,6 +245,7 @@ class AgentRunner:
         trace_id: str,
         event_sink: EventSink | None = None,
         stop: TurnStop | None = None,
+        attachments: list[MessageAttachment] | None = None,
     ) -> ChatResponse:
         """Run one user turn. The caller holds the conversation's run lease."""
         config = self._config(conversation, trace_id)
@@ -255,7 +257,13 @@ class AgentRunner:
             seed = await self._delimit_task_results(conversation.id, seed)
         closures = dangling_tool_closures(checkpointed or seed, ABANDONED_CALL_RESULT)
         task_results = await self._finished_task_results(conversation.id, checkpointed or seed)
-        user_message = HumanMessage(content=request.message, id=f"msg_{uuid4().hex}")
+        user_message = HumanMessage(
+            content=request.message,
+            id=f"msg_{uuid4().hex}",
+            additional_kwargs=(
+                {ATTACHMENTS_KEY: [item.model_dump() for item in attachments]} if attachments else {}
+            ),
+        )
         archiver = TranscriptArchiver(
             self.conversations,
             conversation_id=conversation.id,

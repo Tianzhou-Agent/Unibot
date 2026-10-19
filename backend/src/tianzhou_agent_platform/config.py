@@ -91,7 +91,8 @@ class AgentSettings(BaseSettings):
         default="",
         validation_alias=AliasChoices("UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS", "aina_canvas_allowed_origins"),
         description=(
-            "Comma-separated approved HTTPS origins for AINA URL canvases. Kept apart from the capability allowlist "
+            "Comma-separated approved origins for AINA URL canvases (HTTPS, or HTTP on loopback for development). "
+            "Kept apart from the capability allowlist "
             "because a URL canvas can change after review; empty denies all."
         ),
     )

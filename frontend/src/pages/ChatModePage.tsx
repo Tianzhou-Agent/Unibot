@@ -9,6 +9,7 @@ import {
   CirclePause,
   MessageSquareText,
   PanelRightClose,
+  Paperclip,
   PanelRightOpen,
   Play,
   Plus,
@@ -36,7 +37,7 @@ import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widge
 import { AinaTaskList } from "@/components/tasks/AinaTaskList";
 import { useCanvasViewer } from "@/components/canvas/useCanvasViewer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
-import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
+import { api, ApiError, apiErrorMessage, apiUrl, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
@@ -51,6 +52,7 @@ import type {
   ConversationRecord,
   DocumentTaskContext,
   LLMCallRecord,
+  MessageAttachment,
   TraceRecord,
   TraceSpan,
   WidgetDefinition,
@@ -457,10 +459,10 @@ export default function ChatModePage() {
     };
   }, []);
 
-  const sendMessage = (text: string) => runTurn(text);
+  const sendMessage = (text: string, files: File[] = []) => runTurn(text, files);
 
-  /** Runs a turn for `text`, or continues the conversation's stopped turn when `text` is null. */
-  async function runTurn(text: string | null) {
+  /** Runs a turn for `text` with `files` attached, or continues the conversation's stopped turn when `text` is null. */
+  async function runTurn(text: string | null, files: File[] = []) {
     if (sending || deleted) return;
     setClarificationWidgets([]);
     const draftTitle = text === null ? null : text.length > 24 ? `${text.slice(0, 24)}…` : text;
@@ -470,6 +472,7 @@ export default function ChatModePage() {
       content: text,
       content_type: "text",
       widgets: [],
+      attachments: files.map((file) => ({ file_ref: "", name: file.name, content_type: file.type, size_bytes: file.size })),
       created_at: new Date().toISOString(),
     };
     optimisticBaselineRef.current = conversation?.messages.length ?? 0;
@@ -532,9 +535,18 @@ export default function ChatModePage() {
       if (text === null) {
         await streamResume(targetConversation.id, actor, onEvent, streamController.signal);
       } else {
+        // Files are stored with the conversation first; the message names them by file_ref.
+        const attachments: MessageAttachment[] = [];
+        for (const file of files) {
+          const form = new FormData();
+          form.append("file", file);
+          attachments.push(await api.postForm<MessageAttachment>(`/conversations/${targetConversation.id}/attachments`, form));
+          if (!isActiveRun()) return;
+        }
         await streamChat(
           {
             message: text,
+            attachments: attachments.length ? attachments.map((item) => item.file_ref) : undefined,
             conversation_id: targetConversation.id,
             workspace_id: routeWorkspaceId,
             preferred_aina_id: canvasRouteRef.current.activeAinaId ?? undefined,
@@ -988,7 +1000,18 @@ function ConversationMessage({
   if (message.role === "user") {
     return (
       <div className="space-y-2">
-        <UserMessage content={message.content} />
+        <UserMessage
+          content={message.content}
+          files={message.attachments?.map((item) => ({
+            id: item.file_ref || item.name,
+            name: item.name,
+            sizeBytes: item.size_bytes,
+            mimeType: item.content_type,
+            href: item.file_ref && conversationId
+              ? apiUrl(`/conversations/${conversationId}/attachments/${item.file_ref}`)
+              : undefined,
+          }))}
+        />
         {failure && message.trace_id ? (
           <FailedCallNotice conversationId={conversationId} traceId={message.trace_id} failure={failure} />
         ) : null}
@@ -1120,7 +1143,7 @@ function ChatComposer({
   sessionId: string | null;
   messageCount: number;
   context: DocumentTaskContext | null;
-  onSend: (text: string) => Promise<boolean | undefined>;
+  onSend: (text: string, files: File[]) => Promise<boolean | undefined>;
   onStop: () => void;
   onBackgroundTaskSettled: () => void;
 }) {
@@ -1128,16 +1151,34 @@ function ChatComposer({
   const { t: tCanvas } = useTranslation("canvas");
   const [text, setText] = useState(initialText);
   const [sendFailed, setSendFailed] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const composingRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function addFiles(picked: FileList | null) {
+    const chosen = Array.from(picked ?? []);
+    const tooLarge = chosen.find((file) => file.size > MAX_ATTACHMENT_MB * 1024 * 1024);
+    const next = [...files, ...chosen.filter((file) => file !== tooLarge)];
+    setFileError(
+      tooLarge ? t("attachmentTooLarge", { name: tooLarge.name, limit: MAX_ATTACHMENT_MB })
+        : next.length > MAX_ATTACHMENTS ? t("tooManyAttachments", { limit: MAX_ATTACHMENTS })
+          : null,
+    );
+    setFiles(next.slice(0, MAX_ATTACHMENTS));
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
     if (!value || disabled) return;
     setSendFailed(false);
-    const sent = await onSend(value);
-    if (sent) setText((current) => current === text ? "" : current);
-    else if (sent === false) setSendFailed(true);
+    const sent = await onSend(value, files);
+    if (sent) {
+      setText((current) => current === text ? "" : current);
+      setFiles([]);
+      setFileError(null);
+    } else if (sent === false) setSendFailed(true);
   }
 
   return (
@@ -1146,6 +1187,7 @@ function ChatComposer({
         <AinaTaskList conversationId={sessionId} refreshKey={messageCount} onSettled={onBackgroundTaskSettled} />
         <TaskTreeWidget sessionId={sessionId} />
         {sendFailed ? <p role="status" className="text-[11.5px] text-ink-muted">{t("sendFailed")}</p> : null}
+        {fileError ? <p role="status" className="text-[11.5px] text-ink-muted">{fileError}</p> : null}
         <form
           onSubmit={submit}
           className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
@@ -1154,6 +1196,24 @@ function ChatComposer({
             <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[10.5px] text-accent">
               <Sparkles className="h-3 w-3 shrink-0" />
               <span className="truncate">{tCanvas("context", { task: context.taskTitle, section: context.sectionHeading })}</span>
+            </div>
+          ) : null}
+          {files.length ? (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {files.map((file, index) => (
+                <span key={`${file.name}:${index}`} className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-lg border border-line bg-app-soft px-2 text-[12px] font-semibold text-ink-muted">
+                  <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}
+                    className="shrink-0 hover:text-ink"
+                    aria-label={t("removeAttachment", { name: file.name })}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))}
             </div>
           ) : null}
           <textarea
@@ -1175,7 +1235,26 @@ function ChatComposer({
             className="w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
           />
           <div className="mt-2 flex items-center justify-between gap-2">
-            <ModelSelector disabled={disabled} />
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-app-soft hover:text-ink disabled:opacity-60"
+                aria-label={t("attachAria")}
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                data-testid="composer-files"
+                onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }}
+              />
+              <ModelSelector disabled={disabled} />
+            </div>
             {running ? (
               <button
                 type="button"
@@ -1206,6 +1285,10 @@ function ChatComposer({
     </div>
   );
 }
+
+// The backend's limits (conversations/attachments.py), checked here so the user learns before sending.
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_MB = 20;
 
 function WelcomePanel() {
   const { t } = useTranslation("chatPage");

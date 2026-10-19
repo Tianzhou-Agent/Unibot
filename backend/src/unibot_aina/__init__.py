@@ -14,7 +14,7 @@ It is published as ``unibot-aina`` from ``sdk/python``.
 """
 
 from unibot_aina.context import UnibotContext, unibot_context
-from unibot_aina.host import HostApi, HostApiError, set_default_transport
+from unibot_aina.host import HostApi, HostApiError, PassedFile, set_default_transport
 from unibot_aina.verify import ContextError, ContextVerifier
 
 __all__ = [
@@ -22,6 +22,7 @@ __all__ = [
     "ContextVerifier",
     "HostApi",
     "HostApiError",
+    "PassedFile",
     "UnibotContext",
     "set_default_transport",
     "unibot_context",

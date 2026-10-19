@@ -12,6 +12,7 @@ from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.package.files import AinaFile
+from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.aina.package.notifications import AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -67,6 +68,7 @@ from tianzhou_agent_platform.store.aina_storage_store import AinaStorageStore
 from tianzhou_agent_platform.store.developer_token_store import DeveloperTokenStore
 from tianzhou_agent_platform.store.aina_notification_store import AinaNotificationStore
 from tianzhou_agent_platform.store.aina_file_store import AinaFileStore
+from tianzhou_agent_platform.store.chat_attachment_store import ChatAttachmentStore
 from tianzhou_agent_platform.store.aina_task_store import AinaTaskStore
 from tianzhou_agent_platform.store.aina_project_store import AinaProjectStore
 from tianzhou_agent_platform.store.registry_store import RegistryStore
@@ -127,6 +129,7 @@ class PersistentRepository(InMemoryRepository):
         self._developer_token_store = DeveloperTokenStore(stores.mysql)
         self._aina_notification_store = AinaNotificationStore(stores.mysql)
         self._aina_file_store = AinaFileStore(stores.mysql)
+        self._chat_attachment_store = ChatAttachmentStore(stores.mysql)
         self._aina_task_store = AinaTaskStore(stores.mysql)
 
     async def initialize(self) -> None:
@@ -504,6 +507,16 @@ class PersistentRepository(InMemoryRepository):
         self, *, installation_key: str | None = None, aina_id: str | None = None
     ) -> list[AinaFile]:
         return await self._aina_file_store.delete_all(installation_key=installation_key, aina_id=aina_id)
+
+    async def put_chat_attachment(self, attachment: Attachment) -> Attachment:
+        await self._chat_attachment_store.put(attachment)
+        return self._copy(attachment)
+
+    async def get_chat_attachment(self, file_ref: str) -> Attachment | None:
+        return await self._chat_attachment_store.get(file_ref)
+
+    async def list_chat_attachments(self, file_refs: list[str]) -> list[Attachment]:
+        return await self._chat_attachment_store.list_refs(file_refs)
 
     async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
         await self._aina_notification_store.create(notification)

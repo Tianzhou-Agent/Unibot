@@ -20,6 +20,16 @@ export interface FileChip {
   name: string;
   sizeBytes?: number;
   mimeType?: string;
+  /** Where the user downloads the file, when it is stored. */
+  href?: string;
+}
+
+/** A file the user attached to a chat message; tools read it by its file_ref. */
+export interface MessageAttachment {
+  file_ref: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
 }
 
 export type MessageBlock =
@@ -161,6 +171,7 @@ export interface BackendMessage {
   tool_call_id?: string | null;
   name?: string | null;
   widgets: WidgetDefinition[];
+  attachments?: MessageAttachment[];
   trace_id?: string | null;
   created_at: string;
 }

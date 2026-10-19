@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.core.agent_runtime.middleware.summarization import is_summary_message
+from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY
 from tianzhou_agent_platform.conversations.models import Message
 from tianzhou_agent_platform.model_providers.factory import REASONING_KEY
 from tianzhou_agent_platform.services.agent_integration.capabilities import provider_messages_for_scope
@@ -105,7 +106,10 @@ def archive_to_native(message: Message) -> BaseMessage:
     wire = message.provider_message()
     if message.role == "assistant" and message.reasoning is not None:
         wire[REASONING_KEY] = message.reasoning
-    return wire_to_native(wire, message_id=message.id)
+    native = wire_to_native(wire, message_id=message.id)
+    if message.role == "user" and message.attachments:
+        native.additional_kwargs[ATTACHMENTS_KEY] = [item.model_dump() for item in message.attachments]
+    return native
 
 
 def project_scope_history(messages: list[Any], visible_names: set[str]) -> list[Any]:
@@ -160,6 +164,7 @@ class TranscriptArchiver:
                 continue
             attached = (widgets or {}).get(message.id) or []
             reasoning = message.additional_kwargs.get(REASONING_KEY) if isinstance(message, AIMessage) else None
+            files = message.additional_kwargs.get(ATTACHMENTS_KEY) if isinstance(message, HumanMessage) else None
             records.append(
                 Message(
                     id=message.id,
@@ -170,6 +175,7 @@ class TranscriptArchiver:
                     tool_call_id=wire.get("tool_call_id"),
                     name=wire.get("name"),
                     widgets=attached,
+                    attachments=files or [],
                     content_type="tool" if wire["role"] == "tool" else "widget" if attached else "text",
                     trace_id=self._trace_id,
                 )

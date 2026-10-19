@@ -15,6 +15,8 @@ from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, Mod
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY, attachments_block
+
 
 @dataclass
 class RunScope:
@@ -74,7 +76,7 @@ class CapabilityScopeMiddleware(AgentMiddleware):
             "tools": tools,
             "system_message": SystemMessage(content=prompt),
         }
-        messages = list(request.messages)
+        messages = [_with_attachments(message) for message in request.messages]
         if self.scope.ui_context:
             messages = [_with_ui_context(message, self.scope) for message in messages]
         if self.scope.project_messages is not None:
@@ -129,6 +131,18 @@ class CapabilityScopeMiddleware(AgentMiddleware):
         if payload is not None and call_id not in self.scope.recorded_failures and self.scope.on_tool_error:
             await self.scope.on_tool_error(str(request.tool_call.get("name") or ""), call_id, payload)
         return result
+
+
+def _with_attachments(message: Any) -> Any:
+    """A user message with attachments, as the model reads it: the text, then the files and their refs."""
+    files = message.additional_kwargs.get(ATTACHMENTS_KEY) if isinstance(message, HumanMessage) else None
+    if not files:
+        return message
+    content = message.content if isinstance(message.content, str) else str(message.content)
+    kwargs = {key: value for key, value in message.additional_kwargs.items() if key != ATTACHMENTS_KEY}
+    return message.model_copy(
+        update={"content": f"{content}\n\n{attachments_block(files)}", "additional_kwargs": kwargs}
+    )
 
 
 def _with_ui_context(message: Any, scope: RunScope) -> Any:

@@ -53,6 +53,7 @@ from tianzhou_agent_platform.aina.protocol.widgets import WidgetAinaUi, WidgetCa
 from tianzhou_agent_platform.aina.package.widgets import aina_widget, result_widget_id
 from tianzhou_agent_platform.aina.security.destinations import require_approved_destination
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.conversations.attachments import Attachment, passed_refs
 from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 
@@ -75,6 +76,8 @@ class PackageRegistry(Protocol):
     ) -> list[AinaInstallation]: ...
 
     async def list_ainas(self) -> list[AinaRecord]: ...
+
+    async def list_chat_attachments(self, file_refs: list[str]) -> list[Attachment]: ...
 
 
 class AinaPackageService:
@@ -362,7 +365,11 @@ class AinaPackageService:
         )
         context["host"] = {"api_base": self.settings.aina_host_api_base}
         context["token"] = self.mint_token(
-            installation, context, conversation_id=conversation_id, workspace_id=workspace_id
+            installation,
+            context,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+            files=await self._passed_files(arguments, installation, conversation_id),
         )
         meta = {"progressToken": invocation_id, CONTEXT_META_KEY: context}
         url, timeout = manifest.tools.mcp.url, snapshot.timeout_seconds
@@ -514,10 +521,12 @@ class AinaPackageService:
         *,
         conversation_id: str | None = None,
         workspace_id: str | None = None,
+        files: list[str] | None = None,
     ) -> str:
         """Context token carrying the same pairwise identity as ``context`` (design §8).
 
-        The raw conversation and workspace ids travel only inside the encrypted host reference.
+        The raw conversation and workspace ids travel only inside the encrypted host reference. ``files`` are the
+        attachments this call was passed, which the token may read with ``GET /files/{file_ref}``.
         """
         claims = {
             "sub": context["user"]["id"],
@@ -529,6 +538,8 @@ class AinaPackageService:
         for claim, key in (("conversation", "conversation_id"), ("workspace", "workspace_id")):
             if key in context:
                 claims[claim] = context[key]
+        if files:
+            claims["files"] = files
         reference = HostReference(
             tenant_id=installation.tenant_id,
             user_id=installation.user_id,
@@ -537,6 +548,17 @@ class AinaPackageService:
             workspace_id=workspace_id,
         )
         return self.tokens.mint(reference=reference, claims=claims)
+
+    async def _passed_files(
+        self, arguments: dict[str, Any], installation: AinaInstallation, conversation_id: str | None
+    ) -> list[str]:
+        """The user's attachments in this conversation whose file_ref appears in the call's arguments."""
+        refs = passed_refs(arguments)
+        if not refs or conversation_id is None:
+            return []
+        owner = (conversation_id, installation.tenant_id, installation.user_id)
+        found = await self.repository.list_chat_attachments(sorted(refs))
+        return sorted(item.id for item in found if (item.conversation_id, item.tenant_id, item.user_id) == owner)
 
     async def _installation(self, aina_id: str, *, tenant_id: str, user_id: str) -> AinaInstallation | None:
         try:

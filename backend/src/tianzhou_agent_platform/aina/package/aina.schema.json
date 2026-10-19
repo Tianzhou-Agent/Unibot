@@ -66,6 +66,13 @@
       "pattern": "^(https://[^/?#]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]{1,5})?([/?#]|$))",
       "maxLength": 2048
     },
+    "canvas_url": {
+      "description": "HTTPS web app; plain HTTP is accepted only for loopback development servers.",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^(https://[^/?#]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]{1,5})?([/?#]|$))",
+      "maxLength": 2048
+    },
     "identity": {
       "type": "object",
       "required": ["id", "version", "name", "description", "publisher"],
@@ -203,7 +210,7 @@
       "properties": {
         "title": { "type": "string", "minLength": 1, "maxLength": 160 },
         "entry": { "$ref": "#/$defs/package_path" },
-        "url": { "$ref": "#/$defs/https_url" },
+        "url": { "$ref": "#/$defs/canvas_url" },
         "tools": {
           "type": "array",
           "maxItems": 16,

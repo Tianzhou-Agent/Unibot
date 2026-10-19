@@ -1,0 +1,61 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "local.excalidraw",
+    "version": "0.2.0",
+    "name": "Excalidraw",
+    "description": "Draw and edit diagrams on the local Excalidraw whiteboard at http://127.0.0.1:3000.",
+    "publisher": { "id": "local", "name": "Local deployment" },
+    "locales": {
+      "zh-CN": { "name": "Excalidraw 白板", "description": "在本地 Excalidraw 白板（http://127.0.0.1:3000）上绘制和编辑图表。" }
+    }
+  },
+
+  "tools": {
+    "mcp": {
+      "url": "http://127.0.0.1:3001/mcp",
+      "auth": { "type": "none" }
+    },
+    "expose": {
+      "read_diagram_guide": { "effect": "read", "visibility": ["model"] },
+      "describe_scene": { "effect": "read", "visibility": ["model"] },
+      "query_elements": { "effect": "read", "visibility": ["model"] },
+      "get_element": { "effect": "read", "visibility": ["model"] },
+      "get_resource": { "effect": "read", "visibility": ["model"] },
+      "get_canvas_screenshot": { "effect": "read", "visibility": ["model"], "timeout_seconds": 60 },
+      "create_element": { "effect": "write", "visibility": ["model"] },
+      "batch_create_elements": { "effect": "write", "visibility": ["model"] },
+      "create_from_mermaid": { "effect": "write", "visibility": ["model"], "timeout_seconds": 60 },
+      "update_element": { "effect": "write", "visibility": ["model"] },
+      "duplicate_elements": { "effect": "write", "visibility": ["model"] },
+      "group_elements": { "effect": "write", "visibility": ["model"] },
+      "ungroup_elements": { "effect": "write", "visibility": ["model"] },
+      "align_elements": { "effect": "write", "visibility": ["model"] },
+      "distribute_elements": { "effect": "write", "visibility": ["model"] },
+      "lock_elements": { "effect": "write", "visibility": ["model"] },
+      "unlock_elements": { "effect": "write", "visibility": ["model"] },
+      "set_viewport": { "effect": "write", "visibility": ["model"] },
+      "snapshot_scene": { "effect": "write", "visibility": ["model"] },
+      "delete_element": { "effect": "destructive", "visibility": ["model"] },
+      "restore_snapshot": { "effect": "destructive", "visibility": ["model"] },
+      "clear_canvas": { "effect": "destructive", "visibility": ["model"] }
+    }
+  },
+
+  "canvas": {
+    "url": "http://127.0.0.1:3000/",
+    "title": "Whiteboard"
+  },
+
+  "skills": [
+    {
+      "id": "draw-diagram",
+      "name": "Draw a diagram",
+      "description": "Use when the user wants a flowchart, architecture sketch or other diagram drawn or changed on the whiteboard.",
+      "path": "skills/draw-diagram",
+      "tools": ["read_diagram_guide", "describe_scene", "batch_create_elements", "create_from_mermaid", "set_viewport"]
+    }
+  ]
+}

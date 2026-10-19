@@ -107,6 +107,7 @@ export async function streamChat(
     capability?: string;
     preferred_aina_id?: string;
     ui_context?: string;
+    attachments?: string[];
   },
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,

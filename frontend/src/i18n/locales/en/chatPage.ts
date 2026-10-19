@@ -39,6 +39,10 @@ export default {
   messageAria: "Message",
   stopAria: "Stop generating",
   sendAria: "Send message",
+  attachAria: "Attach files",
+  removeAttachment: "Remove {{name}}",
+  attachmentTooLarge: "{{name}} is larger than {{limit}} MB.",
+  tooManyAttachments: "A message can carry at most {{limit}} files.",
   welcome: {
     title: "Start a new conversation",
     body: "Unibot keeps multi-turn context, combines the right capabilities for your goal, and waits for your confirmation before high-risk actions.",

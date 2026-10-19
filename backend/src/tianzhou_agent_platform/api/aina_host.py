@@ -4,6 +4,9 @@ Authorization never comes from a user session: every request carries ``Authoriza
 A request is allowed only while the token is valid, the installation it names is still active, and the scope is
 both in the token and still granted to the installation, so uninstalling or revoking a scope takes effect at once.
 
+``GET /files/{file_ref}`` needs no scope either: it reads only an attachment whose ref the tool call was passed (the
+token's ``files`` claim), in that call's conversation.
+
 Task callbacks (design §7.3) need no scope: a task id is looked up within the caller's installation only. A task's
 token may be refreshed after it expired, but only while the task is live and only with a token of the invocation
 that started it.
@@ -41,6 +44,8 @@ from tianzhou_agent_platform.aina.package.tasks import MAX_MESSAGE_CHARS, AinaTa
 from tianzhou_agent_platform.aina.package.tokens import MAX_TOKEN_SECONDS, VerifiedToken, invalid_token
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
 from tianzhou_agent_platform.api.dependencies import aina_file_blobs, aina_packages, aina_tasks, repository
+from tianzhou_agent_platform.conversations.attachments import blob_key as attachment_blob_key
+from tianzhou_agent_platform.conversations.attachments import content_disposition
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.store.memory_repository import installation_record_id
@@ -300,6 +305,33 @@ def create_aina_host_router() -> APIRouter:
             raise not_found("File", path)
         await aina_file_blobs(request).delete(blob_key(removed))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @router.get(
+        f"{HOST_API_PREFIX}/files/{{file_ref}}",
+        response_class=Response,
+        responses={200: {"content": {"application/octet-stream": {}}, "description": "The file's bytes"}},
+    )
+    async def passed_file(file_ref: str, request: Request, caller: HostCaller = Depends(host_caller)) -> Response:
+        """A file the user attached and this tool call was passed (its ``file_ref`` was in the call's arguments).
+
+        ``Content-Type`` is the file's type and ``Content-Disposition`` carries its name.
+        """
+        passed = file_ref in (caller.token.claims.get("files") or [])
+        _audit(caller, "files.get", scope="files", allowed=passed)
+        attachment = await repository(request).get_chat_attachment(file_ref) if passed else None
+        reference = caller.token.reference
+        if attachment is None or (attachment.conversation_id, attachment.tenant_id, attachment.user_id) != (
+            reference.conversation_id,
+            reference.tenant_id,
+            reference.user_id,
+        ):
+            raise not_found("File", file_ref)  # also for a ref the call was not passed: its existence is not told
+        payload = await aina_file_blobs(request).read(attachment_blob_key(attachment))
+        return Response(
+            payload,
+            media_type=attachment.content_type,
+            headers={"Content-Disposition": content_disposition(attachment.name), "ETag": f'"{attachment.sha256}"'},
+        )
 
     @router.get(f"{HOST_API_PREFIX}/tasks/{{task_id}}", response_model=TaskState)
     async def task_state(task_id: str, request: Request, caller: HostCaller = Depends(host_caller)) -> TaskState:

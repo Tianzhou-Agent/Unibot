@@ -16,6 +16,7 @@ from tianzhou_agent_platform.aina.project import AinaProjectRecord
 from tianzhou_agent_platform.aina.memory.models import MemoryCreate, MemoryRecord, MemoryStats, MemoryUpdate
 from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.package.files import AinaFile, file_record_id
+from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.aina.package.notifications import KEEP_PER_USER, AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
@@ -111,6 +112,7 @@ class InMemoryRepository:
         self._developer_tokens: dict[str, DeveloperToken] = {}
         self._aina_notifications: dict[str, AinaNotification] = {}
         self._aina_files: dict[str, AinaFile] = {}
+        self._chat_attachments: dict[str, Attachment] = {}
         self._aina_tasks: dict[str, AinaTask] = {}
 
     async def _save_record(self, resource: str, record_id: str, value: Any) -> None:
@@ -1322,6 +1324,20 @@ class InMemoryRepository:
             for f in doomed:
                 del self._aina_files[f.id]
             return doomed
+
+    async def put_chat_attachment(self, attachment: Attachment) -> Attachment:
+        async with self._lock:
+            self._chat_attachments[attachment.id] = self._copy(attachment)
+            return self._copy(attachment)
+
+    async def get_chat_attachment(self, file_ref: str) -> Attachment | None:
+        async with self._lock:
+            found = self._chat_attachments.get(file_ref)
+            return self._copy(found) if found is not None else None
+
+    async def list_chat_attachments(self, file_refs: list[str]) -> list[Attachment]:
+        async with self._lock:
+            return [self._copy(self._chat_attachments[ref]) for ref in file_refs if ref in self._chat_attachments]
 
     async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
         async with self._lock:
