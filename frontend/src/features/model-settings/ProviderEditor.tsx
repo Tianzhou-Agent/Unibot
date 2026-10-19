@@ -86,6 +86,8 @@ interface ModelDraft {
   enabled: boolean;
   contextWindowTokens: number;
   acceptsImages: boolean;
+  /** Empty: Unibot's default (a quarter of the window, at most 4096). */
+  maxOutputTokens: number | null;
 }
 
 /** Step one of adding a provider: pick its type, then the drawer opens prefilled with that preset. */
@@ -195,6 +197,7 @@ export function ProviderEditor({
       key: model.id,
       contextWindowTokens: model.context_window_tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
       acceptsImages: model.accepts_images ?? false,
+      maxOutputTokens: model.max_output_tokens ?? null,
     })) ?? preset.models.map((model) => ({ ...emptyModel(), ...model })),
   );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -323,13 +326,14 @@ export function ProviderEditor({
       base_url: baseUrl.trim(),
       api_key: apiKey,
       timeout_seconds: timeoutSeconds,
-      models: models.map(({ id, name: modelName, model, enabled, contextWindowTokens, acceptsImages }) => ({
+      models: models.map(({ id, name: modelName, model, enabled, contextWindowTokens, acceptsImages, maxOutputTokens }) => ({
         ...(id ? { id } : {}),
         name: modelName.trim(),
         model: model.trim(),
         enabled,
         context_window_tokens: contextWindowTokens,
         accepts_images: acceptsImages,
+        max_output_tokens: maxOutputTokens,
       })),
     });
   }
@@ -483,6 +487,19 @@ export function ProviderEditor({
                             aria-label={t("contextAria", { n })}
                           />
                         </Field>
+                        <Field label={t("maxOutput")} small>
+                          <input
+                            value={model.maxOutputTokens ?? ""}
+                            onChange={(event) => updateModel(model.key, { maxOutputTokens: event.target.value ? Number(event.target.value) : null })}
+                            className="input-soft bg-white py-1.5 font-mono text-[11.5px]"
+                            type="number"
+                            min={256}
+                            max={Math.floor(model.contextWindowTokens / 2)}
+                            placeholder={String(Math.min(4096, Math.floor(model.contextWindowTokens / 4)))}
+                            aria-label={t("maxOutputAria", { n })}
+                            title={t("maxOutputHint")}
+                          />
+                        </Field>
                         <label className="col-span-2 flex items-start gap-2 text-[11.5px] text-ink-muted">
                           <input
                             type="checkbox"
@@ -605,5 +622,6 @@ function emptyModel(): ModelDraft {
     enabled: true,
     contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     acceptsImages: false,
+    maxOutputTokens: null,
   };
 }

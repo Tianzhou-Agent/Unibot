@@ -8,6 +8,8 @@ export interface ModelDefinition {
   is_default: boolean;
   context_window_tokens: number;
   accepts_images?: boolean;
+  /** Most tokens one reply may use, thinking included; unset keeps the default. */
+  max_output_tokens?: number | null;
 }
 
 export interface ModelProvider {
@@ -65,5 +67,6 @@ export interface ModelProviderPayload {
     enabled: boolean;
     context_window_tokens: number;
     accepts_images: boolean;
+    max_output_tokens: number | null;
   }>;
 }

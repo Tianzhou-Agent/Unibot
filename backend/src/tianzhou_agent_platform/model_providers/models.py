@@ -20,6 +20,7 @@ ProviderType = Literal["openai", "deepseek", "mimo", "opencode", "openrouter", "
 DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
 MIN_CONTEXT_WINDOW_TOKENS = 4_096
 MAX_CONTEXT_WINDOW_TOKENS = 10_000_000
+MIN_OUTPUT_TOKENS = 256
 
 
 class ModelDefinitionInput(StrictModel):
@@ -34,11 +35,19 @@ class ModelDefinitionInput(StrictModel):
     )
     # The model reads images (OpenAI-style ``image_url`` parts); AINA tools' image results are then shown to it.
     accepts_images: bool = False
+    # Most tokens one reply may use, thinking included; unset keeps min(4096, a quarter of the context window).
+    max_output_tokens: int | None = Field(default=None, ge=MIN_OUTPUT_TOKENS, le=MAX_CONTEXT_WINDOW_TOKENS)
 
     @field_validator("name", "model")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def output_fits_the_window(self) -> "ModelDefinitionInput":
+        if self.max_output_tokens is not None and self.max_output_tokens > self.context_window_tokens // 2:
+            raise ValueError("Max output tokens may be at most half of the context window")
+        return self
 
 
 class ModelProviderCreate(StrictModel):
@@ -113,6 +122,8 @@ class ModelDefinition(StrictModel):
     )
     # The model reads images (OpenAI-style ``image_url`` parts); AINA tools' image results are then shown to it.
     accepts_images: bool = False
+    # Most tokens one reply may use, thinking included; unset keeps min(4096, a quarter of the context window).
+    max_output_tokens: int | None = Field(default=None, ge=MIN_OUTPUT_TOKENS, le=MAX_CONTEXT_WINDOW_TOKENS)
 
 
 class ModelProviderRecord(StrictModel):
@@ -178,6 +189,7 @@ class ModelRuntimeConfig:
     context_window_tokens: int
     timeout_seconds: float
     accepts_images: bool = False
+    max_output_tokens: int | None = None
 
     @property
     def chat_completions_url(self) -> str:
@@ -197,6 +209,11 @@ def current_model_runtime() -> ModelRuntimeConfig | None:
 def current_context_window_tokens(default: int) -> int:
     runtime = current_model_runtime()
     return runtime.context_window_tokens if runtime is not None else default
+
+
+def current_max_output_tokens() -> int | None:
+    runtime = current_model_runtime()
+    return runtime.max_output_tokens if runtime is not None else None
 
 
 @contextmanager

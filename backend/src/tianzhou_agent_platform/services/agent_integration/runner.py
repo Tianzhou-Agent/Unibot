@@ -73,7 +73,11 @@ from tianzhou_agent_platform.core.base import Usage
 from tianzhou_agent_platform.core.capability_discovery import aina_graph, model_scope_details
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.model_providers.errors import map_model_error, rejects_tool_choice
-from tianzhou_agent_platform.model_providers.models import current_context_window_tokens, current_model_runtime
+from tianzhou_agent_platform.model_providers.models import (
+    current_context_window_tokens,
+    current_max_output_tokens,
+    current_model_runtime,
+)
 from tianzhou_agent_platform.model_providers.tokens import (
     estimate_request_tokens,
     output_token_reserve,
@@ -550,7 +554,7 @@ class AgentRunner:
             select=is_summary_call,
         )
         budget_guard = RequestBudgetGuard(
-            input_budget_tokens=request_input_budget(window),
+            input_budget_tokens=request_input_budget(window, current_max_output_tokens()),
             count_tokens=estimate_request_tokens,
         )
         output_guard = OutputGuardMiddleware()
@@ -912,12 +916,15 @@ class AgentRunner:
                 runtime.api_key,
                 runtime.timeout_seconds,
                 runtime.context_window_tokens,
+                runtime.max_output_tokens,
             )
             model = self._runtime_models.get(key)
             if model is None:
                 model = self._runtime_models[key] = self.model_factory(
                     runtime,
-                    max_completion_tokens=output_token_reserve(runtime.context_window_tokens),
+                    max_completion_tokens=output_token_reserve(
+                        runtime.context_window_tokens, runtime.max_output_tokens
+                    ),
                 )
             return model
         if self.model is None:

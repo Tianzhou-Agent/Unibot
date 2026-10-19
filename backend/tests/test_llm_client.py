@@ -60,6 +60,7 @@ def _client(
     provider: Callable[[httpx.Request], httpx.Response],
     *,
     context_window_tokens: int = 64_000,
+    max_output_tokens: int | None = None,
 ) -> Iterator[TestClient]:
     """App whose actor selected a provider model served by ``provider``."""
     import tianzhou_agent_platform.main as main_module
@@ -81,7 +82,12 @@ def _client(
                 "base_url": "https://provider.invalid/v1",
                 "api_key": "provider-key",
                 "models": [
-                    {"name": "Team model", "model": "team-model", "context_window_tokens": context_window_tokens}
+                    {
+                        "name": "Team model",
+                        "model": "team-model",
+                        "context_window_tokens": context_window_tokens,
+                        "max_output_tokens": max_output_tokens,
+                    }
                 ],
             },
         ).json()
@@ -105,6 +111,34 @@ def test_model_output_reserve_is_sent_with_every_request(monkeypatch: Any) -> No
 
     assert response.json()["content"] == "ok"
     assert requests[0]["max_completion_tokens"] == 1_024
+
+
+def test_a_models_own_output_limit_is_sent_instead_of_the_default(monkeypatch: Any) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return _completion({"role": "assistant", "content": "ok"})
+
+    with _client(monkeypatch, provider, context_window_tokens=1_000_000, max_output_tokens=32_768) as client:
+        response = client.post("/chat", json={"message": "Hello"})
+        saved = client.get("/model-settings").json()["providers"][0]["models"][0]
+
+    assert response.json()["content"] == "ok"
+    assert requests[0]["max_completion_tokens"] == 32_768
+    assert saved["max_output_tokens"] == 32_768
+
+
+def test_an_output_limit_above_half_the_window_is_refused() -> None:
+    from pydantic import ValidationError
+
+    from tianzhou_agent_platform.model_providers.models import ModelDefinitionInput
+    from tianzhou_agent_platform.model_providers.tokens import output_token_reserve
+
+    with pytest.raises(ValidationError, match="half of the context window"):
+        ModelDefinitionInput(name="m", model="m", context_window_tokens=8_192, max_output_tokens=8_192)
+    assert output_token_reserve(1_000_000) == 4_096
+    assert output_token_reserve(1_000_000, 32_768) == 32_768
 
 
 def test_named_tool_choice_falls_back_for_incompatible_provider(monkeypatch: Any) -> None:
