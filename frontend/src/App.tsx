@@ -3,7 +3,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import ChatModePage from "@/pages/ChatModePage";
 import SettingsPage from "@/pages/SettingsPage";
 import DebugPage from "@/pages/DebugPage";
+import AddAppPage from "@/pages/AddAppPage";
 import AllAppsPage from "@/pages/AllAppsPage";
+import CanvasBridgeHelpPage from "@/pages/CanvasBridgeHelpPage";
 import PluginDetailPage from "@/pages/PluginDetailPage";
 import ScheduledAinaPage from "@/pages/ScheduledAinaPage";
 import FeedbackAdminPage from "@/pages/FeedbackAdminPage";
@@ -32,6 +34,8 @@ export default function App() {
         <Route path="/workspaces/:workspaceId/canvas/:ainaId" element={<LegacyCanvasRedirect />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/plugin" element={<AllAppsPage />} />
+        <Route path="/plugin/new" element={<AddAppPage />} />
+        <Route path="/plugin/help/canvas-bridge" element={<CanvasBridgeHelpPage />} />
         <Route path="/plugin/:ainaId" element={<PluginDetailPage />} />
         <Route path="/apps" element={<Navigate to="/plugin" replace />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />

@@ -57,7 +57,12 @@ class McpAuth(StrictModel):
     scopes: list[str] | None = None
 
 
+DEFAULT_SERVER_ID = "default"
+
+
 class McpServer(StrictModel):
+    # Required when ``tools.mcp`` lists several servers; a single server is ``default``.
+    id: str = DEFAULT_SERVER_ID
     url: str
     auth: McpAuth
 
@@ -69,11 +74,16 @@ class ExposedTool(StrictModel):
     result_widget: str | None = None
     long_running: bool = False
     timeout_seconds: float | None = None
+    # The id of the server that provides the tool; required when the app has several servers.
+    server: str | None = None
 
 
 class PackageTools(StrictModel):
-    mcp: McpServer
+    mcp: McpServer | list[McpServer]
     expose: dict[str, ExposedTool]
+
+    def servers(self) -> list[McpServer]:
+        return self.mcp if isinstance(self.mcp, list) else [self.mcp]
 
 
 class PackageSkill(StrictModel):
@@ -135,7 +145,7 @@ class AinaPackageManifest(StrictModel):
     schema_url: str | None = Field(default=None, alias="$schema")
     protocol_version: Literal["2.0"]
     aina: PackageIdentity
-    tools: PackageTools
+    tools: PackageTools | None = None
     skills: list[PackageSkill] = Field(default_factory=list)
     canvas: PackageCanvas | None = None
     widgets: list[PackageWidget] = Field(default_factory=list)
@@ -147,3 +157,20 @@ class AinaPackageManifest(StrictModel):
 
     def secret_config_fields(self) -> set[str]:
         return self.config.secret_fields() if self.config is not None else set()
+
+    def exposed(self) -> dict[str, ExposedTool]:
+        """The exposed MCP tools by name (none for an app of only skills or a canvas)."""
+        return self.tools.expose if self.tools is not None else {}
+
+    def servers(self) -> list[McpServer]:
+        return self.tools.servers() if self.tools is not None else []
+
+    def server_for(self, tool_name: str) -> McpServer:
+        """The server that provides an exposed tool (validation guarantees there is exactly one)."""
+        servers = self.servers()
+        wanted = self.exposed()[tool_name].server
+        return next(server for server in servers if wanted is None or server.id == wanted)
+
+    def oauth_server(self) -> McpServer | None:
+        """The one server that uses OAuth, if any (validation allows at most one)."""
+        return next((server for server in self.servers() if server.auth.type == "oauth2"), None)

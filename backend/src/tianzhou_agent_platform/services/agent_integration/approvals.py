@@ -55,7 +55,7 @@ def _has_confirmation_widget(capability: Capability) -> bool:
     if capability.kind != "mcp":
         return False
     aina, _installation, tool = cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], capability.value)
-    exposed = package_runtime(aina).package.tools.expose.get(tool.name)
+    exposed = package_runtime(aina).package.exposed().get(tool.name)
     return exposed is not None and exposed.confirm_widget is not None
 
 

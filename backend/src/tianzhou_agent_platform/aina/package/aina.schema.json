@@ -3,7 +3,12 @@
   "$id": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
   "title": "AINA package manifest (aina.json), protocol 2.0",
   "type": "object",
-  "required": ["protocol_version", "aina", "tools"],
+  "required": ["protocol_version", "aina"],
+  "anyOf": [
+    { "required": ["tools"] },
+    { "required": ["skills"], "properties": { "skills": { "minItems": 1 } } },
+    { "required": ["canvas"] }
+  ],
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
@@ -122,13 +127,15 @@
       "additionalProperties": false,
       "properties": {
         "mcp": {
-          "type": "object",
-          "required": ["url", "auth"],
-          "additionalProperties": false,
-          "properties": {
-            "url": { "$ref": "#/$defs/mcp_url" },
-            "auth": { "$ref": "#/$defs/mcp_auth" }
-          }
+          "oneOf": [
+            { "$ref": "#/$defs/mcp_server" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "$ref": "#/$defs/mcp_server", "required": ["id"] }
+            }
+          ]
         },
         "expose": {
           "type": "object",
@@ -169,6 +176,16 @@
         }
       ]
     },
+    "mcp_server": {
+      "type": "object",
+      "required": ["url", "auth"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/local_id" },
+        "url": { "$ref": "#/$defs/mcp_url" },
+        "auth": { "$ref": "#/$defs/mcp_auth" }
+      }
+    },
     "exposed_tool": {
       "type": "object",
       "additionalProperties": false,
@@ -183,7 +200,8 @@
         "confirm_widget": { "$ref": "#/$defs/local_id" },
         "result_widget": { "$ref": "#/$defs/local_id" },
         "long_running": { "type": "boolean" },
-        "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 120 }
+        "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 120 },
+        "server": { "$ref": "#/$defs/local_id" }
       }
     },
     "skill": {

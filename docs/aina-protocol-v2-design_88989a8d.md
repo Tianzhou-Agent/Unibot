@@ -277,9 +277,12 @@ must load remote content is declared as a URL canvas instead (§9.1).
 | `aina.version` | yes | Semver; any change to the package or exposed tool set requires a new version |
 | `aina.name` · `description` · `publisher` | yes | `description` is model-facing routing text |
 | `aina.icon` · `locales` | no | `locales` holds display strings only and is never sent to the model |
+| `tools` | one of `tools` · `skills` · `canvas` | An app needs at least one part; an app of only skills or only a canvas has no `tools` |
+| `tools.mcp` | with `tools` | One server `{url, auth}`, or a list of servers each with an `id` (at most 8) |
 | `tools.mcp.url` | yes | HTTPS Streamable HTTP endpoint; origin must pass the admin allowlist |
-| `tools.mcp.auth` | yes | `none` · `bearer`/`api_key` (value from a secret config field) · `oauth2` (per user, MCP authorization spec) |
-| `tools.expose` | yes | Allowlist; only these MCP tools are ever exposed (§6.1) |
+| `tools.mcp.auth` | yes | `none` · `bearer`/`api_key` (value from a secret config field) · `oauth2` (per user, MCP authorization spec); at most one server of an app uses `oauth2` |
+| `tools.expose` | with `tools` | Allowlist; only these MCP tools are ever exposed (§6.1); names are unique within the app |
+| `tools.expose.*.server` | with several servers | The `id` of the server that provides the tool |
 | `tools.expose.*.effect` | no | `read` · `write` · `destructive`; default derived from MCP annotations (§6.1) |
 | `tools.expose.*.visibility` | no | `model` (agent may call) and/or `app` (canvas/widgets may call); default both |
 | `tools.expose.*.confirm_widget` · `result_widget` | no | IDs from `widgets` (§9.2) |
@@ -882,6 +885,21 @@ runtime type only, never on an AINA id.
 ### Where the implementation differs from or narrows this design
 
 - `tools.mcp.url` also accepts plain `http://` for loopback hosts, so a developer can register a local server.
+- The **Add app** page (`/plugin/new`,
+  [`AddAppPage.tsx`](../frontend/src/pages/AddAppPage.tsx), [`api/aina_add_app.py`](../backend/src/tianzhou_agent_platform/api/aina_add_app.py))
+  builds a package from its parts with `POST /ainas/packages/compose` (`mode=check|download|register`): `aina.json`
+  as filled in, an optional base `.aina.zip` whose other files are kept, `skill:<id>` files (`SKILL.md` or a folder
+  `.zip`; name and description come from the frontmatter) and a canvas bundle `.zip`.
+  - `POST /ainas/mcp/inspect` lists a server's tools with the effect their annotations suggest and the loosest one
+    they allow.
+  - `POST /ainas/canvas/inspect` checks a canvas address against the allowlist and its `X-Frame-Options` and CSP
+    `frame-ancestors`.
+  - A checked bundle is previewed from `/aina-ui/drafts/<archive sha256>/…`, kept in the node's memory (the newest
+    32 drafts) with the same sandbox headers as registered packages.
+  - Checking and downloading need a signed-in user; registering needs a platform admin.
+  - The old Add menu entries are gone: registering 1.x AINA, tool and skill JSON, the AINA Project template and
+    the project ZIP import. Existing projects, tools and skills are still listed on the Developer tab, where they
+    can be deployed, downloaded or deleted.
 - MCP `oauth2` authorization ([`aina/package/oauth.py`](../backend/src/tianzhou_agent_platform/aina/package/oauth.py),
   [`api/aina_oauth.py`](../backend/src/tianzhou_agent_platform/api/aina_oauth.py)):
   - **Discovery:** the protected resource metadata comes from the server's `401` challenge, or from the path-aware

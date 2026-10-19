@@ -39,8 +39,6 @@ interface MockState {
   openedAppId: string | null;
   sandbox: JsonObject | null;
   sandboxExecutions: JsonObject[];
-  lastProjectImportContentType: string | null;
-  lastProjectScaffoldPayload: JsonObject | null;
 }
 
 function conversation(overrides: JsonObject = {}): JsonObject {
@@ -320,8 +318,6 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     openedAppId: initial.openedAppId ?? null,
     sandbox: initial.sandbox ?? null,
     sandboxExecutions: initial.sandboxExecutions ?? [],
-    lastProjectImportContentType: null,
-    lastProjectScaffoldPayload: null,
   };
 
   await page.route("**/api/**", async (route) => {
@@ -600,22 +596,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
         },
       });
     }
-    if (method === "POST" && path === "/aina-projects/scaffold") {
-      state.lastProjectScaffoldPayload = request.postDataJSON() as JsonObject;
-      return route.fulfill({
-        status: 200,
-        contentType: "application/zip",
-        headers: { "Content-Disposition": "attachment; filename=\"com.example.my-aina-0.1.0.aina.zip\"" },
-        body: Buffer.from("PK-e2e-scaffold"),
-      });
-    }
     if (method === "GET" && path === "/aina-projects") return json(route, state.ainaProjects);
-    if (method === "POST" && path === "/aina-projects") {
-      state.lastProjectImportContentType = request.headers()["content-type"] ?? null;
-      const project = ainaProject();
-      if (!state.ainaProjects.some((item) => item.id === project.id)) state.ainaProjects.unshift(project);
-      return json(route, project, 201);
-    }
     if (method === "GET" && /^\/aina-projects\/[^/]+\/archive$/.test(path)) {
       return route.fulfill({
         status: 200,
@@ -633,22 +614,6 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
     if (method === "GET" && path === "/installations") return json(route, []);
     if (method === "GET" && path === "/skills") return json(route, []);
     if (method === "GET" && path === "/tools") return json(route, state.tools);
-    if (method === "POST" && path === "/tools") {
-      const payload = request.postDataJSON() as JsonObject;
-      const created = {
-        ...payload,
-        version: payload.version ?? "1.0.0",
-        authentication: payload.authentication ?? { type: "none", header_name: "Authorization" },
-        timeout_seconds: payload.timeout_seconds ?? 15,
-        retries: payload.retries ?? 1,
-        permissions: payload.permissions ?? [],
-        visibility: payload.visibility ?? "public",
-        status: payload.status ?? "published",
-        created_at: NOW,
-      };
-      state.tools.push(created);
-      return json(route, created, 201);
-    }
     if (method === "GET" && path === "/memories") return json(route, { items: [], total: 0 });
     if (method === "GET" && path === "/memories/stats") {
       return json(route, { total: 0, fact: 0, preference: 0, goal: 0, instruction: 0 });
@@ -1303,12 +1268,12 @@ test("FE-E2E-REGISTRY-001 ordinary authenticated users can browse but cannot man
     is_admin: false, providers: ["password"], avatar_url: null,
   } }));
   await page.goto("/plugin");
-  await page.getByRole("button", { name: "添加", exact: true }).click();
-  const addMenu = page.getByRole("menu", { name: "添加", exact: true });
-  await expect(addMenu.getByText("注册和删除能力定义需要管理员权限。", { exact: true })).toBeVisible();
-  await expect(addMenu.getByRole("menuitem", { name: /^注册/ })).toHaveCount(0);
-  await expect(addMenu.getByRole("menuitem", { name: "项目模板", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^删除 / })).toHaveCount(0);
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  // Anyone can prepare and download a package on the Add app page; only an admin registers it.
+  await expect(page.getByText("只有平台管理员可以注册应用。下载应用包后交给管理员即可。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载应用包", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "注册应用", exact: true })).toHaveCount(0);
 });
 
 test("FE-E2E-MOBILE-001 phone navigation overlays content and both send buttons fit", async ({ page }) => {
@@ -1892,7 +1857,7 @@ test("FE-E2E-002D 文件入口按用户和 Workspace 层级展示文件", async 
   await expect(page.getByRole("textbox", { name: "全文 Markdown 编辑器" })).toBeVisible();
 });
 
-test("FE-E2E-003 在插件页面注册 Tool", async ({ page }) => {
+test("FE-E2E-003 插件页面的添加按钮打开添加应用页面", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/apps");
   await expect(page).toHaveURL(/\/plugin$/);
@@ -1901,22 +1866,11 @@ test("FE-E2E-003 在插件页面注册 Tool", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/plugin$/);
   await expect(page.getByRole("heading", { name: "插件", exact: true, level: 1 })).toBeVisible();
-  const registerTool = async () => {
-    await page.getByRole("button", { name: "添加", exact: true }).click();
-    await page.getByRole("menuitem", { name: "注册工具", exact: true }).click();
-  };
-  await registerTool();
-  await expect(page.getByRole("tab", { name: "开发者", selected: true })).toBeVisible();
-  await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.add/);
-  await page.getByRole("button", { name: "提交注册" }).click();
-
-  await expect(page.getByText("工具注册成功。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "工具", exact: true }).getByRole("article", { name: "浏览器加法工具" })).toBeVisible();
-
-  // The high-risk preset lives inside the editor rather than on the page toolbar.
-  await registerTool();
-  await page.getByRole("button", { name: "载入高风险示例", exact: true }).click();
-  await expect(page.getByLabel("工具 JSON")).toHaveValue(/browser\.demo\.risky-add/);
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await expect(page).toHaveURL(/\/plugin\/new$/);
+  await expect(page.getByRole("heading", { name: "添加应用", exact: true, level: 2 })).toBeVisible();
+  await page.getByRole("navigation", { name: "导航路径" }).getByRole("link", { name: "插件", exact: true }).click();
+  await expect(page).toHaveURL(/\/plugin$/);
 });
 
 test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page }) => {
@@ -2006,33 +1960,14 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
   await expect(page).toHaveURL(/\/plugin$/);
 });
 
-test("FE-E2E-003C AINA Project 模板、导入、下载和删除保持独立闭环", async ({ page }) => {
-  const state = await installMockApi(page);
+test("FE-E2E-003C 已有的 AINA Project 仍可下载和删除", async ({ page }) => {
+  const state = await installMockApi(page, { ainaProjects: [ainaProject()] });
   await page.goto("/plugin");
-  await page.getByRole("button", { name: "添加", exact: true }).click();
-  await page.getByRole("menuitem", { name: "项目模板", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "生成 AINA Project 模板", exact: true })).toBeVisible();
-  const scaffoldDownload = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下载 ZIP 模板", exact: true }).click();
-  await expect((await scaffoldDownload).suggestedFilename()).toBe("com.example.my-aina-0.1.0.aina.zip");
-  expect(state.lastProjectScaffoldPayload?.aina_id).toBe("com.example.my-aina");
-
-  await page.getByLabel("选择 AINA Project ZIP").setInputFiles({
-    name: "managed-demo.aina.zip",
-    mimeType: "application/zip",
-    buffer: Buffer.from("PK-e2e-upload"),
-  });
+  await page.getByRole("tab", { name: "开发者", exact: true }).click();
 
   const projectSection = page.getByRole("region", { name: "AINA Projects", exact: true });
   const projectRow = projectSection.getByRole("article", { name: "Managed Demo", exact: true });
   await expect(projectRow).toBeVisible();
-  await expect(projectSection.getByText("已校验·待部署", { exact: true })).toBeVisible();
-  expect(state.lastProjectImportContentType).toContain("multipart/form-data; boundary=");
-  expect(state.ainas).toHaveLength(0);
-  // An imported project is not a callable app until deployed.
-  await page.getByRole("tab", { name: "应用", exact: true }).click();
-  await expect(page.getByText("尚未注册 AINA", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "开发者", exact: true }).click();
 
   const archiveDownload = page.waitForEvent("download");
   await projectRow.getByRole("button", { name: "Managed Demo 更多操作", exact: true }).click();

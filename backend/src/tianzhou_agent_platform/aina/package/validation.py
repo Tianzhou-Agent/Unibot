@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 from jsonschema import Draft202012Validator, FormatChecker  # type: ignore[import-untyped]
-from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
+from jsonschema.exceptions import SchemaError, ValidationError  # type: ignore[import-untyped]
 from pydantic import Field
 
 from tianzhou_agent_platform.aina.package.manifest import AinaPackageManifest
@@ -109,6 +109,11 @@ def validate_package_files(files: Mapping[str, bytes]) -> PackageValidationRepor
         key=lambda error: [str(part) for part in error.absolute_path],
     )
     for error in schema_errors:
+        if not error.absolute_path and error.validator == "anyOf":
+            errors.append("aina.json: an app needs at least one of tools (an MCP server), skills or a canvas")
+            continue
+        # ``tools.mcp`` is one server or a list: report what is wrong with the form that was used.
+        error = _specific(error)
         location = "/".join(str(part) for part in error.absolute_path) or "(root)"
         errors.append(f"aina.json {location}: {error.message}")
     if schema_errors:
@@ -121,6 +126,16 @@ def validate_package_files(files: Mapping[str, bytes]) -> PackageValidationRepor
     report.skills = _load_skills(manifest, files, errors)
     report.warnings.extend(_model_text_warnings(manifest, report.skills))
     return report
+
+
+def _specific(error: ValidationError) -> ValidationError:
+    """The sub-error of a ``oneOf`` for the branch that matches the instance's type."""
+    while error.validator == "oneOf" and error.context:
+        same_type = [item for item in error.context if item.validator != "type"]
+        if not same_type:
+            break
+        error = min(same_type, key=lambda item: len(item.relative_schema_path))
+    return error
 
 
 def check_mcp_tool_description(name: str, description: str) -> tuple[list[str], list[str]]:
@@ -146,7 +161,7 @@ def _check_references(manifest: AinaPackageManifest, files: Mapping[str, bytes],
         widgets[widget.id] = widget.purpose
         if widget.entry not in files:
             errors.append(f"widgets/{index}/entry: file {widget.entry!r} is missing from the package")
-    for name, tool in manifest.tools.expose.items():
+    for name, tool in manifest.exposed().items():
         for field, purpose in (("confirm_widget", "confirmation"), ("result_widget", "result")):
             widget_id = getattr(tool, field)
             if widget_id is None:
@@ -159,7 +174,8 @@ def _check_references(manifest: AinaPackageManifest, files: Mapping[str, bytes],
 
 def _check_tools(manifest: AinaPackageManifest, errors: list[str]) -> None:
     canvas_tools = manifest.canvas.tools if manifest.canvas is not None else []
-    seen: set[str] = set(manifest.tools.expose)
+    _check_servers(manifest, errors)
+    seen: set[str] = set(manifest.exposed())
     for index, tool in enumerate(canvas_tools):
         if tool.name in seen:
             errors.append(f"canvas.tools/{index}/name: tool name {tool.name!r} is not unique across the package")
@@ -184,6 +200,21 @@ def _check_tools(manifest: AinaPackageManifest, errors: list[str]) -> None:
         errors.append(f"permissions: scope {scope!r} is declared more than once")
 
 
+def _check_servers(manifest: AinaPackageManifest, errors: list[str]) -> None:
+    """Several MCP servers: unique ids, every exposed tool names its server, and at most one uses OAuth."""
+    servers = manifest.servers()
+    ids = [server.id for server in servers]
+    for server_id in sorted({server_id for server_id in ids if ids.count(server_id) > 1}):
+        errors.append(f"tools.mcp: server id {server_id!r} is duplicated")
+    for name, tool in manifest.exposed().items():
+        if tool.server is None and len(servers) > 1:
+            errors.append(f"tools.expose.{name}.server: name the server that provides the tool ({', '.join(ids)})")
+        elif tool.server is not None and tool.server not in ids:
+            errors.append(f"tools.expose.{name}.server: no MCP server has the id {tool.server!r}")
+    if sum(server.auth.type == "oauth2" for server in servers) > 1:
+        errors.append("tools.mcp: at most one MCP server of an app may use OAuth")
+
+
 def _check_config(manifest: AinaPackageManifest, errors: list[str]) -> None:
     if manifest.config is not None:
         schema = manifest.config.json_schema
@@ -193,9 +224,10 @@ def _check_config(manifest: AinaPackageManifest, errors: list[str]) -> None:
             errors.append(f"config.schema: not a valid JSON Schema ({exc.message})")
         if schema.get("type") != "object":
             errors.append("config.schema: the configuration schema must have type 'object'")
-    secret = manifest.tools.mcp.auth.secret
-    if secret is not None and secret not in manifest.secret_config_fields():
-        errors.append(f'tools.mcp.auth.secret: {secret!r} must be a config.schema property with "x-secret": true')
+    for server in manifest.servers():
+        secret = server.auth.secret
+        if secret is not None and secret not in manifest.secret_config_fields():
+            errors.append(f'tools.mcp.auth.secret: {secret!r} must be a config.schema property with "x-secret": true')
 
 
 def _load_skills(

@@ -5,7 +5,7 @@ import { ShieldCheck, X } from "lucide-react";
 import { apiErrorMessage } from "@/lib/api";
 import { connectAina, installPackage } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
-import type { AinaConfigField, AinaInstallation, AinaRecord } from "@/types";
+import { packageServers, type AinaConfigField, type AinaInstallation, type AinaRecord } from "@/types";
 
 // Design §10: which scopes are granted without asking, and how each is highlighted.
 const AUTO_GRANTED = new Set(["storage", "notify"]);
@@ -42,7 +42,9 @@ export function InstallConsentDialog({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const origin = useMemo(() => (pkg ? safeOrigin(pkg.tools.mcp.url) : ""), [pkg]);
+  const servers = useMemo(() => (pkg ? packageServers(pkg) : []), [pkg]);
+  const origin = servers.map((server) => safeOrigin(server.url)).join(", ");
+  const oauthOrigin = safeOrigin(servers.find((server) => server.auth.type === "oauth2")?.url ?? "");
 
   if (!pkg || runtime.type !== "package") return null;
   const tools = runtime.tools;
@@ -100,10 +102,14 @@ export function InstallConsentDialog({
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 text-[11.5px]">
           <section>
-            <h3 className="font-bold">{t("server")}</h3>
-            <p className="mt-1 font-mono text-[11px]">{origin}</p>
-            <p className="mt-0.5 text-ink-muted">{t("serverHint")}</p>
-            {pkg.tools.mcp.auth.type === "oauth2" ? <p className="mt-1 text-ink-muted">{t("oauthNext", { origin })}</p> : null}
+            {servers.length ? (
+              <>
+                <h3 className="font-bold">{t("server")}</h3>
+                <p className="mt-1 font-mono text-[11px]">{origin}</p>
+                <p className="mt-0.5 text-ink-muted">{t("serverHint")}</p>
+                {oauthOrigin ? <p className="mt-1 text-ink-muted">{t("oauthNext", { origin: oauthOrigin })}</p> : null}
+              </>
+            ) : null}
             {pkg.canvas?.url ? (
               <p className="mt-1.5"><span className="font-bold">{t("canvas")}:</span> <span className="font-mono text-[11px]">{safeOrigin(pkg.canvas.url)}</span></p>
             ) : null}

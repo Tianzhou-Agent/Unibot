@@ -20,6 +20,8 @@ from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.store.models import StoragePath
 
 _CACHED_PACKAGES = 16
+# Drafts from the Add app page, kept in memory for the canvas preview only (newest first out of mind).
+_CACHED_DRAFTS = 32
 _TEXT_TYPES = {".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css"}
 
 
@@ -33,6 +35,21 @@ class PackageUiStore:
     def __init__(self, artifacts: AinaProjectArtifactStore) -> None:
         self._artifacts = artifacts
         self._cache: OrderedDict[str, dict[str, bytes]] = OrderedDict()
+        self._drafts: OrderedDict[str, tuple[dict[str, bytes], set[str]]] = OrderedDict()
+
+    def save_draft(self, archive_sha256: str, files: dict[str, bytes], skill_paths: list[str]) -> None:
+        """A checked but unregistered package, so its canvas can be previewed; kept in this node's memory."""
+        self._drafts[archive_sha256] = (files, {f"{path.rstrip('/')}/" for path in skill_paths})
+        self._drafts.move_to_end(archive_sha256)
+        while len(self._drafts) > _CACHED_DRAFTS:
+            self._drafts.popitem(last=False)
+
+    def draft_file(self, archive_sha256: str, path: str) -> tuple[bytes, str]:
+        files, skill_folders = self._drafts.get(archive_sha256) or ({}, set())
+        content = files.get(path) if _is_ui_file(path, skill_folders) else None
+        if content is None:
+            raise not_found("AINA UI file", path)
+        return content, _media_type(path)
 
     async def save(self, aina_id: str, archive_sha256: str, payload: bytes) -> None:
         await self._artifacts.write(archive_path(aina_id, archive_sha256), payload)
@@ -45,11 +62,7 @@ class PackageUiStore:
         content = files.get(path)
         if content is None:
             raise not_found("AINA UI file", path)
-        suffix = PurePosixPath(path).suffix.lower()
-        media = _TEXT_TYPES.get(suffix) or mimetypes.guess_type(path)[0] or "application/octet-stream"
-        if media.startswith("text/"):
-            media = f"{media}; charset=utf-8"
-        return content, media
+        return content, _media_type(path)
 
     async def _files(self, aina_id: str, archive_sha256: str) -> dict[str, bytes]:
         files = self._cache.get(archive_sha256)
@@ -72,13 +85,22 @@ class PackageUiStore:
 
 
 def is_ui_path(runtime: PackageRuntimeDefinition, path: str) -> bool:
+    return _is_ui_file(path, {f"{skill.path.rstrip('/')}/" for skill in runtime.package.skills})
+
+
+def _is_ui_file(path: str, skill_folders: set[str]) -> bool:
     parts = PurePosixPath(path).parts
     if not parts or path != PurePosixPath(path).as_posix() or any(part in {"", ".", ".."} for part in parts):
         return False
     if path == "aina.json":
         return False
-    skill_folders = {f"{skill.path.rstrip('/')}/" for skill in runtime.package.skills}
     return not any(path.startswith(folder) for folder in skill_folders)
+
+
+def _media_type(path: str) -> str:
+    suffix = PurePosixPath(path).suffix.lower()
+    media = _TEXT_TYPES.get(suffix) or mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return f"{media}; charset=utf-8" if media.startswith("text/") else media
 
 
 def ui_headers(*, frame_ancestors: list[str]) -> dict[str, str]:

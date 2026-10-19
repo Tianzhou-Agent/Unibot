@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from tianzhou_agent_platform.api.aina_add_app import create_aina_add_app_router
 from tianzhou_agent_platform.api.aina_canvas import create_aina_canvas_router
 from tianzhou_agent_platform.api.aina_host import create_aina_host_router
 from tianzhou_agent_platform.api.aina_host_services import create_aina_host_services_router
@@ -39,6 +40,7 @@ def create_router() -> APIRouter:
     router.include_router(create_memory_router())
     router.include_router(create_model_settings_router())
     router.include_router(create_aina_project_router())
+    router.include_router(create_aina_add_app_router())
     router.include_router(create_capability_router())
     router.include_router(create_aina_host_router())
     router.include_router(create_aina_host_services_router())
