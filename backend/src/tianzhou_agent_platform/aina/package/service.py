@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -20,7 +20,7 @@ from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 
 from tianzhou_agent_platform.aina.package.configuration import mcp_auth_headers, prepare_configuration, secret_context
 from tianzhou_agent_platform.aina.package.context import CONTEXT_META_KEY, Source, unibot_context
-from tianzhou_agent_platform.aina.package.manifest import EFFECT_ORDER, AinaPackageManifest, Effect
+from tianzhou_agent_platform.aina.package.manifest import EFFECT_ORDER, AinaPackageManifest, Effect, McpServer
 from tianzhou_agent_platform.aina.package.bundled import BUNDLED_HOST, effective_installation, is_bundled_url
 from tianzhou_agent_platform.aina.package.mcp_client import McpServerInfo, McpToolClient
 from tianzhou_agent_platform.aina.package.oauth import OAUTH_SECRET, McpOAuth, OAuthServer
@@ -117,14 +117,16 @@ class AinaPackageService:
         """
         report = validate_package_archive(payload)
         manifest = require_valid_package(report)
-        if is_bundled_url(manifest.tools.mcp.url) != bundled:
+        servers = manifest.servers()
+        if any(is_bundled_url(server.url) != bundled for server in servers):
             raise PlatformError(
                 "INVALID_REQUEST",
                 f"Only packages bundled with Unibot serve their MCP tools at {BUNDLED_HOST}",
                 status_code=422,
                 source="aina_package",
             )
-        self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
+        for server in servers:
+            self._require_destination(server.url, self.settings.capability_allowed_origins)
         if manifest.canvas is not None and manifest.canvas.url is not None:
             self._require_destination(manifest.canvas.url, self.settings.aina_canvas_allowed_origins)
         existing = await self._existing(manifest.aina.id)
@@ -140,9 +142,12 @@ class AinaPackageService:
                     "different content; publish a new version"
                 )
         try:
-            info = await self._list_tools(manifest, self._discovery_headers(manifest, credential=credential))
+            listed = {
+                server.id: await self._list_tools(server, self._discovery_headers(server, credential=credential))
+                for server in servers
+            }
         except PlatformError as exc:
-            if exc.code != "AUTHENTICATION_FAILED" or manifest.tools.mcp.auth.type != "oauth2" or credential:
+            if exc.code != "AUTHENTICATION_FAILED" or manifest.oauth_server() is None or credential:
                 raise
             raise PlatformError(
                 "AUTHENTICATION_FAILED",
@@ -151,7 +156,7 @@ class AinaPackageService:
                 status_code=422,
                 source="aina_package",
             ) from exc
-        snapshots, errors, warnings = snapshot_tools(manifest, info.tools)
+        snapshots, errors, warnings = snapshot_tools(manifest, {key: info.tools for key, info in listed.items()})
         if errors:
             raise PlatformError(
                 "INVALID_REQUEST",
@@ -165,8 +170,8 @@ class AinaPackageService:
             archive_sha256=cast(str, report.archive_sha256),
             tools=snapshots,
             skills=report.skills,
-            server_name=info.name,
-            server_version=info.version,
+            server_name=", ".join(info.name for info in listed.values() if info.name) or None,
+            server_version=", ".join(info.version for info in listed.values() if info.version) or None,
             bundled=bundled,
             oauth=_kept_oauth(existing, manifest),
         )
@@ -237,7 +242,7 @@ class AinaPackageService:
             user_id=request.user_id,
             previous=previous,
         )
-        oauth = manifest.tools.mcp.auth.type == "oauth2"
+        oauth = manifest.oauth_server() is not None
         if oauth and previous is not None and OAUTH_SECRET in previous.secrets:
             sealed[OAUTH_SECRET] = previous.secrets[OAUTH_SECRET]  # the user's connection outlives a re-install
         installation = AinaInstallation(
@@ -266,18 +271,20 @@ class AinaPackageService:
         """Re-run ``tools/list`` and disable every exposed tool that disappeared or changed since review."""
         record = await self.repository.get_aina(aina_id)
         runtime = package_runtime(record)
-        headers = (
-            await self._auth_headers(record, installation)
-            if installation is not None
-            else self._discovery_headers(runtime.package, credential=credential)
-        )
-        info = await self._list_tools(runtime.package, headers)
-        listed = {tool.name: tool for tool in info.tools}
+        listed: dict[str, dict[str, McpToolDescriptor]] = {}
+        for server in runtime.package.servers():
+            headers = (
+                await self._auth_headers(record, installation, server)
+                if installation is not None
+                else self._discovery_headers(server, credential=credential)
+            )
+            info = await self._list_tools(server, headers)
+            listed[server.id] = {tool.name: tool for tool in info.tools}
         tools: list[ToolSnapshot] = []
         for snapshot in runtime.tools:
             status = snapshot.status
             if status == "active":
-                current = listed.get(snapshot.name)
+                current = listed[runtime.package.server_for(snapshot.name).id].get(snapshot.name)
                 if current is None:
                     status = "missing"
                 elif tool_digest(current) != snapshot.digest:
@@ -315,7 +322,9 @@ class AinaPackageService:
             installation = next(
                 (item for item in installations if item.aina_id == aina_id and item.status == "active"), None
             )
-            if installation is None and runtime.package.tools.mcp.auth.type != "none":
+            if not runtime.package.servers():
+                continue  # an app of only skills or a canvas has no tools to check
+            if installation is None and any(server.auth.type != "none" for server in runtime.package.servers()):
                 outcomes[aina_id] = "skipped: no active installation to list its tools with"
                 continue
             try:
@@ -352,8 +361,9 @@ class AinaPackageService:
             )
         validate_arguments(snapshot, arguments)
         manifest = runtime.package
-        self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
-        headers = await self._auth_headers(record, installation)
+        server = manifest.server_for(name)
+        self._require_destination(server.url, self.settings.capability_allowed_origins)
+        headers = await self._auth_headers(record, installation, server)
         context = unibot_context(
             secret=aina_key_material(self.settings),
             manifest=manifest,
@@ -372,14 +382,14 @@ class AinaPackageService:
             files=await self._passed_files(arguments, installation, conversation_id),
         )
         meta = {"progressToken": invocation_id, CONTEXT_META_KEY: context}
-        url, timeout = manifest.tools.mcp.url, snapshot.timeout_seconds
+        url, timeout = server.url, snapshot.timeout_seconds
         try:
             result = await self.mcp.call_tool(url, name, arguments, meta=meta, headers=headers, timeout=timeout)
         except PlatformError as exc:
-            if exc.code != "AUTHENTICATION_FAILED" or manifest.tools.mcp.auth.type != "oauth2":
+            if exc.code != "AUTHENTICATION_FAILED" or server.auth.type != "oauth2":
                 raise
             # The server rejected the user's token: refresh it once (a failed refresh asks the user to reconnect).
-            headers = await self._auth_headers(record, installation, force_refresh=True)
+            headers = await self._auth_headers(record, installation, server, force_refresh=True)
             result = await self.mcp.call_tool(url, name, arguments, meta=meta, headers=headers, timeout=timeout)
         text = content_text(result.content)
         if result.is_error:
@@ -394,7 +404,7 @@ class AinaPackageService:
             visible["structuredContent"] = result.structured_content
         if text and not _same_json(text, result.structured_content):
             visible["content"] = text
-        exposed = manifest.tools.expose.get(name)
+        exposed = manifest.exposed().get(name)
         task = parse_task_start(result.meta) if exposed is not None and exposed.long_running else None
         widget_id = result_widget_id(manifest, name, result.meta)
         widget = (
@@ -431,7 +441,7 @@ class AinaPackageService:
         record, installation = await self._usable_installation(aina_id, tenant_id=tenant_id, user_id=user_id)
         runtime = package_runtime(record)
         snapshot = runtime.tool(name)
-        exposed = runtime.package.tools.expose.get(name)
+        exposed = runtime.package.exposed().get(name)
         if snapshot is None or exposed is None or "app" not in snapshot.visibility:
             raise PlatformError(
                 "PERMISSION_DENIED",
@@ -568,21 +578,20 @@ class AinaPackageService:
                 return None
             raise
 
-    def _discovery_headers(self, manifest: AinaPackageManifest, *, credential: str | None) -> dict[str, str]:
-        if manifest.tools.mcp.auth.type == "none" or credential is None:
+    def _discovery_headers(self, server: McpServer, *, credential: str | None) -> dict[str, str]:
+        if server.auth.type == "none" or credential is None:
             return {}
-        if manifest.tools.mcp.auth.type == "oauth2":
+        if server.auth.type == "oauth2":
             return {"Authorization": f"Bearer {credential}"}  # an access token the admin got from the server
-        return mcp_auth_headers(manifest.tools.mcp.auth, None, box=self.box, credential=credential)
+        return mcp_auth_headers(server.auth, None, box=self.box, credential=credential)
 
     # --- OAuth MCP servers (oauth.py) -------------------------------------------------------------------------
 
     async def _auth_headers(
-        self, record: AinaRecord, installation: AinaInstallation, *, force_refresh: bool = False
+        self, record: AinaRecord, installation: AinaInstallation, server: McpServer, *, force_refresh: bool = False
     ) -> dict[str, str]:
-        manifest = package_runtime(record).package
-        if manifest.tools.mcp.auth.type != "oauth2":
-            return mcp_auth_headers(manifest.tools.mcp.auth, installation, box=self.box)
+        if server.auth.type != "oauth2":
+            return mcp_auth_headers(server.auth, installation, box=self.box)
         return {"Authorization": f"Bearer {await self._access_token(record, installation, force_refresh=force_refresh)}"}
 
     async def _access_token(self, record: AinaRecord, installation: AinaInstallation, *, force_refresh: bool) -> str:
@@ -626,15 +635,15 @@ class AinaPackageService:
         """The URL that sends the user to the OAuth MCP server's authorization page (registering Unibot first)."""
         record = await self.repository.get_aina(aina_id)
         runtime = package_runtime(record)
-        auth = runtime.package.tools.mcp.auth
-        if auth.type != "oauth2":
+        oauth_server = runtime.package.oauth_server()
+        if oauth_server is None:
             raise PlatformError("INVALID_REQUEST", f"AINA {aina_id!r} does not use OAuth", status_code=409)
         if await self._installation(aina_id, tenant_id=tenant_id, user_id=user_id) is None:
             raise PlatformError("INVALID_REQUEST", "Install the AINA before connecting it", status_code=409)
         server = runtime.oauth
         if server is None or server.redirect_uri != self.oauth.redirect_uri:
             server = await self.oauth.register_client(
-                aina_id=aina_id, mcp_url=runtime.package.tools.mcp.url, scopes=list(auth.scopes or [])
+                aina_id=aina_id, mcp_url=oauth_server.url, scopes=list(oauth_server.auth.scopes or [])
             )
             updated = runtime.model_copy(update={"oauth": server})
             record = await self.repository.upsert_aina(
@@ -670,6 +679,17 @@ class AinaPackageService:
             raise PlatformError("RESOURCE_NOT_FOUND", f"AINA {aina_id!r} is not installed", status_code=404)
         return await self._disconnect(installation)
 
+    async def inspect_server(self, server: McpServer, *, credential: str | None = None) -> McpServerInfo:
+        """The tools an MCP server lists, for the Add app page to choose from before anything is registered."""
+        return await self._list_tools(server, self._discovery_headers(server, credential=credential))
+
+    def canvas_origin_allowed(self, url: str) -> bool:
+        try:
+            self._require_destination(url, self.settings.aina_canvas_allowed_origins)
+        except PlatformError:
+            return False
+        return True
+
     async def _existing(self, aina_id: str) -> AinaRecord | None:
         try:
             return await self.repository.get_aina(aina_id)
@@ -678,10 +698,10 @@ class AinaPackageService:
                 return None
             raise
 
-    async def _list_tools(self, manifest: AinaPackageManifest, headers: dict[str, str]) -> McpServerInfo:
-        self._require_destination(manifest.tools.mcp.url, self.settings.capability_allowed_origins)
+    async def _list_tools(self, server: McpServer, headers: dict[str, str]) -> McpServerInfo:
+        self._require_destination(server.url, self.settings.capability_allowed_origins)
         return await self.mcp.list_tools(
-            manifest.tools.mcp.url,
+            server.url,
             headers=headers,
             timeout=self.settings.capability_timeout_seconds,
         )
@@ -694,10 +714,14 @@ class AinaPackageService:
 
 def _kept_oauth(existing: AinaRecord | None, manifest: AinaPackageManifest) -> OAuthServer | None:
     """An upgrade keeps Unibot's client registration while the MCP server stays the same, so tokens keep working."""
-    if existing is None or manifest.tools.mcp.auth.type != "oauth2":
+    server = manifest.oauth_server()
+    if existing is None or server is None:
         return None
     previous = existing.manifest.runtime
-    if not isinstance(previous, PackageRuntimeDefinition) or previous.package.tools.mcp.url != manifest.tools.mcp.url:
+    if not isinstance(previous, PackageRuntimeDefinition):
+        return None
+    previous_server = previous.package.oauth_server()
+    if previous_server is None or previous_server.url != server.url:
         return None
     return previous.oauth
 
@@ -757,6 +781,10 @@ def consent_changes(previous: PackageRuntimeDefinition, current: PackageRuntimeD
             changes.append(f"Tool {name!r} now asks less often ({old_effect} → {effect})")
         if model_visible and not old_visible:
             changes.append(f"The agent can now call {name!r}")
+    known_servers = {server.url for server in previous.package.servers()}
+    for server in current.package.servers():
+        if server.url not in known_servers:
+            changes.append(f"Tools from a new MCP server at {server.url}")
     old_url = previous.package.canvas.url if previous.package.canvas is not None else None
     new_url = current.package.canvas.url if current.package.canvas is not None else None
     if new_url is not None and new_url != old_url:
@@ -803,17 +831,23 @@ def load_skill(record: AinaRecord, skill_id: str, file: str | None = None) -> st
 
 def snapshot_tools(
     manifest: AinaPackageManifest,
-    listed: Iterable[McpToolDescriptor],
+    listed: Mapping[str, Iterable[McpToolDescriptor]],
 ) -> tuple[list[ToolSnapshot], list[str], list[str]]:
-    """(snapshots, errors, warnings) of the exposed tools found in a ``tools/list`` result."""
-    by_name = {tool.name: tool for tool in listed}
+    """(snapshots, errors, warnings) of the exposed tools found in each server's ``tools/list`` result.
+
+    ``listed`` maps a server id to the tools it lists.
+    """
+    by_server = {server_id: {tool.name: tool for tool in tools} for server_id, tools in listed.items()}
     snapshots: list[ToolSnapshot] = []
     errors: list[str] = []
     warnings: list[str] = []
-    for name, exposed in manifest.tools.expose.items():
-        tool = by_name.get(name)
+    several = len(manifest.servers()) > 1
+    for name, exposed in manifest.exposed().items():
+        server = manifest.server_for(name)
+        tool = by_server.get(server.id, {}).get(name)
         if tool is None:
-            errors.append(f"tools.expose.{name}: the MCP server does not list a tool named {name!r}")
+            where = f"MCP server {server.id!r}" if several else "MCP server"
+            errors.append(f"tools.expose.{name}: the {where} does not list a tool named {name!r}")
             continue
         description = tool.description or tool.title or ""
         if not description:

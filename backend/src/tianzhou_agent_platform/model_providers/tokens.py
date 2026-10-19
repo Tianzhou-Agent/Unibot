@@ -23,13 +23,16 @@ def estimate_request_tokens(messages: list[dict[str, Any]], tools: list[dict[str
     return total
 
 
-def output_token_reserve(context_window_tokens: int) -> int:
-    """Answer space kept free in every request: a quarter of the window, at most 4096 tokens."""
+def output_token_reserve(context_window_tokens: int, max_output_tokens: int | None = None) -> int:
+    """Answer space kept free in every request: the model's own setting, else a quarter of the window, at most
+    4096 tokens."""
+    if max_output_tokens is not None:
+        return min(max_output_tokens, context_window_tokens // 2)
     return min(4_096, context_window_tokens // 4)
 
 
-def request_input_budget(context_window_tokens: int) -> int:
-    return context_window_tokens - output_token_reserve(context_window_tokens)
+def request_input_budget(context_window_tokens: int, max_output_tokens: int | None = None) -> int:
+    return context_window_tokens - output_token_reserve(context_window_tokens, max_output_tokens)
 
 
 def _estimate_value_tokens(value: Any) -> int:

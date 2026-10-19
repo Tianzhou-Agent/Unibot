@@ -395,16 +395,6 @@ export interface AinaProjectRecord {
   deployed_at?: string | null;
 }
 
-export interface AinaProjectScaffoldRequest {
-  aina_id: string;
-  name: string;
-  description: string;
-  version?: string;
-  publisher_id?: string;
-  publisher_name?: string;
-  language: "python" | "node";
-}
-
 export interface AinaInstallation {
   aina_id: string;
   installed_version: string;
@@ -858,12 +848,24 @@ export interface MemoryStatsResponse {
 }
 
 /** The parts of an AINA 2.0 ``aina.json`` the install consent shows (design §10). */
+export interface PackageMcpServer {
+  id?: string;
+  url: string;
+  auth: { type: "none" | "bearer" | "api_key" | "oauth2" };
+}
+
+/** Every MCP server of a package (none for an app of only skills or a canvas). */
+export function packageServers(pkg: AinaPackageManifest): PackageMcpServer[] {
+  return pkg.tools ? ([] as PackageMcpServer[]).concat(pkg.tools.mcp) : [];
+}
+
 export interface AinaPackageManifest {
   aina: { id: string; name: string; version: string; publisher: { id: string; name: string; url?: string | null } };
-  tools: {
-    mcp: { url: string; auth: { type: "none" | "bearer" | "api_key" | "oauth2" } };
-    expose?: Record<string, { effect: "read" | "write" | "destructive"; visibility: ("model" | "app")[]; long_running?: boolean }>;
-  };
+  /** Absent for an app of only skills or a canvas; ``mcp`` lists several servers when it is an array. */
+  tools?: {
+    mcp: PackageMcpServer | PackageMcpServer[];
+    expose?: Record<string, { effect: "read" | "write" | "destructive"; visibility: ("model" | "app")[]; long_running?: boolean; server?: string | null }>;
+  } | null;
   canvas?: { title: string; entry?: string | null; url?: string | null; tools?: { name: string }[] } | null;
   config?: { schema: AinaConfigSchema } | null;
   permissions: { scope: string; reason?: string | null; optional: boolean }[];

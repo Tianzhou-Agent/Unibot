@@ -1877,6 +1877,7 @@ def new_model_provider(data: ModelProviderCreate, *, existing_count: int) -> Mod
                 enabled=model.enabled,
                 context_window_tokens=model.context_window_tokens,
                 accepts_images=model.accepts_images,
+                max_output_tokens=model.max_output_tokens,
             )
             for model in data.models
         ],
@@ -1901,6 +1902,7 @@ def updated_model_provider(provider: ModelProviderRecord, data: ModelProviderUpd
             is_default=(current_models[model.id].is_default and model.enabled if model.id else False),
             context_window_tokens=model.context_window_tokens,
             accepts_images=model.accepts_images,
+            max_output_tokens=model.max_output_tokens,
         )
         for model in data.models
     ]
@@ -1959,6 +1961,7 @@ def default_model_runtime(providers: Iterable[ModelProviderRecord]) -> ModelRunt
                 context_window_tokens=model.context_window_tokens,
                 timeout_seconds=provider.timeout_seconds,
                 accepts_images=model.accepts_images,
+                max_output_tokens=model.max_output_tokens,
             )
     return None
 

@@ -353,7 +353,7 @@ class AinaTaskService:
             return []
         runtime = record.manifest.runtime
         exposed = (
-            runtime.package.tools.expose.get(task.tool_name) if isinstance(runtime, PackageRuntimeDefinition) else None
+            runtime.package.exposed().get(task.tool_name) if isinstance(runtime, PackageRuntimeDefinition) else None
         )
         if exposed is None or exposed.result_widget is None:
             return []

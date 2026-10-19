@@ -69,8 +69,19 @@ aina publish package --host https://unibot.example.com/api --token <developer to
 Create the token in Unibot under **Settings → Developer**. It is shown once. It can only validate, publish and
 refresh packages, and publishing needs a platform admin.
 
-Without the CLI, use **Plugins → Add → New app** in Unibot to download the same starter project. **Upload app
-package** runs the host's checks and lets an admin register it.
+Without the CLI, use **Plugins → Add** in Unibot. The **Add app** page offers the same starter project, takes a
+finished `.aina.zip`, or builds a package from its parts:
+
+- **About this app:** the name and description are required, because the agent reads them to decide when to use the
+  app.
+- **What it includes:** at least one of these parts.
+  - MCP servers: **Load tools** lists a server's tools, and you choose which ones to include and each one's
+    effect.
+  - Skills: a `SKILL.md`, or a folder `.zip` with its references.
+  - A canvas: a web address or a static bundle (`.zip` with `index.html`), with a live preview in a frame the size
+    of the canvas pane.
+- **Check app** runs the host's checks. **Download package** gives you the `.aina.zip` to keep or hand to an admin.
+  **Register app** is for platform admins.
 
 ## 2. The package
 
@@ -133,6 +144,9 @@ A minimal `aina.json`:
 
 ## 3. Tools
 
+An app may have no tools at all: an app of only skills, or only a canvas, is valid. It needs at least one of
+`tools`, `skills` or `canvas`.
+
 Your MCP server may have many tools. Only those listed in `tools.expose` are ever used. When the package is
 registered, Unibot calls `tools/list` and stores a **snapshot** of each exposed tool: description, input and output
 schema, annotations. The agent only ever sees the snapshot, and arguments are checked against it.
@@ -176,6 +190,28 @@ The default is both. App-only tools (for example `sync_bank`) are never shown to
   work must use a long-running tool (§8).
 - **Server authentication:** `tools.mcp.auth` is `none`, `bearer`, `api_key` or `oauth2`. A `bearer` or `api_key`
   credential comes from a secret setting (§7).
+
+### Several servers
+
+`tools.mcp` may also be a list of servers, each with an `id`. Every exposed tool then names the server that
+provides it:
+
+```json
+"tools": {
+  "mcp": [
+    { "id": "board", "url": "https://draw.example.com/mcp", "auth": { "type": "none" } },
+    { "id": "files", "url": "https://files.example.com/mcp", "auth": { "type": "bearer", "secret": "files_token" } }
+  ],
+  "expose": {
+    "create_element": { "effect": "write", "server": "board" },
+    "save_file": { "effect": "write", "server": "files" }
+  }
+}
+```
+
+- **Tool names:** they are unique within an app. If two servers list the same name, expose it from one of them.
+- **Authentication:** each server has its own auth. At most one server of an app may use `oauth2`.
+- **Upgrades:** a version that adds a server asks every user to approve the app again.
 
 ### OAuth servers
 
@@ -291,6 +327,10 @@ Everything goes through the UI bridge:
 
 - vendor `aina-ui.js` next to your HTML (as `aina init` does), or
 - `npm install @unibot/aina-ui` in a bundled app.
+
+Unibot also serves the script at `/aina-ui/sdk/aina-ui.js` (and `aina-ui.css`), so a web app canvas can import it
+from there while you develop. **Plugins → Add → Canvas** shows whether a page is connected, and links to an in-app
+help page (`/plugin/help/canvas-bridge`) on what a canvas gains from the script.
 
 ```js
 import { host } from "./aina-ui.js";
@@ -417,8 +457,9 @@ The rules:
 ## 9. Publishing and upgrades
 
 - **Registration:**
-  - `aina publish`, or **Upload app package**, registers a version. Registering needs a platform admin.
-  - For a `bearer` or `api_key` server, pass `--credential` (or fill the field in the dialog). It is used once to
+  - `aina publish`, or **Register app** on the Add app page, registers a version. Registering needs a platform
+    admin.
+  - For a `bearer` or `api_key` server, pass `--credential` (or fill the server's field on the page). It is used once to
     list your tools and is not stored.
   - For an `oauth2` server that lists its tools only to an authorized client, pass an access token for the server
     the same way.

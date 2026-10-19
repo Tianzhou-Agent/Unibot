@@ -16,6 +16,9 @@ if (!dir) {
   process.exit(1);
 }
 const port = Number(process.env.PORT ?? 3001);
+// The server resolves relative export paths (exports/…) from its working folder, as the stdio server run from the
+// checkout does.
+process.chdir(dir);
 // The server reads its configuration when its modules load, so set it first.
 process.env.EXPRESS_SERVER_URL ??= "http://127.0.0.1:3000";
 process.env.ENABLE_CANVAS_SYNC ??= "true";

@@ -82,8 +82,10 @@ from tianzhou_agent_platform.store.repository_schema import (
 )
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 
-CONVERSATION_RUN_TTL_SECONDS = 15 * 60
+# A live run renews its lease every heartbeat (and cancels itself when it cannot), so the lease only has to
+# outlast a few missed heartbeats. When the process running a turn dies, the conversation is released this soon.
 CONVERSATION_RUN_HEARTBEAT_SECONDS = 30
+CONVERSATION_RUN_TTL_SECONDS = 4 * CONVERSATION_RUN_HEARTBEAT_SECONDS
 
 
 class PersistentRepository(InMemoryRepository):

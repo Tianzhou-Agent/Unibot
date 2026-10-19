@@ -1,31 +1,25 @@
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n";
-import { type ChangeEvent, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AppWindow,
   CheckCircle2,
-  ChevronDown,
   Code2,
   Download,
-  FileArchive,
   Info,
   Loader2,
   PackageCheck,
   Plus,
   RefreshCw,
   Rocket,
-  Sparkles,
   Search,
   ShieldAlert,
   Trash2,
   Unplug,
-  Upload,
   Wrench,
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
-import { PackageReviewDialog, PackageScaffoldForm } from "@/components/apps/PackageDeveloper";
 import { ActionMenu, AppIcon, PluginChip, PluginRow, PluginSection, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
@@ -35,117 +29,13 @@ import { classNames, downloadBlob } from "@/lib/utils";
 import type {
   AinaInstallation,
   AinaProjectRecord,
-  AinaProjectScaffoldRequest,
   AinaRecord,
-  PackageValidationReport,
   SkillRecord,
   ToolRecord,
 } from "@/types";
 
 type View = "apps" | "developer";
 type Kind = "aina" | "tools" | "skills";
-
-const DEFAULT_PROJECT_SCAFFOLD: AinaProjectScaffoldRequest = {
-  aina_id: "com.example.my-aina",
-  name: "My AINA",
-  description: "A managed AINA project.",
-  version: "0.1.0",
-  language: "python",
-};
-
-const SAMPLE_TOOL = {
-  tool_id: "browser.demo.add",
-  get name() { return i18n.t("apps:sample.tool.name"); },
-  get description() { return i18n.t("apps:sample.tool.desc"); },
-  input_schema: {
-    type: "object",
-    properties: { a: { type: "integer" }, b: { type: "integer" } },
-    required: ["a", "b"],
-    additionalProperties: false,
-  },
-  output_schema: {
-    type: "object",
-    properties: { result: { type: "integer" } },
-    required: ["result"],
-  },
-  endpoint: "http://127.0.0.1:8099/tool/add",
-  side_effect_level: "none",
-  authentication: { type: "none" },
-};
-
-const SAMPLE_RISKY_TOOL = {
-  ...SAMPLE_TOOL,
-  tool_id: "browser.demo.risky-add",
-  get name() { return i18n.t("apps:sample.risky.name"); },
-  get description() { return i18n.t("apps:sample.risky.desc"); },
-  side_effect_level: "high",
-};
-
-const SAMPLE_AINA = {
-  protocol_version: "1.0",
-  aina: {
-    id: "com.example.browser-arithmetic",
-    get name() { return i18n.t("apps:sample.aina.name"); },
-    version: "1.0.0",
-    get description() { return i18n.t("apps:sample.aina.desc"); },
-    publisher: { id: "unibot-demo", name: "Unibot Demo" },
-  },
-  runtime: {
-    type: "remote",
-    endpoint: "http://127.0.0.1:8099/aina",
-    streaming: false,
-    async_tasks: false,
-  },
-  capabilities: {
-    skills: [
-      {
-        id: "multiply",
-        get name() { return i18n.t("apps:sample.skill1.name"); },
-        get description() { return i18n.t("apps:sample.skill1.desc"); },
-        input_schema: { type: "object" },
-      },
-    ],
-    tools: [],
-    ui: [],
-    events: [],
-  },
-  main_widget: {
-    id: "arithmetic-main",
-    kind: "form",
-    get title() { return i18n.t("apps:sample.widget.title"); },
-    get description() { return i18n.t("apps:sample.widget.desc"); },
-    get markdown() { return i18n.t("apps:sample.widget.markdown"); },
-    fields: [
-      { id: "left", get label() { return i18n.t("apps:sample.widget.left"); }, input_type: "number", placeholder: "6", required: true },
-      { id: "right", get label() { return i18n.t("apps:sample.widget.right"); }, input_type: "number", placeholder: "7", required: true },
-    ],
-    actions: [
-      {
-        id: "multiply",
-        get label() { return i18n.t("apps:sample.widget.action"); },
-        kind: "prompt",
-        get prompt() { return i18n.t("apps:sample.widget.prompt"); },
-      },
-    ],
-  },
-  permissions: [],
-  authentication: { type: "none" },
-};
-
-const SAMPLE_SKILL = {
-  skill_id: "browser.demo.arithmetic",
-  get name() { return i18n.t("apps:sample.skill.name"); },
-  get description() { return i18n.t("apps:sample.skill.desc"); },
-  version: "1.0.0",
-  input_schema: { type: "object" },
-  output_schema: { type: "object" },
-  get instructions() { return i18n.t("apps:sample.skill.instructions"); },
-  tools: ["browser.demo.add"],
-  permissions: [],
-  publisher: "unibot-demo",
-  visibility: "public",
-  status: "published",
-};
 
 export default function AllAppsPage() {
   const { t } = useTranslation("apps");
@@ -161,18 +51,8 @@ export default function AllAppsPage() {
   const [tools, setTools] = useState<ToolRecord[]>([]);
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editorKind, setEditorKind] = useState<Kind>("aina");
-  const [editorText, setEditorText] = useState("");
-  const [saving, setSaving] = useState(false);
   const [projectAction, setProjectAction] = useState<string | null>(null);
-  const [scaffoldOpen, setScaffoldOpen] = useState(false);
-  const [scaffold, setScaffold] = useState<AinaProjectScaffoldRequest>(DEFAULT_PROJECT_SCAFFOLD);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
-  const projectFileInput = useRef<HTMLInputElement>(null);
-  const packageFileInput = useRef<HTMLInputElement>(null);
-  const [packageFormOpen, setPackageFormOpen] = useState(false);
-  const [packageReview, setPackageReview] = useState<{ file: File; report: PackageValidationReport } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -207,72 +87,6 @@ export default function AllAppsPage() {
     () => new Set(installations.filter((item) => item.status === "active").map((item) => item.aina_id)),
     [installations],
   );
-
-  function openEditor(kind: Kind) {
-    setView("developer");
-    setEditorKind(kind);
-    const sample = kind === "aina" ? SAMPLE_AINA : kind === "tools" ? SAMPLE_TOOL : SAMPLE_SKILL;
-    setEditorText(JSON.stringify(sample, null, 2));
-    setEditorOpen(true);
-    setScaffoldOpen(false);
-    setNotice(null);
-  }
-
-  async function importProject(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) return;
-
-    setProjectAction("import");
-    setNotice(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const project = await api.postForm<AinaProjectRecord>("/aina-projects", form);
-      setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
-      setNotice({
-        tone: "success",
-        text: t("notice.projectSaved", { name: project.manifest.aina.name }),
-      });
-    } catch (importError) {
-      setNotice({ tone: "error", text: apiErrorMessage(importError) });
-    } finally {
-      setProjectAction(null);
-    }
-  }
-
-  async function reviewPackage(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) return;
-    setNotice(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      setPackageReview({ file, report: await api.postForm<PackageValidationReport>("/ainas/packages/validate", form) });
-    } catch (validateError) {
-      setNotice({ tone: "error", text: apiErrorMessage(validateError) });
-    }
-  }
-
-  async function downloadScaffold(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setProjectAction("scaffold");
-    setNotice(null);
-    try {
-      const result = await api.postBlob("/aina-projects/scaffold", scaffold);
-      downloadBlob(
-        result.blob,
-        result.filename ?? `${scaffold.aina_id}-${scaffold.version ?? "0.1.0"}.aina.zip`,
-      );
-      setNotice({ tone: "success", text: t("notice.templateDownloaded") });
-      setScaffoldOpen(false);
-    } catch (scaffoldError) {
-      setNotice({ tone: "error", text: apiErrorMessage(scaffoldError) });
-    } finally {
-      setProjectAction(null);
-    }
-  }
 
   async function downloadProject(project: AinaProjectRecord) {
     setProjectAction(project.id);
@@ -339,23 +153,6 @@ export default function AllAppsPage() {
     }
   }
 
-  async function registerDefinition() {
-    setSaving(true);
-    setNotice(null);
-    try {
-      const payload = JSON.parse(editorText) as unknown;
-      const path = editorKind === "aina" ? "/ainas" : editorKind === "tools" ? "/tools" : "/skills";
-      await api.post(path, payload);
-      setNotice({ tone: "success", text: t("notice.registered", { label: kindLabel(editorKind) }) });
-      setEditorOpen(false);
-      await load();
-    } catch (registerError) {
-      setNotice({ tone: "error", text: apiErrorMessage(registerError) });
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function install(aina: AinaRecord) {
     if (aina.manifest.runtime.type === "package") {
       setConsentFor(aina); // a 2.0 package installs only after the user reviews its access and settings
@@ -409,51 +206,6 @@ export default function AllAppsPage() {
   const visibleTools = tools.filter((tool) => matches(tool.name, tool.description, tool.tool_id));
   const visibleSkills = skills.filter((skill) => matches(skill.name, skill.description, skill.skill_id));
 
-  const addItems: MenuItem[] = [
-    ...(canManageRegistry
-      ? (["aina", "tools", "skills"] as const).map((kind) => ({
-        label: t("register", { label: kindLabel(kind) }),
-        icon: <Plus className="h-4 w-4" />,
-        onSelect: () => openEditor(kind),
-      }))
-      : []),
-    {
-      label: t("package.newMenu"),
-      icon: <Sparkles className="h-4 w-4" />,
-      onSelect: () => {
-        setView("developer");
-        setPackageFormOpen(true);
-        setScaffoldOpen(false);
-        setEditorOpen(false);
-        setNotice(null);
-      },
-    },
-    {
-      label: t("package.uploadMenu"),
-      icon: <PackageCheck className="h-4 w-4" />,
-      onSelect: () => packageFileInput.current?.click(),
-    },
-    {
-      label: t("template"),
-      icon: <FileArchive className="h-4 w-4" />,
-      onSelect: () => {
-        setView("developer");
-        setScaffoldOpen(true);
-        setPackageFormOpen(false);
-        setEditorOpen(false);
-        setNotice(null);
-      },
-    },
-    {
-      label: projectAction === "import" ? t("importing") : t("importZip"),
-      icon: <Upload className="h-4 w-4" />,
-      onSelect: () => {
-        setView("developer");
-        projectFileInput.current?.click();
-      },
-    },
-  ];
-
   return (
     <div className="flex h-full flex-col bg-app-bg">
       {consentFor ? (
@@ -463,20 +215,6 @@ export default function AllAppsPage() {
           onInstalled={() => {
             setNotice({ tone: "success", text: t("notice.installed", { name: consentFor.manifest.aina.name }) });
             setConsentFor(null);
-            void load();
-          }}
-        />
-      ) : null}
-      {packageReview ? (
-        <PackageReviewDialog
-          file={packageReview.file}
-          report={packageReview.report}
-          canRegister={canManageRegistry}
-          onClose={() => setPackageReview(null)}
-          onRegistered={(record) => {
-            setPackageReview(null);
-            setNotice({ tone: "success", text: t("package.registered", { name: record.manifest.aina.name, version: record.manifest.aina.version }) });
-            setView("apps");
             void load();
           }}
         />
@@ -510,29 +248,13 @@ export default function AllAppsPage() {
               >
                 <RefreshCw className="h-4 w-4" />
               </button>
-              <ActionMenu
-                label={t("add")}
-                trigger={<>{t("add")}<ChevronDown className="h-4 w-4" /></>}
-                triggerClassName="btn h-10 shrink-0 gap-1.5 rounded-full bg-ink px-4 text-white hover:bg-black"
-                items={addItems}
-                note={canManageRegistry ? undefined : t("adminOnly")}
-              />
-              <input
-                ref={packageFileInput}
-                type="file"
-                accept=".zip,application/zip"
-                aria-label={t("package.uploadAria")}
-                className="hidden"
-                onChange={(event) => void reviewPackage(event)}
-              />
-              <input
-                ref={projectFileInput}
-                type="file"
-                accept=".zip,.aina.zip,application/zip"
-                className="hidden"
-                aria-label={t("zipAria")}
-                onChange={(event) => void importProject(event)}
-              />
+              <button
+                type="button"
+                onClick={() => navigate("/plugin/new")}
+                className="btn h-10 shrink-0 gap-1.5 rounded-full bg-ink px-4 text-white hover:bg-black"
+              >
+                <Plus className="h-4 w-4" />{t("add")}
+              </button>
             </div>
           </header>
 
@@ -577,35 +299,6 @@ export default function AllAppsPage() {
 
             {!loading && view === "developer" ? (
               <>
-                {editorOpen ? (
-                  <DefinitionEditor
-                    kind={editorKind}
-                    text={editorText}
-                    saving={saving}
-                    onChange={setEditorText}
-                    onLoadRiskySample={editorKind === "tools" ? () => setEditorText(JSON.stringify(SAMPLE_RISKY_TOOL, null, 2)) : undefined}
-                    onClose={() => setEditorOpen(false)}
-                    onSave={() => void registerDefinition()}
-                  />
-                ) : null}
-                {packageFormOpen ? (
-                  <PackageScaffoldForm
-                    onCancel={() => setPackageFormOpen(false)}
-                    onDone={(message) => {
-                      setPackageFormOpen(false);
-                      setNotice({ tone: "success", text: message });
-                    }}
-                  />
-                ) : null}
-                {scaffoldOpen ? (
-                  <ProjectScaffoldForm
-                    value={scaffold}
-                    downloading={projectAction === "scaffold"}
-                    onChange={setScaffold}
-                    onCancel={() => setScaffoldOpen(false)}
-                    onSubmit={(event) => void downloadScaffold(event)}
-                  />
-                ) : null}
                 <PluginSection title="AINA Projects" count={projects.length}>
                   {visibleProjects.length ? (
                     <RowGrid>
@@ -672,100 +365,6 @@ export default function AllAppsPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function ProjectScaffoldForm({
-  value,
-  downloading,
-  onChange,
-  onCancel,
-  onSubmit,
-}: {
-  value: AinaProjectScaffoldRequest;
-  downloading: boolean;
-  onChange: (value: AinaProjectScaffoldRequest) => void;
-  onCancel: () => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const { t } = useTranslation("apps");
-  return (
-    <form onSubmit={onSubmit} className="rounded-2xl border border-line bg-white p-4">
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-app-soft text-ink-muted">
-          <FileArchive className="h-5 w-5" />
-        </div>
-        <h2 className="text-[14px] font-semibold text-ink">{t("scaffold.title")}</h2>
-        <InfoHint text={t("scaffold.desc")} />
-      </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <ProjectField label="AINA ID">
-          <input
-            required
-            value={value.aina_id}
-            onChange={(event) => onChange({ ...value, aina_id: event.target.value })}
-            className="input-soft"
-            placeholder="com.example.my-aina"
-          />
-        </ProjectField>
-        <ProjectField label={t("scaffold.name")}>
-          <input
-            required
-            value={value.name}
-            onChange={(event) => onChange({ ...value, name: event.target.value })}
-            className="input-soft"
-            placeholder="My AINA"
-          />
-        </ProjectField>
-        <ProjectField label={t("scaffold.version")}>
-          <input
-            required
-            value={value.version ?? ""}
-            onChange={(event) => onChange({ ...value, version: event.target.value })}
-            className="input-soft"
-            placeholder="0.1.0"
-          />
-        </ProjectField>
-        <ProjectField label={t("scaffold.language")}>
-          <select
-            value={value.language}
-            onChange={(event) => onChange({ ...value, language: event.target.value as "python" | "node" })}
-            className="input-soft"
-          >
-            <option value="python">Python</option>
-            <option value="node">Node.js</option>
-          </select>
-        </ProjectField>
-        <div className="sm:col-span-2">
-          <ProjectField label={t("scaffold.description")}>
-            <textarea
-              required
-              rows={3}
-              value={value.description}
-              onChange={(event) => onChange({ ...value, description: event.target.value })}
-              className="input-soft resize-none"
-              placeholder={t("scaffold.descPlaceholder")}
-            />
-          </ProjectField>
-        </div>
-      </div>
-      <div className="mt-4 flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="btn-outline rounded-full">{t("scaffold.cancel")}</button>
-        <button type="submit" disabled={downloading} className="btn rounded-full bg-ink text-white hover:bg-black">
-          {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          {downloading ? t("scaffold.generating") : t("scaffold.download")}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function ProjectField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[11px] font-bold text-ink-muted">{label}</span>
-      {children}
-    </label>
   );
 }
 
@@ -874,58 +473,7 @@ function PillTab({ active, onClick, children }: { active: boolean; onClick: () =
   );
 }
 
-function DefinitionEditor({ kind, text, saving, onChange, onLoadRiskySample, onClose, onSave }: {
-  kind: Kind;
-  text: string;
-  saving: boolean;
-  onChange: (text: string) => void;
-  onLoadRiskySample?: () => void;
-  onClose: () => void;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation("apps");
-  return (
-    <section className="overflow-hidden rounded-2xl border border-line bg-white">
-      <div className="flex h-12 items-center gap-2 border-b border-line px-4">
-        <h2 className="text-[14px] font-semibold text-ink">{t("editor.title", { label: kindLabel(kind) })}</h2>
-        <InfoHint text={t("editor.hint")} />
-        <span className="flex-1" />
-        <button type="button" onClick={onClose} className="btn-ghost h-8" aria-label={t("editor.close")}><X className="w-4 h-4" /></button>
-      </div>
-      <div className="p-4">
-        <textarea
-          value={text}
-          onChange={(event) => onChange(event.target.value)}
-          rows={18}
-          spellCheck={false}
-          aria-label={`${kindLabel(kind)} JSON`}
-          className="w-full rounded-xl border border-line-strong bg-slate-950 p-3 font-mono text-[11.5px] leading-relaxed text-slate-100 outline-none focus:border-accent"
-        />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {onLoadRiskySample ? (
-            <button type="button" onClick={onLoadRiskySample} className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-warning-deep hover:underline">
-              <ShieldAlert className="h-3.5 w-3.5" />{t("loadRiskySample")}
-            </button>
-          ) : null}
-          <div className="ml-auto flex gap-2 whitespace-nowrap">
-            <button type="button" onClick={onClose} className="btn-outline rounded-full">{t("editor.cancel")}</button>
-            <button type="button" disabled={saving} onClick={onSave} className="btn rounded-full bg-ink text-white hover:bg-black">{saving ? t("editor.registering") : t("editor.submit")}</button>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 // Explanatory copy sits behind an icon instead of a paragraph: hover shows it, screen readers read it.
-function InfoHint({ text }: { text: string }) {
-  return (
-    <span role="img" aria-label={text} title={text} className="inline-flex cursor-help text-ink-subtle hover:text-ink-muted">
-      <Info className="h-3.5 w-3.5" />
-    </span>
-  );
-}
-
 function SectionEmpty({ text }: { text: string }) {
   return <p className="px-2 py-3 text-[13px] text-ink-subtle">{text}</p>;
 }
@@ -961,10 +509,6 @@ function LoadingRows() {
       {[0, 1, 2, 3].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-line/60" />)}
     </div>
   );
-}
-
-function kindLabel(kind: Kind): string {
-  return kind === "aina" ? "AINA" : i18n.t(`apps:label.${kind}`);
 }
 
 function formatBytes(bytes: number): string {

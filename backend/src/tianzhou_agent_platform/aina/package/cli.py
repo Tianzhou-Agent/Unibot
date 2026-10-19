@@ -152,13 +152,14 @@ def _validate(path: Path, *, live: bool) -> int:
         validate_package_archive(path.read_bytes()) if path.is_file() else validate_package_files(read_package_folder(path))
     )
     if live and report.valid and report.manifest is not None:
-        url = report.manifest.tools.mcp.url
-        info = asyncio.run(McpToolClient().list_tools(url))
-        _snapshots, errors, warnings = snapshot_tools(report.manifest, info.tools)
+        servers = report.manifest.servers()
+        listed = {server.id: asyncio.run(McpToolClient().list_tools(server.url)).tools for server in servers}
+        _snapshots, errors, warnings = snapshot_tools(report.manifest, listed)
         report.errors.extend(errors)
         report.warnings.extend(warnings)
-        if not errors:
-            print(f"live: {url} lists every exposed tool ({len(report.manifest.tools.expose)})")
+        if not errors and servers:
+            urls = ", ".join(server.url for server in servers)
+            print(f"live: {urls} list every exposed tool ({len(report.manifest.exposed())})")
     return _print(report)
 
 

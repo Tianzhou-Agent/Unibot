@@ -20,7 +20,7 @@ MAX_WIDGET_DATA_BYTES = 64 * 1024
 
 def result_widget_id(manifest: AinaPackageManifest, tool_name: str, meta: dict[str, Any]) -> str | None:
     """Design §7.1: the tool's ``result_widget``, unless the result names another declared widget or ``null``."""
-    exposed = manifest.tools.expose.get(tool_name)
+    exposed = manifest.exposed().get(tool_name)
     chosen = exposed.result_widget if exposed is not None else None
     if WIDGET_META_KEY in meta:
         requested = meta[WIDGET_META_KEY]
@@ -42,7 +42,7 @@ def confirmation_widget(
     record: AinaRecord, tool_name: str, *, call_id: str, arguments: dict[str, Any]
 ) -> WidgetAinaUi | None:
     runtime = record.manifest.runtime
-    exposed = runtime.package.tools.expose.get(tool_name) if isinstance(runtime, PackageRuntimeDefinition) else None
+    exposed = runtime.package.exposed().get(tool_name) if isinstance(runtime, PackageRuntimeDefinition) else None
     if exposed is None or exposed.confirm_widget is None:
         return None
     return aina_widget(record, exposed.confirm_widget, tool_name=tool_name, call_id=call_id, arguments=arguments)

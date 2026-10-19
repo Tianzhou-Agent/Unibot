@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "playwright/test";
 
-// Creating an AINA 2.0 app (design §12): a starter project, the upload review that registers a package, and the
-// developer tokens `aina publish` uses. The API is mocked.
+// Creating an AINA 2.0 app (design §12): a starter project, registering an uploaded package from the Add app page,
+// and the developer tokens `aina publish` uses. The API is mocked.
 const AINA = "com.acme.notes";
 
 function json(route: Route, body: unknown, status = 200) {
@@ -10,7 +10,7 @@ function json(route: Route, body: unknown, status = 200) {
 
 const VALID_REPORT = {
   manifest: {
-    aina: { id: AINA, name: "Acme Notes", version: "0.1.0", publisher: { id: "acme", name: "Acme" } },
+    aina: { id: AINA, name: "Acme Notes", version: "0.1.0", description: "Keep short notes.", publisher: { id: "acme", name: "Acme" } },
     tools: {
       mcp: { url: "https://notes.acme.example/mcp", auth: { type: "bearer" } },
       expose: {
@@ -42,9 +42,11 @@ async function installApi(page: Page, report: unknown = VALID_REPORT) {
       return route.fulfill({ status: 200, contentType: "application/zip", headers: { "Content-Disposition": `attachment; filename="${AINA}.zip"` }, body: Buffer.from("PK\x05\x06" + "\0".repeat(18), "latin1") });
     }
     if (method === "POST" && path === "/ainas/packages/validate") return json(route, report);
-    if (method === "POST" && path === "/ainas/packages") {
-      calls.push({ path, form: request.postDataBuffer()?.toString("latin1") });
-      return json(route, { manifest: { aina: { id: AINA, name: "Acme Notes", version: "0.1.0" } } }, 201);
+    if (method === "POST" && path === "/ainas/packages/compose") {
+      const mode = new URL(request.url()).searchParams.get("mode");
+      calls.push({ path: `${path}?mode=${mode}`, form: request.postDataBuffer()?.toString("latin1") });
+      if (mode === "register") return json(route, { manifest: { aina: { id: AINA, name: "Acme Notes", version: "0.1.0" } } }, 201);
+      return json(route, { report, canvas_preview: null });
     }
     if (path === "/developer-tokens" && method === "GET") return json(route, tokens);
     if (path === "/developer-tokens" && method === "POST") {
@@ -67,7 +69,8 @@ test("FE-E2E-CREATE-01 a new app's starter project is downloaded from Plugins", 
   const calls = await installApi(page);
   await page.goto("/plugin");
   await page.getByRole("button", { name: "添加", exact: true }).click();
-  await page.getByRole("menuitem", { name: "新建应用（AINA 2.0）" }).click();
+  await expect(page).toHaveURL(/\/plugin\/new$/);
+  await page.getByRole("button", { name: "下载入门项目" }).click();
 
   const form = page.getByRole("form", { name: "新建 AINA 2.0 应用" });
   const appId = form.getByRole("textbox", { name: "应用 ID" });
@@ -88,33 +91,34 @@ test("FE-E2E-CREATE-01 a new app's starter project is downloaded from Plugins", 
   expect(calls[0].body).toEqual({ aina_id: AINA, name: "Acme Notes", description: "Short notes.", mcp_url: "http://127.0.0.1:8770/mcp" });
 });
 
-test("FE-E2E-CREATE-02 an uploaded package is reviewed, then registered with a one-time credential", async ({ page }) => {
+test("FE-E2E-CREATE-02 an uploaded package fills the Add app page and registers with a one-time credential", async ({ page }) => {
   const calls = await installApi(page);
-  await page.goto("/plugin");
-  await page.getByLabel("选择 AINA 2.0 应用包（.zip）").setInputFiles({ name: "notes.aina.zip", mimeType: "application/zip", buffer: Buffer.from("zip") });
+  await page.goto("/plugin/new");
+  await page.getByLabel("选择文件").setInputFiles({ name: "notes.aina.zip", mimeType: "application/zip", buffer: Buffer.from("zip") });
 
-  const dialog = page.getByRole("dialog", { name: "检查应用包" });
-  await expect(dialog.getByText("应用包已通过 Unibot 的检查。")).toBeVisible();
-  await expect(dialog.getByText("Tool 'list_notes' has no outputSchema")).toBeVisible();
-  await expect(dialog.getByText("delete_note")).toBeVisible();
-  await expect(dialog.getByText("Keep notes")).toBeVisible();
-  await dialog.getByLabel("服务器凭据").fill("server-secret");
-  await dialog.getByRole("button", { name: "注册" }).click();
+  await expect(page.getByText("基于 notes.aina.zip")).toBeVisible();
+  await expect(page.getByPlaceholder("Whiteboard")).toHaveValue("Acme Notes");
+  await expect(page.getByRole("textbox", { name: "MCP 服务器地址" })).toHaveValue("https://notes.acme.example/mcp");
+  await expect(page.getByText("Keep notes")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "来自应用包" })).toHaveAttribute("aria-checked", "true");
+  await page.getByLabel("服务器凭据").fill("server-secret");
+  await page.getByRole("button", { name: "注册应用" }).click();
 
-  await expect(page.getByText("Acme Notes 0.1.0 已注册")).toBeVisible();
-  const registration = calls.find((call) => call.path === "/ainas/packages")!;
+  await expect(page).toHaveURL(new RegExp(`/plugin/${AINA.replace(/\./g, "\\.")}$`));
+  const registration = calls.find((call) => call.path === "/ainas/packages/compose?mode=register")!;
+  expect(registration.form).toContain('name="base"; filename="notes.aina.zip"');
   expect(registration.form).toContain('name="credential"');
   expect(registration.form).toContain("server-secret");
+  expect(registration.form).toContain('"delete_note"');
 });
 
-test("FE-E2E-CREATE-03 a package with problems lists them and cannot be registered", async ({ page }) => {
+test("FE-E2E-CREATE-03 a package with problems lists them and fills nothing", async ({ page }) => {
   await installApi(page, { ...VALID_REPORT, manifest: null, errors: ["aina.json: 'aina' is a required property"], warnings: [] });
-  await page.goto("/plugin");
-  await page.getByLabel("选择 AINA 2.0 应用包（.zip）").setInputFiles({ name: "broken.zip", mimeType: "application/zip", buffer: Buffer.from("zip") });
+  await page.goto("/plugin/new");
+  await page.getByLabel("选择文件").setInputFiles({ name: "broken.zip", mimeType: "application/zip", buffer: Buffer.from("zip") });
 
-  const dialog = page.getByRole("dialog", { name: "检查应用包" });
-  await expect(dialog.getByText("aina.json: 'aina' is a required property")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "注册" })).toBeDisabled();
+  await expect(page.getByText("aina.json: 'aina' is a required property")).toBeVisible();
+  await expect(page.getByPlaceholder("Whiteboard")).toHaveValue("");
 });
 
 test("FE-E2E-CREATE-04 a developer token is shown once, listed and revoked", async ({ page }) => {
