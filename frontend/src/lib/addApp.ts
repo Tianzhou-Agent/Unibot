@@ -111,6 +111,12 @@ export async function skillFromFile(file: File): Promise<SkillDraft> {
   return draft;
 }
 
+/** The next patch version (``1.2.3`` → ``1.2.4``); a version that is not ``x.y.z`` is left for the developer. */
+export function nextVersion(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  return match ? `${match[1]}.${match[2]}.${Number(match[3]) + 1}` : version;
+}
+
 /** Fill the form from a package's manifest as the validator returned it. */
 export function draftFromManifest(manifest: Json, skills: { id: string; name: string; description: string }[]): AppDraft {
   const aina = (manifest.aina ?? {}) as Json;

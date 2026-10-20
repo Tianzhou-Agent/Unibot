@@ -20,6 +20,7 @@ export default {
   permissionCount: "需要 {{count}} 项权限",
   noMatches: "没有匹配“{{query}}”的插件。",
   delete: "删除",
+  edit: "编辑",
   breadcrumb: "面包屑导航",
   detail: {
     connectRequired: "登录 {{name}} 服务后即可开始使用。",

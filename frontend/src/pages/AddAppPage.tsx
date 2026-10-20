@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Download, Loader2, Package, PackageCheck, ShieldCheck } from "lucide-react";
 import { Topbar } from "@/components/layout/Topbar";
 import { CanvasPart, McpServersPart, SkillsPart } from "@/components/apps/AddAppParts";
@@ -14,6 +14,7 @@ import {
   draftProblems,
   duplicateTools,
   emptyDraft,
+  nextVersion,
   suggestedId,
   type AppDraft,
 } from "@/lib/addApp";
@@ -26,9 +27,14 @@ interface ComposeCheck {
   canvas_preview: string | null;
 }
 
-/** Add an app: upload a finished package, or build one from an MCP server, skills and a canvas. */
+/**
+ * Add an app: upload a finished package, or build one from an MCP server, skills and a canvas. With an ``ainaId``
+ * (``/plugin/:ainaId/edit``) it edits a registered package, starting from its archive, as its next version.
+ */
 export default function AddAppPage() {
   const { t } = useTranslation("addApp");
+  const { ainaId } = useParams();
+  const editing = Boolean(ainaId);
   const navigate = useNavigate();
   const { user, config } = useAuth();
   const canRegister = !config.auth_required || Boolean(user?.is_admin);
@@ -51,7 +57,19 @@ export default function AddAppPage() {
     setCheck(null);
   };
 
-  async function usePackage(file: File | undefined) {
+  useEffect(() => {
+    if (!ainaId) return;
+    setBusy("upload");
+    api
+      .getBlob(`/ainas/${encodeURIComponent(ainaId)}/package`)
+      .then((result) => usePackage(new File([result.blob], result.filename ?? `${ainaId}.aina.zip`), true))
+      .catch((loadError) => {
+        setError(apiErrorMessage(loadError));
+        setBusy(null);
+      });
+  }, [ainaId]);
+
+  async function usePackage(file: File | undefined, nextRelease = false) {
     if (!file) return;
     setBusy("upload");
     setError(null);
@@ -65,7 +83,8 @@ export default function AddAppPage() {
       }
       const manifest = report.manifest as unknown as Record<string, unknown>;
       setBase({ file, manifest });
-      setDraft(draftFromManifest(manifest, report.skills));
+      const loaded = draftFromManifest(manifest, report.skills);
+      setDraft(nextRelease ? { ...loaded, version: nextVersion(loaded.version) } : loaded);
       setCheck(null);
     } catch (uploadError) {
       setError(apiErrorMessage(uploadError));
@@ -108,24 +127,33 @@ export default function AddAppPage() {
   }
 
   const report = check?.report;
+  const title = editing ? t("edit.title") : t("title");
   return (
     <div className="flex h-full flex-col bg-app-bg">
-      <Topbar title={t("title")} />
+      <Topbar title={title} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-5 py-7 md:px-8 md:py-9">
           <nav className="flex items-center gap-1 text-[12.5px] text-ink-muted" aria-label={t("breadcrumb")}>
             <Link to="/plugin" className="hover:text-ink">{t("plugins")}</Link>
             <ChevronRight className="h-3.5 w-3.5" />
-            <span className="text-ink">{t("title")}</span>
+            {ainaId ? (
+              <>
+                <Link to={`/plugin/${encodeURIComponent(ainaId)}`} className="hover:text-ink">{draft.name || ainaId}</Link>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </>
+            ) : null}
+            <span className="text-ink">{title}</span>
           </nav>
           <header className="mt-2 flex flex-wrap items-baseline justify-between gap-3">
             <div>
-              <h2 className="text-[26px] font-semibold text-ink">{t("title")}</h2>
-              <p className="mt-1 text-[14px] text-ink-muted">{t("subtitle")}</p>
+              <h2 className="text-[26px] font-semibold text-ink">{title}</h2>
+              <p className="mt-1 text-[14px] text-ink-muted">{editing ? t("edit.subtitle") : t("subtitle")}</p>
             </div>
-            <button type="button" onClick={() => setStarter((open) => !open)} className="text-[13px] text-accent hover:underline">
-              {t("starter.link")}
-            </button>
+            {!editing ? (
+              <button type="button" onClick={() => setStarter((open) => !open)} className="text-[13px] text-accent hover:underline">
+                {t("starter.link")}
+              </button>
+            ) : null}
           </header>
           {starter ? (
             <div className="mt-4">
@@ -165,6 +193,7 @@ export default function AddAppPage() {
               <Field label={t("about.id")} hint={t("about.idHint")} error={flagged("id") ? t("problems.id") : undefined}>
                 <input
                   value={draft.id}
+                  disabled={editing}
                   onChange={(event) => change({ id: event.target.value.trim().toLowerCase(), idEdited: true })}
                   placeholder="com.example.notes"
                   className={classNames("input-soft font-mono", draft.id && !ID_PATTERN.test(draft.id) && "border-danger")}
@@ -189,9 +218,9 @@ export default function AddAppPage() {
               />
             </Field>
             {/[^\x00-\x7F]/.test(draft.name + draft.description) ? <p className="mt-1.5 text-[11.5px] text-warning-deep">{t("about.english")}</p> : null}
-            <details className="mt-3 text-[12.5px] text-ink-muted">
+            <details open={editing} className="mt-3 text-[12.5px] text-ink-muted">
               <summary className="cursor-pointer">{t("about.more")}</summary>
-              <Field className="mt-2 w-40" label={t("about.version")}>
+              <Field className="mt-2 w-40" label={t("about.version")} hint={editing ? t("about.versionHint") : undefined}>
                 <input value={draft.version} onChange={(event) => change({ version: event.target.value.trim() })} className="input-soft font-mono" />
               </Field>
             </details>
@@ -227,7 +256,7 @@ export default function AddAppPage() {
             </button>
             {canRegister ? (
               <button type="button" onClick={() => void run("register")} disabled={busy !== null} className="btn rounded-full bg-ink text-white hover:bg-black">
-                {busy === "register" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}{t("actions.register")}
+                {busy === "register" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}{editing ? t("actions.save") : t("actions.register")}
               </button>
             ) : null}
           </footer>

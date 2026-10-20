@@ -37,6 +37,7 @@ export default function App() {
         <Route path="/plugin/new" element={<AddAppPage />} />
         <Route path="/plugin/help/canvas-bridge" element={<CanvasBridgeHelpPage />} />
         <Route path="/plugin/:ainaId" element={<PluginDetailPage />} />
+        <Route path="/plugin/:ainaId/edit" element={<AddAppPage />} />
         <Route path="/apps" element={<Navigate to="/plugin" replace />} />
         <Route path="/schedules" element={<ScheduledAinaPage />} />
         <Route path="/obs" element={<PersonalObsRoute />} />

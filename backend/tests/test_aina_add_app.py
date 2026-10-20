@@ -134,6 +134,25 @@ def test_starting_from_a_package_keeps_its_other_files(client: TestClient) -> No
     assert checked["canvas_preview"].endswith("/canvas/index.html")
 
 
+def test_a_registered_package_is_edited_as_its_next_version(client: TestClient) -> None:
+    manifest = _manifest(skills=[{"id": "draw-diagram"}])
+    registered = _compose(client, manifest, "register", **{"skill__draw-diagram": ("SKILL.md", SKILL, "text/markdown")})
+    package = client.get("/ainas/com.example.board/package")
+    edited = {**manifest, "aina": {**manifest["aina"], "version": "0.1.1", "name": "Whiteboard"}}
+    updated = _compose(
+        client, edited, "register", base=("com.example.board.aina.zip", package.content, "application/zip")
+    )
+
+    assert registered.status_code == 201, registered.text
+    assert package.status_code == 200, package.text
+    with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+        assert "skills/draw-diagram/SKILL.md" in archive.namelist()
+    assert updated.status_code == 201, updated.text
+    assert updated.json()["manifest"]["aina"]["name"] == "Whiteboard"
+    assert updated.json()["manifest"]["runtime"]["package"]["skills"][0]["id"] == "draw-diagram"
+    assert client.get("/ainas/unknown.app/package").status_code == 404
+
+
 def test_a_bundle_without_index_html_is_refused(client: TestClient) -> None:
     refused = _compose(
         client,

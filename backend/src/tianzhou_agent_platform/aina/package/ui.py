@@ -54,6 +54,13 @@ class PackageUiStore:
     async def save(self, aina_id: str, archive_sha256: str, payload: bytes) -> None:
         await self._artifacts.write(archive_path(aina_id, archive_sha256), payload)
 
+    async def archive(self, aina_id: str, archive_sha256: str) -> bytes:
+        """The registered package archive, as it was uploaded."""
+        try:
+            return await self._artifacts.read(archive_path(aina_id, archive_sha256))
+        except Exception as exc:  # noqa: BLE001 - a missing archive only means the package must be registered again
+            raise _missing_archive() from exc
+
     async def file(self, aina_id: str, runtime: PackageRuntimeDefinition, path: str) -> tuple[bytes, str]:
         """A UI file of the package and its media type; skills and the manifest are never served."""
         if not is_ui_path(runtime, path):
@@ -67,21 +74,21 @@ class PackageUiStore:
     async def _files(self, aina_id: str, archive_sha256: str) -> dict[str, bytes]:
         files = self._cache.get(archive_sha256)
         if files is None:
-            try:
-                payload = await self._artifacts.read(archive_path(aina_id, archive_sha256))
-            except Exception as exc:  # noqa: BLE001 - a missing archive only means the UI cannot be shown
-                raise PlatformError(
-                    "RESOURCE_NOT_FOUND",
-                    "The AINA package files are not available; register the package again",
-                    status_code=404,
-                    source="aina_package",
-                ) from exc
-            files, _size = read_project_archive(payload)
+            files, _size = read_project_archive(await self.archive(aina_id, archive_sha256))
             self._cache[archive_sha256] = files
             while len(self._cache) > _CACHED_PACKAGES:
                 self._cache.popitem(last=False)
         self._cache.move_to_end(archive_sha256)
         return files
+
+
+def _missing_archive() -> PlatformError:
+    return PlatformError(
+        "RESOURCE_NOT_FOUND",
+        "The AINA package files are not available; register the package again",
+        status_code=404,
+        source="aina_package",
+    )
 
 
 def is_ui_path(runtime: PackageRuntimeDefinition, path: str) -> bool:

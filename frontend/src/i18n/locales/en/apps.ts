@@ -20,6 +20,7 @@ export default {
   permissionCount: "Needs {{count}} permission(s)",
   noMatches: "No plugins match “{{query}}”.",
   delete: "Delete",
+  edit: "Edit",
   breadcrumb: "Breadcrumb",
   detail: {
     connectRequired: "Sign in to the {{name}} service to start using it.",

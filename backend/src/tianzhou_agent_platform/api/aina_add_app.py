@@ -15,15 +15,16 @@ from fastapi import APIRouter, Query, Request, Response
 from starlette.datastructures import UploadFile
 from pydantic import SecretStr
 
+from tianzhou_agent_platform.aina.package.bundled import is_bundled
 from tianzhou_agent_platform.aina.package.compose import compose_package
 from tianzhou_agent_platform.aina.package.manifest import McpAuth, McpServer
-from tianzhou_agent_platform.aina.package.service import resolve_effect
+from tianzhou_agent_platform.aina.package.service import package_runtime, resolve_effect
 from tianzhou_agent_platform.aina.package.validation import PackageValidationReport, validate_package_archive
 from tianzhou_agent_platform.aina.project import MAX_PROJECT_ARCHIVE_BYTES, build_project_archive
 from tianzhou_agent_platform.aina.protocol.models import AinaRecord
-from tianzhou_agent_platform.api.dependencies import aina_packages, require_platform_admin
+from tianzhou_agent_platform.api.dependencies import aina_packages, repository, require_platform_admin
 from tianzhou_agent_platform.core.base import StrictModel
-from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.errors import PlatformError, not_found
 
 SKILL_FIELD = "skill:"
 _FRAME_CHECK_SECONDS = 5.0
@@ -102,6 +103,21 @@ def create_aina_add_app_router() -> APIRouter:
         except httpx.HTTPError as exc:
             return CanvasInspection(allowed=True, detail=f"Could not load the page ({type(exc).__name__})")
         return CanvasInspection(allowed=True, **_embedding(response))
+
+    @router.get("/ainas/{aina_id}/package")
+    async def download_aina_package(aina_id: str, request: Request) -> Response:
+        """The registered archive of an uploaded package, for the Add app page to edit as its next version."""
+        require_platform_admin(request)
+        record = await repository(request).get_aina(aina_id)
+        packages = aina_packages(request)
+        if record.manifest.runtime.type != "package" or is_bundled(record) or packages.ui is None:
+            raise not_found("AINA package", aina_id)
+        archive = await packages.ui.archive(aina_id, package_runtime(record).archive_sha256)
+        return Response(
+            archive,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{aina_id}.aina.zip"'},
+        )
 
     @router.post("/ainas/packages/compose", response_model=None)
     async def compose_aina_package(

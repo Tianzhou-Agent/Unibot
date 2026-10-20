@@ -1,6 +1,10 @@
 export default {
   title: "Add app",
   subtitle: "Upload a finished package, or build one from its parts.",
+  edit: {
+    title: "Edit app",
+    subtitle: "Your changes are registered as a new version. Installed users move to it, and are asked again if it can do more.",
+  },
   breadcrumb: "Breadcrumb",
   plugins: "Plugins",
   adminOnly: "Only a platform admin can register apps. Download the package and share it with one.",
@@ -25,6 +29,7 @@ export default {
     english: "The agent reads the name and description: write them in English.",
     more: "More settings",
     version: "Version",
+    versionHint: "Use a version newer than the registered one.",
   },
   parts: {
     title: "What it includes",
@@ -41,6 +46,7 @@ export default {
     download: "Download package",
     check: "Check app",
     register: "Register app",
+    save: "Save new version",
   },
   check: {
     passed: "The app passed Unibot's checks.",
