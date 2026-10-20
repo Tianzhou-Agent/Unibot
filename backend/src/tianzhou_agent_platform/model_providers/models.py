@@ -211,9 +211,9 @@ def current_context_window_tokens(default: int) -> int:
     return runtime.context_window_tokens if runtime is not None else default
 
 
-def current_max_output_tokens() -> int | None:
+def current_max_output_tokens(default: int | None) -> int | None:
     runtime = current_model_runtime()
-    return runtime.max_output_tokens if runtime is not None else None
+    return runtime.max_output_tokens if runtime is not None else default
 
 
 @contextmanager

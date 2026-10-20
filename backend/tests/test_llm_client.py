@@ -141,6 +141,67 @@ def test_an_output_limit_above_half_the_window_is_refused() -> None:
     assert output_token_reserve(1_000_000, 32_768) == 32_768
 
 
+@contextmanager
+def _env_model_client(
+    monkeypatch: Any, provider: Callable[[httpx.Request], httpx.Response], **settings: Any
+) -> Iterator[TestClient]:
+    """App without user model settings, so turns use the .env model served by ``provider``."""
+    import tianzhou_agent_platform.model_providers.factory as factory_module
+    from tianzhou_agent_platform.model_providers.factory import create_native_chat_model
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    monkeypatch.setattr(
+        factory_module,
+        "create_native_chat_model",
+        lambda **options: create_native_chat_model(http_client=http_client, **options),
+    )
+    env = AgentSettings(  # type: ignore[call-arg]
+        _env_file=None, llm_base_url="https://env.invalid/v1", llm_api_key="env-key", llm_model="env-model", **settings
+    )
+    with TestClient(create_app(settings=env)) as client:
+        yield client
+    asyncio.run(http_client.aclose())
+
+
+def test_the_env_models_output_limit_comes_from_settings(monkeypatch: Any) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return _completion({"role": "assistant", "content": "ok"})
+
+    with _env_model_client(
+        monkeypatch, provider, context_window_tokens=1_000_000, max_output_tokens=32_768
+    ) as client:
+        response = client.post("/chat", json={"message": "Hello"})
+
+    assert response.json()["content"] == "ok"
+    assert requests[0]["max_completion_tokens"] == 32_768
+
+
+def test_the_env_models_output_limit_is_reserved_from_the_input_budget(monkeypatch: Any) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return _completion({"role": "assistant", "content": "ok"})
+
+    with _env_model_client(monkeypatch, provider, context_window_tokens=64_000, max_output_tokens=32_000) as client:
+        # About 40k estimated tokens: within the default budget (64k - 4096), over 64k - 32k.
+        response = client.post("/chat", json={"message": "word " * 32_000}).json()
+
+    assert response["status"] == "failed"
+    assert "32000 available" in response["content"]
+    assert requests == []
+
+
+def test_an_env_output_limit_above_half_the_window_is_refused() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="at most half of UNIBOT_CONTEXT_WINDOW_TOKENS"):
+        AgentSettings(_env_file=None, context_window_tokens=8_192, max_output_tokens=8_192)  # type: ignore[call-arg]
+
+
 def test_named_tool_choice_falls_back_for_incompatible_provider(monkeypatch: Any) -> None:
     requests: list[dict[str, Any]] = []
 

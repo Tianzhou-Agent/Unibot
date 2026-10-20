@@ -59,6 +59,7 @@ class ChatService:
         trace_id: str | None = None,
     ) -> ChatResponse:
         conversation = await self._conversation(request)
+        after_failed_turn = conversation.run_status == "failed"
         attachments = await self.attachments.bind(conversation, request.attachments) if request.attachments else []
         texts = await self.attachments.texts(conversation, attachments) if attachments else {}
         trace_id = trace_id or f"trace_{uuid4().hex}"
@@ -96,6 +97,7 @@ class ChatService:
                         stop=stop,
                         attachments=attachments,
                         attachment_texts=texts,
+                        after_failed_turn=after_failed_turn,
                     )
         except BaseException as exc:
             await self._fail_run(conversation.id, trace_id, exc)

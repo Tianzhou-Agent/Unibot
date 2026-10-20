@@ -8,6 +8,8 @@ from uuid import UUID
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from tianzhou_agent_platform.model_providers.models import MIN_OUTPUT_TOKENS
+
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 DEV_USER_ID = "user_dev"
@@ -112,6 +114,13 @@ class AgentSettings(BaseSettings):
         default=128_000,
         ge=4_096,
         validation_alias=AliasChoices("UNIBOT_CONTEXT_WINDOW_TOKENS", "context_window_tokens"),
+    )
+    # Most tokens one reply of the configured llm_model may use, thinking included; unset keeps
+    # min(4096, a quarter of the context window). Models from user settings carry their own value.
+    max_output_tokens: int | None = Field(
+        default=None,
+        ge=MIN_OUTPUT_TOKENS,
+        validation_alias=AliasChoices("UNIBOT_MAX_OUTPUT_TOKENS", "max_output_tokens"),
     )
     context_compression_threshold_ratio: float = Field(
         default=0.75,
@@ -423,6 +432,12 @@ class AgentSettings(BaseSettings):
     def _restrict_dev_auth_bypass(self) -> "AgentSettings":
         if self.dev_auth_bypass and self.env != "development":
             raise ValueError("UNIBOT_DEV_AUTH_BYPASS requires UNIBOT_ENV=development")
+        return self
+
+    @model_validator(mode="after")
+    def _output_fits_the_window(self) -> "AgentSettings":
+        if self.max_output_tokens is not None and self.max_output_tokens > self.context_window_tokens // 2:
+            raise ValueError("UNIBOT_MAX_OUTPUT_TOKENS may be at most half of UNIBOT_CONTEXT_WINDOW_TOKENS")
         return self
 
     @property
