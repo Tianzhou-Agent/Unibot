@@ -10,7 +10,7 @@ parts of a 2.0 AINA:
 | Canvas | `package/canvas/` (with the `highlight_rows` canvas tool) |
 | Widgets | `package/widgets/confirm-expense.html`, `package/widgets/expense-card.html` |
 
-Everything Unibot needs to know is in `package/aina.json`.
+Everything Superbot needs to know is in `package/aina.json`.
 
 ## Try it
 
@@ -22,7 +22,7 @@ aina pack examples/expenses-aina/package -o expenses.aina.zip
 
 Register the zip as a platform admin with `POST /ainas/packages` (multipart field `file`), then install it from the
 Plugins page, or with `POST /ainas/com.example.expenses/install`. `storage` is granted automatically. Set
-`UNIBOT_AINA_HOST_API_BASE` to an address of Unibot that this server can reach. The loopback MCP origin must be in
+`UNIBOT_AINA_HOST_API_BASE` to an address of Superbot that this server can reach. The loopback MCP origin must be in
 `UNIBOT_CAPABILITY_ALLOWED_ORIGINS` when destination policy is enforced.
 
 ## What works today
@@ -35,13 +35,13 @@ change as later phases land:
   read and written through `storage`, scoped by the token to the calling user.
 - **Long-running tool:** `monthly_report` is `long_running`. It answers at once with `_meta["unibot/task"]`, which
   ends the turn, then builds the report in the background and reports on the Host API (`/tasks/{id}/progress`, then
-  `/complete` or `/fail`). It renews its context token with `/token/refresh` if the token expires. Unibot posts the
+  `/complete` or `/fail`). It renews its context token with `/token/refresh` if the token expires. Superbot posts the
   report to the conversation and shows the task in the Tasks pane. The jobs live in process memory, so a restart
   loses them; a real server would use a durable queue.
 - **Canvas (P3a):** open the app from its plugin page. `canvas/app.js` lists, adds and deletes expenses through
-  `host.callTool`; Unibot asks you before each change. It can also send a prompt into the chat. `aina-ui.js` and
+  `host.callTool`; Superbot asks you before each change. It can also send a prompt into the chat. `aina-ui.js` and
   `aina-ui.css` are vendored copies of `spec/aina/2.0/ui/`.
-- **Widgets (P3b):** `confirm-expense` shows inside Unibot's approval card for `add_expense` and lets you adjust the
+- **Widgets (P3b):** `confirm-expense` shows inside Superbot's approval card for `add_expense` and lets you adjust the
   amount and category before you allow it (`host.proposeArguments`); `expense-card` shows the saved expense under
   the answer, with a button that opens the canvas.
 - **Later:** canvas tools such as `highlight_rows` (P6).

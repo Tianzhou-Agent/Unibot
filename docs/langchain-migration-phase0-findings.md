@@ -62,7 +62,7 @@ Covered:
 | Gap | Impact | Mitigation |
 | --- | --- | --- |
 | Native `ToolNode` dispatches tool batches with `asyncio.gather` | Ordered side effects / one-AINA-activation / same-batch dedup are not guaranteed | Phase 3 `awrap_tool_call` coordinator (plan §6.3). Feasibility test records concurrent completion. |
-| `SummarizationMiddleware` calls `model.with_retry()` internally | Summary path already has up to 3 attempts | Align Unibot retry ceilings when composing; do not nest another summary retry. |
+| `SummarizationMiddleware` calls `model.with_retry()` internally | Summary path already has up to 3 attempts | Align Superbot retry ceilings when composing; do not nest another summary retry. |
 | HITL resume shape is `Command(resume={"decisions":[...]})` | Custom approval adapter must map public approval IDs to this shape | Phase 4 `services/agent_integration/approvals.py`. |
 | Custom `state_schema` **replaces** `AgentState` unless it extends the required fields (`messages`, `jump_to`, `structured_response`) | Easy to break routing if a bare TypedDict is passed | Prefer middleware `state_schema` extensions or inherit `AgentState`. |
 | `AgentMiddleware.name` is a property | Custom middleware must not assign `self.name` | Use class names or override the property. |
@@ -72,7 +72,7 @@ Covered:
 
 - **Summary trimming**: `trim_tokens_to_summarize=4000` by default; `None` disables. Complete AI/Tool pairs are kept together at the cutoff (`_find_safe_cutoff_point`).
 - **Summary failure**: exceptions propagate after `Runnable.with_retry` exhaustion — no silent invalid-summary replacement in the observed path.
-- **Tool retries**: `ToolRetryMiddleware` defaults `max_retries=2`, `on_failure="continue"`, exponential backoff + jitter. Unibot must set these explicitly.
+- **Tool retries**: `ToolRetryMiddleware` defaults `max_retries=2`, `on_failure="continue"`, exponential backoff + jitter. Superbot must set these explicitly.
 - **Model retries**: `ModelRetryMiddleware` exists but is opt-in; current factory uses `max_retries=0` — do not introduce SDK retries accidentally.
 
 ## Exit criteria

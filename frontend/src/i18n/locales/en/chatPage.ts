@@ -59,7 +59,7 @@ export default {
   attachmentPreviewMore: "Showing the start of the file.",
   welcome: {
     title: "Start a new conversation",
-    body: "Unibot keeps multi-turn context, combines the right capabilities for your goal, and waits for your confirmation before high-risk actions.",
+    body: "Superbot keeps multi-turn context, combines the right capabilities for your goal, and waits for your confirmation before high-risk actions.",
     f1: {
       title: "Multi-turn context",
       body: "Conversation history restores automatically",

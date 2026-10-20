@@ -71,11 +71,11 @@ cases:
     description: Missing information is requested through a prefilled host-rendered form.
     tags: [tool_use, builtin]
     turns:
-      - user: "Use a form to collect the project name and the deadline from me, with the project name prefilled as Unibot."
+      - user: "Use a form to collect the project name and the deadline from me, with the project name prefilled as Superbot."
         expect:
           tools: {expected: [request_clarification], mode: superset}
           widgets:
-            - {kind: form, fields: {fields: [{value: Unibot}]}}
+            - {kind: form, fields: {fields: [{value: Superbot}]}}
           judge:
             rubric: correctness
             criteria: >-

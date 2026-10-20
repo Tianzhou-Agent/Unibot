@@ -4,7 +4,7 @@
 
 ### 1.1 文档目的
 
-本文档针对原始需求中的“IR-01 平台运行可观测与质量分析”，结合 Unibot 当前实现，形成可独立评审和开发的需求分析。
+本文档针对原始需求中的“IR-01 平台运行可观测与质量分析”，结合 Superbot 当前实现，形成可独立评审和开发的需求分析。
 
 本文档回答：
 
@@ -357,7 +357,7 @@ Agent 负责人比较不同 Agent/AINA 或配置版本的成功率、耗时、To
 
 - 优先级：P0
 - 工作内容：
-  - 明确 Unibot 主 Agent 与 AINA 的统计关系。
+  - 明确 Superbot 主 Agent 与 AINA 的统计关系。
   - 定义 Agent、AINA、模型配置和 Tool 的版本快照。
 - 验收：
   - 历史 Trace 的版本维度不会随当前配置变化。
@@ -795,7 +795,7 @@ Agent 负责人比较不同 Agent/AINA 或配置版本的成功率、耗时、To
 
 ## 14. 编码前待确认事项
 
-1. Agent 是否等同于 AINA，还是包含 Unibot 主 Agent。
+1. Agent 是否等同于 AINA，还是包含 Superbot 主 Agent。
 2. `request_id` 是否直接使用用户 Message ID。
 3. HTTP Trace 与 Agent Trace 是合并还是父子关系。
 4. 有效请求是否包含失败、取消、审批中、定时任务和 Debug 请求。

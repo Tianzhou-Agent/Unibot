@@ -1,1 +1,1 @@
-"""Opt-in evaluations against a running Unibot backend."""
+"""Opt-in evaluations against a running Superbot backend."""

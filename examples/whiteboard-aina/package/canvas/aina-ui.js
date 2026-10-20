@@ -1,7 +1,7 @@
 // @unibot/aina-ui — the UI bridge for AINA Protocol 2.0 canvases and widgets (design §9.4).
 // Vendor this file into your package next to your HTML and import it as a module:
 //   import { host } from "./aina-ui.js";
-// It talks to the Unibot shell only through window.parent.postMessage; the shell applies every check and asks the
+// It talks to the Superbot shell only through window.parent.postMessage; the shell applies every check and asks the
 // user to confirm tool calls that change data.
 const PROTOCOL = "aina-ui/2.0";
 const pending = new Map();

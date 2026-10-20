@@ -1,7 +1,7 @@
 """__NAME__ MCP server (AINA Protocol 2.0).
 
 Run it with `python server/main.py`, then check the package against it with `aina validate package --live`.
-Notes are kept in the user's private AINA storage through the Unibot Host API (the `storage` permission).
+Notes are kept in the user's private AINA storage through the Superbot Host API (the `storage` permission).
 """
 
 from __future__ import annotations

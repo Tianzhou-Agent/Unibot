@@ -1,4 +1,4 @@
-"""Thin async client for the Unibot REST surface used by the evaluations."""
+"""Thin async client for the Superbot REST surface used by the evaluations."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # 图片识别 AINA
 
-`unibot.image-recognition` 是随 Unibot 一起发布的第一方 AINA 2.0 包（设计 §11）。用户可以在 Canvas 中粘贴、
+`unibot.image-recognition` 是随 Superbot 一起发布的第一方 AINA 2.0 包（设计 §11）。用户可以在 Canvas 中粘贴、
 拖入或选择 JPEG、PNG、WebP 图片，Canvas 会自动调用 YOLO26m，并显示目标框、中英文类别、置信度、目标数量、
 推理耗时和实际运行设备。它对所有用户可用，无需安装。
 
@@ -10,7 +10,7 @@
 Browser
   └─ Canvas（沙箱 iframe，aina-ui 桥接）
        └─ callTool("detect", {image_base64, content_type, filename})
-            └─ Unibot FastAPI  POST /ainas/unibot.image-recognition/app-tools/detect
+            └─ Superbot FastAPI  POST /ainas/unibot.image-recognition/app-tools/detect
                  └─ 进程内 MCP 服务器  backend/src/unibot_plugins/image_recognition/server.py
                       └─ POST /v1/detect (multipart)
                            └─ unibot/vision-service

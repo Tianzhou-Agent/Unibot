@@ -1,4 +1,4 @@
-"""Automatic tool retries for Unibot (plan §6.7).
+"""Automatic tool retries for Superbot (plan §6.7).
 
 Automatic retries use native ``ToolRetryMiddleware``: only side-effect-free remote tools are retried, each with its
 own configured ``retries`` budget, and only for transient failures. The remote gateway makes a single attempt, so

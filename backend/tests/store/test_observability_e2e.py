@@ -96,7 +96,7 @@ async def test_chat_to_obs_query_end_to_end(
         redis_dsn=REDIS_URL,
         nas_root_path=tmp_path / "nas",
     )
-    app = create_app(settings=settings, storage_settings=storage, llm=ScriptedLLM([assistant("你好，我是 Unibot。")]))
+    app = create_app(settings=settings, storage_settings=storage, llm=ScriptedLLM([assistant("你好，我是 Superbot。")]))
 
     with TestClient(app) as client:
         # 1) chat request completes (barrier ran before the response returned)

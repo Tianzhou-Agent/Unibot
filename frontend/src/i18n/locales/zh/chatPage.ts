@@ -59,7 +59,7 @@ export default {
   attachmentPreviewMore: "仅显示文件开头部分。",
   welcome: {
     title: "开始新对话",
-    body: "Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",
+    body: "Superbot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",
     f1: {
       title: "多轮上下文",
       body: "会话历史自动恢复",

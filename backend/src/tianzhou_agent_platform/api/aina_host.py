@@ -1,4 +1,4 @@
-"""AINA Host API (design §8): the routes an AINA's MCP server calls back into Unibot with its context token.
+"""AINA Host API (design §8): the routes an AINA's MCP server calls back into Superbot with its context token.
 
 Authorization never comes from a user session: every request carries ``Authorization: Bearer <context token>``.
 A request is allowed only while the token is valid, the installation it names is still active, and the scope is
@@ -340,7 +340,7 @@ def create_aina_host_router() -> APIRouter:
 
     @router.get(f"{HOST_API_PREFIX}/tasks/{{task_id}}", response_model=TaskState)
     async def task_state(task_id: str, request: Request, caller: HostCaller = Depends(host_caller)) -> TaskState:
-        """The task as Unibot sees it: an AINA should stop working on one the user ``cancelled``."""
+        """The task as Superbot sees it: an AINA should stop working on one the user ``cancelled``."""
         _audit(caller, "tasks.get", scope="tasks", allowed=True)
         return _task_state(await aina_tasks(request).state(caller.installation_key, task_id))
 

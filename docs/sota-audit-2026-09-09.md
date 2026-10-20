@@ -1,4 +1,4 @@
-**Unibot: blockers to a state-of-the-art product**
+**Superbot: blockers to a state-of-the-art product**
 
 Implementation follow-up: [remediation and remaining evidence, 10 September 2026](sota-remediation-2026-09-10.md). Findings below describe the pre-fix snapshot.
 

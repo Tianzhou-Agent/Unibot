@@ -111,7 +111,7 @@ class AinaPackageService:
         """Validate a package, snapshot its exposed MCP tools and register (or upgrade) the AINA.
 
         ``credential`` authenticates the registration-time ``tools/list`` of a ``bearer``/``api_key`` server, or is
-        an access token for an ``oauth2`` one; it is used once and never stored. ``bundled`` registers a first-party package shipped with Unibot (design §11),
+        an access token for an ``oauth2`` one; it is used once and never stored. ``bundled`` registers a first-party package shipped with Superbot (design §11),
         whose content may change without a version bump between releases. ``replace`` (``aina dev``) re-registers the
         same version with new content and a fresh tool snapshot.
         """
@@ -121,7 +121,7 @@ class AinaPackageService:
         if any(is_bundled_url(server.url) != bundled for server in servers):
             raise PlatformError(
                 "INVALID_REQUEST",
-                f"Only packages bundled with Unibot serve their MCP tools at {BUNDLED_HOST}",
+                f"Only packages bundled with Superbot serve their MCP tools at {BUNDLED_HOST}",
                 status_code=422,
                 source="aina_package",
             )
@@ -632,7 +632,7 @@ class AinaPackageService:
         return await self.repository.put_installation(current.model_copy(update={"secrets": secrets, "status": status}))
 
     async def start_authorization(self, aina_id: str, *, tenant_id: str, user_id: str, return_to: str) -> str:
-        """The URL that sends the user to the OAuth MCP server's authorization page (registering Unibot first)."""
+        """The URL that sends the user to the OAuth MCP server's authorization page (registering Superbot first)."""
         record = await self.repository.get_aina(aina_id)
         runtime = package_runtime(record)
         oauth_server = runtime.package.oauth_server()
@@ -713,7 +713,7 @@ class AinaPackageService:
 
 
 def _kept_oauth(existing: AinaRecord | None, manifest: AinaPackageManifest) -> OAuthServer | None:
-    """An upgrade keeps Unibot's client registration while the MCP server stays the same, so tokens keep working."""
+    """An upgrade keeps Superbot's client registration while the MCP server stays the same, so tokens keep working."""
     server = manifest.oauth_server()
     if existing is None or server is None:
         return None

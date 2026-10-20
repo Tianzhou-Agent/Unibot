@@ -16,12 +16,12 @@ agent can change what the user sees (for example `draw_circle` on an Excalidraw 
 
 ## 0. Summary
 
-Today an AINA can only reach the depth of Memory, Documents or Code Runner if it is written *inside* Unibot: those
+Today an AINA can only reach the depth of Memory, Documents or Code Runner if it is written *inside* Superbot: those
 "built-in" AINAs are wired by hard-coded IDs through the capability catalog, executor, prompt builder and frontend.
 A third-party AINA gets a much thinner contract — one black-box `input: string` entry, no tools of its own, no access
 to host services, and only four generic widget kinds.
 
-This design replaces that split with **one package format that every AINA uses, including Unibot's own**. A developer
+This design replaces that split with **one package format that every AINA uses, including Superbot's own**. A developer
 provides:
 
 | Part | What it is | Where it runs |
@@ -32,10 +32,10 @@ provides:
 | **Widgets** | Small web UIs shown in the conversation, e.g. a confirmation before a tool runs or a result card. | Sandboxed iframe inline in chat |
 
 All metadata lives in **`aina.json`**. The canvas and widgets talk to the host only through a `postMessage` bridge.
-The MCP server may call back into Unibot through a permission-scoped **Host API**. The agent changes durable data
+The MCP server may call back into Superbot through a permission-scoped **Host API**. The agent changes durable data
 through MCP tools and changes what is on screen through canvas tools, so the conversation can drive the canvas
 directly. A developer needs the published spec, any
-MCP SDK, a small UI SDK and a CLI — never Unibot's source. First-party AINAs are rebuilt on the same format; the
+MCP SDK, a small UI SDK and a CLI — never Superbot's source. First-party AINAs are rebuilt on the same format; the
 `builtin` runtime type and every per-AINA branch in host code are removed.
 
 ## 1. Problem: where the implementation diverges from the architecture
@@ -57,7 +57,7 @@ analogy says the same: system capabilities plus installable apps.
 | 8 | Skills are a manifest field that only feeds one prompt string; there is no way to ship a reusable workflow. | `AinaCapability.instructions` in [models.py](../backend/src/tianzhou_agent_platform/aina/protocol/models.py) |
 | 9 | Managed AINAs hand-roll a custom envelope (`request_id`, `trace_id`, `usage`) in every handler. | [examples/hello-aina/src/main.py](../examples/hello-aina/src/main.py) |
 
-The root cause is the same in every row: **the protocol is too thin to express what Unibot's own apps need, so those
+The root cause is the same in every row: **the protocol is too thin to express what Superbot's own apps need, so those
 apps bypass it.** Fixing this means making the protocol rich enough that they no longer need to. Special-casing more IDs
 would not fix it.
 
@@ -77,7 +77,7 @@ would not fix it.
 
 **Non-goals (2.0)**
 
-- Unibot hosting developer backend code (the 1.0 managed runtime); local/stdio MCP servers.
+- Superbot hosting developer backend code (the 1.0 managed runtime); local/stdio MCP servers.
 - MCP resources, prompts, sampling and elicitation (skills, widgets and the Host API cover these needs).
 - Marketplace, billing, review workflow, publisher signing PKI.
 - AINA-to-AINA direct calls (the host agent remains the only orchestrator).
@@ -85,10 +85,10 @@ would not fix it.
 
 ## 3. Design principles
 
-1. **The host owns the agent.** AINAs contribute tools, skills and UI; Unibot decides when to use them.
+1. **The host owns the agent.** AINAs contribute tools, skills and UI; Superbot decides when to use them.
 2. **Contract, not code.** Everything an AINA can do is in the spec. A first-party AINA that needs something new must
    get it added to the spec, so third parties get it too.
-3. **Standard where a standard exists.** Tools are plain MCP; Unibot adds only what MCP lacks (install, consent,
+3. **Standard where a standard exists.** Tools are plain MCP; Superbot adds only what MCP lacks (install, consent,
    skills, canvas, widgets, Host API).
 4. **Least privilege, explicit consent.** Every host resource sits behind a permission scope; every scope is shown at
    install; tokens carry only granted scopes and expire quickly.
@@ -101,14 +101,14 @@ would not fix it.
 
 ```mermaid
 flowchart LR
-    subgraph Package["AINA package (uploaded to Unibot)"]
+    subgraph Package["AINA package (uploaded to Superbot)"]
         Manifest["aina.json"]
         Skills["skills/{name}/SKILL.md"]
         Canvas["canvas/ bundle<br/>(or canvas.url)"]
         Widgets["widgets/*.html"]
     end
 
-    subgraph Host["Unibot host"]
+    subgraph Host["Superbot host"]
         Agent["Agent runtime<br/>(LangChain / LangGraph)"]
         PH["Plugin Host<br/>catalog · scope · approvals<br/>MCP client · tool snapshot"]
         HAPI["Host API gateway<br/>/aina-host/v1 · token + scope check"]
@@ -303,11 +303,11 @@ must load remote content is declared as a URL canvas instead (§9.1).
   `skills[].tools` and widget binding refers to an exposed tool, a canvas tool or a declared widget; a
   `confirm_widget` must have `purpose: confirmation`.
 - Each `skills[].path` is a folder containing exactly one of `SKILL.md` or `skill.md`; any other files in the folder
-  are supporting references (§6.3). Skill folders contain no executable scripts; Unibot never runs skill files.
+  are supporting references (§6.3). Skill folders contain no executable scripts; Superbot never runs skill files.
 - `aina.json` is the source of skill metadata. A `SKILL.md` may keep a YAML frontmatter block for compatibility with
   existing Agent Skills folders. If present, its `name` and `description` must match `aina.json`, and the host strips
   the block before loading.
-- `canvas.url` must be HTTPS (plain HTTP only on a loopback host, for development), must pass the admin origin allowlist, and must not be a Unibot or `aina-ui` origin.
+- `canvas.url` must be HTTPS (plain HTTP only on a loopback host, for development), must pass the admin origin allowlist, and must not be a Superbot or `aina-ui` origin.
 - Tool names are unique across `tools.expose` and `canvas.tools`.
 - **Model-facing text** (`aina.description`, `skills[].description`, skill bodies, MCP and canvas tool descriptions)
   must be English; the validator warns on non-ASCII model-facing text.
@@ -391,7 +391,7 @@ a third party.
 
 ### 6.4 Context passed to the MCP server
 
-Every `tools/call` carries the Unibot context in the MCP request `_meta`:
+Every `tools/call` carries the Superbot context in the MCP request `_meta`:
 
 ```json
 {
@@ -426,7 +426,7 @@ Every `tools/call` carries the Unibot context in the MCP request `_meta`:
   repeated in `_meta`.
 - `token` is the **context token** (§8): a host-signed JWT that carries the same identity claims. The server verifies it
   with the host's JWKS to trust the context, and uses it as the Host API bearer. The SDK helper does both.
-- `traceparent` is sent as an HTTP header, so remote spans join Unibot's trace.
+- `traceparent` is sent as an HTTP header, so remote spans join Superbot's trace.
 
 ## 7. Tool results
 
@@ -499,12 +499,12 @@ Canvas and widgets are rendered in sandboxed iframes and connected to the host b
 |---|---|---|
 | Served from | `https://aina-ui.<host>/<aina_id>/<version>/…` (separate, cookieless origin) | The developer's declared HTTPS origin |
 | iframe `sandbox` | `allow-scripts allow-forms allow-downloads` — **no** `allow-same-origin` | `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads` |
-| Why | Packages share the `aina-ui` origin, so each runs with an opaque origin and cannot read another AINA's storage | The app runs on its own origin, which is never Unibot's, so it can keep its own storage and session without reaching Unibot's cookies, storage or DOM |
-| Network | CSP `default-src 'self'; connect-src 'none'`; all data goes through the bridge | The app may call its own backend; Unibot data still comes only through the bridge |
+| Why | Packages share the `aina-ui` origin, so each runs with an opaque origin and cannot read another AINA's storage | The app runs on its own origin, which is never Superbot's, so it can keep its own storage and session without reaching Superbot's cookies, storage or DOM |
+| Network | CSP `default-src 'self'; connect-src 'none'`; all data goes through the bridge | The app may call its own backend; Superbot data still comes only through the bridge |
 | Review | Exactly the packaged files | The origin is reviewed and shown at install; content can change without a new version, so admins allowlist URL-canvas origins separately |
 
 Both kinds: the host sets `frame-ancestors`/`frame-src` so only declared origins load, accepts bridge messages only
-from the expected origin, and posts to that origin only. Unibot passes theme tokens as CSS custom properties, and the
+from the expected origin, and posts to that origin only. Superbot passes theme tokens as CSS custom properties, and the
 SDK ships a small stylesheet so AINAs look native.
 
 A URL canvas often needs to know who the user is in order to load data from its own backend. `getIdentityToken()`
@@ -688,7 +688,7 @@ sequenceDiagram
 | Host API | HTTPS | In-process adapter of the same client interface |
 
 First-party AINAs live in `backend/src/unibot_plugins/<name>/`: `package/` is an ordinary AINA 2.0 package folder and
-`server.py` its MCP server (an `mcp` object). Their MCP server code may import **only** the MCP SDK and the Unibot AINA
+`server.py` its MCP server (an `mcp` object). Their MCP server code may import **only** the MCP SDK and the Superbot AINA
 helper (`unibot_aina`) — never `tianzhou_agent_platform` — and an import-boundary test enforces this. Moving a bundled
 AINA to a standalone remote MCP server must need no code change apart from its transport.
 
@@ -702,7 +702,7 @@ not offered to the model as an entry point.
 
 ## 12. Developer experience
 
-None of this requires reading Unibot's source:
+None of this requires reading Superbot's source:
 
 - **Spec:** this contract plus JSON Schemas (`aina.schema.json`, bridge messages) and the Host API OpenAPI, versioned
   under `spec/aina/2.0/`.
@@ -772,7 +772,7 @@ form, default approval card) stay host-owned and are not part of the AINA contra
   is no automatic conversion: a 1.0 AINA migrates by putting its logic behind an MCP server and adding `aina.json`.
 - **Standalone MCP servers in Settings** (removed on `feature/remove-mcp`) are not reintroduced. An MCP server reaches
   users only inside an AINA package, which gives it install consent, effects, skills and UI.
-- **Later runtimes** (Unibot-hosted MCP servers, which would replace 1.0 managed) can be added as a new `tools`
+- **Later runtimes** (Superbot-hosted MCP servers, which would replace 1.0 managed) can be added as a new `tools`
   source without changing the other three parts.
 
 ## 15. Phased plan
@@ -870,7 +870,7 @@ once, stored as a SHA-256 hash, expire after 30–365 days, and are accepted onl
 above, so they cannot read data or create other tokens. Registering still needs a platform admin; a local host without
 sign-in needs no token.
 
-`aina dev package [--port 8790]` runs the full Unibot host in process (in-memory storage, no sign-in, no
+`aina dev package [--port 8790]` runs the full Superbot host in process (in-memory storage, no sign-in, no
 observability pipeline), registers the folder with `replace` (same version, new content, fresh tool snapshot) and
 installs it for the local user with every declared scope. Its page at `/` is a small host shell without a model: it
 embeds the canvas and widgets with the production bridge rules (app-visible tools only, confirmation before writes),
@@ -905,7 +905,7 @@ runtime type only, never on an AINA id.
   - **Discovery:** the protected resource metadata comes from the server's `401` challenge, or from the path-aware
     and root well-known URLs. The authorization server metadata comes from RFC 8414 or OIDC discovery (issuers with
     a path included), and must list PKCE `S256`.
-  - **Client registration:** Unibot registers once per AINA with dynamic client registration, as a public client
+  - **Client registration:** Superbot registers once per AINA with dynamic client registration, as a public client
     (`token_endpoint_auth_method: none`, with a sealed secret if the server issues one anyway). The registration
     is stored on the package runtime (`oauth`) and kept across upgrades while the MCP URL stays the same.
     Pre-registered clients and Client ID Metadata Documents are not supported.

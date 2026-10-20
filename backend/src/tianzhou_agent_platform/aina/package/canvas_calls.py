@@ -161,8 +161,8 @@ class CanvasCallBroker:
         logger.info("canvas call %s: no viewer took it (tried %s)", call_id, tried or "none")
         raise PlatformError(
             "CANVAS_NOT_OPEN",
-            f"The {title} canvas is not open in any Unibot tab that responds, so the call could not run. "
-            "Ask the user to open the conversation in Unibot (in a visible tab) and try again.",
+            f"The {title} canvas is not open in any Superbot tab that responds, so the call could not run. "
+            "Ask the user to open the conversation in Superbot (in a visible tab) and try again.",
             status_code=409,
             source="canvas",
         )

@@ -161,7 +161,7 @@ def main() -> None:
                 json={
                     "message": (
                         "The request is ambiguous. Ask me for project name and deadline using the host "
-                        "clarification form. Prefill the project name as Unibot."
+                        "clarification form. Prefill the project name as Superbot."
                     ),
                     "capability": "builtin:request_clarification",
                 },
@@ -170,7 +170,7 @@ def main() -> None:
         forms = [widget for widget in clarification["widgets"] if widget["kind"] == "form"]
         if not forms or len(forms[0]["fields"]) < 2:
             raise AssertionError("The real model did not produce a host-rendered clarification form")
-        if not any(field.get("value") == "Unibot" for field in forms[0]["fields"]):
+        if not any(field.get("value") == "Superbot" for field in forms[0]["fields"]):
             raise AssertionError("The clarification form did not preserve the model-provided prefilled value")
 
         tool_id = f"smoke.add.{suffix}"

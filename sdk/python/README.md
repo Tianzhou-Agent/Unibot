@@ -1,6 +1,6 @@
 # unibot-aina
 
-Helper for the MCP server of a [Unibot](https://github.com/Tianzhou-Agent/Unibot) AINA Protocol 2.0 app. It works
+Helper for the MCP server of a [Superbot](https://github.com/Tianzhou-Agent/Unibot) AINA Protocol 2.0 app. It works
 with any MCP server SDK; the examples use the official MCP Python SDK.
 
 ```bash
@@ -30,4 +30,4 @@ async def list_notes(ctx: Context) -> dict:
   expiry. Use it when your server is reachable by others; `verify_identity_token` does the same for a URL canvas's
   identity token.
 
-See the AINA developer guide (`docs/aina-developer-guide.md` in the Unibot repository).
+See the AINA developer guide (`docs/aina-developer-guide.md` in the Superbot repository).

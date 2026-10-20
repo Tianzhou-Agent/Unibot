@@ -42,7 +42,7 @@ class AttachmentService:
         self.documents = documents
 
     async def upload(self, name: str | None, payload: bytes, *, tenant_id: str, user_id: str) -> MessageAttachment:
-        """Keep a file the user picked until a message names it; refused unless Unibot can read it."""
+        """Keep a file the user picked until a message names it; refused unless Superbot can read it."""
         self._documents()
         file_name = clean_name(name)
         converted = await asyncio.to_thread(convert, file_name, payload)

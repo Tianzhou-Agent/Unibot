@@ -1,1 +1,1 @@
-"""Versioned, isolated evaluations of Unibot's agent workflows."""
+"""Versioned, isolated evaluations of Superbot's agent workflows."""

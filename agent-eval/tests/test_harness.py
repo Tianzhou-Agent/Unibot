@@ -378,7 +378,7 @@ def test_prompt_summary_is_recognised(message: dict, present: bool) -> None:  # 
     from unibot_eval.dataset import PromptExpectation
 
     turn = _turn({})
-    turn.llm_calls = [{"request": {"messages": [{"role": "system", "content": "You are Unibot."}, message]}}]
+    turn.llm_calls = [{"request": {"messages": [{"role": "system", "content": "You are Superbot."}, message]}}]
     assert check_prompt(PromptExpectation(has_summary=True), turn)[0].passed is present
 
 

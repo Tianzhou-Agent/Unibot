@@ -1,6 +1,6 @@
 import { FileCode2, FileSpreadsheet, FileText, type LucideIcon } from "lucide-react";
 
-// The files Unibot reads (backend aina/document/file_types.py); it refuses any other upload.
+// The files Superbot reads (backend aina/document/file_types.py); it refuses any other upload.
 const MARKDOWN = [".md"];
 const PROSE = [".markdown", ".txt", ".text", ".log", ".rst"];
 const SHEETS = [".csv", ".tsv"];

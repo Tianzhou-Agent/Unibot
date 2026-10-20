@@ -72,7 +72,7 @@ def create_conversation_router() -> APIRouter:
     ) -> MessageAttachment:
         """Keep a file the user picked for their next message, which names it by the returned file_ref.
 
-        Only files Unibot can read are accepted (415 otherwise); one no message names within a day is deleted.
+        Only files Superbot can read are accepted (415 otherwise); one no message names within a day is deleted.
         """
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         payload = await _read_upload(file)

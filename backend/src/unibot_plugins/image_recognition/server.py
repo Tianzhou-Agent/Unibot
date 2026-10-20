@@ -26,7 +26,7 @@ VISION_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 
 class VisionSettings(BaseSettings):
-    # Read from the environment or, bundled with Unibot, the backend's .env like the host's own settings.
+    # Read from the environment or, bundled with Superbot, the backend's .env like the host's own settings.
     model_config = SettingsConfigDict(
         env_prefix="UNIBOT_VISION_", env_file=Path(__file__).resolve().parents[3] / ".env", extra="ignore"
     )

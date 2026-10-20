@@ -4,7 +4,7 @@
 ``aina validate PATH [--live]`` runs the host's own package validation on a package folder or ``.aina.zip``;
 ``--live`` also lists the tools of the package's MCP server and checks the exposed ones as registration would.
 ``aina pack DIR -o FILE`` validates a folder and writes a reproducible package archive.
-``aina publish PATH --host URL`` registers (or upgrades) the package on a Unibot host with a developer token.
+``aina publish PATH --host URL`` registers (or upgrades) the package on a Superbot host with a developer token.
 ``aina dev PATH`` runs a local host with a developer page for the package (see ``devhost``).
 """
 
@@ -48,14 +48,14 @@ def main(argv: list[str] | None = None) -> int:
     pack = commands.add_parser("pack", help="validate a package folder and write its .aina.zip")
     pack.add_argument("path", type=Path)
     pack.add_argument("-o", "--output", type=Path, required=True)
-    publish = commands.add_parser("publish", help="register a package folder or .aina.zip on a Unibot host")
+    publish = commands.add_parser("publish", help="register a package folder or .aina.zip on a Superbot host")
     publish.add_argument("path", type=Path)
-    publish.add_argument("--host", required=True, help="the Unibot API base URL, e.g. https://unibot.example.com/api")
+    publish.add_argument("--host", required=True, help="the Superbot API base URL, e.g. https://unibot.example.com/api")
     publish.add_argument("--token", default=None, help="developer token (default: $UNIBOT_TOKEN)")
     publish.add_argument(
         "--credential", default=None, help="one-time credential for a bearer/api_key MCP server's tools/list"
     )
-    dev = commands.add_parser("dev", help="run a local Unibot host with a developer page for a package folder")
+    dev = commands.add_parser("dev", help="run a local Superbot host with a developer page for a package folder")
     dev.add_argument("path", type=Path)
     dev.add_argument("--host", default="127.0.0.1")
     dev.add_argument("--port", type=int, default=8790)

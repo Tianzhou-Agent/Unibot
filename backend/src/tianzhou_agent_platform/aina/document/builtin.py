@@ -406,7 +406,7 @@ def unibot_documents_record() -> AinaRecord:
                 name="Document Editor",
                 version="1.0.0",
                 description="Create, read, edit, rename and delete documents and files stored on NAS, including uploaded ones.",
-                publisher=Publisher(id="unibot", name="Unibot"),
+                publisher=Publisher(id="unibot", name="Superbot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
             capabilities=AinaCapabilities(

@@ -52,9 +52,9 @@ def render_html(runs: list[tuple[str, dict[str, Any]]]) -> str:
     progress = sum(case.get("progress", 0) for _, case in cases) / len(cases) if cases else 0.0
     parts = [
         "<!doctype html><html lang=en><head><meta charset=utf-8>",
-        "<meta name=viewport content='width=device-width,initial-scale=1'><title>Unibot eval results</title>",
+        "<meta name=viewport content='width=device-width,initial-scale=1'><title>Superbot eval results</title>",
         f"<style>{_CSS}</style></head><body><main>",
-        "<h1>Unibot agent eval results</h1>",
+        "<h1>Superbot agent eval results</h1>",
         "<div class=meta>" + " · ".join(
             f"{escape(label)}: {escape(str(run['summary']['settings'].get('base_url')))}, judge "
             f"{escape(str(run['summary']['settings'].get('judge_model') or 'disabled'))}, "

@@ -1,6 +1,6 @@
-"""What an uploaded file is to Unibot: its text, which the model reads.
+"""What an uploaded file is to Superbot: its text, which the model reads.
 
-Only files Unibot can read are accepted: UTF-8 text (Markdown, plain text, data and code files), PDF with a text
+Only files Superbot can read are accepted: UTF-8 text (Markdown, plain text, data and code files), PDF with a text
 layer, DOCX and XLSX. Everything else is refused, so the model is never handed a file it cannot see. The type is
 decided from the file's name and bytes, never from what the browser said.
 """
@@ -34,7 +34,7 @@ class Converted:
 
 
 def convert(name: str, payload: bytes) -> Converted:
-    """The text of the uploaded file ``name``; raises when Unibot cannot read the file."""
+    """The text of the uploaded file ``name``; raises when Superbot cannot read the file."""
     kind = file_kind(name)
     if kind is None:
         raise unsupported(name)
@@ -56,7 +56,7 @@ def convert(name: str, payload: bytes) -> Converted:
 def unsupported(name: str) -> PlatformError:
     return PlatformError(
         "UNSUPPORTED_FILE_TYPE",
-        f"{name!r} is not a file Unibot can read: attach text, Markdown, code, PDF, DOCX or XLSX files",
+        f"{name!r} is not a file Superbot can read: attach text, Markdown, code, PDF, DOCX or XLSX files",
         status_code=415,
         source="attachments",
     )

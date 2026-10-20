@@ -97,7 +97,7 @@ def clean_name(name: str | None) -> str:
 
 
 def content_disposition(name: str) -> str:
-    """Always a download: an attachment is never rendered on Unibot's origin."""
+    """Always a download: an attachment is never rendered on Superbot's origin."""
     fallback = "".join(
         character if character.isascii() and character.isalnum() or character in "._-" else "_" for character in name
     )

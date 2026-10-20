@@ -353,7 +353,7 @@ function Brand() {
   return (
     <NavLink to="/chat" className="flex items-center gap-2.5" aria-label={t("homeAria")}>
       <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-white"><Bot className="h-4 w-4" /></span>
-      <span className="text-[14px] font-semibold tracking-tight text-ink">Unibot</span>
+      <span className="text-[14px] font-semibold tracking-tight text-ink">Superbot</span>
     </NavLink>
   );
 }

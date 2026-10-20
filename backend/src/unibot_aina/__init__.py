@@ -1,4 +1,4 @@
-"""Helper for AINA Protocol 2.0 MCP servers (design §12): the Unibot context of a call and a Host API client.
+"""Helper for AINA Protocol 2.0 MCP servers (design §12): the Superbot context of a call and a Host API client.
 
     from unibot_aina import unibot_context
 
@@ -8,8 +8,8 @@
         items = await unibot.host.storage_get("expenses", default=[])
         ...
 
-``ContextVerifier`` checks that a call was signed by your Unibot host. The package depends only on httpx and
-cryptography, never on Unibot's own code, so a bundled first-party server can move to its own process unchanged.
+``ContextVerifier`` checks that a call was signed by your Superbot host. The package depends only on httpx and
+cryptography, never on Superbot's own code, so a bundled first-party server can move to its own process unchanged.
 It is published as ``unibot-aina`` from ``sdk/python``.
 """
 

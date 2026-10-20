@@ -1,6 +1,6 @@
 # 飞牛 fnOS 部署
 
-该目录使用 GitHub Container Registry 中预构建的 Unibot 镜像，飞牛无需编译源码。默认地址针对 `192.168.1.8`：
+该目录使用 GitHub Container Registry 中预构建的 Superbot 镜像，飞牛无需编译源码。默认地址针对 `192.168.1.8`：
 
 - Web：<http://192.168.1.8:8080>
 - API 文档：<http://192.168.1.8:8000/docs>
@@ -18,7 +18,7 @@ sh deploy/fnos/start.sh
 
 ## Docker 图形界面
 
-1. 在文件管理中创建 Unibot 项目目录，并放入本目录的 `docker-compose.yml` 与由 `.env.example` 复制得到的 `.env`；
+1. 在文件管理中创建 Superbot 项目目录，并放入本目录的 `docker-compose.yml` 与由 `.env.example` 复制得到的 `.env`；
 2. 修改 `.env` 中所有 `CHANGE_ME`，至少填写模型 API Key；
 3. 打开 **Docker → Compose → 新增项目**；
 4. 选择“上传 docker-compose.yml”，项目路径选择上述目录；

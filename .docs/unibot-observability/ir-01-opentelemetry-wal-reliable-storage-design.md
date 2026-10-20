@@ -7,7 +7,7 @@
 
 ### 1.1 文档目的
 
-本文档定义 Unibot 可观测性数据从“业务请求同步写 MySQL”迁移为“OpenTelemetry SDK 采集、NAS WAL 持久化、后台批量写 MySQL”的技术方案。
+本文档定义 Superbot 可观测性数据从“业务请求同步写 MySQL”迁移为“OpenTelemetry SDK 采集、NAS WAL 持久化、后台批量写 MySQL”的技术方案。
 
 本方案仅引入代码和数据库表结构变更，不新增 OpenTelemetry Collector、Phoenix、ClickHouse、Kafka 等独立服务，并继续使用项目已有的 MySQL、Redis 和 NAS。
 
@@ -25,7 +25,7 @@
 
 - 使用 OpenTelemetry Python SDK 作为 Trace/Span 的应用内数据模型和上下文标准。
 - 不部署 OpenTelemetry Collector，不使用 OTLP 作为本期数据传输链路。
-- 在 Unibot Backend 内实现专用的 WAL Writer 和 MySQL Ingest Worker。
+- 在 Superbot Backend 内实现专用的 WAL Writer 和 MySQL Ingest Worker。
 - Span 完成后形成不可变记录，先写入 NAS WAL，再由后台 Worker 批量写入 MySQL。
 - 一轮交互对应一个 OTel Trace，一个对话对应一个 Session。
 - 已完成交互在返回用户前必须完成 WAL `fsync`，但不等待 MySQL。
@@ -179,7 +179,7 @@ flowchart LR
 - 使用 GenAI 语义字段记录模型、Token、工具和对话属性。
 - 将来增加 Collector 时只需替换或增加 Exporter，不需要重写 Agent 埋点。
 
-本期 OTel SDK 是应用内库，WAL Writer 是 Unibot 自己的可靠落盘实现。
+本期 OTel SDK 是应用内库，WAL Writer 是 Superbot 自己的可靠落盘实现。
 
 ## 5. Trace 与 Span 模型
 
@@ -216,7 +216,7 @@ OTel Trace ID 和 Span ID 使用标准格式。本期同时保存：
 
 ### 5.3 Span 类型映射
 
-| Unibot 节点 | OTel Span | 主要属性 |
+| Superbot 节点 | OTel Span | 主要属性 |
 | --- | --- | --- |
 | 一轮交互 | Root Agent Span | `gen_ai.operation.name=invoke_agent`、Session、用户、租户 |
 | 模型调用 | Model Span | 模型、Provider、Token、TTFT、输出速率、原始 IO 地址 |
@@ -258,9 +258,9 @@ unibot.raw_io.size_bytes
 
 ### 5.5 Span 状态
 
-Unibot 页面状态与 OTel 状态的映射：
+Superbot 页面状态与 OTel 状态的映射：
 
-| Unibot 状态 | OTel 状态 | 扩展属性 |
+| Superbot 状态 | OTel 状态 | 扩展属性 |
 | --- | --- | --- |
 | `running` | UNSET | `unibot.status=running` |
 | `completed` | UNSET/OK | `unibot.status=completed` |
@@ -658,7 +658,7 @@ input_tokens = input_tokens + VALUES(input_tokens)
 
 ### 12.1 查询原则
 
-- 所有用户访问都经过 Unibot Backend。
+- 所有用户访问都经过 Superbot Backend。
 - 前端不得直接访问 WAL、NAS 或 OBS 数据库。
 - 普通用户查询必须同时包含 `tenant_id` 和 `user_id`。
 - 管理员查询由 `require_platform_admin` 授权后才允许去掉用户条件。
@@ -745,11 +745,11 @@ Redis 只负责避免多个实例同时重放，不保存任何唯一数据。�
 
 ### 13.3 远程 AINA
 
-本期至少在 Unibot Gateway 侧创建完整的远程调用 Span，并向支持 W3C Trace Context 的远端请求注入 `traceparent` 和 `tracestate`。
+本期至少在 Superbot Gateway 侧创建完整的远程调用 Span，并向支持 W3C Trace Context 的远端请求注入 `traceparent` 和 `tracestate`。
 
-若远程服务尚未接入 OTel，调用树只展示 Unibot 观察到的远程请求时延、状态和结果。远程服务内部 Span 的回传需要额外的受认证遥测接收端点或 Collector，不属于本期纯代码可靠存储范围。
+若远程服务尚未接入 OTel，调用树只展示 Superbot 观察到的远程请求时延、状态和结果。远程服务内部 Span 的回传需要额外的受认证遥测接收端点或 Collector，不属于本期纯代码可靠存储范围。
 
-不得通过 OTel Baggage 向不可信远端传播用户邮箱、密钥或完整权限信息。用户与租户归属以 Unibot Root Span 和经过认证的业务请求为准。
+不得通过 OTel Baggage 向不可信远端传播用户邮箱、密钥或完整权限信息。用户与租户归属以 Superbot Root Span 和经过认证的业务请求为准。
 
 ## 14. 故障处理与降级
 

@@ -1,4 +1,4 @@
-"""Bundled first-party AINAs (design §11): packages shipped with Unibot under ``unibot_plugins``.
+"""Bundled first-party AINAs (design §11): packages shipped with Superbot under ``unibot_plugins``.
 
 Each ``unibot_plugins/<name>/`` holds ``package/`` (an ordinary AINA 2.0 package folder) and ``server.py`` (its MCP
 server, an ``mcp`` object built with the MCP SDK). The host registers them at startup and serves their tools in

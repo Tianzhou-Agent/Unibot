@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Unibot AINA Host API",
+    "title": "Superbot AINA Host API",
     "version": "2.0",
-    "description": "What an AINA 2.0 MCP server may ask of the Unibot host on behalf of one tool call. Every request carries the call's context token (`_meta[\"unibot/context\"].token`) as a bearer token; each route also needs one permission the user granted (`storage`, `documents.read`, `documents.write`, `memory.read`, `memory.write`, `llm`). Task callbacks and `token/refresh` need only a token of the invocation that started the task. The server URL is the call's `_meta[\"unibot/context\"].host.api_base`."
+    "description": "What an AINA 2.0 MCP server may ask of the Superbot host on behalf of one tool call. Every request carries the call's context token (`_meta[\"unibot/context\"].token`) as a bearer token; each route also needs one permission the user granted (`storage`, `documents.read`, `documents.write`, `memory.read`, `memory.write`, `llm`). Task callbacks and `token/refresh` need only a token of the invocation that started the task. The server URL is the call's `_meta[\"unibot/context\"].host.api_base`."
   },
   "servers": [
     {
@@ -937,7 +937,7 @@
     "/tasks/{task_id}": {
       "get": {
         "summary": "Task State",
-        "description": "The task as Unibot sees it: an AINA should stop working on one the user ``cancelled``.",
+        "description": "The task as Superbot sees it: an AINA should stop working on one the user ``cancelled``.",
         "operationId": "task_state_aina_host_v1_tasks__task_id__get",
         "parameters": [
           {

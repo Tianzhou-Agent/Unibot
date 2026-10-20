@@ -1,7 +1,7 @@
-"""Unibot configuration and tracing of working-memory compaction.
+"""Superbot configuration and tracing of working-memory compaction.
 
 Compaction itself is the runtime's ``TurnSummarizationMiddleware`` (built-in ``SummarizationMiddleware`` retaining
-complete turns). This module supplies Unibot's summary prompt, multilingual token estimate and settings, and records
+complete turns). This module supplies Superbot's summary prompt, multilingual token estimate and settings, and records
 each summary as a ``context.compress`` span with ``context.compression.*`` / ``context.compacted`` trace events.
 """
 

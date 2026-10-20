@@ -64,7 +64,7 @@ async function installApi(page: Page, initial: ReturnType<typeof installation>[]
     }
     return json(route, { error: { message: `Unhandled ${method} ${path}` } }, 404);
   });
-  // The authorization server: the user approves, and Unibot's callback sends them back connected.
+  // The authorization server: the user approves, and Superbot's callback sends them back connected.
   await page.route("**/fake-authorize?**", (route) => {
     const returnTo = new URL(route.request().url()).searchParams.get("return_to") ?? "/plugin";
     state.installations = [installation("active", true)];

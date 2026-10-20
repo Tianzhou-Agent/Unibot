@@ -1,4 +1,4 @@
-// Expenses canvas: everything goes through the Unibot UI bridge; the frame has no network access of its own.
+// Expenses canvas: everything goes through the Superbot UI bridge; the frame has no network access of its own.
 import { host } from "./aina-ui.js";
 
 const rows = document.getElementById("rows");
@@ -43,7 +43,7 @@ async function run(action) {
     await action();
     await render();
   } catch (error) {
-    // A call the user declined in Unibot's confirmation is reported as an error too.
+    // A call the user declined in Superbot's confirmation is reported as an error too.
     status.textContent = error.message;
   }
 }

@@ -47,7 +47,7 @@ class FeedbackRecord(StrictModel):
     conversation_id: str
     message_id: str
     trace_id: str | None = None
-    agent_name: str = "Unibot"
+    agent_name: str = "Superbot"
     agent_version: str = ""
     rating: FeedbackRating
     reason: str = ""

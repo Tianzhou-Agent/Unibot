@@ -35,18 +35,18 @@ Composed per invocation by `AgentRunner`; first = outermost.
 | `TerminalDenialMiddleware` | runtime | A denied batch closes every pending call and ends without another model call. | `HumanInTheLoopMiddleware` rejects only the reviewed calls, runs the siblings and asks the model again. |
 | `TranscriptHookMiddleware` | runtime | Archives new messages before summarization can replace them. | Summarization removes working-state messages; originals must be persisted first. |
 | `TurnSummarizationMiddleware` | runtime, subclass of `SummarizationMiddleware` | Built-in summarization retaining complete user turns. | `keep` cannot express turns; the built-in re-raises summary failures and cannot skip an oversized summary request. |
-| `CapabilityScopeMiddleware` | Unibot | Advertised tools, system prompt, UI context, forced tool, out-of-scope history projection. | Product capability scopes (AINA activation). |
+| `CapabilityScopeMiddleware` | Superbot | Advertised tools, system prompt, UI context, forced tool, out-of-scope history projection. | Product capability scopes (AINA activation). |
 | `RequestBudgetGuard` | runtime | Refuses a final request over the model's input budget; nothing is sent. | No built-in final-request budget (tools and system prompt included). |
 | `ForcedToolChoiceMiddleware` | runtime | Forced tool calls are not streamed; a provider that rejects or ignores a named `tool_choice` is asked once more, and a call still missing fails the run. | Demonstrated provider incompatibility (thinking-mode providers reject it; `mimo-v2.6-flash` ignores it in about a quarter of requests). |
 | `ProviderErrorMiddleware` | runtime | Provider exceptions → platform errors (injected mapping). | Product error protocol. |
-| `ModelCallRecorder` | Unibot | Model spans, trace events, `/llm-calls` records, run usage. | Product trace contract; records the exact provider request. |
+| `ModelCallRecorder` | Superbot | Model spans, trace events, `/llm-calls` records, run usage. | Product trace contract; records the exact provider request. |
 | `InvalidToolCallMiddleware` | runtime | Answers tool calls whose arguments are not valid JSON. | LangChain keeps them in `invalid_tool_calls`, which nothing executes or answers. |
 | `OrderedBatchMiddleware` | runtime | Ordered execution of a response's calls, same-batch and run-scoped signature deduplication. | The tool node runs calls concurrently; `ToolCallLimitMiddleware` counts calls but cannot deduplicate signatures. |
 | `ModelCallBudgetMiddleware` | runtime, subclass of `ModelCallLimitMiddleware` | Per-invocation model-call limit ending with the product reply. | The built-in either raises or ends with its own English notice. |
 | `HumanInTheLoopMiddleware` | LangChain | Pauses a batch with a risky call; `when` skips calls with invalid arguments. | — |
 | `OutputGuardMiddleware` | runtime | Empty or truncated responses fail; calls of a truncated response never run. | No built-in guard. |
 | `ToolErrorMiddleware` | LangChain | Tool failures → model-visible error envelopes. | — |
-| `CapabilityCallMiddleware` | Unibot | Scope and argument checks, one tool span and event set per logical call, product retry policy. | Product trace contract and capability rules. |
+| `CapabilityCallMiddleware` | Superbot | Scope and argument checks, one tool span and event set per logical call, product retry policy. | Product trace contract and capability rules. |
 | `ToolRetryMiddleware` groups | LangChain | Automatic retries of side-effect-free remote tools, one group per `retries` budget. | — |
 
 Standalone model calls use native callbacks: `StandaloneCallRecorder` records summary calls (per run) and document

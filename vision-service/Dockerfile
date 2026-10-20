@@ -3,7 +3,7 @@ FROM ${ULTRALYTICS_IMAGE}
 
 ARG MODEL_NAME=yolo26m.pt
 
-LABEL org.opencontainers.image.title="Unibot YOLO Vision Service" \
+LABEL org.opencontainers.image.title="Superbot YOLO Vision Service" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 WORKDIR /opt/models

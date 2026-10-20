@@ -126,7 +126,7 @@ def _json_string(value: Any) -> str | None:
 
 
 def otel_status_to_unibot(status: Any, business_status: str | None) -> str:
-    """Map OTel StatusCode to the Unibot page status (design 5.5)."""
+    """Map OTel StatusCode to the Superbot page status (design 5.5)."""
     if business_status is not None:
         return business_status
     if status is not None and status.status_code == StatusCode.ERROR:

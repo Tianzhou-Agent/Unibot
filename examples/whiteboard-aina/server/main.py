@@ -17,7 +17,7 @@ from pydantic import BaseModel
 MAX_ELEMENTS = 2_000
 
 mcp = MCPServer("whiteboard", version="1.0.0")
-# Tests route Host API calls to an in-process Unibot; None means real HTTP.
+# Tests route Host API calls to an in-process Superbot; None means real HTTP.
 HOST_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 
@@ -28,7 +28,7 @@ class Board(BaseModel):
 def _unibot(ctx: Context) -> dict[str, Any]:
     context = (ctx.request_context.meta or {}).get("unibot/context")
     if not isinstance(context, dict):
-        raise ToolError("This server must be called by Unibot")
+        raise ToolError("This server must be called by Superbot")
     return context
 
 

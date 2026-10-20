@@ -1,4 +1,4 @@
-# Unibot
+# Superbot
 
 完整的 Docker Compose 部署方式见 [容器化部署文档](docs/container-deployment.md)。
 
@@ -6,12 +6,12 @@
 
 ## 产品定位
 
-Unibot 由两层能力构成：
+Superbot 由两层能力构成：
 
 1. **Host 基础对话能力**：内置 Agent Loop、LLM 调用、上下文管理和工具路由，即使不安装任何外部 App 也能作为完整 Chatbot 使用。
 2. **App 扩展生态**：通过 AINA 协议注册外部 App，动态扩展平台能力边界。
 
-类比：Unibot 像 iPhone —— 开机就有系统级 Siri 能力；安装 App 后才有拍照、导航、支付等扩展能力。
+类比：Superbot 像 iPhone —— 开机就有系统级 Siri 能力；安装 App 后才有拍照、导航、支付等扩展能力。
 
 ## 核心特性
 
@@ -122,7 +122,7 @@ npm run dev
 `http://127.0.0.1:8000`。如需直连其他后端，可配置 `VITE_API_BASE_URL`。
 
 首次打开业务页面会进入登录页。系统支持邮箱密码注册登录；GitHub 登录在配置 OAuth App 后自动显示。
-生产环境必须设置唯一的 `UNIBOT_AUTH_SECRET`，所有 Unibot 后端节点使用相同值，并开启
+生产环境必须设置唯一的 `UNIBOT_AUTH_SECRET`，所有 Superbot 后端节点使用相同值，并开启
 `UNIBOT_AUTH_COOKIE_SECURE=true`。GitHub OAuth App 的本地回调地址为
 `http://127.0.0.1:5173/api/auth/github/callback`。完整配置和安全说明见
 [`docs/authentication.md`](docs/authentication.md)。

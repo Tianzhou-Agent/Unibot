@@ -1,6 +1,10 @@
 export default {
   title: "添加应用",
   subtitle: "上传完整的应用包，或由各个部分组装一个。",
+  edit: {
+    title: "编辑应用",
+    subtitle: "修改将注册为新版本。已安装的用户会升级到新版本；若新版本能做更多事，会再次征求同意。",
+  },
   breadcrumb: "导航路径",
   plugins: "插件",
   adminOnly: "只有平台管理员可以注册应用。下载应用包后交给管理员即可。",
@@ -21,10 +25,11 @@ export default {
     idHint: "反向域名，小写。首次注册后不可更改。",
     description: "描述",
     descriptionPlaceholder: "Draw and edit diagrams. Use when the user wants a flowchart or a sketch.",
-    descriptionHint: "Unibot 根据名称和描述决定何时使用此应用。请写明它做什么、何时使用。",
+    descriptionHint: "Superbot 根据名称和描述决定何时使用此应用。请写明它做什么、何时使用。",
     english: "智能体会读取名称和描述，请用英文书写。",
     more: "更多设置",
     version: "版本",
+    versionHint: "请使用比已注册版本更新的版本号。",
   },
   parts: {
     title: "包含内容",
@@ -41,9 +46,10 @@ export default {
     download: "下载应用包",
     check: "检查应用",
     register: "注册应用",
+    save: "保存新版本",
   },
   check: {
-    passed: "应用已通过 Unibot 的检查。",
+    passed: "应用已通过 Superbot 的检查。",
     errors: "有 {{count}} 个问题需要修复",
     warnings: "{{count}} 条警告",
   },
@@ -104,9 +110,9 @@ export default {
     embeddable: "该页面允许被嵌入",
     embeddableUnknown: "无法判断该页面是否允许被嵌入",
     bridge: {
-      waiting: "正在检查页面是否连接 Unibot…",
-      connected: "已连接 Unibot：页面可以使用画布工具、主题和应用设置",
-      none: "仅显示：页面可以正常显示，但没有使用 Unibot 的画布功能。",
+      waiting: "正在检查页面是否连接 Superbot…",
+      connected: "已连接 Superbot：页面可以使用画布工具、主题和应用设置",
+      none: "仅显示：页面可以正常显示，但没有使用 Superbot 的画布功能。",
       learn: "这是什么意思",
     },
   },

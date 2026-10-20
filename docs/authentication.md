@@ -1,6 +1,6 @@
 # 用户认证
 
-Unibot 支持邮箱密码账户，以及 GitHub、华为 Uniportal、Google、Microsoft、Apple 登录。业务接口默认要求登录；`/health`、API 文档和
+Superbot 支持邮箱密码账户，以及 GitHub、华为 Uniportal、Google、Microsoft、Apple 登录。业务接口默认要求登录；`/health`、API 文档和
 `/auth/*` 保持公开。登录成功后，后端通过 `HttpOnly`、`SameSite=Lax` Cookie 保存有时效的签名会话，
 前端不接触或持久化令牌。
 
@@ -88,7 +88,7 @@ UNIBOT_FRONTEND_BASE_URL=http://127.0.0.1:5173
 三家使用授权码流程。后端通过官方 JWKS 验证 ID token 的 RS256 签名，并校验 issuer、audience、
 有效期、nonce 和适用的 access-token hash。Google、Microsoft 同时使用 S256 PKCE。
 以签发方和 `sub` 组合识别用户，Microsoft 的租户信息参与身份隔离；同邮箱已有账户时拒绝自动合并。
-第三方令牌不持久化，登录后使用现有 Unibot 会话和用户空间。
+第三方令牌不持久化，登录后使用现有 Superbot 会话和用户空间。
 
 ### Google
 
@@ -181,7 +181,7 @@ UNIBOT_FRONTEND_BASE_URL=https://unibot.example.com
 UNIBOT_GITHUB_CALLBACK_URL=https://unibot.example.com/api/auth/github/callback
 ```
 
-- 所有 Unibot 后端节点必须共享相同的 `UNIBOT_AUTH_SECRET`，这样任意节点都能验证同一个会话。
+- 所有 Superbot 后端节点必须共享相同的 `UNIBOT_AUTH_SECRET`，这样任意节点都能验证同一个会话。
 - 用户记录存入现有 MySQL 权威存储；Redis 锁串行化跨节点账户创建和 OAuth 登录，防止重复账户。
 - 前端和 `/api` 应通过同一个站点提供服务。若使用反向代理，保留 HTTPS 和 Cookie 响应头。
 - `UNIBOT_AUTH_SECRET`、各提供方 Client secret 和 Apple 私钥不得提交到 Git；轮换认证密钥会使已有会话全部失效。

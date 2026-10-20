@@ -16,7 +16,7 @@ export function Topbar({
   const { activeWorkspace } = useWorkspace();
   return (
     <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-white px-4 md:px-6">
-      <span className="hidden text-[13px] font-normal text-ink-subtle sm:inline">Unibot</span>
+      <span className="hidden text-[13px] font-normal text-ink-subtle sm:inline">Superbot</span>
       {activeWorkspace ? (
         <>
           <ChevronRight className="hidden h-3.5 w-3.5 text-ink-subtle sm:block" />

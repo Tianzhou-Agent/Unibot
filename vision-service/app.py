@@ -271,7 +271,7 @@ def create_app(
         await resolved_engine.load()
         yield
 
-    app = FastAPI(title="Unibot YOLO Vision Service", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Superbot YOLO Vision Service", version="1.0.0", lifespan=lifespan)
     app.state.engine = resolved_engine
     app.state.settings = resolved_settings
 

@@ -80,7 +80,7 @@ def test_open_app_agent_flow() -> None:
     assert_agent_run(
         run,
         task="Open the unibot-memory AINA",
-        expected_output="Confirm that Unibot Memory is ready to open.",
+        expected_output="Confirm that Superbot Memory is ready to open.",
         expected_tools=["open_app"],
         criteria="The answer must concern opening unibot-memory and must not claim a different AINA was opened.",
     )
@@ -89,7 +89,7 @@ def test_open_app_agent_flow() -> None:
 def test_clarification_form_agent_flow() -> None:
     run = asyncio.run(
         _run_once(
-            "Ask for project name and deadline in a form; prefill project name as Unibot.",
+            "Ask for project name and deadline in a form; prefill project name as Superbot.",
             capability="builtin:request_clarification",
         )
     )
@@ -98,13 +98,13 @@ def test_clarification_form_agent_flow() -> None:
     form = run.response["widgets"][0]
     assert form["kind"] == "form"
     assert len(form["fields"]) >= 2
-    assert any(field.get("value") == "Unibot" for field in form["fields"])
+    assert any(field.get("value") == "Superbot" for field in form["fields"])
     assert_agent_run(
         run,
         task="Present a form with project name prefilled and request the missing deadline",
         expected_output=(
             "The interactive form is validated separately; the assistant should direct the user to enter the "
-            "deadline and note that project name is prefilled as Unibot."
+            "deadline and note that project name is prefilled as Superbot."
         ),
         expected_tools=["request_clarification"],
         criteria=(

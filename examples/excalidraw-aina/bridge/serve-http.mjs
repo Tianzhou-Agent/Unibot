@@ -1,5 +1,5 @@
 // Serves a local Excalidraw MCP server (yctimlin/mcp_excalidraw, which itself speaks only stdio) over Streamable
-// HTTP, so Unibot can use it as a remote AINA. It reuses the server's own tool table and the MCP SDK it ships with,
+// HTTP, so Superbot can use it as a remote AINA. It reuses the server's own tool table and the MCP SDK it ships with,
 // and draws on the canvas service the same way the stdio server does.
 //
 //   EXCALIDRAW_DIR=/path/to/excalidraw node examples/excalidraw-aina/bridge/serve-http.mjs

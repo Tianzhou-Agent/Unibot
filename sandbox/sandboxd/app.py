@@ -59,7 +59,7 @@ class ExecutionResult(BaseModel):
     truncated: bool = False
 
 
-app = FastAPI(title="Unibot sandboxd", version="1.0.0")
+app = FastAPI(title="Superbot sandboxd", version="1.0.0")
 
 
 @app.get("/health")

@@ -254,13 +254,13 @@ async def _optional_trace(data_repository, trace_id: str | None):  # type: ignor
 
 def _agent_identity(trace) -> tuple[str, str]:  # type: ignore[no-untyped-def]
     if trace is None:
-        return "Unibot", ""
+        return "Superbot", ""
     span = next((item for item in trace.spans if item.kind == "aina"), None)
     if span is None:
         span = next((item for item in trace.spans if item.kind == "model"), None)
     if span is None:
-        return "Unibot", ""
-    return span.target_id or span.name or "Unibot", span.target_version or ""
+        return "Superbot", ""
+    return span.target_id or span.name or "Superbot", span.target_version or ""
 
 
 def _aware(value: datetime | None) -> datetime | None:

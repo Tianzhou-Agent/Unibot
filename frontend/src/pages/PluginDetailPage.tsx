@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
-import { AppWindow, ChevronRight, Download, LogIn, LogOut, Trash2, Unplug } from "lucide-react";
+import { AppWindow, ChevronRight, Download, LogIn, LogOut, Pencil, Trash2, Unplug } from "lucide-react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AinaCapabilitySections } from "@/components/apps/AinaCapabilities";
 import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
@@ -81,6 +81,9 @@ export default function PluginDetailPage() {
   }
   if (manifest && (installed || disconnected) && !builtin) {
     menuItems.push({ label: t("aina.uninstall"), icon: <Unplug className="h-4 w-4" />, onSelect: () => void run(() => uninstallAina(ainaId)) });
+  }
+  if (manifest && canManageRegistry && manifest.runtime.type === "package" && !builtin) {
+    menuItems.push({ label: t("edit"), icon: <Pencil className="h-4 w-4" />, onSelect: () => navigate(`/plugin/${encodeURIComponent(ainaId)}/edit`) });
   }
   if (manifest && canManageRegistry && !builtin && manifest.runtime.type !== "managed") {
     menuItems.push({ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => void run(() => deleteAina(ainaId), () => navigate("/plugin")) });

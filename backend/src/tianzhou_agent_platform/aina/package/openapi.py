@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, JWKS_PATH
 
 DESCRIPTION = (
-    "What an AINA 2.0 MCP server may ask of the Unibot host on behalf of one tool call. Every request carries the "
+    "What an AINA 2.0 MCP server may ask of the Superbot host on behalf of one tool call. Every request carries the "
     "call's context token (`_meta[\"unibot/context\"].token`) as a bearer token; each route also needs one "
     "permission the user granted (`storage`, `documents.read`, `documents.write`, `memory.read`, `memory.write`, "
     "`llm`). Task callbacks and `token/refresh` need only a token of the invocation that started the task. The "
@@ -42,7 +42,7 @@ def host_api_openapi(app: FastAPI) -> dict[str, Any]:
     jwks.pop("tags", None)
     return {
         "openapi": full["openapi"],
-        "info": {"title": "Unibot AINA Host API", "version": "2.0", "description": DESCRIPTION},
+        "info": {"title": "Superbot AINA Host API", "version": "2.0", "description": DESCRIPTION},
         "servers": [{"url": "{api_base}", "variables": {"api_base": {"default": "https://unibot.example.com/api/aina-host/v1"}}}],
         "paths": dict(sorted(paths.items())),
         "components": {

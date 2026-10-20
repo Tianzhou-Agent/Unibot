@@ -8,7 +8,7 @@ navigation. A row is complete only when every applicable layer is automated.
 > `services/agent_integration/runner.py`. Working memory is the conversation's LangGraph checkpoint, approvals use
 > `HumanInTheLoopMiddleware`, compaction uses `SummarizationMiddleware` and automatic retries use
 > `ToolRetryMiddleware`. Reusable policies live in `core/agent_runtime/middleware` and are tested without the app in
-> `tests/agent_runtime/`; the Unibot integration is tested in `tests/agent_integration/` and through the HTTP suites;
+> `tests/agent_runtime/`; the Superbot integration is tested in `tests/agent_integration/` and through the HTTP suites;
 > `tests/store/test_agent_runtime_e2e.py` covers approval restore on the production saver. See
 > `docs/langchain-migration-status.md`.
 
