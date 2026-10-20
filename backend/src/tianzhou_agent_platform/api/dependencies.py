@@ -95,6 +95,12 @@ def conversation_service(request: Request):
     return cast(ConversationService, request.app.state.conversation_service)
 
 
+def chat_attachments(request: Request):
+    from tianzhou_agent_platform.conversations.attachment_service import AttachmentService
+
+    return cast(AttachmentService, request.app.state.chat_attachments)
+
+
 def chat_service(request: Request):
     from tianzhou_agent_platform.services.chat import ChatService
 

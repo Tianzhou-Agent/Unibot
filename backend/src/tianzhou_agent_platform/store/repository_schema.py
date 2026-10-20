@@ -327,13 +327,16 @@ chat_attachments_table = Table(
     Column("id", String(64), primary_key=True),  # the file_ref
     Column("tenant_id", ACTOR, nullable=False),
     Column("user_id", ACTOR, nullable=False),
-    Column("conversation_id", ID, nullable=False),
+    Column("conversation_id", ID),
+    Column("workspace_id", ID),
+    Column("document", String(600)),
     Column("name", String(255), nullable=False),
     Column("content_type", String(160), nullable=False),
     Column("size_bytes", Integer, nullable=False),
     Column("sha256", String(64), nullable=False),
     Column("created_at", TIMESTAMP, nullable=False),
     Index("ix_unibot_chat_attachments_conversation", "conversation_id"),
+    Index("ix_unibot_chat_attachments_owner", "tenant_id", "user_id", "created_at"),
 )
 
 aina_notifications_table = Table(

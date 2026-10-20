@@ -10,6 +10,7 @@ frontend/frontend-run.log
 .env
 deploy/fnos/.env
 /data/
+/release-artifacts/
 .reasonix/
 reasonix.toml
 backend/backend-live*.log

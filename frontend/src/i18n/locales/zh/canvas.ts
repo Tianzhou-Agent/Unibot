@@ -12,6 +12,7 @@ export default {
   reorderShortcut: "Alt + ← / → 调整顺序",
   expand: "展开画布",
   restore: "恢复分栏",
+  resize: "调整 Canvas 宽度",
   launcher: {
     newTab: "新标签页",
     title: "接下来，做点什么？",

@@ -10,6 +10,7 @@ import {
   Code2,
   Columns2,
   Copy,
+  Download,
   Eye,
   FileCheck2,
   FilePlus2,
@@ -31,8 +32,10 @@ import {
   X,
 } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
-import { api, ApiError, apiErrorMessage } from "@/lib/api";
+import { BinaryFileViewer, TextFileEditor } from "./FileViewers";
+import { api, ApiError, apiErrorMessage, apiUrl } from "@/lib/api";
 import { documentApiPath } from "@/lib/documentPaths";
+import { documentKind, fileVisual } from "@/lib/fileTypes";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames } from "@/lib/utils";
 import type {
@@ -125,6 +128,8 @@ export function DocumentWidget({ workspaceId, initialDocumentName, disabled = fa
   }
 
   const dirty = selectedName !== null && content !== savedContent;
+  // Markdown has sections and edit tasks; other text files are edited whole; PDF, DOCX and XLSX are read-only.
+  const kind = selectedName ? documentKind(selectedName) : null;
   const selected = useMemo(
     () => items.find((item) => item.name === selectedName) ?? null,
     [items, selectedName],
@@ -787,6 +792,13 @@ export function DocumentWidget({ workspaceId, initialDocumentName, disabled = fa
             <p className="mt-0.5 text-[9px] text-ink-subtle">{selected?.modified_at ? t("header.updated", { date: formatDate(selected.modified_at) }) : t("header.pickToEdit")}</p>
           </div>
           {selectedName ? (
+            <a href={apiUrl(`/documents/${documentApiPath(selectedName)}/file?${scopeQuery}`)} download={baseName(selectedName)}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-line bg-white text-ink-muted hover:bg-app-soft hover:text-ink"
+              aria-label={t("viewer.download", { name: baseName(selectedName) })} title={t("viewer.download", { name: baseName(selectedName) })}>
+              <Download className="h-3.5 w-3.5" />
+            </a>
+          ) : null}
+          {selectedName && kind === "markdown" ? (
             <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5" aria-label={t("header.modeAria")}>
               <ViewButton active={mode === "edit"} label={t("header.edit")} onClick={() => switchMode("edit")} />
               <ViewButton active={mode === "tasks"} label={t("header.tasksTab", { count: tasks.length })} onClick={() => switchMode("tasks")} />
@@ -801,12 +813,20 @@ export function DocumentWidget({ workspaceId, initialDocumentName, disabled = fa
         <div className="min-h-0 flex-1 bg-white">
           {loading && !selectedName ? <div className="flex h-full items-center justify-center text-ink-muted"><Loader2 className="h-5 w-5 animate-spin" /></div> : null}
           {!loading && !selectedName ? <EmptyDocument /> : null}
-          {selectedName && mode === "edit" ? (
+          {selectedName && kind === "text" ? (
+            <TextFileEditor name={selectedName} content={content} dirty={dirty} saving={saving} disabled={disabled}
+              onContent={setContent} onSave={() => void saveDocumentChanges()} />
+          ) : null}
+          {selectedName && kind === "binary" ? (
+            <BinaryFileViewer name={selectedName} content={content}
+              filePath={`/documents/${documentApiPath(selectedName)}/file?${scopeQuery}`} />
+          ) : null}
+          {selectedName && kind === "markdown" && mode === "edit" ? (
             <DocumentEditor content={content} dirty={dirty} saving={saving} disabled={disabled} mode={editorMode}
               outline={outline} headingIndex={editHeadingIndex} onHeading={(index) => void selectEditorSection(index)}
               onContent={setContent} onMode={setEditorMode} onSave={() => void saveDocumentChanges()} />
           ) : null}
-          {selectedName && mode === "tasks" ? (
+          {selectedName && kind === "markdown" && mode === "tasks" ? (
             <TaskWorkspace tasks={tasks} activeTask={activeTask} activeSection={activeSection}
               activeSectionId={activeSectionId} creating={creatingTask} outline={outline}
               description={taskDescription} selected={selectedHeadingIndexes} draftContent={draftContent}
@@ -1292,12 +1312,14 @@ function DocumentTree({ node, depth, selectedName, selectedFolder, expanded, ren
     })}
     {node.documents.map((document) => {
       const isRenaming = renaming?.kind === "document" && renaming.path === document.name;
+      const visual = fileVisual(document.name);
+      const Icon = visual.icon;
       return <div key={document.name} role="button" tabIndex={0} aria-label={baseName(document.name)} onClick={() => onDocument(document.name)}
         onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onDocument(document.name); } }}
         style={indent}
         className={classNames("group mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded py-1.5 pr-1 text-left",
           document.name === selectedName ? "bg-white text-accent shadow-sm" : "text-ink-muted hover:bg-white")}>
-        <FileText className="h-3.5 w-3.5 shrink-0" />
+        <span className={classNames("flex h-5 w-5 shrink-0 items-center justify-center rounded", visual.tile)} title={visual.label}><Icon className="h-3 w-3" aria-hidden /></span>
         {isRenaming
           ? <RenameInput value={renameValue} onValue={onRenameValue} onSubmit={onRenameSubmit} onCancel={onRenameCancel} />
           : <span className="min-w-0 flex-1"><strong className="block truncate text-[10.5px]">{baseName(document.name)}</strong>

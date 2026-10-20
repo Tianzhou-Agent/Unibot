@@ -50,7 +50,12 @@ from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.package.canvas_calls import canvas_state_block
 from tianzhou_agent_platform.aina.package.tasks import model_result_text, result_message_id
 from tianzhou_agent_platform.config import AgentSettings
-from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY, MessageAttachment
+from tianzhou_agent_platform.conversations.attachments import (
+    ATTACHMENTS_KEY,
+    MessageAttachment,
+    inline_budget,
+    inline_contents,
+)
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord, ChatRequest, ChatResponse
 from tianzhou_agent_platform.conversations.service import ConversationService
@@ -250,11 +255,13 @@ class AgentRunner:
         event_sink: EventSink | None = None,
         stop: TurnStop | None = None,
         attachments: list[MessageAttachment] | None = None,
+        attachment_texts: dict[str, str] | None = None,
         after_failed_turn: bool = False,
     ) -> ChatResponse:
         """Run one user turn. The caller holds the conversation's run lease.
 
-        After a failed turn, re-enter the AINA scope that turn activated.
+        ``attachment_texts`` are the documents of the message's ``attachments`` (file_ref -> text), which the model
+        reads in the message, as much as fits. After a failed turn, re-enter the AINA scope that turn activated.
         """
         config = self._config(conversation, trace_id)
         checkpointed = await self._working_messages(config)
@@ -284,6 +291,11 @@ class AgentRunner:
         run = self._new_run(conversation, trace_id, event_sink)
         run.scope.ui_context = request.ui_context
         run.scope.ui_context_message_id = user_message.id
+        run.scope.attachment_contents = inline_contents(
+            attachments or [],
+            attachment_texts or {},
+            inline_budget(current_context_window_tokens(self.settings.context_window_tokens)),
+        )
         run.memory_context = await self.memories.search_memories(
             request.message,
             user_id=conversation.user_id,

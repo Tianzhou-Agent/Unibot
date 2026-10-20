@@ -520,6 +520,23 @@ class PersistentRepository(InMemoryRepository):
     async def list_chat_attachments(self, file_refs: list[str]) -> list[Attachment]:
         return await self._chat_attachment_store.list_refs(file_refs)
 
+    async def bind_chat_attachment(
+        self, file_ref: str, *, conversation_id: str, workspace_id: str | None
+    ) -> Attachment | None:
+        return await self._chat_attachment_store.bind(
+            file_ref, conversation_id=conversation_id, workspace_id=workspace_id
+        )
+
+    async def delete_chat_attachment(self, file_ref: str) -> None:
+        await self._chat_attachment_store.delete(file_ref)
+
+    async def list_unsent_chat_attachments(
+        self, *, tenant_id: str, user_id: str, created_before: datetime
+    ) -> list[Attachment]:
+        return await self._chat_attachment_store.list_unsent(
+            tenant_id=tenant_id, user_id=user_id, created_before=created_before
+        )
+
     async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
         await self._aina_notification_store.create(notification)
         return self._copy(notification)

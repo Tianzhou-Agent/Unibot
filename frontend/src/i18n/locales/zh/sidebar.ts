@@ -15,6 +15,7 @@ export default {
   closeNav: "关闭导航",
   collapseNav: "收起导航",
   expandNav: "展开导航",
+  resizeNav: "调整侧边栏宽度",
   mainNav: "主导航",
   quickNav: "快捷导航",
   nav: {

@@ -65,7 +65,7 @@ export function TurnProcessToggle({ durationMs, open, onToggle, active = false, 
 }) {
   const { t } = useTranslation("chat");
   const Icon = { reasoning: Lightbulb, text: MessageSquareText, tool: Wrench, activity: Sparkles }[activityType];
-  const detail = preview?.replace(/\s+/g, " ").trim();
+  const detail = open ? undefined : preview?.replace(/\s+/g, " ").trim();
   return (
     <button
       type="button"

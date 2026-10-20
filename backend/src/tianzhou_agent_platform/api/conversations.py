@@ -1,26 +1,20 @@
-import hashlib
-
 from fastapi import APIRouter, File, Request, Response, UploadFile, status
 
 from tianzhou_agent_platform.aina.package.tasks import AinaTask
 from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
-    aina_file_blobs,
     aina_tasks,
     bind_actor,
+    chat_attachments,
     chat_service,
     conversation_service,
     require_actor_ownership,
 )
 from tianzhou_agent_platform.conversations.attachments import (
-    DEFAULT_TYPE,
     MAX_ATTACHMENT_BYTES,
-    Attachment,
+    AttachmentPreview,
     MessageAttachment,
-    blob_key,
-    clean_name,
     content_disposition,
-    new_file_ref,
     too_large,
 )
 from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate, ConversationUpdate
@@ -69,47 +63,56 @@ def create_conversation_router() -> APIRouter:
         require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
         return await aina_tasks(request).cancel(conversation_id, task_id)
 
-    @router.post(
-        "/conversations/{conversation_id}/attachments",
-        response_model=MessageAttachment,
-        status_code=status.HTTP_201_CREATED,
-    )
-    async def upload_attachment(conversation_id: str, request: Request, file: UploadFile = File(...)) -> MessageAttachment:
-        """Store a file for the next message of this conversation; the message names it by the returned file_ref."""
-        conversation = await conversation_service(request).get(conversation_id)
-        require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
-        try:
-            payload = await file.read(MAX_ATTACHMENT_BYTES + 1)
-        finally:
-            await file.close()
-        if len(payload) > MAX_ATTACHMENT_BYTES:
-            raise too_large()
-        content_type = (file.content_type or DEFAULT_TYPE).split(";")[0].strip()[:160] or DEFAULT_TYPE
-        attachment = Attachment(
-            id=new_file_ref(),
-            tenant_id=conversation.tenant_id,
-            user_id=conversation.user_id,
-            conversation_id=conversation.id,
-            name=clean_name(file.filename),
-            content_type=content_type,
-            size_bytes=len(payload),
-            sha256=hashlib.sha256(payload).hexdigest(),
+    @router.post("/attachments", response_model=MessageAttachment, status_code=status.HTTP_201_CREATED)
+    async def upload_attachment(
+        request: Request,
+        file: UploadFile = File(...),
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> MessageAttachment:
+        """Keep a file the user picked for their next message, which names it by the returned file_ref.
+
+        Only files Unibot can read are accepted (415 otherwise); one no message names within a day is deleted.
+        """
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        payload = await _read_upload(file)
+        return await chat_attachments(request).upload(
+            file.filename, payload, tenant_id=actor.tenant_id, user_id=actor.user_id
         )
-        # The bytes first: a message can name the file only once they are stored.
-        await aina_file_blobs(request).write(blob_key(attachment), payload)
-        return await conversation_service(request).add_attachment(attachment)
+
+    @router.delete("/attachments/{file_ref}", status_code=status.HTTP_204_NO_CONTENT)
+    async def discard_attachment(
+        file_ref: str, request: Request, user_id: str | None = None, tenant_id: str | None = None
+    ) -> Response:
+        """Delete an upload no message has named yet."""
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        await chat_attachments(request).discard(file_ref, tenant_id=actor.tenant_id, user_id=actor.user_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @router.get("/attachments/{file_ref}/preview", response_model=AttachmentPreview)
+    async def preview_attachment(
+        file_ref: str, request: Request, user_id: str | None = None, tenant_id: str | None = None
+    ) -> AttachmentPreview:
+        """The start of the user's upload's text, sent or not."""
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        service = chat_attachments(request)
+        attachment = await service.owned(file_ref, tenant_id=actor.tenant_id, user_id=actor.user_id)
+        text, truncated = await service.preview(attachment)
+        return AttachmentPreview(text=text, truncated=truncated)
 
     @router.get(
-        "/conversations/{conversation_id}/attachments/{file_ref}",
+        "/attachments/{file_ref}",
         response_class=Response,
         responses={200: {"content": {"application/octet-stream": {}}, "description": "The file's bytes"}},
     )
-    async def download_attachment(conversation_id: str, file_ref: str, request: Request) -> Response:
-        conversations = conversation_service(request)
-        conversation = await conversations.get(conversation_id)
-        require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
-        attachment = await conversations.attachment(conversation, file_ref)
-        payload = await aina_file_blobs(request).read(blob_key(attachment))
+    async def download_attachment(
+        file_ref: str, request: Request, user_id: str | None = None, tenant_id: str | None = None
+    ) -> Response:
+        """The user's upload as a download, sent or not; not found once its file was deleted from the file tree."""
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        service = chat_attachments(request)
+        attachment = await service.owned(file_ref, tenant_id=actor.tenant_id, user_id=actor.user_id)
+        payload = await service.original(attachment)
         return Response(
             payload,
             media_type=attachment.content_type,
@@ -145,3 +148,13 @@ def create_conversation_router() -> APIRouter:
         return await conversations.restore(conversation_id)
 
     return router
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    try:
+        payload = await file.read(MAX_ATTACHMENT_BYTES + 1)
+    finally:
+        await file.close()
+    if len(payload) > MAX_ATTACHMENT_BYTES:
+        raise too_large()
+    return payload

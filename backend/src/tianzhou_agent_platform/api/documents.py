@@ -1,5 +1,8 @@
+from pathlib import PurePosixPath
+
 from fastapi import APIRouter, Query, Request, Response, status
 
+from tianzhou_agent_platform.aina.document.file_types import content_type
 from tianzhou_agent_platform.aina.document.models import (
     DocumentCreate,
     DocumentFolder,
@@ -17,6 +20,7 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentTreeResponse,
 )
 from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, documents, repository
+from tianzhou_agent_platform.conversations.attachments import content_disposition
 
 
 def create_document_router() -> APIRouter:
@@ -192,6 +196,39 @@ def create_document_router() -> APIRouter:
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
             workspace_storage_key=workspace_storage_key,
+        )
+
+    @router.get(
+        "/{name:path}/file",
+        response_class=Response,
+        responses={200: {"content": {"application/octet-stream": {}}, "description": "The file's bytes"}},
+    )
+    async def get_document_file(
+        name: str,
+        request: Request,
+        user_id: str = "anonymous",
+        tenant_id: str = "default",
+        workspace_id: str | None = None,
+    ) -> Response:
+        """The file itself as a download: a text file's text, or a PDF, DOCX or XLSX file as uploaded."""
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        workspace_storage_key = await _workspace_storage_key(
+            request,
+            workspace_id,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+        )
+        payload = await documents(request).read_file(
+            name,
+            user_id=actor.user_id,
+            tenant_id=actor.tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
+        file_name = PurePosixPath(name).name
+        return Response(
+            payload,
+            media_type=content_type(file_name),
+            headers={"Content-Disposition": content_disposition(file_name), "X-Content-Type-Options": "nosniff"},
         )
 
     @router.get("/{name:path}", response_model=DocumentRecord)
