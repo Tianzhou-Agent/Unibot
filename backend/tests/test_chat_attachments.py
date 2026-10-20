@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool, tool
 from tests.test_aina_package import (
     ENTRY,
     MCP_URL,
+    _call,
     _example_files,
     _example_server,
     _register,
@@ -21,12 +24,17 @@ from tests.test_aina_package import (
     _settings,
     _with_manifest,
 )
+from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.api import conversations as conversation_routes
+from tianzhou_agent_platform.conversations import attachments as attachments_module
 from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY, MessageAttachment, passed_refs
 from tianzhou_agent_platform.conversations.models import Message
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
+from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.main import create_app
 from tianzhou_agent_platform.services.agent_integration.history import archive_to_native
+from tianzhou_agent_platform.store.errors import StorageNotFoundError
+from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from unibot_aina import HostApi, set_default_transport
 
 AINA_ID = "com.example.expenses"
@@ -50,7 +58,7 @@ def _receipt_server() -> Any:
 
 
 @pytest.fixture
-def chat() -> Any:
+def chat(tmp_path: Path) -> Any:
     server = _receipt_server()
     seen: list[str] = []
 
@@ -65,7 +73,12 @@ def chat() -> Any:
         return assistant("It is a taxi receipt.")
 
     llm = ScriptedLLM([call_first_tool(prefix=ENTRY, call_id="call_activate"), call_with_the_ref, answer])
-    app = create_app(settings=_settings(), llm=llm, mcp_client=McpToolClient(servers={MCP_URL: server.mcp}))
+    app = create_app(
+        settings=_settings(),
+        llm=llm,
+        mcp_client=McpToolClient(servers={MCP_URL: server.mcp}),
+        document_service=DocumentService(NasStore(tmp_path)),
+    )
     set_default_transport(httpx.ASGITransport(app=app), api_base="http://testserver/aina-host/v1")
     files = _with_manifest(
         _example_files(), _set("tools.expose.read_receipt", {"effect": "read", "visibility": ["model"]})
@@ -79,14 +92,25 @@ def chat() -> Any:
         set_default_transport(None)
 
 
-def _upload(client: TestClient, conversation_id: str, name: str = "taxi.txt", data: bytes = b"Taxi 42 EUR") -> Any:
-    return client.post(f"/conversations/{conversation_id}/attachments", files={"file": (name, data, "text/plain")})
+def _upload(client: TestClient, name: str = "taxi.txt", data: bytes = b"Taxi 42 EUR", **params: str) -> Any:
+    return client.post("/attachments", files={"file": (name, data, "text/plain")}, params=params)
+
+
+def _send(client: TestClient, conversation_id: str, refs: list[str]) -> list[dict[str, Any]]:
+    """Bind uploads to the conversation as a sent message does, without running a turn."""
+    state = client.app.state  # type: ignore[attr-defined]
+    conversation = _call(client, state.conversation_service.get, conversation_id)
+    return [item.model_dump(mode="json") for item in _call(client, state.chat_attachments.bind, conversation, refs)]
+
+
+def _documents(client: TestClient, **params: str) -> list[str]:
+    return [item["name"] for item in client.get("/documents/tree", params=params).json()["documents"]]
 
 
 def test_a_tool_reads_the_file_the_model_passed_it(chat: Any) -> None:
     client, seen = chat
     conversation_id = client.post("/conversations", json={"title": "Receipts"}).json()["id"]
-    uploaded = _upload(client, conversation_id, name="../taxi receipt.txt").json()
+    uploaded = _upload(client, name="../taxi receipt.txt").json()
 
     reply = client.post(
         "/chat",
@@ -100,36 +124,132 @@ def test_a_tool_reads_the_file_the_model_passed_it(chat: Any) -> None:
     download = client.get(f"/conversations/{conversation_id}/attachments/{uploaded['file_ref']}")
 
     assert reply["status"] == "completed", reply
-    assert uploaded["name"] == "taxi receipt.txt" and uploaded["size_bytes"] == 11
-    assert f"file_ref: {uploaded['file_ref']}" in seen[0]
+    assert uploaded["name"] == "taxi receipt.txt" and uploaded["size_bytes"] == 11 and "document" not in uploaded
+    assert f"document: Uploads/taxi receipt.txt.md file_ref: {uploaded['file_ref']}" in seen[0]
+    assert '<attachment document="Uploads/taxi receipt.txt.md">\nTaxi 42 EUR\n</attachment>' in seen[0]
     tool_result = next(message for message in messages if message["role"] == "tool" and "taxi" in message["content"])
     assert "taxi receipt.txt text/plain Taxi 42 EUR" in tool_result["content"]
     user = next(message for message in messages if message["role"] == "user")
     assert user["content"] == "What is this receipt?"  # the refs reach the model, not the shown message
-    assert user["attachments"] == [uploaded]
+    assert user["attachments"] == [{**uploaded, "document": "Uploads/taxi receipt.txt.md"}]
     assert download.content == b"Taxi 42 EUR" and download.headers["content-disposition"].startswith("attachment;")
+    assert client.get("/documents/Uploads/taxi receipt.txt.md").json()["content"] == "Taxi 42 EUR"
 
 
-def test_a_message_names_only_files_of_its_own_conversation(chat: Any) -> None:
+def test_a_message_names_only_its_owners_unsent_files_or_its_own(chat: Any) -> None:
     client, _seen = chat
     mine = client.post("/conversations", json={"title": "Mine"}).json()["id"]
     other = client.post("/conversations", json={"title": "Other"}).json()["id"]
-    elsewhere = _upload(client, other).json()["file_ref"]
+    elsewhere = _upload(client).json()["file_ref"]
+    _send(client, other, [elsewhere])
+    someone_elses = _upload(client, user_id="someone-else").json()["file_ref"]
 
-    refused = client.post("/chat", json={"message": "Read it", "conversation_id": mine, "attachments": [elsewhere]})
+    refused = [
+        client.post("/chat", json={"message": "Read it", "conversation_id": mine, "attachments": [ref]})
+        for ref in (elsewhere, someone_elses, "file_" + "0" * 32)
+    ]
     missing = client.get(f"/conversations/{mine}/attachments/{elsewhere}")
 
-    assert refused.status_code == 422 and "was not uploaded to this conversation" in refused.text
+    assert [response.status_code for response in refused] == [422, 422, 422]
+    assert "is not an upload of this conversation's owner" in refused[0].text
     assert missing.status_code == 404
+
+
+def test_a_retried_message_reuses_the_document_its_files_became(chat: Any) -> None:
+    client, _seen = chat
+    conversation_id = client.post("/conversations", json={"title": "Retry"}).json()["id"]
+    ref = _upload(client, name="notes.md", data=b"# Notes").json()["file_ref"]
+
+    first, again = _send(client, conversation_id, [ref, ref]), _send(client, conversation_id, [ref])
+
+    assert [item["document"] for item in first + again] == ["Uploads/notes.md", "Uploads/notes.md"]
+    assert _documents(client) == ["Uploads/notes.md"]
+
+
+def test_files_unibot_cannot_read_are_refused_on_upload(chat: Any) -> None:
+    client, _seen = chat
+
+    image = _upload(client, name="photo.png", data=b"\x89PNG\r\n")
+    broken = _upload(client, name="scan.pdf", data=b"%PDF-1.4 no pages")
+
+    assert image.status_code == 415 and broken.status_code == 422
+
+
+def test_an_unsent_upload_can_be_discarded_but_a_sent_one_is_deleted_as_its_document(chat: Any) -> None:
+    client, _seen = chat
+    conversation_id = client.post("/conversations", json={"title": "Discard"}).json()["id"]
+    unsent = _upload(client).json()["file_ref"]
+    sent = _upload(client).json()["file_ref"]
+    _send(client, conversation_id, [sent])
+
+    discarded = client.delete(f"/attachments/{unsent}")
+    refused = client.delete(f"/attachments/{sent}")
+    named_after = client.post(
+        "/chat", json={"message": "Read it", "conversation_id": conversation_id, "attachments": [unsent]}
+    )
+
+    assert discarded.status_code == 204 and named_after.status_code == 422
+    assert refused.status_code == 409 and "Uploads/taxi.txt.md" in refused.text
+
+
+def test_deleting_the_document_deletes_the_file(chat: Any) -> None:
+    client, _seen = chat
+    conversation_id = client.post("/conversations", json={"title": "Delete"}).json()["id"]
+    ref = _upload(client).json()["file_ref"]
+    _send(client, conversation_id, [ref])
+
+    state = client.app.state  # type: ignore[attr-defined]
+    conversation = _call(client, state.conversation_service.get, conversation_id)
+    views = _call(client, state.chat_attachments.bind, conversation, [ref])
+    before = client.get(f"/conversations/{conversation_id}/attachments/{ref}")
+    texts_before = _call(client, state.chat_attachments.texts, conversation, views)
+    deleted = client.delete("/documents/Uploads/taxi.txt.md")
+    after = client.get(f"/conversations/{conversation_id}/attachments/{ref}")
+    texts_after = _call(client, state.chat_attachments.texts, conversation, views)
+
+    assert before.content == b"Taxi 42 EUR" and deleted.status_code == 204 and after.status_code == 404
+    assert texts_before == {ref: "Taxi 42 EUR"} and texts_after == {}
+    assert client.get("/documents/tree").json() == {"folders": [{"path": "Uploads", "name": "Uploads"}], "documents": []}
+
+
+def test_uploads_no_message_named_within_a_day_are_deleted(chat: Any) -> None:
+    client, _seen = chat
+    state = client.app.state  # type: ignore[attr-defined]
+    stale = _upload(client).json()["file_ref"]
+    attachment = _call(client, state.repository.get_chat_attachment, stale)
+    aged = attachment.model_copy(update={"created_at": utc_now() - timedelta(days=2)})
+    _call(client, state.repository.put_chat_attachment, aged)
+    fresh = _upload(client).json()["file_ref"]
+
+    assert _call(client, state.repository.get_chat_attachment, stale) is None
+    assert _call(client, state.repository.get_chat_attachment, fresh) is not None
+    with pytest.raises(StorageNotFoundError):
+        _call(client, state.aina_file_blobs.read, f"chat-attachments/{stale}")
+
+
+def test_a_workspace_conversation_stores_its_files_in_the_workspace(chat: Any) -> None:
+    client, _seen = chat
+    workspace = client.post("/workspaces", json={"name": "Team"}).json()
+    conversation = client.post("/conversations", json={"title": "Team chat", "workspace_id": workspace["id"]}).json()
+    ref = _upload(client).json()["file_ref"]
+    _send(client, conversation["id"], [ref])
+
+    assert _documents(client, workspace_id=workspace["id"]) == ["Uploads/taxi.txt.md"]
+    assert _documents(client) == []
+    assert client.get(f"/conversations/{conversation['id']}/attachments/{ref}").content == b"Taxi 42 EUR"
+
+
+def test_uploads_need_the_document_storage() -> None:
+    with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+        assert _upload(client).status_code == 503
 
 
 def test_attachments_have_a_size_limit(chat: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _seen = chat
     monkeypatch.setattr(conversation_routes, "MAX_ATTACHMENT_BYTES", 4)
-    conversation_id = client.post("/conversations", json={"title": "Big"}).json()["id"]
 
-    assert _upload(client, conversation_id, data=b"12345").status_code == 413
-    assert _upload(client, conversation_id, data=b"1234").status_code == 201
+    assert _upload(client, data=b"12345").status_code == 413
+    assert _upload(client, data=b"1234").status_code == 201
 
 
 def _host_get(client: TestClient, ref: str, *, files: list[str], conversation_id: str) -> httpx.Response:
@@ -158,8 +278,9 @@ def test_the_host_api_serves_only_files_passed_to_the_call_in_its_conversation(c
     client, _seen = chat
     conversation_id = client.post("/conversations", json={"title": "Receipts"}).json()["id"]
     other = client.post("/conversations", json={"title": "Other"}).json()["id"]
-    ref = _upload(client, conversation_id).json()["file_ref"]
-    unpassed = _upload(client, conversation_id, name="secret.txt").json()["file_ref"]
+    ref = _upload(client).json()["file_ref"]
+    unpassed = _upload(client, name="secret.txt").json()["file_ref"]
+    _send(client, conversation_id, [ref, unpassed])
 
     passed = _host_get(client, ref, files=[ref], conversation_id=conversation_id)
     not_passed = _host_get(client, unpassed, files=[ref], conversation_id=conversation_id)
@@ -184,3 +305,49 @@ def test_working_memory_rebuilt_from_the_archive_keeps_the_attachments() -> None
 
     assert native.additional_kwargs[ATTACHMENTS_KEY] == [attachment.model_dump()]
     assert "attachments" not in Message(id="msg_2", role="user", content="hi").model_dump(mode="json")
+
+
+def test_only_the_message_that_attached_a_file_shows_its_text(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def answer(*, messages: list[dict[str, Any]], **_: Any) -> Any:
+        seen.append("\n".join(str(message.get("content")) for message in messages))
+        return assistant("Noted.")
+
+    app = create_app(
+        settings=_settings(), llm=ScriptedLLM([answer, answer]), document_service=DocumentService(NasStore(tmp_path))
+    )
+    with TestClient(app) as client:
+        conversation_id = client.post("/conversations", json={"title": "Notes"}).json()["id"]
+        ref = _upload(client, name="notes.md", data=b"# Plan\n\nShip on Friday").json()["file_ref"]
+        for message, refs in (("Read my notes", [ref]), ("And now?", [])):
+            reply = client.post(
+                "/chat", json={"message": message, "conversation_id": conversation_id, "attachments": refs}
+            ).json()
+            assert reply["status"] == "completed", reply
+
+    shown = '<attachment document="Uploads/notes.md">\n# Plan\n\nShip on Friday\n</attachment>'
+    assert shown in seen[0]
+    assert f"document: Uploads/notes.md file_ref: {ref}" in seen[1] and "Ship on Friday" not in seen[1]
+
+
+def _attachment(ref: str, document: str) -> MessageAttachment:
+    return MessageAttachment(file_ref=ref, name=document, content_type="text/plain", size_bytes=1, document=document)
+
+
+def test_a_messages_files_text_is_clipped_to_its_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(attachments_module, "INLINE_FILE_CHARS", 12)
+    files = [_attachment("file_a", "a.md"), _attachment("file_b", "b.md"), _attachment("file_c", "c.md")]
+    texts = {"file_a": "one\ntwo\nthree\nfour\n", "file_b": "short", "file_c": "x" * 30}
+
+    contents = attachments_module.inline_contents(files, texts, budget=200)
+    starved = attachments_module.inline_contents(files, texts, budget=3)
+
+    assert contents["file_a"] == (
+        "one\ntwo\n[Only lines 1-2 of 4 are shown. Read the rest of a.md with the document read tool from offset 3.]"
+    )
+    assert contents["file_b"] == "short"
+    assert contents["file_c"].startswith("[Not shown here") and "c.md" in contents["file_c"]
+    assert starved["file_a"].startswith("[Not shown here")  # nothing of it fits in what the message may carry
+    assert attachments_module.inline_budget(32_000) == 8_000
+    assert attachments_module.inline_budget(1_000_000) == attachments_module.INLINE_MESSAGE_CHARS

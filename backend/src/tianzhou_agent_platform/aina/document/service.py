@@ -22,6 +22,8 @@ from tianzhou_agent_platform.store.models import FileMetadata, StoragePath
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 
 MAX_DOCUMENT_BYTES = 1024 * 1024
+UPLOADS_FOLDER = "Uploads"
+MAX_UPLOAD_COPIES = 99
 _WINDOWS_RESERVED_NAMES = {
     "aux",
     "con",
@@ -562,6 +564,22 @@ class DocumentService:
                 workspace_storage_key=workspace_storage_key,
             ),
         )
+        original = self._path(
+            _original_name(current.name),
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_storage_key=workspace_storage_key,
+        )
+        if await self._nas.exists(original):
+            await self._nas.move(
+                original,
+                self._path(
+                    _original_name(normalized_new_name),
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    workspace_storage_key=workspace_storage_key,
+                ),
+            )
         return await self.get_document(
             normalized_new_name,
             user_id=user_id,
@@ -586,7 +604,66 @@ class DocumentService:
                 workspace_storage_key=workspace_storage_key,
             )
         )
+        await self._nas.delete(
+            self._path(
+                _original_name(normalized),
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            )
+        )
         return result.deleted
+
+    async def add_upload(
+        self,
+        file_name: str,
+        markdown: str,
+        original: bytes | None,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> str:
+        """Store a file the user uploaded as a document in ``Uploads/``; returns the document's name.
+
+        The document holds the text the model reads. ``original`` is the file as uploaded, kept beside the document
+        under a hidden name that the document's rename and delete carry along; None when the upload is Markdown and so
+        is the document itself.
+        """
+        stem, extension = _upload_name(file_name)
+        suffix = "" if original is None else ".md"
+        for copy in range(1, MAX_UPLOAD_COPIES + 1):
+            numbered = stem if copy == 1 else f"{stem} ({copy})"
+            name = normalize_document_name(f"{UPLOADS_FOLDER}/{numbered}{extension}{suffix}")
+            path, original_path = (
+                self._path(item, user_id=user_id, tenant_id=tenant_id, workspace_storage_key=workspace_storage_key)
+                for item in (name, _original_name(name))
+            )
+            if await self._nas.exists(path) or await self._nas.exists(original_path):
+                continue
+            await self._nas.write(path, _encode_content(markdown), overwrite=False)
+            if original is not None:
+                await self._nas.write(original_path, original, overwrite=False)
+            return name
+        raise StorageValidationError(f"{UPLOADS_FOLDER} already holds {MAX_UPLOAD_COPIES} files named {file_name!r}")
+
+    async def upload_original(
+        self,
+        name: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        workspace_storage_key: str | None = None,
+    ) -> bytes:
+        """The file as uploaded that the document ``name`` was made from (see ``add_upload``)."""
+        return await self._nas.read(
+            self._path(
+                _original_name(normalize_document_name(name)),
+                user_id=user_id,
+                tenant_id=tenant_id,
+                workspace_storage_key=workspace_storage_key,
+            )
+        )
 
     @staticmethod
     def _actor_prefix(
@@ -640,6 +717,24 @@ def normalize_document_name(value: str) -> str:
     if len(normalized) > 512:
         raise StorageValidationError("Document path exceeds 512 characters")
     return normalized
+
+
+def _original_name(document_name: str) -> str:
+    """Where the uploaded file a document was made from is kept: hidden beside it, and never a document itself."""
+    path = PurePosixPath(document_name)
+    return str(path.with_name(f".{path.name}.original"))
+
+
+def _upload_name(file_name: str) -> tuple[str, str]:
+    """An uploaded file's name as a valid document stem and its extension."""
+    cleaned = "".join(
+        "_" if character in _INVALID_FILENAME_CHARS or ord(character) < 32 else character for character in file_name
+    )
+    path = PurePosixPath(cleaned.strip())
+    stem = path.name.removesuffix(path.suffix).rstrip(". ")[:120] or "file"
+    if stem.casefold() in _WINDOWS_RESERVED_NAMES:
+        stem = f"{stem}_"
+    return stem, path.suffix
 
 
 def normalize_folder_path(value: str) -> str:

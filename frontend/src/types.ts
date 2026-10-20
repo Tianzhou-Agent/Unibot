@@ -20,8 +20,8 @@ export interface FileChip {
   name: string;
   sizeBytes?: number;
   mimeType?: string;
-  /** Where the user downloads the file, when it is stored. */
-  href?: string;
+  /** The app route that shows the file, when it is stored. */
+  to?: string;
 }
 
 /** A file the user attached to a chat message; tools read it by its file_ref. */
@@ -30,6 +30,8 @@ export interface MessageAttachment {
   name: string;
   content_type: string;
   size_bytes: number;
+  /** The document the file became in the conversation's file tree; unset until a message is sent with it. */
+  document?: string;
 }
 
 export type MessageBlock =

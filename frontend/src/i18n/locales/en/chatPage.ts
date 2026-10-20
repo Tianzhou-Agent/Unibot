@@ -44,6 +44,10 @@ export default {
   attachmentTooLarge: "{{name}} is larger than {{limit}} MB.",
   tooManyAttachments: "A message can carry at most {{limit}} files.",
   welcome: {
+  attachmentUnsupported: "{{name}} can't be read. Attach text, Markdown, code, PDF, DOCX or XLSX files.",
+  attachmentFailed: "{{name}} could not be uploaded: {{error}}",
+  attachmentUploading: "Uploading {{name}}",
+  retryAttachment: "Retry uploading {{name}}",
     title: "Start a new conversation",
     body: "Unibot keeps multi-turn context, combines the right capabilities for your goal, and waits for your confirmation before high-risk actions.",
     f1: {

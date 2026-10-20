@@ -1339,6 +1339,32 @@ class InMemoryRepository:
         async with self._lock:
             return [self._copy(self._chat_attachments[ref]) for ref in file_refs if ref in self._chat_attachments]
 
+    async def bind_chat_attachment(
+        self, file_ref: str, *, conversation_id: str, workspace_id: str | None
+    ) -> Attachment | None:
+        async with self._lock:
+            found = self._chat_attachments.get(file_ref)
+            if found is not None and found.conversation_id is None:
+                found = found.model_copy(update={"conversation_id": conversation_id, "workspace_id": workspace_id})
+                self._chat_attachments[file_ref] = found
+            return self._copy(found) if found is not None else None
+
+    async def delete_chat_attachment(self, file_ref: str) -> None:
+        async with self._lock:
+            self._chat_attachments.pop(file_ref, None)
+
+    async def list_unsent_chat_attachments(
+        self, *, tenant_id: str, user_id: str, created_before: datetime
+    ) -> list[Attachment]:
+        async with self._lock:
+            return [
+                self._copy(item)
+                for item in self._chat_attachments.values()
+                if (item.tenant_id, item.user_id) == (tenant_id, user_id)
+                and item.conversation_id is None
+                and item.created_at < created_before
+            ]
+
     async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification:
         async with self._lock:
             self._aina_notifications[notification.id] = self._copy(notification)

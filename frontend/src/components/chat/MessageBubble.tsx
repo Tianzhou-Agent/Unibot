@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Check, Copy, Paperclip, ArrowUp, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { classNames } from "@/lib/utils";
 import type { ChatMessage, FileChip, MessageBlock } from "@/types";
 import { MessageFeedback } from "@/components/feedback/MessageFeedback";
@@ -98,12 +99,12 @@ function BlockRenderer({ block }: { block: MessageBlock }) {
 
 function FileChipPill({ file }: { file: FileChip }) {
   const className = "inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border border-line bg-app-soft text-ink-muted text-[12px] font-semibold";
-  if (file.href) {
+  if (file.to) {
     return (
-      <a href={file.href} download={file.name} className={classNames(className, "hover:text-accent")}>
+      <Link to={file.to} className={classNames(className, "hover:text-accent")}>
         <Paperclip className="w-3.5 h-3.5" />
         {file.name}
-      </a>
+      </Link>
     );
   }
   return (

@@ -288,13 +288,16 @@ or paused app stop working at once.
 | `passed_file(file_ref)` | `GET /files/{file_ref}` | none: a file the user attached, only when this call's arguments carried its `file_ref` |
 | `task_progress/complete/fail` | `/tasks/{id}/…` | the task's own invocation (§8) |
 
-**Files the user attaches.** The user can attach files (at most 10 per message, 20 MiB each) to a chat message. The
-model reads each file's name, type, size and `file_ref`, a string like `file_3f9c…`. To let a tool work on an
+**Files the user attaches.** The user can attach files (at most 10 per message, 20 MiB each) to a chat message. Only
+files Unibot can read are accepted: text, Markdown, code, PDF with a text layer, DOCX and XLSX. Each becomes a
+Markdown document in `Uploads/` of the user's files (or the workspace's), which the model reads with the document
+tools. The model also reads each file's name, type, size and `file_ref`, a string like `file_3f9c…`. To let a tool
+work on an
 attachment, give it a string argument for the file and describe it, for example
 `"file": {"type": "string", "description": "file_ref of the attached image"}`. The model then passes the ref, and the
-tool reads the file with `passed_file`, which returns its `name`, `content_type` and `data`. A tool can read only a
-file whose ref is somewhere in its own call's arguments, in the conversation of that call. Any other ref returns
-`None` (`404`). Refreshed task tokens keep the files of their call.
+tool reads the file as uploaded with `passed_file`, which returns its `name`, `content_type` and `data`. A tool can
+read only a file whose ref is somewhere in its own call's arguments, in the conversation of that call. Any other ref,
+or a file whose document the user deleted, returns `None` (`404`). Refreshed task tokens keep the files of their call.
 
 The full API is described in [`host-api.openapi.json`](../spec/aina/2.0/host-api.openapi.json).
 

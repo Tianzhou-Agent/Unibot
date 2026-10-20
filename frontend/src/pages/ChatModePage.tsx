@@ -7,6 +7,7 @@ import {
   Bot,
   Check,
   CirclePause,
+  Loader2,
   MessageSquareText,
   PanelRightClose,
   Paperclip,
@@ -37,13 +38,13 @@ import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widge
 import { AinaTaskList } from "@/components/tasks/AinaTaskList";
 import { useCanvasViewer } from "@/components/canvas/useCanvasViewer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
-import { api, ApiError, apiErrorMessage, apiUrl, streamChat, streamResume, type StreamEvent } from "@/lib/api";
+import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
-import { canvasQuery, readCanvasRoute, workspaceChatPath, type CanvasRoute } from "@/lib/workspace";
+import { canvasQuery, readCanvasRoute, workspaceCanvasPath, workspaceChatPath, type CanvasRoute } from "@/lib/workspace";
 import type {
   AinaCanvasResponse,
   ApprovalRecord,
@@ -462,10 +463,10 @@ export default function ChatModePage() {
     };
   }, []);
 
-  const sendMessage = (text: string, files: File[] = []) => runTurn(text, files);
+  const sendMessage = (text: string, attachments: MessageAttachment[] = []) => runTurn(text, attachments);
 
-  /** Runs a turn for `text` with `files` attached, or continues the conversation's stopped turn when `text` is null. */
-  async function runTurn(text: string | null, files: File[] = []) {
+  /** Runs a turn for `text` with uploaded `attachments`, or continues the conversation's stopped turn when `text` is null. */
+  async function runTurn(text: string | null, attachments: MessageAttachment[] = []) {
     if (sending || deleted) return;
     setClarificationWidgets([]);
     const draftTitle = text === null ? null : text.length > 24 ? `${text.slice(0, 24)}…` : text;
@@ -475,7 +476,7 @@ export default function ChatModePage() {
       content: text,
       content_type: "text",
       widgets: [],
-      attachments: files.map((file) => ({ file_ref: "", name: file.name, content_type: file.type, size_bytes: file.size })),
+      attachments,
       created_at: new Date().toISOString(),
     };
     optimisticBaselineRef.current = conversation?.messages.length ?? 0;
@@ -540,14 +541,6 @@ export default function ChatModePage() {
       if (text === null) {
         await streamResume(targetConversation.id, actor, onEvent, streamController.signal);
       } else {
-        // Files are stored with the conversation first; the message names them by file_ref.
-        const attachments: MessageAttachment[] = [];
-        for (const file of files) {
-          const form = new FormData();
-          form.append("file", file);
-          attachments.push(await api.postForm<MessageAttachment>(`/conversations/${targetConversation.id}/attachments`, form));
-          if (!isActiveRun()) return;
-        }
         await streamChat(
           {
             message: text,
@@ -1052,8 +1045,8 @@ function ConversationMessage({
             name: item.name,
             sizeBytes: item.size_bytes,
             mimeType: item.content_type,
-            href: item.file_ref && conversationId
-              ? apiUrl(`/conversations/${conversationId}/attachments/${item.file_ref}`)
+            to: item.document
+              ? workspaceCanvasPath(workspaceId, "unibot-documents", conversationId || null, item.document)
               : undefined,
           }))}
         />
@@ -1191,37 +1184,102 @@ function ChatComposer({
   approval?: { id: string; content: ReactNode };
   messageCount: number;
   context: DocumentTaskContext | null;
-  onSend: (text: string, files: File[]) => Promise<boolean | undefined>;
+  onSend: (text: string, attachments: MessageAttachment[]) => Promise<boolean | undefined>;
   onStop: () => void;
   onBackgroundTaskSettled: () => void;
 }) {
   const { t } = useTranslation("chatPage");
   const { t: tCanvas } = useTranslation("canvas");
+  const { profile } = useMockSession();
   const [text, setText] = useState(initialText);
   const [sendFailed, setSendFailed] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<PickedFile[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const composingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadQueueRef = useRef<PickedFile[]>([]);
+  const activeUploadsRef = useRef(0);
+  // Files removed while still uploading: their upload is discarded once it lands.
+  const removedRef = useRef(new Set<string>());
+  const actorQuery = new URLSearchParams({ user_id: profile.actorUserId, tenant_id: profile.tenantId }).toString();
+  const filesReady = files.every((item) => item.status === "ready");
+
+  function updateFile(key: string, change: Partial<PickedFile>) {
+    setFiles((current) => current.map((item) => item.key === key ? { ...item, ...change } : item));
+  }
+
+  // Each file is uploaded when it is picked, a few at a time; the message then names it by file_ref.
+  function queueUpload(item: PickedFile) {
+    uploadQueueRef.current.push(item);
+    startUploads();
+  }
+
+  function startUploads() {
+    while (activeUploadsRef.current < MAX_PARALLEL_UPLOADS && uploadQueueRef.current.length) {
+      const next = uploadQueueRef.current.shift()!;
+      if (removedRef.current.delete(next.key)) continue;
+      activeUploadsRef.current += 1;
+      void upload(next).finally(() => {
+        activeUploadsRef.current -= 1;
+        startUploads();
+      });
+    }
+  }
+
+  async function upload(item: PickedFile) {
+    const form = new FormData();
+    form.append("file", item.file);
+    try {
+      const attachment = await api.postForm<MessageAttachment>(`/attachments?${actorQuery}`, form);
+      if (removedRef.current.delete(item.key)) void discardUpload(attachment);
+      else updateFile(item.key, { status: "ready", attachment });
+    } catch (uploadError) {
+      if (removedRef.current.delete(item.key)) return;
+      updateFile(item.key, { status: "failed" });
+      setFileError(t("attachmentFailed", { name: item.file.name, error: apiErrorMessage(uploadError) }));
+    }
+  }
+
+  function discardUpload(attachment: MessageAttachment) {
+    // A failed discard is harmless: the server deletes an upload no message names within a day.
+    return api.delete(`/attachments/${attachment.file_ref}?${actorQuery}`).catch(() => undefined);
+  }
 
   function addFiles(picked: FileList | null) {
     const chosen = Array.from(picked ?? []);
+    const unreadable = chosen.find((file) => !isReadableFile(file.name));
     const tooLarge = chosen.find((file) => file.size > MAX_ATTACHMENT_MB * 1024 * 1024);
-    const next = [...files, ...chosen.filter((file) => file !== tooLarge)];
+    const accepted = chosen.filter((file) => isReadableFile(file.name) && file.size <= MAX_ATTACHMENT_MB * 1024 * 1024);
+    const room = Math.max(0, MAX_ATTACHMENTS - files.length);
+    const added = accepted.slice(0, room).map((file): PickedFile => ({ key: uid("file"), file, status: "uploading" }));
     setFileError(
-      tooLarge ? t("attachmentTooLarge", { name: tooLarge.name, limit: MAX_ATTACHMENT_MB })
-        : next.length > MAX_ATTACHMENTS ? t("tooManyAttachments", { limit: MAX_ATTACHMENTS })
-          : null,
+      unreadable ? t("attachmentUnsupported", { name: unreadable.name })
+        : tooLarge ? t("attachmentTooLarge", { name: tooLarge.name, limit: MAX_ATTACHMENT_MB })
+          : accepted.length > room ? t("tooManyAttachments", { limit: MAX_ATTACHMENTS })
+            : null,
     );
-    setFiles(next.slice(0, MAX_ATTACHMENTS));
+    setFiles((current) => [...current, ...added]);
+    added.forEach(queueUpload);
+  }
+
+  function removeFile(item: PickedFile) {
+    setFiles((current) => current.filter((entry) => entry.key !== item.key));
+    if (item.status === "uploading") removedRef.current.add(item.key);
+    else if (item.attachment) void discardUpload(item.attachment);
+  }
+
+  function retryFile(item: PickedFile) {
+    updateFile(item.key, { status: "uploading" });
+    setFileError(null);
+    queueUpload(item);
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
-    if (!value || disabled) return;
+    if (!value || disabled || !filesReady) return;
     setSendFailed(false);
-    const sent = await onSend(value, files);
+    const sent = await onSend(value, files.flatMap((item) => item.attachment ? [item.attachment] : []));
     if (sent) {
       setText((current) => current === text ? "" : current);
       setFiles([]);
@@ -1248,15 +1306,38 @@ function ChatComposer({
           ) : null}
           {files.length ? (
             <div className="mb-2 flex flex-wrap gap-1.5">
-              {files.map((file, index) => (
-                <span key={`${file.name}:${index}`} className="inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-lg border border-line bg-app-soft px-2 text-[12px] font-semibold text-ink-muted">
-                  <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{file.name}</span>
+              {files.map((item) => (
+                <span
+                  key={item.key}
+                  data-status={item.status}
+                  className={classNames(
+                    "inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-lg border bg-app-soft px-2 text-[12px] font-semibold",
+                    item.status === "failed" ? "border-danger-ring text-danger" : "border-line text-ink-muted",
+                  )}
+                >
+                  {item.status === "uploading" ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" role="img" aria-label={t("attachmentUploading", { name: item.file.name })} />
+                  ) : item.status === "failed" ? (
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  ) : (
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  )}
+                  <span className="truncate">{item.file.name}</span>
+                  {item.status === "failed" ? (
+                    <button
+                      type="button"
+                      onClick={() => retryFile(item)}
+                      className="shrink-0 hover:text-ink"
+                      aria-label={t("retryAttachment", { name: item.file.name })}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => setFiles((current) => current.filter((_, position) => position !== index))}
+                    onClick={() => removeFile(item)}
                     className="shrink-0 hover:text-ink"
-                    aria-label={t("removeAttachment", { name: file.name })}
+                    aria-label={t("removeAttachment", { name: item.file.name })}
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -1298,6 +1379,7 @@ function ChatComposer({
                 type="file"
                 multiple
                 hidden
+                accept={READABLE_EXTENSIONS.join(",")}
                 data-testid="composer-files"
                 onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }}
               />
@@ -1315,10 +1397,10 @@ function ChatComposer({
             ) : (
               <button
                 type="submit"
-                disabled={disabled || !text.trim()}
+                disabled={disabled || !text.trim() || !filesReady}
                 className={classNames(
                   "flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors",
-                  !disabled && text.trim()
+                  !disabled && text.trim() && filesReady
                     ? "bg-accent hover:bg-accent-hover"
                     : "bg-ink cursor-not-allowed opacity-80",
                 )}
@@ -1337,6 +1419,29 @@ function ChatComposer({
 // The backend's limits (conversations/attachments.py), checked here so the user learns before sending.
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_MB = 20;
+const MAX_PARALLEL_UPLOADS = 3;
+// The files the backend can read (conversations/conversion.py); it refuses any other.
+const READABLE_EXTENSIONS = [
+  ".md", ".markdown", ".txt", ".text", ".log", ".rst",
+  ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".html", ".htm", ".toml", ".ini", ".cfg", ".conf",
+  ".sql", ".py", ".ipynb", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".css", ".scss",
+  ".java", ".kt", ".scala", ".go", ".rs", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".rb", ".php", ".swift",
+  ".dart", ".lua", ".r", ".sh", ".bash", ".ps1", ".bat", ".diff", ".patch",
+  ".pdf", ".docx", ".xlsx",
+];
+
+function isReadableFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && READABLE_EXTENSIONS.includes(name.slice(dot).toLowerCase());
+}
+
+/** A file picked in the composer: uploaded right away, then sent by its file_ref. */
+interface PickedFile {
+  key: string;
+  file: File;
+  status: "uploading" | "ready" | "failed";
+  attachment?: MessageAttachment;
+}
 
 function WelcomePanel() {
   const { t } = useTranslation("chatPage");

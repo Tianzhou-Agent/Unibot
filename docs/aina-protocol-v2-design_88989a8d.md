@@ -946,9 +946,16 @@ runtime type only, never on an AINA id.
 - A Host API call is allowed only while the token is valid, the installation is active, and the scope is in both
   the token and the installation's current grants. Uninstalling or revoking a scope therefore applies at once, not
   at token expiry.
-- Chat attachments: the composer uploads files to `POST /conversations/{id}/attachments` (at most 10 per message,
-  20 MiB each) and the message names them by `file_ref`. The model sees an `<attachments>` block listing each file's
-  name, type, size and ref ([`attachments.py`](../backend/src/tianzhou_agent_platform/conversations/attachments.py)).
+- Chat attachments: the composer uploads files to `POST /attachments` (at most 10 per message, 20 MiB each) and the
+  message names them by `file_ref`. Only text, Markdown, code, PDF with a text layer, DOCX and XLSX are accepted
+  ([`conversion.py`](../backend/src/tianzhou_agent_platform/conversations/conversion.py)). Sending the message stores
+  each file as a Markdown document in `Uploads/` of the conversation's file tree, with the original kept hidden
+  beside it; deleting the document deletes both. An upload no message names within a day is deleted. The model sees
+  an `<attachments>` block listing each file's name, type, size, document and ref
+  ([`attachments.py`](../backend/src/tianzhou_agent_platform/conversations/attachments.py)). In the turn that
+  attached them it also reads the documents' text, at most 20,000 characters of a file and, of all files, at most
+  60,000 or a quarter of the context window; a clipped file says from which line to read on with `document.read`.
+  Earlier turns show only the list, so their files are read again through the document tools.
   When a tool call's arguments contain refs of the conversation's attachments, its context token carries them in the
   `files` claim. `GET /files/{file_ref}` serves only a ref in that claim, from the token's own conversation and user,
   and answers `404` otherwise. `pickFile` and `download` on the UI bridge are not built.

@@ -44,6 +44,10 @@ export default {
   attachmentTooLarge: "{{name}} 超过 {{limit}} MB。",
   tooManyAttachments: "每条消息最多附带 {{limit}} 个文件。",
   welcome: {
+  attachmentUnsupported: "无法读取 {{name}}。请添加文本、Markdown、代码、PDF、DOCX 或 XLSX 文件。",
+  attachmentFailed: "{{name}} 上传失败：{{error}}",
+  attachmentUploading: "正在上传 {{name}}",
+  retryAttachment: "重新上传 {{name}}",
     title: "开始新对话",
     body: "Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",
     f1: {

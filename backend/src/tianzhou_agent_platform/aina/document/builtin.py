@@ -1,5 +1,6 @@
 from typing import Any
 
+from tianzhou_agent_platform.aina.document.models import DocumentRecord
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_models import (
     DocumentEditTaskCreate,
@@ -161,10 +162,25 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=READ_DOCUMENT_TOOL_ID,
             name="Read document",
-            description="Read the full content and metadata of one Markdown document. Use only when the task really needs the whole text.",
+            description=(
+                "Read the full content and metadata of one Markdown document, or with offset and limit a range of "
+                "its lines, to read a long document a part at a time. Use only when the task really needs the text."
+            ),
             input_schema={
                 "type": "object",
-                "properties": {"name": name_property},
+                "properties": {
+                    "name": name_property,
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "First line to read, counting from 1; defaults to the first line.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Most lines to read; defaults to the rest of the document.",
+                    },
+                },
                 "required": ["name"],
                 "additionalProperties": False,
             },
@@ -564,6 +580,8 @@ async def invoke_document_tool(
             tenant_id=tenant_id,
             workspace_storage_key=workspace_storage_key,
         )
+        if "offset" in arguments or "limit" in arguments:
+            return {"document": _line_range(document, arguments, tool_id)}, []
     elif tool_id == CREATE_DOCUMENT_TOOL_ID:
         document = await service.create_document(
             name,
@@ -718,3 +736,18 @@ def _required_revision(arguments: dict[str, Any], tool_id: str) -> int:
             f"{tool_id} expected_draft_revision must be a non-negative integer",
         )
     return value
+
+
+def _line_range(document: DocumentRecord, arguments: dict[str, Any], tool_id: str) -> dict[str, Any]:
+    """The document with only the lines ``offset`` and ``limit`` ask for, and where they sit in the whole."""
+    bounds = {key: arguments.get(key) for key in ("offset", "limit") if arguments.get(key) is not None}
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 1 for value in bounds.values()):
+        raise PlatformError("INVALID_REQUEST", f"{tool_id} offset and limit must be positive integers")
+    lines = document.content.splitlines(keepends=True)
+    start = bounds.get("offset", 1)
+    end = min(len(lines), start - 1 + bounds.get("limit", len(lines)))
+    return {
+        **document.model_dump(mode="json"),
+        "content": "".join(lines[start - 1 : end]),
+        "lines": {"start": start, "end": max(end, start - 1), "total": len(lines)},
+    }

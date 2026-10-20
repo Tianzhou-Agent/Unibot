@@ -370,6 +370,7 @@ def create_app(
     app.state.repository = resolved_repository
     app.state.llm = resolved_llm
     # Feature services; the concrete repository is injected through their protocols.
+    from tianzhou_agent_platform.conversations.attachment_service import AttachmentService
     from tianzhou_agent_platform.conversations.service import ConversationService
     from tianzhou_agent_platform.model_providers.service import ModelProviderService
     from tianzhou_agent_platform.services.chat import ChatService
@@ -387,6 +388,9 @@ def create_app(
     app.state.aina_packages = aina_packages
     # Plugin-private files (Host API storage/files): on the NAS when storage is configured.
     app.state.aina_file_blobs = NasFileBlobs(storage_stores.nas) if storage_stores is not None else MemoryFileBlobs()
+    app.state.chat_attachments = AttachmentService(
+        resolved_repository, app.state.aina_file_blobs, resolved_document_service
+    )
     app.state.aina_tasks = aina_tasks
     canvas_calls = CanvasCallBroker(storage_stores.redis if storage_stores is not None else None)
     app.state.canvas_calls = canvas_calls
@@ -420,6 +424,7 @@ def create_app(
     prompts = SystemPrompts(settings=resolved_settings, registry=resolved_repository, auth_enforced=enforce_auth)
     app.state.chat_service = ChatService(
         conversations=conversation_service,
+        attachments=app.state.chat_attachments,
         model_providers=model_provider_service,
         events=run_events,
         runner=AgentRunner(

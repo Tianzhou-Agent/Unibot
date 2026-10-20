@@ -59,6 +59,9 @@ class RunScope:
     # Transient UI context of this turn: shown to the model inside the user message with this id, never stored.
     ui_context: str | None = None
     ui_context_message_id: str | None = None
+    # Text of the files the turn's own user message (``ui_context_message_id``) attached, as the model reads it
+    # there: ``file_ref -> text``. Earlier messages show only their files' documents and refs.
+    attachment_contents: dict[str, str] = field(default_factory=dict)
 
 
 class CapabilityScopeMiddleware(AgentMiddleware):
@@ -76,7 +79,7 @@ class CapabilityScopeMiddleware(AgentMiddleware):
             "tools": tools,
             "system_message": SystemMessage(content=prompt),
         }
-        messages = [_with_attachments(message) for message in request.messages]
+        messages = [_with_attachments(message, self.scope) for message in request.messages]
         if self.scope.ui_context:
             messages = [_with_ui_context(message, self.scope) for message in messages]
         if self.scope.project_messages is not None:
@@ -133,15 +136,17 @@ class CapabilityScopeMiddleware(AgentMiddleware):
         return result
 
 
-def _with_attachments(message: Any) -> Any:
-    """A user message with attachments, as the model reads it: the text, then the files and their refs."""
+def _with_attachments(message: Any, scope: RunScope) -> Any:
+    """A user message with attachments, as the model reads it: the text, then the files and their refs, and for the
+    turn's own message the files' text."""
     files = message.additional_kwargs.get(ATTACHMENTS_KEY) if isinstance(message, HumanMessage) else None
     if not files:
         return message
     content = message.content if isinstance(message.content, str) else str(message.content)
     kwargs = {key: value for key, value in message.additional_kwargs.items() if key != ATTACHMENTS_KEY}
+    contents = scope.attachment_contents if message.id == scope.ui_context_message_id else None
     return message.model_copy(
-        update={"content": f"{content}\n\n{attachments_block(files)}", "additional_kwargs": kwargs}
+        update={"content": f"{content}\n\n{attachments_block(files, contents)}", "additional_kwargs": kwargs}
     )
 
 
