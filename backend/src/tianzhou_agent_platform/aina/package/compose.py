@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from tianzhou_agent_platform.aina.project import read_project_archive
+from tianzhou_agent_platform.aina.project import read_package_archive, read_project_archive
 from tianzhou_agent_platform.core.errors import PlatformError
 
 CANVAS_FOLDER = "canvas"
@@ -30,7 +30,7 @@ def compose_package(
     canvas_bundle: bytes | None = None,
 ) -> dict[str, bytes]:
     """The package files. ``skills`` maps a skill id to its upload (file name, bytes)."""
-    files = read_project_archive(base)[0] if base else {}
+    files = read_package_archive(base) if base else {}
     for skill_id, (filename, payload) in (skills or {}).items():
         folder = f"skills/{skill_id}"
         files = {path: content for path, content in files.items() if not path.startswith(f"{folder}/")}

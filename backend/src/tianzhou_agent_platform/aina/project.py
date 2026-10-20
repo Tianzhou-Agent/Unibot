@@ -198,6 +198,14 @@ def read_project_archive(payload: bytes) -> tuple[dict[str, bytes], int]:
     return files, uncompressed_size
 
 
+def read_package_archive(payload: bytes) -> dict[str, bytes]:
+    """Files of an AINA 2.0 package ZIP. A starter project's ZIP (``package/`` beside ``server/``) gives its package."""
+    files, _size = read_project_archive(payload)
+    if "aina.json" not in files and "package/aina.json" in files:
+        return {name.removeprefix("package/"): content for name, content in files.items() if name.startswith("package/")}
+    return files
+
+
 def _load_manifest(content: bytes, path: str) -> AinaManifest:
     if len(content) > 1024 * 1024:
         raise _invalid_project("AINA manifest cannot exceed 1 MiB")

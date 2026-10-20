@@ -14,7 +14,7 @@ from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
-from tianzhou_agent_platform.aina.project import read_project_archive
+from tianzhou_agent_platform.aina.project import read_package_archive
 from tianzhou_agent_platform.aina.project_service import AinaProjectArtifactStore
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.store.models import StoragePath
@@ -74,7 +74,7 @@ class PackageUiStore:
     async def _files(self, aina_id: str, archive_sha256: str) -> dict[str, bytes]:
         files = self._cache.get(archive_sha256)
         if files is None:
-            files, _size = read_project_archive(await self.archive(aina_id, archive_sha256))
+            files = read_package_archive(await self.archive(aina_id, archive_sha256))
             self._cache[archive_sha256] = files
             while len(self._cache) > _CACHED_PACKAGES:
                 self._cache.popitem(last=False)

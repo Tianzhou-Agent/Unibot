@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -97,6 +99,38 @@ def test_init_creates_a_valid_project_whose_server_works_in_unibot(tmp_path: Pat
     # The note went through the Host API into the AINA's private storage, and back.
     assert [note["text"] for note in listed.json()["structuredContent"]["items"]] == ["Buy milk"]
     assert canvas.status_code == 200
+
+
+def test_the_downloaded_starter_project_uploads_on_the_add_app_page_as_is(tmp_path: Path) -> None:
+    project = tmp_path / "notes"
+    _init(project)
+    app = create_app(
+        settings=_settings(env="development"),
+        llm=ScriptedLLM([]),
+        mcp_client=McpToolClient(servers={MCP_URL: _server(project).mcp}),
+    )
+    with TestClient(app) as client:
+        starter = client.post(
+            "/ainas/packages/scaffold",
+            json={"aina_id": AINA_ID, "name": "Acme Notes", "description": "Write, find and remove short notes."},
+        ).content
+        upload = {"file": ("starter.zip", starter, "application/zip")}
+        checked = client.post("/ainas/packages/validate", files=upload)
+        registered = client.post(
+            "/ainas/packages/compose",
+            params={"mode": "register"},
+            # The page sends the aina.json it filled in from the upload; here, the starter's own.
+            data={"manifest": zipfile.ZipFile(io.BytesIO(starter)).read("package/aina.json").decode()},
+            files=[("base", ("starter.zip", starter, "application/zip"))],
+        )
+        canvas = client.get(f"/aina-ui/{AINA_ID}/0.1.0/canvas/index.html")
+        widget = client.get(f"/aina-ui/{AINA_ID}/0.1.0/widgets/notes.html")
+
+    # The ZIP holds the whole project (package/ beside server/); the page takes its package/ folder.
+    assert checked.json()["errors"] == [] and checked.json()["manifest"], checked.json()["errors"]
+    assert "server/main.py" not in checked.json()["files"]
+    assert registered.status_code == 201, registered.text
+    assert (canvas.status_code, widget.status_code) == (200, 200)
 
 
 def test_init_refuses_a_non_empty_folder_and_a_bad_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
