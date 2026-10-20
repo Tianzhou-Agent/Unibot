@@ -1,4 +1,4 @@
-"""Native tools for Unibot capabilities and the domain operations behind them.
+"""Native tools for Superbot capabilities and the domain operations behind them.
 
 Each capability becomes a ``StructuredTool`` whose coroutine performs exactly one domain call and returns the
 JSON result. Failures raise; retries, error envelopes and observation are middleware concerns.

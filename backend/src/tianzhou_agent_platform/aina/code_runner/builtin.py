@@ -86,7 +86,7 @@ def unibot_code_runner_record() -> AinaRecord:
                 name="Code Runner",
                 version="1.0.0",
                 description="A separate workspace per user that runs Python, Bash and Node.js scripts in an isolated sandbox.",
-                publisher=Publisher(id="unibot", name="Unibot"),
+                publisher=Publisher(id="unibot", name="Superbot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
             capabilities=AinaCapabilities(

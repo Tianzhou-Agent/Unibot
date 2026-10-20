@@ -1,5 +1,5 @@
 ---
-- name: Provision K3s nodes for Unibot user sandboxes
+- name: Provision K3s nodes for Superbot user sandboxes
   hosts: k3s_servers
   become: true
   vars:

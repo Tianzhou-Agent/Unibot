@@ -1,4 +1,4 @@
-"""Unibot capabilities the agent can call: discovery, AINA scopes and forced-capability resolution.
+"""Superbot capabilities the agent can call: discovery, AINA scopes and forced-capability resolution.
 
 A capability is a remote tool, an AINA entrypoint or a host built-in. The catalog resolves which ones an actor may
 use in a conversation; the executor binds them to native tools.
@@ -852,7 +852,7 @@ def provider_messages_for_scope(
                     pending_stale_call_ids.add(call_id)
             if stale_count:
                 note = (
-                    "[Historical capability calls outside the current Unibot scope were converted to "
+                    "[Historical capability calls outside the current Superbot scope were converted to "
                     "non-executable context. Use only currently advertised capabilities.]"
                 )
                 content = str(copied.get("content") or "").strip()

@@ -46,7 +46,7 @@ export default {
   },
   developer: {
     title: "Developer",
-    desc: "Build AINA apps for Unibot and publish them from the command line.",
+    desc: "Build AINA apps for Superbot and publish them from the command line.",
     tokens: "Developer tokens",
     tokensDesc: "A token lets the aina CLI validate and publish app packages as you. It can do nothing else. Publishing needs a platform admin.",
     name: "Token name",
@@ -67,7 +67,7 @@ export default {
     revokeNamed: "Revoke {{name}}",
     confirmRevoke: "Revoke “{{name}}”? The aina CLI using it stops working at once.",
     cli: "Command line",
-    cliDesc: "Install the CLI with the Unibot backend package, then create, check and publish an app:",
+    cliDesc: "Install the CLI with the Superbot backend package, then create, check and publish an app:",
   },
   general: {
     title: "General",

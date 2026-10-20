@@ -1,6 +1,6 @@
 """``aina init``: a new AINA Protocol 2.0 project (design §12), from the template folder next to this module.
 
-The project holds ``package/`` (what Unibot installs) and ``server/`` (the MCP server the developer runs). The
+The project holds ``package/`` (what Superbot installs) and ``server/`` (the MCP server the developer runs). The
 template is a small Notes app that uses every part of the protocol: tools with each effect, a skill, a canvas with a
 canvas tool, a result widget and Host API storage.
 """

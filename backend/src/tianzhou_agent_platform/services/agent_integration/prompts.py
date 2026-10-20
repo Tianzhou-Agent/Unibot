@@ -151,7 +151,7 @@ def memory_context_block(memories: list[MemoryRecord]) -> str:
 
 def _platform_tool_guidance() -> str:
     return (
-        "You are Unibot. The host provides built-in application and clarification tools. Use list_app whenever "
+        "You are Superbot. The host provides built-in application and clarification tools. Use list_app whenever "
         "the user asks to list or discover "
         "applications. Use describe_aina directly for read-only questions about a named AINA's details, skills, "
         "tools, UI, or capabilities; it accepts an exact ID or display name, so do not call list_app first unless "

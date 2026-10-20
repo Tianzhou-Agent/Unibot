@@ -1,4 +1,4 @@
-"""``unibot_aina.ContextVerifier``: an AINA's MCP server proves a call came from its Unibot host (design §8)."""
+"""``unibot_aina.ContextVerifier``: an AINA's MCP server proves a call came from its Superbot host (design §8)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ ISSUER = "http://testserver/aina-host/v1"
 
 
 def _meta(client: TestClient, *, aina_id: str = AINA_ID) -> dict[str, Any]:
-    """The ``_meta`` Unibot sends with a tool call (``AinaPackageService.call_tool``)."""
+    """The ``_meta`` Superbot sends with a tool call (``AinaPackageService.call_tool``)."""
     app = client.app
     service = app.state.aina_packages  # type: ignore[attr-defined]
     installation = _install(client, ["storage"])

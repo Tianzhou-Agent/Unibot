@@ -6,7 +6,7 @@ circle around the login box" is drawn live on the whiteboard.
 
 | Part | Where |
 |---|---|
-| Canvas + canvas tools | `package/canvas/app.js`: a small Excalidraw-style SVG board. Its canvas tools are `get_scene`, `draw_circle`, `draw_rectangle`, `draw_arrow`, `add_text` and `clear_scene` (destructive, so Unibot asks first) |
+| Canvas + canvas tools | `package/canvas/app.js`: a small Excalidraw-style SVG board. Its canvas tools are `get_scene`, `draw_circle`, `draw_rectangle`, `draw_arrow`, `add_text` and `clear_scene` (destructive, so Superbot asks first) |
 | Model context | the canvas calls `host.setModelContext(summary)` on every change, so the agent sees the board without calling `get_scene` |
 | Tools (MCP) | `server/main.py`: `load_board` (model + app) and `save_board` (app only), kept in Host API `storage` |
 | Skill | `package/skills/sketch/`: how to lay out and annotate a diagram |
@@ -22,6 +22,6 @@ aina pack examples/whiteboard-aina/package -o whiteboard.aina.zip
 ```
 
 Register the zip as a platform admin (`POST /ainas/packages`) and install it from the Plugins page. Then, in a chat,
-ask "draw a login box and circle it". The canvas opens by itself if it is closed, and Unibot asks before the first
+ask "draw a login box and circle it". The canvas opens by itself if it is closed, and Superbot asks before the first
 drawing call. With the conversation open in two tabs, only the tab you looked at last draws. Without any open tab,
 the agent is told the canvas is not open.

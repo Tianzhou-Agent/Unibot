@@ -1,7 +1,7 @@
 [project]
 name = "unibot-aina"
 version = "0.1.0"
-description = "Helper for Unibot AINA Protocol 2.0 MCP servers: the call's context, a Host API client and token verification."
+description = "Helper for Superbot AINA Protocol 2.0 MCP servers: the call's context, a Host API client and token verification."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "AGPL-3.0-only" }

@@ -1,4 +1,4 @@
-"""Typed client for the Unibot Host API (design §8), authorized by a call's context token."""
+"""Typed client for the Superbot Host API (design §8), authorized by a call's context token."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _in_process: tuple[httpx.AsyncBaseTransport, str] | None = None
 def set_default_transport(transport: httpx.AsyncBaseTransport | None, *, api_base: str = "") -> None:
     """Send Host API calls through ``transport`` to ``api_base`` instead of the context's public URL.
 
-    Unibot uses it to serve its bundled servers in process; ``None`` restores ordinary HTTP.
+    Superbot uses it to serve its bundled servers in process; ``None`` restores ordinary HTTP.
     """
     global _in_process
     _in_process = None if transport is None else (transport, api_base)
@@ -147,7 +147,7 @@ class HostApi:
         )
 
     async def task_state(self, task_id: str) -> dict[str, Any]:
-        """The task as Unibot sees it; stop working when its ``status`` is ``cancelled``."""
+        """The task as Superbot sees it; stop working when its ``status`` is ``cancelled``."""
         return cast(dict[str, Any], await self._request("GET", f"/tasks/{_path(task_id)}"))
 
     async def task_complete(self, task_id: str, text: str, structured: dict[str, Any] | None = None) -> None:

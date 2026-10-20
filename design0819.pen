@@ -145,7 +145,7 @@
       "id": "yak5E",
       "x": 1560,
       "y": 0,
-      "name": "Unibot · Agent (Minimal)",
+      "name": "Superbot · Agent (Minimal)",
       "clip": true,
       "width": 1440,
       "height": 960,
@@ -233,7 +233,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "AI 产品调研"
@@ -711,7 +711,7 @@
       "id": "A0yHr9",
       "x": 0,
       "y": 0,
-      "name": "Unibot · Research Workspace",
+      "name": "Superbot · Research Workspace",
       "clip": true,
       "width": 1440,
       "height": 960,
@@ -726,7 +726,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -927,7 +927,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "AI 产品调研"
@@ -1440,7 +1440,7 @@
       "id": "f38rU8",
       "x": 3080,
       "y": 0,
-      "name": "Unibot · Workspace Search",
+      "name": "Superbot · Workspace Search",
       "clip": true,
       "width": 1440,
       "height": 960,
@@ -1455,7 +1455,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -1666,7 +1666,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "AI 产品调研"
@@ -2434,7 +2434,7 @@
       "id": "bZR9p",
       "x": 4600,
       "y": 1040,
-      "name": "Unibot · Canvas Mode",
+      "name": "Superbot · Canvas Mode",
       "clip": true,
       "width": 1440,
       "height": 960,
@@ -2449,7 +2449,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -2650,7 +2650,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "AI 产品调研"
@@ -3469,7 +3469,7 @@
       "id": "NNtws",
       "x": 3080,
       "y": 1040,
-      "name": "Unibot · Canvas (Minimal)",
+      "name": "Superbot · Canvas (Minimal)",
       "clip": true,
       "width": 1440,
       "height": 960,
@@ -3484,7 +3484,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -3685,7 +3685,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "AI 产品调研"
@@ -4639,7 +4639,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -4850,7 +4850,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -5706,7 +5706,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -6208,7 +6208,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -6409,7 +6409,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -6932,7 +6932,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -7133,7 +7133,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -7970,7 +7970,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -8171,7 +8171,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -9156,7 +9156,7 @@
               "id": "HTlUz",
               "name": "Brand Name",
               "fill": "$text",
-              "content": "Unibot",
+              "content": "Superbot",
               "fontFamily": "$font-ui",
               "fontSize": 14,
               "fontWeight": "600"
@@ -9593,7 +9593,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -9794,7 +9794,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -10489,7 +10489,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -10690,7 +10690,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "开源洞察"
@@ -11325,7 +11325,7 @@
               "id": "ah4c5",
               "name": "Brand Name",
               "fill": "$text",
-              "content": "Unibot",
+              "content": "Superbot",
               "fontFamily": "$font-ui",
               "fontSize": 14,
               "fontWeight": "600"
@@ -11762,7 +11762,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -11973,7 +11973,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "运维排障"
@@ -12832,7 +12832,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "运维排障"
@@ -13331,7 +13331,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -13532,7 +13532,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "运维排障"
@@ -14059,7 +14059,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -14260,7 +14260,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "运维排障"
@@ -15096,7 +15096,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -15297,7 +15297,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "content": "运维排障"
@@ -16431,7 +16431,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -16642,7 +16642,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -17456,7 +17456,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -17667,7 +17667,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -18540,7 +18540,7 @@
                       "id": "hNb1S",
                       "name": "Meta",
                       "fill": "$text-subtle",
-                      "content": "v1.4.2 · Unibot 官方",
+                      "content": "v1.4.2 · Superbot 官方",
                       "fontFamily": "$font-mono",
                       "fontSize": 11,
                       "fontWeight": "normal"
@@ -18840,7 +18840,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -19051,7 +19051,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -19876,7 +19876,7 @@
               "content": "日志分析"
             },
             "NZ7l8": {
-              "content": "v1.1.0 · Unibot 市场",
+              "content": "v1.1.0 · Superbot 市场",
               "enabled": true
             },
             "s7GGE": {
@@ -20026,7 +20026,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -20237,7 +20237,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -21227,7 +21227,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -21438,7 +21438,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -22076,7 +22076,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -22287,7 +22287,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -22717,7 +22717,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -22928,7 +22928,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -23824,7 +23824,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -24035,7 +24035,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -24941,7 +24941,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -25152,7 +25152,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -26025,7 +26025,7 @@
                       "id": "DrHyv",
                       "name": "Meta",
                       "fill": "$text-subtle",
-                      "content": "v1.4.2 · Unibot 官方",
+                      "content": "v1.4.2 · Superbot 官方",
                       "fontFamily": "$font-mono",
                       "fontSize": 11,
                       "fontWeight": "normal"
@@ -26618,7 +26618,7 @@
               "id": "t98QKp",
               "name": "Brand Name",
               "fill": "$text",
-              "content": "Unibot",
+              "content": "Superbot",
               "fontFamily": "$font-ui",
               "fontSize": 14,
               "fontWeight": "600"
@@ -27519,7 +27519,7 @@
           "id": "oc84M",
           "name": "Crumb Root",
           "fill": "$text-subtle",
-          "content": "Unibot",
+          "content": "Superbot",
           "fontFamily": "$font-ui",
           "fontSize": 13,
           "fontWeight": "normal"
@@ -28507,7 +28507,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -28718,7 +28718,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -29645,7 +29645,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -29856,7 +29856,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -31320,7 +31320,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -31531,7 +31531,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -32844,7 +32844,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -33055,7 +33055,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -33906,7 +33906,7 @@
           "height": "fill_container",
           "descendants": {
             "t98QKp": {
-              "content": "Unibot",
+              "content": "Superbot",
               "fontWeight": "600",
               "fill": "$text"
             },
@@ -34117,7 +34117,7 @@
                   "name": "Breadcrumb",
                   "descendants": {
                     "oc84M": {
-                      "content": "Unibot"
+                      "content": "Superbot"
                     },
                     "U8R2i": {
                       "enabled": false
@@ -34940,11 +34940,11 @@
                               "id": "rlVZJ",
                               "type": "ref",
                               "ref": "d1aFq",
-                              "name": "Row · Unibot",
+                              "name": "Row · Superbot",
                               "width": "fill_container",
                               "descendants": {
                                 "DO2wr": {
-                                  "content": "Unibot"
+                                  "content": "Superbot"
                                 },
                                 "GTz6Y": {
                                   "content": "v0.8.19 · 已是最新版本"

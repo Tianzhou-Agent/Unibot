@@ -1,6 +1,6 @@
 # AINA 项目格式 1.0
 
-AINA 项目是一个可复现的 ZIP 包。Unibot 只从包根目录读取一个 Manifest，源码和依赖文件均保留在包内，供后续托管运行时部署。AINA 不是独立 Agent；部署后仍只作为能力由 Unibot 选择和调用。
+AINA 项目是一个可复现的 ZIP 包。Superbot 只从包根目录读取一个 Manifest，源码和依赖文件均保留在包内，供后续托管运行时部署。AINA 不是独立 Agent；部署后仍只作为能力由 Superbot 选择和调用。
 
 ## 目录结构
 
@@ -42,7 +42,7 @@ authentication:
 
 `entrypoint` 必须是包内相对 POSIX 路径和处理函数名。处理函数接收 AINA Protocol 1.0 request 对象，返回 Protocol 1.0 response 对象。项目导入后处于 `validated` 状态，完成部署后会注册为 `managed` AINA，可以沿用现有的安装、权限和对话路由流程。
 
-托管运行器复用用户现有的 `SandboxService`。部署包和调用请求通过沙箱工作区文件接口写入，依赖安装与入口调用通过沙箱执行接口完成：本地开发使用 local driver，生产环境使用相同契约下的 Kubernetes driver 与 gVisor Pod。AINA 运行代码不会在 Unibot 后端进程或后端宿主机虚拟环境中执行。
+托管运行器复用用户现有的 `SandboxService`。部署包和调用请求通过沙箱工作区文件接口写入，依赖安装与入口调用通过沙箱执行接口完成：本地开发使用 local driver，生产环境使用相同契约下的 Kubernetes driver 与 gVisor Pod。AINA 运行代码不会在 Superbot 后端进程或后端宿主机虚拟环境中执行。
 
 ## API
 

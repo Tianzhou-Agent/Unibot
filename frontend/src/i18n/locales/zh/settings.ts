@@ -46,7 +46,7 @@ export default {
   },
   developer: {
     title: "开发者",
-    desc: "为 Unibot 构建 AINA 应用，并在命令行中发布。",
+    desc: "为 Superbot 构建 AINA 应用，并在命令行中发布。",
     tokens: "开发者令牌",
     tokensDesc: "令牌让 aina 命令行以你的身份检查和发布应用包，除此之外不能做任何事。发布需要平台管理员权限。",
     name: "令牌名称",
@@ -67,7 +67,7 @@ export default {
     revokeNamed: "撤销 {{name}}",
     confirmRevoke: "撤销“{{name}}”？使用它的 aina 命令行会立即失效。",
     cli: "命令行",
-    cliDesc: "随 Unibot 后端包安装命令行工具，然后创建、检查并发布应用：",
+    cliDesc: "随 Superbot 后端包安装命令行工具，然后创建、检查并发布应用：",
   },
   general: {
     title: "通用",

@@ -16,9 +16,9 @@ async def invoke(request: dict[str, Any]) -> dict[str, Any]:
 
     normalized_name = name.strip()
     greeting = (
-        f"你好，{normalized_name}！欢迎使用 Unibot。"
+        f"你好，{normalized_name}！欢迎使用 Superbot。"
         if language == "zh"
-        else f"Hello, {normalized_name}! Welcome to Unibot."
+        else f"Hello, {normalized_name}! Welcome to Superbot."
     )
     return _response(request, "completed", greeting)
 

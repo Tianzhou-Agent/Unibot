@@ -1,6 +1,6 @@
 """Notifications an AINA sends its user through the Host API (``notify`` scope, design §8).
 
-They land in the user's inbox in the Unibot shell. An AINA writes plain text only and cannot choose a link: a
+They land in the user's inbox in the Superbot shell. An AINA writes plain text only and cannot choose a link: a
 notification opens the AINA's own app, or the conversation of the tool call that sent it.
 """
 

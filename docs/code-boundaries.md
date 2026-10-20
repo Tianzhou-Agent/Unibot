@@ -1,4 +1,4 @@
-# Unibot 代码边界与关系图
+# Superbot 代码边界与关系图
 
 基于 2026-09-30 当前工作区源码。本文描述已实现的结构，而非目标架构；省略数据模型和辅助函数的逐项依赖。
 
@@ -120,7 +120,7 @@ flowchart TB
         Chat --> Stops
     end
 
-    subgraph Integration["Unibot 业务适配 · services/agent_integration/*"]
+    subgraph Integration["Superbot 业务适配 · services/agent_integration/*"]
         Runner["AgentRunner<br/>业务输入 → 原生消息 / 执行 / 业务输出"]
         Catalog["CapabilityCatalog + SystemPrompts<br/>发现可用能力与提示词"]
         Policies["scope / approvals / observation / model_calls<br/>能力域、审批规则、事件记录"]

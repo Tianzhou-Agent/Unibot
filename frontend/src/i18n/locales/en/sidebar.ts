@@ -37,7 +37,7 @@ export default {
   standalone: "Standalone chats",
   newStandalone: "New standalone chat",
   noStandalone: "No standalone chats",
-  homeAria: "Unibot home",
+  homeAria: "Superbot home",
   expandWorkspace: "Expand {{name}}",
   collapseWorkspace: "Collapse {{name}}",
   newConversationIn: "New conversation in {{name}}",

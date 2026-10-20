@@ -1,4 +1,4 @@
-# Unibot Frontend
+# Superbot Frontend
 
 React 18 + Vite 5 + TypeScript 前端，默认连接真实 FastAPI 后端。
 

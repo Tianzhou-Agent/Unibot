@@ -1,6 +1,6 @@
 """``aina dev``: a local host for developing an AINA 2.0 package (design §12).
 
-It runs the real Unibot host in process (in-memory storage, no sign-in), so validation, tool snapshots, effects, the
+It runs the real Superbot host in process (in-memory storage, no sign-in), so validation, tool snapshots, effects, the
 Host API, context tokens and the sandboxed UI behave exactly as in production. On top it serves a developer page at
 ``/`` that embeds the package's canvas and widgets as the shell would, lets the developer call agent tools and canvas
 tools by hand, and shows every request: bridge messages, MCP calls and Host API calls.

@@ -1,6 +1,6 @@
 """Expenses AINA tool server: a plain MCP server (Streamable HTTP) built with the official MCP Python SDK.
 
-Run it with ``python main.py`` and register ``../package`` with Unibot. Unibot sends its context in the request
+Run it with ``python main.py`` and register ``../package`` with Superbot. Superbot sends its context in the request
 ``_meta["unibot/context"]``. Expenses live in the AINA's private Host API ``storage``: the context token scopes every
 read and write to the calling user, so this server keeps no user data of its own.
 """
@@ -23,7 +23,7 @@ from pydantic import BaseModel
 CATEGORIES = {"food", "transport", "housing", "shopping", "health", "entertainment", "other"}
 
 mcp = MCPServer("expenses", version="1.2.0")
-# Tests route Host API calls to an in-process Unibot; None means real HTTP.
+# Tests route Host API calls to an in-process Superbot; None means real HTTP.
 HOST_TRANSPORT: httpx.AsyncBaseTransport | None = None
 # Background report jobs by task id. A real server would use a durable job queue.
 JOBS: dict[str, asyncio.Task[None]] = {}
@@ -49,7 +49,7 @@ def _unibot(ctx: Context) -> dict[str, Any]:
     meta = ctx.request_context.meta or {}
     context = meta.get("unibot/context")
     if not isinstance(context, dict):
-        raise ToolError("This server must be called by Unibot")
+        raise ToolError("This server must be called by Superbot")
     return context
 
 

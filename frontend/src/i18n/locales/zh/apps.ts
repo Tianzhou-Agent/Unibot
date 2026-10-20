@@ -12,7 +12,7 @@ export default {
     undeploy: "取消部署“{{name}}”？已有安装也会一并移除。",
   },
   title: "插件",
-  subtitle: "连接插件，让 Unibot 跨工具协同工作",
+  subtitle: "连接插件，让 Superbot 跨工具协同工作",
   search: "搜索插件",
   add: "添加",
   more: "{{name}} 更多操作",
@@ -50,7 +50,7 @@ export default {
   adminOnly: "注册和删除能力定义需要管理员权限。",
   package: {
     newTitle: "新建 AINA 2.0 应用",
-    newDesc: "下载起步项目：Unibot 安装的应用包，以及提供工具的 Python MCP 服务器。",
+    newDesc: "下载起步项目：Superbot 安装的应用包，以及提供工具的 Python MCP 服务器。",
     id: "应用 ID",
     idHint: "反向域名格式、小写，例如 com.example.notes，发布后不可更改。",
     idInvalid: "请使用至少包含一个点的反向域名 ID，只含小写字母、数字和连字符，例如 com.example.notes。",

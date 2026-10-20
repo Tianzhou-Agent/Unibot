@@ -1,4 +1,4 @@
-"""Runtime middleware composed with scripted native models, without any Unibot service."""
+"""Runtime middleware composed with scripted native models, without any Superbot service."""
 
 from __future__ import annotations
 

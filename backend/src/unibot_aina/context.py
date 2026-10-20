@@ -1,4 +1,4 @@
-"""The Unibot context of one MCP tool call (``_meta["unibot/context"]``, design §6.4)."""
+"""The Superbot context of one MCP tool call (``_meta["unibot/context"]``, design §6.4)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class UnibotContext:
     token: str | None
     conversation_id: str | None = None
     workspace_id: str | None = None
-    # The user's language (e.g. "zh") and IANA time zone, when Unibot knows them.
+    # The user's language (e.g. "zh") and IANA time zone, when Superbot knows them.
     locale: str | None = None
     timezone: str | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -41,7 +41,7 @@ def unibot_context(ctx: Any) -> UnibotContext:
     meta = ctx if isinstance(ctx, dict) else (getattr(getattr(ctx, "request_context", None), "meta", None) or {})
     raw = meta.get(CONTEXT_META_KEY)
     if not isinstance(raw, dict):
-        raise ValueError("This tool must be called by Unibot (no unibot/context in the request)")
+        raise ValueError("This tool must be called by Superbot (no unibot/context in the request)")
     return UnibotContext(
         invocation_id=str(raw.get("invocation_id") or ""),
         source=str(raw.get("source") or "agent"),

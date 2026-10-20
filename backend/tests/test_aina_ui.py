@@ -58,7 +58,7 @@ def test_ui_files_are_served_sandboxed_without_network_access(ui: Any) -> None:
     assert page.status_code == 200 and page.headers["content-type"] == "text/html; charset=utf-8"
     assert script.headers["content-type"] == "text/javascript; charset=utf-8"
     policy = page.headers["content-security-policy"]
-    # Opened directly in a tab, the file still runs with an opaque origin, never as Unibot.
+    # Opened directly in a tab, the file still runs with an opaque origin, never as Superbot.
     assert policy.startswith("sandbox allow-scripts allow-forms allow-downloads;")
     assert "allow-same-origin" not in policy
     assert "connect-src 'none'" in policy

@@ -1,7 +1,7 @@
 [project]
 name = "unibot-agent-eval"
 version = "0.1.0"
-description = "Black-box behaviour and performance evaluation harness for the Unibot agent REST API"
+description = "Black-box behaviour and performance evaluation harness for the Superbot agent REST API"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27.0",
@@ -32,7 +32,7 @@ packages = ["unibot_eval"]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "live: runs dataset cases against a real Unibot backend (needs UNIBOT_EVAL_BASE_URL)",
+    "live: runs dataset cases against a real Superbot backend (needs UNIBOT_EVAL_BASE_URL)",
 ]
 
 [tool.ruff]

@@ -6,7 +6,7 @@ aina:
   description: 根据姓名和语言生成一条简短问候语。
   publisher:
     id: unibot-demo
-    name: Unibot Demo
+    name: Superbot Demo
 runtime:
   type: managed
   language: python

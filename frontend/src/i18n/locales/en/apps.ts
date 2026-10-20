@@ -12,7 +12,7 @@ export default {
     undeploy: "Undeploy “{{name}}”? Existing installs will be removed too.",
   },
   title: "Plugins",
-  subtitle: "Connect plugins so Unibot can work across your tools",
+  subtitle: "Connect plugins so Superbot can work across your tools",
   search: "Search plugins",
   add: "Add",
   more: "More actions for {{name}}",
@@ -50,7 +50,7 @@ export default {
   adminOnly: "Registering and deleting definitions requires administrator access.",
   package: {
     newTitle: "New AINA 2.0 app",
-    newDesc: "Download a starter project: the package Unibot installs and a Python MCP server with its tools.",
+    newDesc: "Download a starter project: the package Superbot installs and a Python MCP server with its tools.",
     id: "App ID",
     idHint: "Reverse domain, lowercase, e.g. com.example.notes. It never changes.",
     idInvalid: "Use a reverse-domain ID with at least one dot, lowercase letters, digits and hyphens, e.g. com.example.notes.",

@@ -326,14 +326,14 @@ def test_open_app_opens_canvas_without_navigation_widget() -> None:
                 prefix="builtin_open_app_",
                 arguments='{"aina_id":"unibot-memory"}',
             ),
-            assistant("Unibot Memory is ready to open."),
+            assistant("Superbot Memory is ready to open."),
         ]
     )
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:
         response = client.post(
             "/chat",
             json={
-                "message": "Open the Unibot Memory application",
+                "message": "Open the Superbot Memory application",
                 "capability": "builtin:open_app",
             },
         )

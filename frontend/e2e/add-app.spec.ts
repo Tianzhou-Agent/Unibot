@@ -74,11 +74,11 @@ test("FE-E2E-ADD-01 an app is built from a server's chosen tools, a skill and a 
   await expect(preview).toHaveAttribute("src", "http://canvas.example.test/board/");
   await expect(page.getByText("该页面允许被嵌入")).toBeVisible();
   // The page loads no bridge script: shown as display only, with a link to what that means.
-  await expect(page.getByText("仅显示：页面可以正常显示，但没有使用 Unibot 的画布功能。")).toBeVisible({ timeout: 8000 });
+  await expect(page.getByText("仅显示：页面可以正常显示，但没有使用 Superbot 的画布功能。")).toBeVisible({ timeout: 8000 });
   await expect(page.getByRole("link", { name: "这是什么意思" })).toHaveAttribute("href", "/plugin/help/canvas-bridge");
 
   await page.getByRole("button", { name: "检查应用" }).click();
-  await expect(page.getByText("应用已通过 Unibot 的检查。")).toBeVisible();
+  await expect(page.getByText("应用已通过 Superbot 的检查。")).toBeVisible();
   await page.getByRole("button", { name: "注册应用" }).click();
   await expect(page).toHaveURL(/\/plugin\/local\.board$/);
 
@@ -138,7 +138,7 @@ test("FE-E2E-ADD-04 the canvas bridge help explains when a canvas needs the scri
   await installApi(page);
   await page.goto("/plugin/help/canvas-bridge");
 
-  await expect(page.getByRole("heading", { name: "让画布连接 Unibot", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "让画布连接 Superbot", level: 2 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "需要它吗？" })).toBeVisible();
   await expect(page.getByRole("link", { name: "aina-ui.js" })).toHaveAttribute("href", "/api/aina-ui/sdk/aina-ui.js");
   await expect(page.getByText('"name": "highlight_shapes"', { exact: false })).toBeVisible();

@@ -6,7 +6,7 @@ Status: Implemented (2026-09-29). See [the migration status](langchain-migration
 
 ## 1. Direction and scope
 
-Use LangChain and LangGraph as the default implementation of agent execution, model access, messages, tools, working memory, summarization, approvals, limits, retries, streaming, and execution instrumentation. Keep Unibot code for its public API, authorization, domain operations, durable conversation archive, and observability backend.
+Use LangChain and LangGraph as the default implementation of agent execution, model access, messages, tools, working memory, summarization, approvals, limits, retries, streaming, and execution instrumentation. Keep Superbot code for its public API, authorization, domain operations, durable conversation archive, and observability backend.
 
 The runtime lives in **core/agent_runtime/**. Conversation, model-provider, observability and persistence responsibilities live outside that package. Organize business services by feature, retain existing domain packages, and use **services/** only for application workflows and adapters that coordinate those domains with the runtime.
 
@@ -15,7 +15,7 @@ This revision replaces the earlier compatibility-wrapper design. The final runti
 For every responsibility:
 
 1. Use a built-in component and its documented configuration.
-2. Add a small adapter for Unibot data or business policy where necessary.
+2. Add a small adapter for Superbot data or business policy where necessary.
 3. Use custom middleware for a demonstrated policy that configuration cannot express.
 4. Retain a custom mechanism only with a documented framework limitation and a regression test. Existing code alone is not justification.
 
@@ -34,13 +34,13 @@ All source paths are relative to backend/src/tianzhou_agent_platform/ unless pre
 | Working messages | Provider dictionaries; persist_from list slicing | Native message state/reducers and stable IDs. |
 | Compression | _prepare_context and context_compression.py; summary cursor in conversation config | SummarizationMiddleware and checkpointed working history. |
 | Approval | Pending approval ends invocation; confirm rebuilds state | HumanInTheLoopMiddleware and checkpointed resume. |
-| Tool execution | Custom sequential dispatcher, validation, deduplication, errors | Native tools plus focused Unibot policies. |
+| Tool execution | Custom sequential dispatcher, validation, deduplication, errors | Native tools plus focused Superbot policies. |
 | Retries | Gateway transport loops and bounded model-directed retries | Native retry components with explicit eligibility and attempt budgets. |
 | Observation | ObservedLLMClient, ObservedAgentRepository, ObservedAgentRuntime | Native callbacks plus explicit application/domain events. |
 | Streaming | Provider wrapper emits custom text deltas | Native streams translated into existing SSE events. |
 | Persistence | Repository history and MySQL saver; thread ID currently equals trace ID | Repository archive plus native conversation working-state checkpoints. |
 
-The reviewed lock resolves LangChain **1.3.4**, LangChain OpenAI **1.4.0**, and LangGraph **1.2.4**. These are baseline versions, not the intended final versions. The installed async tool node uses asyncio.gather, while Unibot currently executes tool batches sequentially. That difference needs a tested compatibility policy.
+The reviewed lock resolves LangChain **1.3.4**, LangChain OpenAI **1.4.0**, and LangGraph **1.2.4**. These are baseline versions, not the intended final versions. The installed async tool node uses asyncio.gather, while Superbot currently executes tool batches sequentially. That difference needs a tested compatibility policy.
 
 Before implementation, record the commit/worktree baseline and preserve existing changes in core/llm.py, tests/test_llm_client.py, and the frontend. Use [the test matrix](../backend/tests/TEST_MATRIX.md) and [the remediation record](sota-remediation-2026-09-10.md) to distinguish deliberate protections from implementation details.
 
@@ -48,7 +48,7 @@ Before implementation, record the commit/worktree baseline and preserve existing
 
 These are the target choices. Phase 0 verifies the selected version and isolates any narrow exceptions.
 
-| Responsibility | Default framework capability | Unibot integration |
+| Responsibility | Default framework capability | Superbot integration |
 | --- | --- | --- |
 | Agent loop | create_agent inside core/agent_runtime | services/chat.py coordinates application lifecycle. |
 | Model invocation | ChatOpenAI/BaseChatModel, ainvoke, astream | Actor-scoped configuration and verified provider quirks. |
@@ -158,7 +158,7 @@ ChatService provides the existing chat/confirm/deny workflow: resolve actor-owne
 
 ConversationService owns conversation/approval persistence operations, idempotent archive append, run-generation/lease operations and ownership checks. It does not invoke the agent or import ChatService. Native interrupt identities are stored as opaque execution references alongside approval metadata, without embedding LangChain objects in domain models.
 
-The integration package binds domain tools, prepares prompts and scope state, converts archive/native messages, configures native HITL, captures transcript updates and translates streams. It is the intentional place that knows both Unibot and LangChain. It contains no custom model/tool loop or summary engine.
+The integration package binds domain tools, prepares prompts and scope state, converts archive/native messages, configures native HITL, captures transcript updates and translates streams. It is the intentional place that knows both Superbot and LangChain. It contains no custom model/tool loop or summary engine.
 
 ModelProviderService and its factory return native model instances for ChatService and document/health consumers alike. Observability callbacks live with their observation service and are injected as native callbacks; the runtime never constructs them.
 
@@ -387,7 +387,7 @@ Tests cover behavior and boundaries; do not add a matching test module for every
 
 core/workspace.py and core/feedback.py are outside agent_runtime and need no behavior change for this migration. Relocating unrelated features or splitting every existing repository consumer is separate work. Existing domain imports affected by the repository/model moves must still be updated.
 
-LangChain supplies execution mechanisms; it does not replace Unibot's conversation ownership, provider settings, public payloads, storage deployment or observability retention. Those responsibilities justify the external feature packages. Retained files must not hide a second framework implementation.
+LangChain supplies execution mechanisms; it does not replace Superbot's conversation ownership, provider settings, public payloads, storage deployment or observability retention. Those responsibilities justify the external feature packages. Retained files must not hide a second framework implementation.
 
 ### 7.2 Dependency and ownership rules
 

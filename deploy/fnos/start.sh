@@ -44,5 +44,5 @@ docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 
 http_port=$(sed -n 's/^UNIBOT_HTTP_PORT=//p' "$ENV_FILE" | tail -n 1)
 backend_port=$(sed -n 's/^UNIBOT_BACKEND_PORT=//p' "$ENV_FILE" | tail -n 1)
-echo "Unibot: http://192.168.1.8:${http_port:-8080}"
+echo "Superbot: http://192.168.1.8:${http_port:-8080}"
 echo "API docs: http://192.168.1.8:${backend_port:-8000}/docs"

@@ -467,7 +467,7 @@ def test_package_scope_skills_and_read_tool_run_without_ids_in_host_code() -> No
     assert "| food |" in results["call_file"]
     listed = json.loads(results["call_list"])
     assert listed == {"structuredContent": {"items": [], "total": 0.0}}
-    # The MCP server got the Unibot context with pairwise ids and non-secret config only.
+    # The MCP server got the Superbot context with pairwise ids and non-secret config only.
     context = seen[-1]
     assert context["source"] == "agent"
     assert context["invocation_id"] == "call_list"

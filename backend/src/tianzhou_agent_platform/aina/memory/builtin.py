@@ -32,7 +32,7 @@ def unibot_memory_record() -> AinaRecord:
                 name="Memory",
                 version="1.0.0",
                 description="Save, recall and delete the user's durable facts, preferences, goals and instructions.",
-                publisher=Publisher(id="unibot", name="Unibot"),
+                publisher=Publisher(id="unibot", name="Superbot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
             capabilities=AinaCapabilities(

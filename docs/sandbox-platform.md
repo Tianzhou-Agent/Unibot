@@ -31,12 +31,12 @@ flowchart LR
 主要不变量：
 
 - 租户、用户与 workspace 身份映射为稳定的 Kubernetes 资源名；standalone 使用独立作用域。
-- 多个 Unibot 后端节点通过 Redis 可续租分布式锁串行化同一沙箱作用域的初始化、执行、停止和重置。
+- 多个 Superbot 后端节点通过 Redis 可续租分布式锁串行化同一沙箱作用域的初始化、执行、停止和重置。
 - Pod 使用 `runsc` RuntimeClass、非 root 用户、只读根文件系统、禁用提权并删除全部 Linux capabilities。
 - 运行镜像只能由平台环境变量配置，普通沙箱请求不能覆盖镜像。
 - 每沙箱 runtime PVC 使用 `ReadWriteOncePod` 并由 `UserSandbox` ownerRef 管理。workspace 文件从预创建的共享
   PVC 以 `workspaces/<server-storage-key>/files` 安全 `subPath` 挂载；共享 PVC 不设置 ownerRef。
-- NetworkPolicy 只允许 Unibot 后端访问 `sandboxd`；依赖下载只能访问公网地址和显式配置的额外 CIDR。
+- NetworkPolicy 只允许 Superbot 后端访问 `sandboxd`；依赖下载只能访问公网地址和显式配置的额外 CIDR。
 - 停止仅回收 Pod/Service。workspace reset 删除 CR、runtime PVC、沙箱记录和执行历史，但不删除共享 PVC
   中的 workspace 文件；standalone reset 仍删除其独立 PVC。
 - `SandboxService` 对 local 与 Kubernetes driver 提供相同的执行、文件写入、读取和删除契约；业务能力不直接访问宿主机路径或 Kubernetes API。

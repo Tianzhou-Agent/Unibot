@@ -1,11 +1,11 @@
 """MCP authorization (OAuth 2.1) for package MCP servers with ``tools.mcp.auth.type: oauth2`` (design §5.3).
 
-Unibot follows the MCP authorization spec as an OAuth client:
+Superbot follows the MCP authorization spec as an OAuth client:
 
 1. **Discovery.** The MCP server's protected resource metadata (RFC 9728), from the ``resource_metadata`` of its
    ``401`` challenge or its well-known URL, names the authorization server; that server's metadata (RFC 8414, or
    OpenID Connect discovery) gives its endpoints. PKCE ``S256`` support is required.
-2. **Client registration.** Unibot registers itself once per AINA with dynamic client registration (RFC 7591) as a
+2. **Client registration.** Superbot registers itself once per AINA with dynamic client registration (RFC 7591) as a
    public client, and keeps the registration across upgrades of the package.
 3. **Authorization.** Each user connects their own account: authorization code with PKCE and the ``resource``
    indicator (RFC 8707). The ``state`` is sealed and bound to the user who started the flow.
@@ -43,13 +43,13 @@ _RESOURCE_METADATA = re.compile(r'resource_metadata="([^"]+)"')
 
 
 class OAuthServer(StrictModel):
-    """How Unibot reaches an AINA's authorization server, and the client it registered there."""
+    """How Superbot reaches an AINA's authorization server, and the client it registered there."""
 
     issuer: str
     authorization_endpoint: str
     token_endpoint: str
     client_id: str
-    # Sealed; most servers register Unibot as a public client without one.
+    # Sealed; most servers register Superbot as a public client without one.
     client_secret: str | None = None
     redirect_uri: str
     resource: str
@@ -98,7 +98,7 @@ class McpOAuth:
     # --- discovery and registration ---------------------------------------------------------------------------
 
     async def register_client(self, *, aina_id: str, mcp_url: str, scopes: list[str]) -> OAuthServer:
-        """Discover the MCP server's authorization server and register Unibot there."""
+        """Discover the MCP server's authorization server and register Superbot there."""
         resource_metadata = await self._resource_metadata(mcp_url)
         servers = resource_metadata.get("authorization_servers") or []
         if not servers:
@@ -110,11 +110,11 @@ class McpOAuth:
         registration = metadata.get("registration_endpoint")
         if not registration:
             raise oauth_failure(
-                "The authorization server offers no dynamic client registration; Unibot cannot connect to it yet"
+                "The authorization server offers no dynamic client registration; Superbot cannot connect to it yet"
             )
         wanted = scopes or [str(scope) for scope in resource_metadata.get("scopes_supported") or []]
         body: dict[str, Any] = {
-            "client_name": "Unibot",
+            "client_name": "Superbot",
             "redirect_uris": [self.redirect_uri],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
@@ -219,7 +219,7 @@ class McpOAuth:
         try:
             opened = OAuthState.model_validate_json(self.box.open(state, context=_STATE_CONTEXT))
         except (PlatformError, ValueError) as exc:
-            raise oauth_failure("The authorization response is not one Unibot started", status_code=400) from exc
+            raise oauth_failure("The authorization response is not one Superbot started", status_code=400) from exc
         if opened.expires < time.time():
             raise oauth_failure("The authorization took too long; connect again", status_code=400)
         return opened
@@ -267,7 +267,7 @@ class McpOAuth:
             reason = payload.get("error_description") or payload.get("error") or f"HTTP {response.status_code}"
             raise oauth_failure(f"The authorization server refused the token request: {reason}")
         if str(payload.get("token_type", "bearer")).lower() != "bearer":
-            raise oauth_failure("The authorization server issued a token Unibot cannot send (not a bearer token)")
+            raise oauth_failure("The authorization server issued a token Superbot cannot send (not a bearer token)")
         expires_in = payload.get("expires_in")
         return OAuthTokens(
             access_token=payload["access_token"],
@@ -306,7 +306,7 @@ class McpOAuth:
         payload = _json(response)
         if response.status_code >= 400:
             reason = payload.get("error_description") or payload.get("error") or f"HTTP {response.status_code}"
-            raise oauth_failure(f"The authorization server refused to register Unibot: {reason}")
+            raise oauth_failure(f"The authorization server refused to register Superbot: {reason}")
         return payload
 
 

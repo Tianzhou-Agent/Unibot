@@ -1,10 +1,10 @@
 export default {
-  title: "Connecting a canvas to Unibot",
+  title: "Connecting a canvas to Superbot",
   breadcrumb: "Breadcrumb",
   plugins: "Plugins",
   addApp: "Add app",
   intro:
-    "A canvas is a web page Unibot shows beside the chat. On its own it only displays. To work with Unibot, the page loads a small script, @unibot/aina-ui. Loading it is what \"connected\" means in the Add app preview.",
+    "A canvas is a web page Superbot shows beside the chat. On its own it only displays. To work with Superbot, the page loads a small script, @unibot/aina-ui. Loading it is what \"connected\" means in the Add app preview.",
   need: {
     title: "Do you need it?",
     withoutTitle: "Works without it",
@@ -15,8 +15,8 @@ export default {
     },
     needsTitle: "Needs it",
     needs: {
-      context: "Reading the user's language, Unibot's theme and the app's settings",
-      callTool: "Calling the app's tools from the page, with Unibot asking the user when needed",
+      context: "Reading the user's language, Superbot's theme and the app's settings",
+      callTool: "Calling the app's tools from the page, with Superbot asking the user when needed",
       refresh: "Refreshing when the agent changed data in chat",
       canvasTools: "Canvas tools: actions the agent performs on the page, such as highlighting shapes",
       modelContext: "Telling the agent what is on screen",
@@ -27,14 +27,14 @@ export default {
   },
   packaged: {
     title: "A canvas in your package",
-    body: "Copy aina-ui.js (and, for Unibot's look, aina-ui.css) next to your canvas's index.html and import it. Starter projects from \"Download a starter project\" or aina init already include both.",
+    body: "Copy aina-ui.js (and, for Superbot's look, aina-ui.css) next to your canvas's index.html and import it. Starter projects from \"Download a starter project\" or aina init already include both.",
     note: "Importing the script connects at once. A packaged canvas has no network access, so all of its data goes through host.callTool.",
   },
   webApp: {
     title: "A web app canvas (canvas.url)",
-    body: "Load the script once at startup. Your Unibot serves it, so you can import it from there while you develop:",
-    vendor: "For production, copy aina-ui.js into your app's static files (or npm install @unibot/aina-ui), so your app doesn't depend on one Unibot's address.",
-    identity: "To know who the user is on your own backend, call host.getIdentityToken() and verify the token with the Unibot JWKS.",
+    body: "Load the script once at startup. Your Superbot serves it, so you can import it from there while you develop:",
+    vendor: "For production, copy aina-ui.js into your app's static files (or npm install @unibot/aina-ui), so your app doesn't depend on one Superbot's address.",
+    identity: "To know who the user is on your own backend, call host.getIdentityToken() and verify the token with the Superbot JWKS.",
   },
   agent: {
     title: "Let the agent use the canvas",
@@ -45,6 +45,6 @@ export default {
     title: "Check it",
     step1: "Open Plugins → Add, and enter your canvas (a web address, or a bundle, then Check app).",
     step2: "Wait for the preview to load.",
-    step3: "Under the preview, \"Connected to Unibot\" means the script loaded and the page talks to Unibot.",
+    step3: "Under the preview, \"Connected to Superbot\" means the script loaded and the page talks to Superbot.",
   },
 };

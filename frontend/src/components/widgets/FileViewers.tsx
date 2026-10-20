@@ -103,7 +103,7 @@ export function TextFileEditor({ name, content, dirty, saving, disabled, onConte
   );
 }
 
-/** A PDF, DOCX or XLSX file: read-only. A PDF shows as itself; each also shows the text Unibot extracted from it. */
+/** A PDF, DOCX or XLSX file: read-only. A PDF shows as itself; each also shows the text Superbot extracted from it. */
 export function BinaryFileViewer({ name, content, filePath }: {
   name: string;
   /** The text extracted from the file. */

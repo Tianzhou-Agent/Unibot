@@ -14,18 +14,18 @@ Middleware                              Owner       Purpose
 ``TerminalDenialMiddleware``            runtime     closes a denied batch and ends the run
 ``TranscriptHookMiddleware``            runtime     archives new messages before summarization replaces them
 ``TurnSummarizationMiddleware``         runtime     built-in summarization, retaining complete turns
-``CapabilityScopeMiddleware``           Unibot      advertised tools, system prompt, UI context, forced tool
+``CapabilityScopeMiddleware``           Superbot      advertised tools, system prompt, UI context, forced tool
 ``RequestBudgetGuard``                  runtime     refuses requests over the model's input budget
 ``ForcedToolChoiceMiddleware``          runtime     provider compatibility for a forced tool call
 ``ProviderErrorMiddleware``             runtime     provider exceptions → platform errors
-``ModelCallRecorder``                   Unibot      model spans, events and ``/llm-calls`` records
+``ModelCallRecorder``                   Superbot      model spans, events and ``/llm-calls`` records
 ``InvalidToolCallMiddleware``           runtime     answers calls with unparseable arguments
 ``OrderedBatchMiddleware``              runtime     batch order, same-batch and run-scoped deduplication
 ``ModelCallBudgetMiddleware``           runtime     built-in model-call limit ending with the product reply
 ``HumanInTheLoopMiddleware``            LangChain   pauses batches with risky calls
 ``OutputGuardMiddleware``               runtime     empty/truncated responses; truncated calls never run
 ``ToolErrorMiddleware``                 LangChain   failures → model-visible error envelopes
-``CapabilityCallMiddleware``            Unibot      scope/argument checks, tool span and events per call
+``CapabilityCallMiddleware``            Superbot      scope/argument checks, tool span and events per call
 ``ToolRetryMiddleware`` groups          LangChain   automatic retries of side-effect-free remote tools
 ======================================  ==========  =========================================================
 """

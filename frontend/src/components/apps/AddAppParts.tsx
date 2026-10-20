@@ -303,7 +303,7 @@ function CanvasPreview({ src, kind, title }: { src: string; kind: "url" | "packa
   const [bridge, setBridge] = useState<"waiting" | "connected" | "none">("waiting");
   const [inspection, setInspection] = useState<{ allowed: boolean; embeddable?: boolean | null; detail?: string | null } | null>(null);
 
-  // The page talks to Unibot through @unibot/aina-ui; any message from the frame shows the bridge is there.
+  // The page talks to Superbot through @unibot/aina-ui; any message from the frame shows the bridge is there.
   useEffect(() => {
     setBridge("waiting");
     const listen = (event: MessageEvent) => { if (event.source === frame.current?.contentWindow) setBridge("connected"); };

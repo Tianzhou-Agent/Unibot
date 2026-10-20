@@ -1,7 +1,7 @@
-"""Proof that a call came from your Unibot host (design §8): the context token, checked against the host's JWKS.
+"""Proof that a call came from your Superbot host (design §8): the context token, checked against the host's JWKS.
 
 An MCP server whose auth is ``none`` can be called by anyone who knows its URL. ``ContextVerifier`` checks the
-ES256 context token Unibot puts in every call: its signature (the host's published key), issuer, audience (your
+ES256 context token Superbot puts in every call: its signature (the host's published key), issuer, audience (your
 AINA id) and expiry, and that the call's context says the same thing as the token.
 
     verifier = ContextVerifier(issuer="https://unibot.example.com/api/aina-host/v1", aina_id="com.example.notes")
@@ -36,7 +36,7 @@ REFETCH_SECONDS = 60.0
 
 
 class ContextError(Exception):
-    """The call or token was not issued by the expected Unibot host for this AINA."""
+    """The call or token was not issued by the expected Superbot host for this AINA."""
 
 
 class ContextVerifier:
@@ -49,7 +49,7 @@ class ContextVerifier:
         leeway_seconds: int = 30,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        """``issuer`` is your Unibot host's Host API base, e.g. ``https://unibot.example.com/api/aina-host/v1``."""
+        """``issuer`` is your Superbot host's Host API base, e.g. ``https://unibot.example.com/api/aina-host/v1``."""
         self.issuer = issuer.rstrip("/")
         self.aina_id = aina_id
         self.jwks_url = jwks_url or f"{self.issuer.removesuffix(HOST_API_SUFFIX)}{JWKS_PATH}"

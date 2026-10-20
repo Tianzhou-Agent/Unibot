@@ -2,7 +2,7 @@
 
     python -m unibot_eval run --dataset datasets --k 3 --out reports/latest
     python -m unibot_eval run --tags tool_use,context --no-judge
-    python -m unibot_eval run --case "long.*" --show-in-ui     # watch the runs in the Unibot UI
+    python -m unibot_eval run --case "long.*" --show-in-ui     # watch the runs in the Superbot UI
     python -m unibot_eval report reports/a/report.json reports/b/report.json --out reports/all.html
     python -m unibot_eval list
 """
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--min-pass-rate", type=float, default=1.0,
                      help="exit non-zero when the pass^k case rate is below this (default 1.0)")
     run.add_argument("--show-in-ui", action="store_true",
-                     help="run as the user the Unibot UI shows (dev auth bypass, session cookie or no auth), keep "
+                     help="run as the user the Superbot UI shows (dev auth bypass, session cookie or no auth), keep "
                           "the conversations and title them '[eval] <case id> #<attempt>'; one attempt per case "
                           "unless --k is given")
 

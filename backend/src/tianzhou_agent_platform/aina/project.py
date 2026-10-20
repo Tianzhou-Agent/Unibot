@@ -248,7 +248,7 @@ def _invalid_project(message: str) -> PlatformError:
 def _scaffold_readme(request: AinaProjectScaffoldRequest) -> str:
     return (
         f"# {request.name}\n\n"
-        f"AINA project `{request.aina_id}` generated for the Unibot managed runtime.\n\n"
+        f"AINA project `{request.aina_id}` generated for the Superbot managed runtime.\n\n"
         "- Declare skills, tools, UI, and permissions in `aina.yaml`.\n"
         "- Implement the configured `invoke` handler under `src/`.\n"
         "- The handler receives an AINA Protocol 1.0 request object and returns a Protocol 1.0 response object.\n"
@@ -261,7 +261,7 @@ from typing import Any
 
 
 async def invoke(request: dict[str, Any]) -> dict[str, Any]:
-    """Handle one request from Unibot through AINA Protocol 1.0."""
+    """Handle one request from Superbot through AINA Protocol 1.0."""
     user_input = request.get("input", {})
     return {
         "request_id": request["request_id"],

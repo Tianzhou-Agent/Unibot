@@ -20,7 +20,7 @@ export interface AinaContext {
   result?: ToolResult | null;
 }
 
-/** A tool result as Unibot hands it to the UI: the structured content and the text of the content blocks. */
+/** A tool result as Superbot hands it to the UI: the structured content and the text of the content blocks. */
 export interface ToolResult<T = unknown> {
   structuredContent?: T;
   content?: string;
@@ -35,7 +35,7 @@ export interface CanvasToolResult {
 export interface Host {
   /** Locale, theme, non-secret configuration and, for widgets, the tool call it shows. */
   getContext(): Promise<AinaContext>;
-  /** Call one of this AINA's app-visible tools; Unibot asks the user before calls that change data. */
+  /** Call one of this AINA's app-visible tools; Superbot asks the user before calls that change data. */
   callTool<T = unknown>(name: string, args?: Record<string, unknown>): Promise<ToolResult<T>>;
   /** Send a message into the conversation as the user. */
   sendPrompt(text: string): Promise<void>;

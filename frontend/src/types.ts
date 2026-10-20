@@ -352,7 +352,7 @@ export interface AinaManifest {
         // AINA Protocol 2.0 package: tools served by the publisher's MCP server, reviewed at registration.
         type: "package";
         archive_sha256: string;
-        // A first-party package shipped with Unibot: available to every user, never installed.
+        // A first-party package shipped with Superbot: available to every user, never installed.
         bundled?: boolean;
         package: AinaPackageManifest;
         tools: {

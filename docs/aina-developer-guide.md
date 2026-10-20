@@ -1,13 +1,13 @@
-# Building an AINA app for Unibot
+# Building an AINA app for Superbot
 
-An **AINA** is an app the Unibot agent can use. An AINA Protocol 2.0 app has two parts:
+An **AINA** is an app the Superbot agent can use. An AINA Protocol 2.0 app has two parts:
 
-- a **package** you upload to Unibot: `aina.json`, plus optional skills, a canvas and widgets;
+- a **package** you upload to Superbot: `aina.json`, plus optional skills, a canvas and widgets;
 - an **MCP server** you run yourself, with the app's tools. Any MCP SDK works; this guide uses the official
   Python SDK and the `unibot-aina` helper.
 
 Users install the package, and the agent then calls your tools. The user can also open your canvas beside the
-conversation. You never need Unibot's source code. The full contract is in
+conversation. You never need Superbot's source code. The full contract is in
 [`aina-protocol-v2-design_88989a8d.md`](aina-protocol-v2-design_88989a8d.md). The machine-readable spec is in
 [`spec/aina/2.0/`](../spec/aina/2.0):
 
@@ -30,7 +30,7 @@ conversation. You never need Unibot's source code. The full contract is in
 
 ## 1. Quick start
 
-You need Python 3.12 for the `aina` CLI. It ships with the Unibot backend package. Your own server can use any
+You need Python 3.12 for the `aina` CLI. It ships with the Superbot backend package. Your own server can use any
 Python from 3.10.
 
 ```bash
@@ -46,10 +46,10 @@ In a second terminal:
 
 ```bash
 aina validate package --live      # checks aina.json and the files, then lists your server's tools
-aina dev package                  # a local Unibot host at http://127.0.0.1:8790
+aina dev package                  # a local Superbot host at http://127.0.0.1:8790
 ```
 
-`aina dev` runs the real Unibot host on your machine. Its page shows:
+`aina dev` runs the real Superbot host on your machine. Its page shows:
 
 - your canvas and widgets, as users will see them;
 - tools you can call as the agent would, through the approval step;
@@ -66,10 +66,10 @@ publish:
 aina publish package --host https://unibot.example.com/api --token <developer token>
 ```
 
-Create the token in Unibot under **Settings → Developer**. It is shown once. It can only validate, publish and
+Create the token in Superbot under **Settings → Developer**. It is shown once. It can only validate, publish and
 refresh packages, and publishing needs a platform admin.
 
-Without the CLI, use **Plugins → Add** in Unibot. The **Add app** page offers the same starter project, takes a
+Without the CLI, use **Plugins → Add** in Superbot. The **Add app** page offers the same starter project, takes a
 finished `.aina.zip`, or builds a package from its parts:
 
 - **About this app:** the name and description are required, because the agent reads them to decide when to use the
@@ -139,7 +139,7 @@ A minimal `aina.json`:
   - `SKILL.md` at most 20,000 characters, and each supporting file at most 50,000;
   - the archive at most 20 MB.
 - **Language:** text meant for the model (descriptions and skills) should be English; non-ASCII gives a warning.
-- **Allowed files:** skill folders hold text files only, and Unibot never runs them. Archives may not contain
+- **Allowed files:** skill folders hold text files only, and Superbot never runs them. Archives may not contain
   symlinks, absolute paths or `..`.
 
 ## 3. Tools
@@ -148,14 +148,14 @@ An app may have no tools at all: an app of only skills, or only a canvas, is val
 `tools`, `skills` or `canvas`.
 
 Your MCP server may have many tools. Only those listed in `tools.expose` are ever used. When the package is
-registered, Unibot calls `tools/list` and stores a **snapshot** of each exposed tool: description, input and output
+registered, Superbot calls `tools/list` and stores a **snapshot** of each exposed tool: description, input and output
 schema, annotations. The agent only ever sees the snapshot, and arguments are checked against it.
 
-If the server later changes or removes an exposed tool, Unibot disables that tool for everyone until you publish a
-new version. Unibot checks again before every new installation, when an admin refreshes the package, and every few
+If the server later changes or removes an exposed tool, Superbot disables that tool for everyone until you publish a
+new version. Superbot checks again before every new installation, when an admin refreshes the package, and every few
 hours (6 by default).
 
-### Effect: when Unibot asks the user
+### Effect: when Superbot asks the user
 
 | `effect` | Asks the user | Retried automatically |
 |---|---|---|
@@ -163,11 +163,11 @@ hours (6 by default).
 | `write` | before the first call of the tool (in a conversation, or while a canvas stays open) | no |
 | `destructive` | before every call | no |
 
-- **Default:** without an `effect`, Unibot uses the MCP annotations. `destructiveHint` means `destructive`,
+- **Default:** without an `effect`, Superbot uses the MCP annotations. `destructiveHint` means `destructive`,
   `readOnlyHint` means `read`, and anything else is `write`.
 - **Both given:** if the manifest and the annotations both give an effect, the stricter one wins.
 - **Duplicates:** `write` and `destructive` tools should de-duplicate on `invocation_id`, because it stays the same
-  when Unibot retries.
+  when Superbot retries.
 
 ### Visibility
 
@@ -223,7 +223,7 @@ With `"auth": {"type": "oauth2"}` each user connects their own account, followin
   - authorization server metadata (RFC 8414 or OpenID Connect discovery) with `S256` in
     `code_challenge_methods_supported`;
   - dynamic client registration (RFC 7591).
-- **What Unibot does:**
+- **What Superbot does:**
   - registers itself once per app as a public client, with redirect URI `<unibot>/api/aina-oauth/callback`;
   - signs the user in with authorization code + PKCE and the `resource` indicator (RFC 8707);
   - asks for the scopes in `auth.scopes`, or else your metadata's `scopes_supported`;
@@ -238,15 +238,15 @@ Every `tools/call` carries `_meta["unibot/context"]`. Read it with `unibot_conte
 
 | Field | Meaning |
 |---|---|
-| `user_id`, `tenant_id`, `installation_id` | Pairwise ids: stable for your app, different for every other app. Unibot's internal ids never leave the host. |
-| `invocation_id` | The tool call; stable across Unibot's retries |
+| `user_id`, `tenant_id`, `installation_id` | Pairwise ids: stable for your app, different for every other app. Superbot's internal ids never leave the host. |
+| `invocation_id` | The tool call; stable across Superbot's retries |
 | `source` | `agent`, `canvas`, `widget` or `schedule` (informational only; never use it for authorization) |
 | `conversation_id`, `workspace_id` | Pairwise ids of where the call happened, when there is one |
-| `locale`, `timezone` | The user's language (`zh`, `en-US`) and IANA time zone, when the call came from Unibot's UI (not for scheduled runs) |
+| `locale`, `timezone` | The user's language (`zh`, `en-US`) and IANA time zone, when the call came from Superbot's UI (not for scheduled runs) |
 | `granted_permissions`, `config` | What the user allowed, and their non-secret settings |
 | `host.api_base`, `token` | The Host API address and this call's bearer token |
 
-### Verify that the call came from Unibot
+### Verify that the call came from Superbot
 
 A server with auth `none` can be called by anyone who knows its URL. Verify each call:
 
@@ -289,7 +289,7 @@ or paused app stop working at once.
 | `task_progress/complete/fail` | `/tasks/{id}/…` | the task's own invocation (§8) |
 
 **Files the user attaches.** The user can attach files (at most 10 per message, 20 MiB each) to a chat message. Only
-files Unibot can read are accepted: text, Markdown, code, PDF with a text layer, DOCX and XLSX. Each is stored under
+files Superbot can read are accepted: text, Markdown, code, PDF with a text layer, DOCX and XLSX. Each is stored under
 its own name in `Uploads/` of the user's files (or the workspace's), where the model reads it with the document tools;
 a PDF, DOCX or XLSX file reads as the text extracted from it. The model also reads each file's name, type, size and `file_ref`, a string like `file_3f9c…`. To let a tool
 work on an
@@ -325,13 +325,13 @@ How skills are loaded:
 
 ## 6. Canvas and widgets
 
-Your canvas and widgets are web pages. Unibot shows them in a sandboxed iframe with no network access and no cookies.
+Your canvas and widgets are web pages. Superbot shows them in a sandboxed iframe with no network access and no cookies.
 Everything goes through the UI bridge:
 
 - vendor `aina-ui.js` next to your HTML (as `aina init` does), or
 - `npm install @unibot/aina-ui` in a bundled app.
 
-Unibot also serves the script at `/aina-ui/sdk/aina-ui.js` (and `aina-ui.css`), so a web app canvas can import it
+Superbot also serves the script at `/aina-ui/sdk/aina-ui.js` (and `aina-ui.css`), so a web app canvas can import it
 from there while you develop. **Plugins → Add → Canvas** shows whether a page is connected, and links to an in-app
 help page (`/plugin/help/canvas-bridge`) on what a canvas gains from the script.
 
@@ -344,8 +344,8 @@ host.on("tool_result", refresh);                  // the agent changed data in c
 host.sendPrompt("Summarize my notes");            // speaks in the conversation as the user
 ```
 
-`callTool` reaches only `app`-visible tools. Unibot asks the user itself before writes and destructive calls, and your
-UI can never approve on the user's behalf. Use the `--aina-*` CSS variables (or `aina-ui.css`) to match Unibot's look.
+`callTool` reaches only `app`-visible tools. Superbot asks the user itself before writes and destructive calls, and your
+UI can never approve on the user's behalf. Use the `--aina-*` CSS variables (or `aina-ui.css`) to match Superbot's look.
 
 ### Canvas
 
@@ -387,9 +387,9 @@ Widgets are small views inside the conversation:
 ]
 ```
 
-- **Confirmation widgets** show inside Unibot's approval card. `getContext().arguments` holds the pending call's
-  arguments. The widget may `proposeArguments(edited)`; Unibot checks the edited arguments against the schema again,
-  and **Allow** and **Deny** stay Unibot's own buttons.
+- **Confirmation widgets** show inside Superbot's approval card. `getContext().arguments` holds the pending call's
+  arguments. The widget may `proposeArguments(edited)`; Superbot checks the edited arguments against the schema again,
+  and **Allow** and **Deny** stay Superbot's own buttons.
 - **Result widgets** show under the agent's answer, rendered from `getContext().result`. They render the same after a
   reload, because they use only the archived result. A result can choose another declared widget with
   `_meta["unibot/widget"] = "<id>"`, or none with `null`.
@@ -410,15 +410,15 @@ Declare what your app needs. Users see each scope with your `reason` before they
 The scopes with a Host API today are `storage`, `notify`, `documents.read`, `documents.write`, `memory.read`,
 `memory.write` and `llm`. Users may decline optional scopes, so check `granted_permissions` before you use one.
 
-`notify` sends the user a plain-text entry (title up to 120 characters, body up to 500) to the bell in Unibot's
+`notify` sends the user a plain-text entry (title up to 120 characters, body up to 500) to the bell in Superbot's
 sidebar. You cannot choose a link: an entry opens your app, or with `opens="conversation"` the conversation of the
 tool call whose token sent it. Use it for things the user would want to know outside the conversation, such as a
-finished background job. Unibot keeps the newest 200 entries per user, and removes your app's entries when the user
+finished background job. Superbot keeps the newest 200 entries per user, and removes your app's entries when the user
 uninstalls it.
 
-Per-user settings are a JSON Schema under `config.schema`. Unibot shows them as a form when the user installs.
+Per-user settings are a JSON Schema under `config.schema`. Superbot shows them as a form when the user installs.
 
-Fields with `"x-secret": true` are stored encrypted and never reach your server in `_meta`. Unibot uses them only
+Fields with `"x-secret": true` are stored encrypted and never reach your server in `_meta`. Superbot uses them only
 for `tools.mcp.auth`:
 
 ```json
@@ -431,7 +431,7 @@ for `tools.mcp.auth`:
 ## 8. Long-running tools
 
 Mark the tool `"long_running": true` and answer at once. Put a short acknowledgement in `content` and
-`_meta["unibot/task"] = {"id": "t_1", "title": "Spending report · 2026-09"}` in the result. Unibot then:
+`_meta["unibot/task"] = {"id": "t_1", "title": "Spending report · 2026-09"}` in the result. Superbot then:
 
 - ends the turn with your acknowledgement;
 - lists the task above the chat box;
@@ -452,7 +452,7 @@ The rules:
 - **Deadline:** a task must end within 24 hours.
 - **Where tasks start:** long-running tools start only from the conversation, never from your UI.
 - **Cancelling:**
-  - The user can cancel a running task from Unibot's task list.
+  - The user can cancel a running task from Superbot's task list.
   - Your next callback then gets `409`. `unibot.host.task_state(id)` (`GET /tasks/{id}`) returns `cancelled`, so
     check it between steps of long work and stop.
 - **Results:** posted results are Markdown. Images in them are shown as links, so nothing loads until the user clicks.

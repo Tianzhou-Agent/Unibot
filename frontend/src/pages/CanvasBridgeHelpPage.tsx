@@ -17,7 +17,7 @@ const PACKAGED = `<!-- canvas/index.html -->
   host.on("tool_result", async () => render((await host.callTool("list_notes")).structuredContent, locale));
 </script>`;
 
-const WEB_APP = `// At your app's startup. Only inside Unibot: opened on its own, your app runs as before.
+const WEB_APP = `// At your app's startup. Only inside Superbot: opened on its own, your app runs as before.
 if (window.parent !== window) {
   const { host } = await import("https://YOUR-UNIBOT/api/aina-ui/sdk/aina-ui.js");
   const { locale, theme } = await host.getContext();
@@ -47,7 +47,7 @@ const CANVAS_TOOLS = `host.registerTool("highlight_shapes", ({ ids }) => {
 // A short summary of what is on screen, sent with the agent's next requests.
 board.onChange(() => host.setModelContext(\`\${board.shapes.length} shapes; selected: \${board.selection.join(", ")}\`));`;
 
-/** How a canvas page connects to Unibot through @unibot/aina-ui, and what it gains. */
+/** How a canvas page connects to Superbot through @unibot/aina-ui, and what it gains. */
 export default function CanvasBridgeHelpPage() {
   const { t } = useTranslation("canvasBridgeHelp");
   const without = ["show", "ownData", "mcp"] as const;

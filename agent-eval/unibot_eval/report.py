@@ -86,7 +86,7 @@ def render_markdown(run: RunResult, summary: dict[str, Any] | None = None) -> st
     overall = summary["overall"]
     perf = summary["performance"]
     lines = [
-        "# Unibot agent evaluation",
+        "# Superbot agent evaluation",
         "",
         f"Backend `{summary['settings']['base_url']}` · judge `{summary['settings']['judge_model'] or 'disabled'}` · "
         f"{summary['started_at']} → {summary['finished_at']}",

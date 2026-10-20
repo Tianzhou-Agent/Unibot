@@ -63,9 +63,9 @@ class PackageRuntimeDefinition(StrictModel):
     server_name: str | None = None
     server_version: str | None = None
     tools_checked_at: datetime = Field(default_factory=utc_now)
-    # A first-party package shipped with Unibot (design §11): served in process and available to every user.
+    # A first-party package shipped with Superbot (design §11): served in process and available to every user.
     bundled: bool = False
-    # ``oauth2`` MCP servers: the authorization server and the client Unibot registered there (kept across upgrades).
+    # ``oauth2`` MCP servers: the authorization server and the client Superbot registered there (kept across upgrades).
     oauth: OAuthServer | None = None
 
     def tool(self, name: str) -> ToolSnapshot | None:

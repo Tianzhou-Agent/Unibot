@@ -6,7 +6,7 @@ aina:
   description: 统计文本的字符、非空字符、单词和行数。
   publisher:
     id: unibot-demo
-    name: Unibot Demo
+    name: Superbot Demo
 runtime:
   type: managed
   language: python

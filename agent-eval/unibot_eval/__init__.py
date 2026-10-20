@@ -1,4 +1,4 @@
-"""Black-box evaluation harness for the Unibot agent.
+"""Black-box evaluation harness for the Superbot agent.
 
 The harness drives the backend only through its public REST API (``/chat``, ``/chat/stream``,
 ``/traces/{id}``, ``/llm-calls``, ``/approvals``, ``/conversations``). It reads the OpenTelemetry-derived

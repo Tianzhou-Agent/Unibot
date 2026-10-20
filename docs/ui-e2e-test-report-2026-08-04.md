@@ -1,4 +1,4 @@
-# Unibot 前端 UI 深度 E2E 测试问题报告
+# Superbot 前端 UI 深度 E2E 测试问题报告
 
 - **测试时间**: 2026-08-04 14:50–15:15 (UTC+8)
 - **测试方式**: Playwright 真实浏览器交互(非 MSW mock), 直接访问运行中的前端 `http://127.0.0.1:5173`(Vite dev)与后端 `http://127.0.0.1:8000`(FastAPI, 真实 DeepSeek LLM)

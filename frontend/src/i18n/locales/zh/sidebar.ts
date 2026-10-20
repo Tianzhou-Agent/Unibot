@@ -37,7 +37,7 @@ export default {
   standalone: "独立对话",
   newStandalone: "新建独立对话",
   noStandalone: "暂无独立对话",
-  homeAria: "Unibot 首页",
+  homeAria: "Superbot 首页",
   expandWorkspace: "展开{{name}}",
   collapseWorkspace: "收起{{name}}",
   newConversationIn: "在 {{name}} 新建对话",

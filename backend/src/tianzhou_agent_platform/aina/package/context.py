@@ -1,4 +1,4 @@
-"""The Unibot context sent to an AINA's MCP server in ``_meta["unibot/context"]`` (design §6.4).
+"""The Superbot context sent to an AINA's MCP server in ``_meta["unibot/context"]`` (design §6.4).
 
 User, tenant and installation are **pairwise identifiers**: stable per (AINA, subject) and derived with a host
 secret, so two AINAs cannot correlate a user and internal ids never leave the host. The context token and Host API

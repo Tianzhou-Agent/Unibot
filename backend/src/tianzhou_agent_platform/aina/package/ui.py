@@ -2,7 +2,7 @@
 
 Packaged UI always runs sandboxed. The canvas pane frames it with ``sandbox`` but never ``allow-same-origin``, and
 every file is also served with a ``Content-Security-Policy: sandbox`` header, so a file opened directly in a tab
-runs with an opaque origin too and can never act as Unibot. ``connect-src 'none'`` stops it from calling any
+runs with an opaque origin too and can never act as Superbot. ``connect-src 'none'`` stops it from calling any
 network endpoint: all data goes through the UI bridge.
 """
 

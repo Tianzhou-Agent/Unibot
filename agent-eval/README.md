@@ -1,6 +1,6 @@
-# Unibot agent eval
+# Superbot agent eval
 
-A black-box test project for the Unibot agent. It runs scripted conversations against the backend's REST API,
+A black-box test project for the Superbot agent. It runs scripted conversations against the backend's REST API,
 reads the trace the backend records from its OpenTelemetry spans, and scores each run on two things:
 
 * **Behaviour**: tool selection, tool arguments, context management, isolation, approvals and safety.
@@ -116,7 +116,7 @@ cross-user isolation cases cannot pass.
 uv run python -m unibot_eval run --show-in-ui --case "long.*" --no-judge
 ```
 
-`--show-in-ui` runs as the user the Unibot UI shows: the dev bypass user (`user_dev`), the user of a session cookie
+`--show-in-ui` runs as the user the Superbot UI shows: the dev bypass user (`user_dev`), the user of a session cookie
 in `UNIBOT_EVAL_HEADERS`, or `anonymous` on a backend without auth. Each attempt's conversations are kept and titled
 `[eval] <case id> #<attempt>` (a case's later conversations get `· conversation 2` ...), so they appear in that user's
 sidebar; the command prints their ids. It runs one attempt per case unless `--k` is given, and skips cases that need

@@ -86,7 +86,7 @@ interface ModelDraft {
   enabled: boolean;
   contextWindowTokens: number;
   acceptsImages: boolean;
-  /** Empty: Unibot's default (a quarter of the window, at most 4096). */
+  /** Empty: Superbot's default (a quarter of the window, at most 4096). */
   maxOutputTokens: number | null;
 }
 

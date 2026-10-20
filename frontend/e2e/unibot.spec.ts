@@ -94,7 +94,7 @@ function ainaProject(overrides: JsonObject = {}): JsonObject {
         name: "Managed Demo",
         version: "0.1.0",
         description: "A managed AINA project used by the browser test.",
-        publisher: { id: "unibot-e2e", name: "Unibot E2E" },
+        publisher: { id: "unibot-e2e", name: "Superbot E2E" },
       },
       runtime: {
         type: "managed",
@@ -278,7 +278,7 @@ function successfulObsSession(sessionId: string): JsonObject {
         target_id: "demo.lookup",
         status: "completed",
         duration_ms: 51,
-        input: { query: "Unibot" },
+        input: { query: "Superbot" },
         output: { result: "工具返回正常" },
         attributes: { target_version: "1.0.0" },
       }),
@@ -345,7 +345,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
           conversation_id: payload.conversation_id,
           message_id: messageId,
           trace_id: null,
-          agent_name: "Unibot",
+          agent_name: "Superbot",
           agent_version: "",
           active: true,
           case_status: "pending",
@@ -579,7 +579,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
       const conversationId = payload.conversation_id as string | undefined;
       return json(route, {
         aina_id: ainaId,
-        name: ainaId === "unibot-memory" ? "Unibot Memory" : ainaId,
+        name: ainaId === "unibot-memory" ? "Superbot Memory" : ainaId,
         description: "管理跨对话保留的长期记忆。",
         version: "1.0.0",
         conversation_id: conversationId ?? null,
@@ -1052,7 +1052,7 @@ async function installMockApi(page: Page, initial: Partial<MockState> = {}): Pro
               first_output_at: null,
               completed_at: NOW,
               duration_ms: 21,
-              input: { query: "Unibot" },
+              input: { query: "Superbot" },
               output: { result: "工具返回正常" },
               attributes: {},
               error: null,
@@ -1116,7 +1116,7 @@ for (const [surface, path] of [
 ]) {
   test(`FE-E2E-COPY-001 ${surface} 复制指定回复并保留 Markdown`, async ({ page }, testInfo) => {
     const replies = [
-      "## 发布计划 🚀\n\n- **负责人**：林晨\n- [x] 测试通过\n\n```python\nprint('你好，Unibot')\n```\n",
+      "## 发布计划 🚀\n\n- **负责人**：林晨\n- [x] 测试通过\n\n```python\nprint('你好，Superbot')\n```\n",
       "第二条独立回复。",
     ];
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -1968,7 +1968,7 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
             name: "文档编辑器",
             version: "1.0.0",
             description: "管理存储在 NAS 中的 Markdown 文档。",
-            publisher: { id: "unibot", name: "Unibot" },
+            publisher: { id: "unibot", name: "Superbot" },
           },
           runtime: { type: "builtin" },
           capabilities: {
@@ -2146,7 +2146,7 @@ test("FE-E2E-004 管理员按用户查看运行摘要及 Trace I/O", async ({ pa
   await expect(spanTree.getByLabel("model.complete 输入")).toContainText("排查模型调用");
   await expect(spanTree.getByLabel("model.complete 输出")).toContainText("模型返回正常");
   await spanTree.getByText("demo.lookup", { exact: true }).click();
-  await expect(spanTree.getByLabel("demo.lookup 输入")).toContainText("Unibot");
+  await expect(spanTree.getByLabel("demo.lookup 输入")).toContainText("Superbot");
   await expect(spanTree.getByLabel("demo.lookup 输出")).toContainText("工具返回正常");
   await page.getByRole("button", { name: "复制 Conversation ID", exact: true }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("conv-e2e-1");
@@ -2476,7 +2476,7 @@ test("FE-E2E-004D 打开应用响应会直接进入对应 Canvas", async ({ page
 
 test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不打断对话", async ({ page }) => {
   const app = (aina_id: string, name: string, description: string) => ({
-    aina_id, name, description, version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true,
+    aina_id, name, description, version: "1.0.0", publisher: "Superbot", installed: true, has_main_widget: true,
   });
   const state = await installMockApi(page, {
     conversations: [conversation()],
@@ -2490,7 +2490,7 @@ test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不�
       actions: [],
       apps: [
         app("unibot-documents", "文档编辑器", "管理 Markdown 文档。"),
-        app("unibot-memory", "Unibot Memory", "管理跨对话保留的长期记忆。"),
+        app("unibot-memory", "Superbot Memory", "管理跨对话保留的长期记忆。"),
       ],
     }],
   });
@@ -2506,7 +2506,7 @@ test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不�
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
   await expect(input).toBeEnabled();
-  await expect(suggestions.last().getByRole("button", { name: "打开 Unibot Memory", exact: true })).toBeVisible();
+  await expect(suggestions.last().getByRole("button", { name: "打开 Superbot Memory", exact: true })).toBeVisible();
 
   await suggestions.last().getByRole("button", { name: "打开 文档编辑器", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
@@ -2526,7 +2526,7 @@ test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不�
   await input.fill("打开记忆");
   await page.getByRole("button", { name: "发送消息" }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
   await expect(page.locator("main p").filter({ hasText: "帮我整理会议纪要" })).toBeVisible();
 
@@ -2534,7 +2534,7 @@ test("FE-E2E-004G 推荐应用以回复下方的标签呈现，不弹窗也不�
   await expect(page).toHaveURL(/\?aina=unibot-documents&aina=unibot-memory&active=unibot-documents$/);
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeHidden();
 
-  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await page.getByRole("button", { name: "关闭 Superbot Memory", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
   await page.getByRole("button", { name: "关闭 unibot-documents", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1$/);
@@ -2548,7 +2548,7 @@ test("FE-E2E-004H 画布 + 像浏览器一样新建标签页，在标签页内�
   });
   await installMockApi(page, {
     conversations: [conversation({ active_aina_ids: ["unibot-documents", "unibot-memory"] })],
-    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory"), aina("unibot-code-runner", "代码运行器")],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Superbot Memory"), aina("unibot-code-runner", "代码运行器")],
   });
   await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
   const plus = page.getByRole("button", { name: "新标签页", exact: true });
@@ -2559,11 +2559,11 @@ test("FE-E2E-004H 画布 + 像浏览器一样新建标签页，在标签页内�
   await plus.click();
   await expect(newTab).toHaveAttribute("aria-selected", "true");
   const inConversation = launcher.getByRole("group", { name: "本对话中的应用" });
-  await expect(inConversation.getByRole("button")).toHaveText([/文档编辑器.*已打开/, /Unibot Memory/]);
+  await expect(inConversation.getByRole("button")).toHaveText([/文档编辑器.*已打开/, /Superbot Memory/]);
   await expect(launcher.getByRole("group", { name: "全部应用" }).getByRole("button")).toHaveText([/代码运行器/]);
-  await inConversation.getByRole("button", { name: /^Unibot Memory/ }).click();
+  await inConversation.getByRole("button", { name: /^Superbot Memory/ }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   await expect(newTab).toHaveCount(0);
 
   // Like a browser tab, the new tab can be left and come back to, or closed.
@@ -2583,11 +2583,11 @@ test("FE-E2E-004H 画布 + 像浏览器一样新建标签页，在标签页内�
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory(&active=unibot-documents)?$/);
 
   // A closed app stays listed with this conversation's apps and reopens from a new tab.
-  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
+  await page.getByRole("button", { name: "关闭 Superbot Memory", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents$/);
   await plus.click();
-  await launcher.getByRole("group", { name: "本对话中的应用" }).getByRole("button", { name: /^Unibot Memory/ }).click();
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await launcher.getByRole("group", { name: "本对话中的应用" }).getByRole("button", { name: /^Superbot Memory/ }).click();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
 
   await plus.click();
   await launcher.getByRole("searchbox", { name: "搜索应用" }).fill("代码");
@@ -2597,7 +2597,7 @@ test("FE-E2E-004H 画布 + 像浏览器一样新建标签页，在标签页内�
 
   // With every app closed, the new tab keeps the canvas open; closing it too closes the canvas.
   await plus.click();
-  for (const name of ["unibot-documents", "Unibot Memory", "unibot-code-runner"]) {
+  for (const name of ["unibot-documents", "Superbot Memory", "unibot-code-runner"]) {
     await page.getByRole("button", { name: `关闭 ${name}`, exact: true }).click();
   }
   await expect(newTab).toHaveAttribute("aria-selected", "true");
@@ -2626,8 +2626,8 @@ test("FE-E2E-CANVAS-01 拖动排序保留选中应用、编辑内容与路由，
   await page.mouse.move(to.x + to.width - 4, to.y + to.height / 2, { steps: 10 });
   await expect(doc).toHaveClass(/opacity-40/);
   await page.mouse.up();
-  await expect(tabs.getByRole("tab")).toHaveText(["Unibot Memory", "unibot-documents"]);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(tabs.getByRole("tab")).toHaveText(["Superbot Memory", "unibot-documents"]);
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   await expect(draft).toHaveValue("排序后保留这段草稿");
   const query = new URL(page.url()).searchParams;
   expect(query.getAll("aina")).toEqual(["unibot-memory", "unibot-documents"]);
@@ -2643,12 +2643,12 @@ test("FE-E2E-CANVAS-01 拖动排序保留选中应用、编辑内容与路由，
   await expect(memory).toHaveClass(/opacity-40/);
   await page.keyboard.press("Escape");
   await page.mouse.up();
-  await expect(tabs.getByRole("tab")).toHaveText(["Unibot Memory", "unibot-documents"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["Superbot Memory", "unibot-documents"]);
   await expect(draft).toHaveValue("排序后保留这段草稿");
 
   await page.reload();
-  await expect(tabs.getByRole("tab")).toHaveText(["Unibot Memory", "unibot-documents"]);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(tabs.getByRole("tab")).toHaveText(["Superbot Memory", "unibot-documents"]);
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
 });
 
 test("FE-E2E-CANVAS-02 新标签页可用快捷键和菜单排序，展开与窄屏操作保持可用", async ({ page }, testInfo) => {
@@ -2658,25 +2658,25 @@ test("FE-E2E-CANVAS-02 新标签页可用快捷键和菜单排序，展开与窄
   });
   await installMockApi(page, {
     conversations: [conversation()],
-    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory")],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Superbot Memory")],
   });
   await page.goto("/chat/conv-e2e-1?aina=unibot-documents&aina=unibot-memory");
   const tabs = page.getByRole("tablist", { name: "已打开的应用" });
   await page.getByRole("button", { name: "新标签页", exact: true }).click();
   const newTab = page.getByRole("tab", { name: "新标签页", exact: true });
   await newTab.press("Alt+ArrowLeft");
-  await expect(tabs.getByRole("tab")).toHaveText(["unibot-documents", "新标签页", "Unibot Memory"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["unibot-documents", "新标签页", "Superbot Memory"]);
   await expect(newTab).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "全部标签与排序", exact: true }).click();
   await page.getByRole("button", { name: "新标签页前移", exact: true }).click();
-  await expect(tabs.getByRole("tab")).toHaveText(["新标签页", "unibot-documents", "Unibot Memory"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["新标签页", "unibot-documents", "Superbot Memory"]);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "关闭 新标签页", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
 
   await page.getByRole("button", { name: "展开画布", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeHidden();
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("canvas-expanded.png") });
   await page.getByRole("button", { name: "恢复分栏", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeVisible();
@@ -2691,7 +2691,7 @@ test("FE-E2E-CANVAS-02 新标签页可用快捷键和菜单排序，展开与窄
   await page.keyboard.press("Escape");
   await page.screenshot({ path: testInfo.outputPath("canvas-mobile.png") });
   await page.getByRole("button", { name: "关闭 unibot-documents", exact: true }).click();
-  await expect(tabs.getByRole("tab")).toHaveText(["新标签页", "Unibot Memory"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["新标签页", "Superbot Memory"]);
   await expect(newTab).toHaveAttribute("aria-selected", "true");
 });
 
@@ -2893,7 +2893,7 @@ test("FE-E2E-IR-001 普通用户与管理员入口隔离", async ({ page }) => {
   await expect(toolCallNode.getByText("工具调用", { exact: true })).toBeVisible();
   await expect(toolCallNode.getByText("调用参数", { exact: true })).toBeVisible();
   await expect(toolCallNode).toContainText("查询：");
-  await expect(toolCallNode).toContainText("Unibot");
+  await expect(toolCallNode).toContainText("Superbot");
   await expect(toolCallNode.getByText("返回结果", { exact: true })).toBeVisible();
   await expect(toolCallNode.getByText("工具返回正常", { exact: true })).toBeVisible();
   await expect(toolCallNode).toContainText("v1.0.0");
@@ -3672,16 +3672,16 @@ test("FE-E2E-006 历史应用列表以推荐标签打开对应 Canvas", async ({
         name: "文档编辑器",
         description: "创建、读取和编辑 Markdown 文档。",
         version: "1.0.0",
-        publisher: "Unibot",
+        publisher: "Superbot",
         installed: true,
         has_main_widget: true,
       },
       {
         aina_id: "unibot-memory",
-        name: "Unibot Memory",
+        name: "Superbot Memory",
         description: "管理长期记忆。",
         version: "1.0.0",
-        publisher: "Unibot",
+        publisher: "Superbot",
         installed: true,
         has_main_widget: true,
       },
@@ -3690,7 +3690,7 @@ test("FE-E2E-006 历史应用列表以推荐标签打开对应 Canvas", async ({
         name: "定时任务 AINA",
         description: "通过固定间隔或 Cron 表达式调度远程 AINA。",
         version: "1.0.0",
-        publisher: "Unibot",
+        publisher: "Superbot",
         installed: true,
         has_main_widget: true,
       },
@@ -3728,7 +3728,7 @@ test("FE-E2E-006 历史应用列表以推荐标签打开对应 Canvas", async ({
   await page.goto("/chat/conv-e2e-1?aina=unibot-documents");
 
   const documentApp = page.getByRole("button", { name: "打开 文档编辑器" });
-  const memoryApp = page.getByRole("button", { name: "打开 Unibot Memory" });
+  const memoryApp = page.getByRole("button", { name: "打开 Superbot Memory" });
   await expect(documentApp).toBeVisible();
   await expect(memoryApp).toBeVisible();
   const documentBox = await documentApp.boundingBox();
@@ -3740,7 +3740,7 @@ test("FE-E2E-006 历史应用列表以推荐标签打开对应 Canvas", async ({
   await memoryApp.click();
 
   await expect(page).toHaveURL(/\/chat\/conv-e2e-1\?aina=unibot-documents&aina=unibot-memory$/);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "添加记忆", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "长期记忆", exact: true })).toBeVisible();
 });
@@ -3760,7 +3760,7 @@ test("FE-E2E-006B 推荐应用不会隐藏文档操作的回答", async ({ page 
     id: "document-answer", role: "assistant", content: "报告正文不会因推荐应用而隐藏。", content_type: "text", created_at: NOW,
     widgets: [{
       id: "unibot-aina-chooser", kind: "aina_chooser", title: "Suggested apps", description: "", fields: [], actions: [], markdown: null,
-      apps: [{ aina_id: "unibot-documents", name: "文档编辑器", description: "管理文档", version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true }],
+      apps: [{ aina_id: "unibot-documents", name: "文档编辑器", description: "管理文档", version: "1.0.0", publisher: "Superbot", installed: true, has_main_widget: true }],
     }],
   });
   await installMockApi(page, { conversations: [conversation({ messages })] });
@@ -4068,7 +4068,7 @@ test("sidebar and canvas dividers resize with minimum widths and keyboard contro
   await page.setViewportSize({ width: 1440, height: 900 });
   await installMockApi(page, { conversations: [conversation()] });
   await page.goto("/chat/conv-e2e-1?aina=unibot-memory");
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   const sidebar = page.getByRole("complementary").filter({ has: page.getByRole("navigation", { name: "主导航", exact: true }) });
   const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
   const canvasHandle = page.getByRole("separator", { name: "调整 Canvas 宽度" });
@@ -4138,11 +4138,11 @@ test("resized panels adapt to available space without horizontal overflow", asyn
   await expect(canvasHandle).toHaveAttribute("aria-valuenow", "360");
   await page.setViewportSize({ width: 1024, height: 900 });
   await expect(canvasHandle).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeInViewport();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeInViewport();
   await page.getByRole("button", { name: "显示对话", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeInViewport();
   await page.getByRole("button", { name: "显示应用", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeInViewport();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeInViewport();
   await page.setViewportSize({ width: 768, height: 900 });
   await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "288");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -4166,7 +4166,7 @@ test("FE-E2E-005E 点击推荐应用打开画布后对话仍停在底部", async
     id: "msg-pin-suggest", role: "assistant", content: "已经记录好了。", content_type: "text", created_at: NOW,
     widgets: [{
       id: "unibot-aina-chooser", kind: "aina_chooser", title: "Suggested apps", description: "", markdown: null, fields: [], actions: [],
-      apps: [{ aina_id: "unibot-memory", name: "Unibot Memory", description: "管理长期记忆。", version: "1.0.0", publisher: "Unibot", installed: true, has_main_widget: true }],
+      apps: [{ aina_id: "unibot-memory", name: "Superbot Memory", description: "管理长期记忆。", version: "1.0.0", publisher: "Superbot", installed: true, has_main_widget: true }],
     }],
   } as (typeof messages)[number]);
   await installMockApi(page, { conversations: [conversation({ messages })] });
@@ -4177,15 +4177,15 @@ test("FE-E2E-005E 点击推荐应用打开画布后对话仍停在底部", async
   await expect.poll(distanceFromBottom).toBeLessThan(2);
 
   // Opening the canvas narrows the chat column and re-wraps the text; the view must stay at the latest message.
-  await page.getByRole("button", { name: "打开 Unibot Memory", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await page.getByRole("button", { name: "打开 Superbot Memory", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
   await expect.poll(distanceFromBottom).toBeLessThan(2);
   await expect(page.getByText("已经记录好了。", { exact: true })).toBeInViewport();
 
   // Someone reading older messages is left where they are when the layout changes back.
   await scroller.evaluate((el) => { el.scrollTop = 0; });
-  await page.getByRole("button", { name: "关闭 Unibot Memory", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Unibot Memory" })).toHaveCount(0);
+  await page.getByRole("button", { name: "关闭 Superbot Memory", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Superbot Memory" })).toHaveCount(0);
   expect(await scroller.evaluate((el) => el.scrollTop)).toBeLessThan(50);
 });
 
@@ -4199,7 +4199,7 @@ test("FE-E2E-004J 标题栏精简：状态移到侧栏，OBS 为图标，应用�
       conversation(),
       conversation({ id: "conv-approval", title: "待确认会话", run_status: "approval_required", active_aina_ids: ["unibot-memory"] }),
     ],
-    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Unibot Memory")],
+    ainas: [aina("unibot-documents", "文档编辑器"), aina("unibot-memory", "Superbot Memory")],
     streamDelayMs: 1200,
   });
   await page.goto("/chat/conv-e2e-1");
@@ -4234,5 +4234,5 @@ test("FE-E2E-004J 标题栏精简：状态移到侧栏，OBS 为图标，应用�
   await page.goto("/chat/conv-approval");
   await page.getByRole("button", { name: "显示应用面板", exact: true }).click();
   await expect(page).toHaveURL(/\/chat\/conv-approval\?aina=unibot-memory$/);
-  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Superbot Memory", selected: true })).toBeVisible();
 });

@@ -7,7 +7,7 @@
     "version": "2.0.0",
     "name": "Image Recognition",
     "description": "Paste or pick an image and detect its objects, counts, positions and confidence with YOLO26m.",
-    "publisher": { "id": "unibot", "name": "Unibot" }
+    "publisher": { "id": "unibot", "name": "Superbot" }
   },
 
   "tools": {

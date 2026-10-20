@@ -1,4 +1,4 @@
-// aina dev page: the host side of the UI bridge (design §9.4), as the Unibot shell implements it, for one package.
+// aina dev page: the host side of the UI bridge (design §9.4), as the Superbot shell implements it, for one package.
 // Packaged UI runs sandboxed with an opaque origin; the page answers only its own frames, relays app-visible tools,
 // and asks before any call that changes data.
 const PROTOCOL = "aina-ui/2.0";

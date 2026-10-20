@@ -123,7 +123,7 @@ def _installation(client: TestClient) -> dict[str, Any]:
 def _connect(
     client: TestClient, authorization: FakeAuthorizationServer, *, return_to: str = "/plugin/x"
 ) -> httpx.Response:
-    """Start the flow, let the fake server "approve" it, and follow the redirect back to Unibot."""
+    """Start the flow, let the fake server "approve" it, and follow the redirect back to Superbot."""
     url = client.post(f"/ainas/{AINA_ID}/oauth/authorize", json={"return_to": return_to}).json()["authorization_url"]
     query = {key: values[0] for key, values in parse_qs(urlsplit(url).query).items()}
     authorization.challenges["code-1"] = query["code_challenge"]
@@ -199,7 +199,7 @@ def test_reinstalling_or_upgrading_keeps_the_connection(oauth: Any) -> None:
         upgraded.status_code == 201 and upgraded.json()["manifest"]["runtime"]["oauth"]["client_id"] == "unibot-client"
     )
     assert listed.status_code == 200
-    assert len(authorization.registrations) == 1  # Unibot registered once
+    assert len(authorization.registrations) == 1  # Superbot registered once
 
 
 def test_disconnecting_drops_the_tokens(oauth: Any) -> None:
@@ -237,7 +237,7 @@ def test_a_failed_or_forged_authorization_is_reported_back(oauth: Any) -> None:
             user_id="mallory",
         )  # type: ignore[attr-defined]
 
-    # The return path stays on Unibot; failures carry the reason.
+    # The return path stays on Superbot; failures carry the reason.
     assert denied.headers["location"].startswith("http://127.0.0.1:5173/plugin?aina_oauth=failed")
     assert "access_denied" in denied.headers["location"]
     assert "PKCE+failed" in wrong_pkce.headers["location"]

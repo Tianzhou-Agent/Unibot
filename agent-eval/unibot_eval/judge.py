@@ -55,7 +55,7 @@ _PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a strict evaluator of an AI agent called Unibot that answers users and can call Tools, "
+            "You are a strict evaluator of an AI agent called Superbot that answers users and can call Tools, "
             "AINA applications and builtin capabilities. Evaluate only what is asked.\n\nRubric: {rubric}\n\n"
             "Return a score between 0 and 1 and a brief justification.",
         ),
