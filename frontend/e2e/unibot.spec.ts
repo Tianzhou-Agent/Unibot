@@ -1660,6 +1660,8 @@ test("FE-E2E-009F 左侧对话保留右侧任务状态并携带章节上下文",
 });
 
 test("FE-E2E-009G 未合入任务归入失败且合入历史按日期展示", async ({ page }) => {
+  // The review header shares half the split with the chat; give it room to show the revision.
+  await page.setViewportSize({ width: 1440, height: 900 });
   await installMockApi(page, {
     documentTasks: [
       documentTask({
