@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.test_aina_scaffold import MCP_URL, _init, _server
+from tests.test_aina_scaffold import AINA_ID, MCP_URL, _init, _server
 from tianzhou_agent_platform.aina.package.devhost import create_dev_app
 
 
@@ -93,6 +93,19 @@ def test_settings_and_optional_scopes_are_reinstalled(dev: Any) -> None:
     installed = client.post("/dev/install", json={"configuration": {}, "granted_permissions": ["storage"]})
 
     assert installed.json()["granted_permissions"] == ["storage"]
+
+
+def test_the_page_opened_at_another_loopback_name_moves_to_the_origin_that_may_frame_the_canvas(dev: Any) -> None:
+    client, _ = dev
+
+    moved = client.get("http://localhost:8790/", follow_redirects=False)
+    page = client.get("http://127.0.0.1:8790/", follow_redirects=False)
+
+    assert (moved.status_code, moved.headers["location"]) == (307, "http://127.0.0.1:8790/")
+    assert page.status_code == 200
+    client.get("/dev/state")  # registers the package, as the page does first
+    canvas = client.get(f"http://127.0.0.1:8790/aina-ui/{AINA_ID}/0.1.0/canvas/index.html")
+    assert "frame-ancestors http://127.0.0.1:8790" in canvas.headers["content-security-policy"]
 
 
 def test_a_server_that_is_not_running_is_reported(tmp_path: Path) -> None:

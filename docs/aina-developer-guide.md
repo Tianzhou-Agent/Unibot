@@ -37,8 +37,7 @@ Python from 3.10.
 pip install "git+https://github.com/Tianzhou-Agent/Unibot#subdirectory=backend"   # the aina CLI
 aina init notes --id com.example.notes --name "Notes"
 cd notes
-pip install -r server/requirements.txt     # mcp and unibot-aina (until it is on PyPI:
-                                           # pip install "git+https://github.com/Tianzhou-Agent/Unibot#subdirectory=sdk/python")
+pip install -r server/requirements.txt     # mcp, and unibot-aina from this repository (it is not on PyPI yet)
 python server/main.py                      # your MCP server, at http://127.0.0.1:8770/mcp
 ```
 
