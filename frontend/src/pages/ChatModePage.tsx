@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   Bot,
   Check,
@@ -32,6 +33,7 @@ import { completedAnswerIds, finishedTurnProcesses, TurnProcessToggle } from "@/
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { announceConversationRunning, notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+import { ResizeHandle } from "@/components/layout/ResizeHandle";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
 import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widgets/SessionWidgetRenderer";
 import { AinaTaskList } from "@/components/tasks/AinaTaskList";
@@ -126,11 +128,19 @@ export default function ChatModePage() {
   // The title-bar toggle hides the canvas without closing its tabs, so their state survives.
   const [canvasHidden, setCanvasHidden] = useState(false);
   const canvasVisible = canvasOpen && !canvasHidden;
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const [splitWidth, setSplitWidth] = useState(0);
+  const [preferredChatWidth, setPreferredChatWidth] = useState<number | null>(null);
+  const canSplit = splitWidth >= 680;
+  const splitView = canvasVisible && !canvasExpanded && canSplit;
+  const chatWidth = Math.max(320, Math.min(preferredChatWidth ?? splitWidth / 2, splitWidth - 360));
   const newTabShown = newTab === "active" || (newTab !== null && !activeAinaId);
   const canvasTabs = ainaIds.map((id) => ({ id, label: canvases[id]?.name ?? id, kind: canvases[id]?.main_widget.kind }));
   if (newTab) canvasTabs.splice(Math.min(newTabIndex ?? ainaIds.length, ainaIds.length), 0, { id: NEW_CANVAS_TAB, label: tCanvas("launcher.newTab"), kind: "panel" });
-  const endRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const scrollContentRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
   const activeConversationIdRef = useRef<string | null>(conversationId ?? null);
   const activeWorkspaceIdRef = useRef<string | null>(routeWorkspaceId);
   const localRunConversationIdRef = useRef<string | null>(null);
@@ -139,6 +149,13 @@ export default function ChatModePage() {
   const runGenerationRef = useRef(0);
   const streamAbortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  useLayoutEffect(() => {
+    const container = splitContainerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(([entry]) => setSplitWidth(entry.contentRect.width));
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
   activeConversationIdRef.current = conversationId ?? null;
   activeWorkspaceIdRef.current = routeWorkspaceId;
   useEffect(() => {
@@ -431,8 +448,19 @@ export default function ChatModePage() {
     return `${workspaceChatPath(routeWorkspaceId, id)}${query ? `?${query}` : ""}`;
   }
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: sending ? "smooth" : "auto" });
+  function scrollToLatest() {
+    pinnedRef.current = true;
+    setAtBottom(true);
+    const scroller = scrollerRef.current;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  useLayoutEffect(() => {
+    scrollToLatest();
+  }, [conversationId, routeWorkspaceId]);
+
+  useLayoutEffect(() => {
+    if (pinnedRef.current) scrollToLatest();
   }, [conversation?.messages, optimisticUser, liveItems, activity, approval, sending, clarificationWidgets]);
 
   useEffect(() => {
@@ -447,15 +475,16 @@ export default function ChatModePage() {
   useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    let pinned = true;
     const onScroll = () => {
-      pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+      pinnedRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1;
+      setAtBottom(pinnedRef.current);
     };
     const observer = new ResizeObserver(() => {
-      if (pinned) scroller.scrollTop = scroller.scrollHeight;
+      if (pinnedRef.current) scroller.scrollTop = scroller.scrollHeight;
     });
     scroller.addEventListener("scroll", onScroll, { passive: true });
     observer.observe(scroller);
+    if (scrollContentRef.current) observer.observe(scrollContentRef.current);
     return () => {
       scroller.removeEventListener("scroll", onScroll);
       observer.disconnect();
@@ -467,6 +496,7 @@ export default function ChatModePage() {
   /** Runs a turn for `text` with `files` attached, or continues the conversation's stopped turn when `text` is null. */
   async function runTurn(text: string | null, files: File[] = []) {
     if (sending || deleted) return;
+    scrollToLatest();
     setClarificationWidgets([]);
     const draftTitle = text === null ? null : text.length > 24 ? `${text.slice(0, 24)}…` : text;
     const localMessage: BackendMessage | null = text === null ? null : {
@@ -772,7 +802,7 @@ export default function ChatModePage() {
         title={title}
         actions={!deleted ? (
           <div className="flex items-center gap-1">
-            {canvasVisible ? <CanvasPaneToggle pane={mobilePane} onChange={(pane) => { setMobilePane(pane); setCanvasExpanded(false); }} /> : null}
+            {canvasVisible && !canSplit ? <CanvasPaneToggle pane={mobilePane} onChange={(pane) => { setMobilePane(pane); setCanvasExpanded(false); }} /> : null}
             {conversation?.id ? (
               <button
                 type="button"
@@ -837,18 +867,18 @@ export default function ChatModePage() {
         </div>
       ) : null}
 
-      <div className={classNames(
+      <div ref={splitContainerRef} style={splitView ? { gridTemplateColumns: `${chatWidth}px minmax(0,1fr)` } : undefined} className={classNames(
         "min-h-0 flex-1",
-        canvasVisible ? classNames("grid grid-cols-1", !canvasExpanded && "lg:grid-cols-[400px_minmax(0,1fr)]") : "flex flex-col",
+        splitView ? "grid" : "flex flex-col",
       )}>
       <div className={classNames(
-        "min-h-0 flex-1 flex-col overflow-hidden",
-        canvasVisible ? canvasExpanded ? "hidden" : classNames("lg:flex", mobilePane === "chat" ? "flex" : "hidden") : "flex",
+        "relative min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+        canvasVisible ? canvasExpanded ? "hidden" : splitView || mobilePane === "chat" ? "flex" : "hidden" : "flex",
       )}>
-        {/* `relative` keeps absolutely positioned descendants (sr-only labels) inside this scroller; otherwise they
-            stretch the document and scrollIntoView scrolls the whole page, dragging the composer up. */}
-        <div ref={scrollerRef} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10" aria-live="polite">
-          <div className="mx-auto max-w-[760px] space-y-7">
+        {splitView ? <ResizeHandle label={tCanvas("resize")} value={chatWidth} min={320} max={splitWidth - 360} onChange={setPreferredChatWidth} /> : null}
+        {/* Keep absolutely positioned descendants (sr-only labels) inside the message scroller. */}
+        <div ref={scrollerRef} className="relative min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] px-4 py-8 md:px-6 md:py-10" aria-live="polite">
+          <div ref={scrollContentRef} className="mx-auto max-w-[760px] space-y-7">
               {loadingConversation ? <ChatSkeleton /> : null}
               {!loadingConversation && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
@@ -916,9 +946,27 @@ export default function ChatModePage() {
               ) : null}
               {error && !hasRecordedRunError ? <ErrorNotice message={error} code={errorCode} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
               {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
-              <div ref={endRef} />
+              <div />
             </div>
           </div>
+          {!atBottom ? (
+            <div className="relative h-0 shrink-0">
+              <button
+                type="button"
+                onClick={scrollToLatest}
+                aria-label={t("jumpToLatest")}
+                className="absolute bottom-3 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-line bg-white text-ink-muted shadow-md hover:text-accent"
+              >
+                {sending ? (
+                  <span className="flex items-center gap-1" aria-hidden="true">
+                    {[0, 150, 300].map((delay) => (
+                      <span key={delay} className="h-1 w-1 rounded-full bg-current motion-safe:animate-bounce" style={{ animationDelay: `${delay}ms` }} />
+                    ))}
+                  </span>
+                ) : <ArrowDown className="h-4 w-4" aria-hidden />}
+              </button>
+            </div>
+          ) : null}
           {!deleted ? (
             <ChatComposer
               key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${composerVersion}`}
@@ -947,8 +995,8 @@ export default function ChatModePage() {
         </div>
         {canvasOpen ? (
           <section className={classNames(
-            "min-h-0 min-w-0 flex-col border-l border-line bg-white",
-            canvasHidden ? "hidden" : classNames("lg:flex", mobilePane === "app" ? "flex" : "hidden"),
+            "min-h-0 min-w-0 flex-1 flex-col border-l border-line bg-white",
+            canvasHidden ? "hidden" : splitView || canvasExpanded || mobilePane === "app" ? "flex" : "hidden",
           )}>
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
               <CanvasTabs
@@ -1230,7 +1278,7 @@ function ChatComposer({
   }
 
   return (
-    <div className="bg-white px-4 pb-5 pt-3 md:px-6">
+    <div className="bg-white px-4 pb-5 md:px-6">
       <div className="mx-auto max-w-[760px] space-y-2">
         <AinaTaskList conversationId={sessionId} refreshKey={messageCount} onSettled={onBackgroundTaskSettled} />
         <TaskTreeWidget key={sessionId} sessionId={sessionId} approval={approval} />
@@ -1392,7 +1440,7 @@ function CanvasPaneToggle({ pane, onChange }: { pane: "chat" | "app"; onChange: 
     { value: "app", label: t("app"), aria: t("showApp"), Icon: PanelRightOpen },
   ] as const;
   return (
-    <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5 lg:hidden" aria-label={t("mobileView")}>
+    <div className="flex h-8 items-center rounded-md border border-line bg-app-soft p-0.5" aria-label={t("mobileView")}>
       {options.map(({ value, label, aria, Icon }) => (
         <button
           key={value}

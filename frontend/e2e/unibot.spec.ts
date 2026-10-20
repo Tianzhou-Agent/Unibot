@@ -1820,6 +1820,10 @@ test("FE-E2E-002C 切换对话不会自动收起导航且图标可展开侧栏",
   await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
   await expect(mainNavigation).toBeVisible();
   await expect(page.getByRole("complementary", { name: "快捷导航" })).toHaveCount(0);
+  const workspaceLink = page.locator('aside a[href="/workspaces/workspace-e2e-1"]');
+  await expect(page.getByTestId("conversation-row-conv-e2e-1").getByRole("link")).toHaveClass(/bg-sidebar-active/);
+  await expect(workspaceLink.locator("..")).not.toHaveClass(/bg-sidebar-hover/);
+  await expect(workspaceLink).not.toHaveAttribute("aria-current", "page");
 
   await page.getByRole("button", { name: "收起导航", exact: true }).click();
   const rail = page.getByRole("complementary", { name: "快捷导航" });
@@ -1838,9 +1842,80 @@ test("FE-E2E-002C 切换对话不会自动收起导航且图标可展开侧栏",
   await expect(mainNavigation).toBeVisible();
 
   await page.goto("/workspaces/workspace-e2e-1");
+  await expect(workspaceLink.locator("..")).toHaveClass(/bg-sidebar-hover/);
+  await expect(workspaceLink).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("conversation-row-conv-e2e-1").getByRole("link")).not.toHaveClass(/bg-sidebar-active/);
   const workspaceNavigation = page.getByRole("navigation", { name: "主导航" });
   await expect(workspaceNavigation.getByRole("link", { name: "对话", exact: true })).not.toHaveClass(/bg-sidebar-active/);
   await expect(workspaceNavigation.getByRole("link", { name: "文件", exact: true })).toHaveClass(/bg-sidebar-active/);
+});
+
+test("folder plus shows a temporary conversation and discards it when leaving without sending", async ({ page }) => {
+  const state = await installMockApi(page, {
+    workspaces: [workspace(), workspace({ id: "workspace-other", name: "Other folder", storage_key: "workspace-other" })],
+    conversations: [],
+  });
+  let createRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/conversations") createRequests += 1;
+  });
+  await page.goto("/workspaces/workspace-e2e-1");
+  await page.getByRole("button", { name: "收起E2E 工作区", exact: true }).click();
+  const plus = page.getByRole("button", { name: "在 E2E 工作区 新建对话", exact: true });
+  await plus.click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat$/);
+  const draft = page.getByTestId("conversation-row-draft-workspace-e2e-1");
+  await expect(draft.getByRole("link", { name: "新对话", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(page.getByRole("button", { name: "收起E2E 工作区", exact: true })).toBeVisible();
+  const folder = page.locator('aside a[href="/workspaces/workspace-e2e-1"]');
+  await expect(folder.locator("..")).not.toHaveClass(/bg-sidebar-hover/);
+  await expect(folder).toHaveText("E2E 工作区1");
+  await expect(draft.getByRole("button")).toHaveCount(0);
+  const input = page.getByRole("textbox", { name: "消息", exact: true });
+  await input.fill("Unsent draft");
+  await plus.click();
+  await expect(draft).toHaveCount(1);
+  await expect(input).toHaveValue("");
+  await input.fill("Still not sent");
+  expect(createRequests).toBe(0);
+  expect(state.conversations).toHaveLength(0);
+  await page.locator('aside a[href="/workspaces/workspace-other"]').click();
+  await expect(draft).toHaveCount(0);
+  await expect(folder).toHaveText("E2E 工作区0");
+  expect(createRequests).toBe(0);
+  expect(state.conversations).toHaveLength(0);
+  await plus.click();
+  await expect(draft).toBeVisible();
+  await expect(input).toHaveValue("");
+  expect(createRequests).toBe(0);
+});
+
+test("temporary folder conversation persists once on the first message and replaces its sidebar row", async ({ page }) => {
+  const state = await installMockApi(page, { workspaces: [workspace()], conversations: [] });
+  await page.goto("/workspaces/workspace-e2e-1");
+  await page.getByRole("button", { name: "在 E2E 工作区 新建对话", exact: true }).click();
+  const draft = page.getByTestId("conversation-row-draft-workspace-e2e-1");
+  await expect(draft).toBeVisible();
+  expect(state.conversations).toHaveLength(0);
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("First folder message");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/workspace-e2e-1\/chat\/conv-e2e-1$/);
+  await expect(page.locator("main").getByText("这是确定性的端到端回复。", { exact: true })).toBeVisible();
+  await expect(draft).toHaveCount(0);
+  const saved = page.getByTestId("conversation-row-conv-e2e-1");
+  await expect(saved.getByRole("link", { name: "First folder message", exact: true })).toHaveClass(/bg-sidebar-active/);
+  await expect(page.locator('aside a[href="/workspaces/workspace-e2e-1"]')).toHaveText("E2E 工作区1");
+  expect(state.conversations).toHaveLength(1);
+  expect(state.conversations[0]).toMatchObject({ workspace_id: "workspace-e2e-1", title: "First folder message" });
+  expect(state.lastStreamPayload?.workspace_id).toBe("workspace-e2e-1");
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("Second message");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(page.locator("main p").filter({ hasText: "Second message" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("");
+  expect(state.conversations).toHaveLength(1);
+  await page.reload();
+  await expect(saved).toBeVisible();
+  await expect(draft).toHaveCount(0);
 });
 
 test("FE-E2E-002D 文件入口按用户和 Workspace 层级展示文件", async ({ page }) => {
@@ -2285,9 +2360,12 @@ test("running process stays on one updating line and expands after a reload", as
   await expect(page.getByLabel("模型思考")).toBeHidden();
   await expect(page.locator(".thinking-glow")).toHaveCount(1);
   await toggle.click();
+  const expanded = page.getByRole("button", { name: "工具", exact: true });
+  await expect(expanded).toHaveAttribute("aria-expanded", "true");
+  await expect(expanded).toHaveText("工具");
   await expect(page.getByText("Checking workspace files.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("工具调用 browser.search 运行中", { exact: true })).toBeVisible();
-  await toggle.click();
+  await expanded.click();
   (state.conversations[0].messages as JsonObject[]).push(message("next-step", "assistant", "Now reading the results."));
   const updated = page.getByRole("button", { name: "回复中 Now reading the results.", exact: true });
   await expect(updated).toHaveAttribute("aria-expanded", "false");
@@ -2327,7 +2405,15 @@ test("streamed process updates a single collapsed line until expanded", async ({
   await send({ type: "reasoning.delta", delta: "Checking available files" });
   const thinking = page.getByRole("button", { name: "思考中 Checking available files", exact: true });
   await expect(thinking).toHaveAttribute("aria-expanded", "false");
+  await thinking.click();
+  const expandedThinking = page.getByRole("button", { name: "思考中", exact: true });
+  await expect(expandedThinking).toHaveAttribute("aria-expanded", "true");
+  await expect(expandedThinking).toHaveText("思考中");
+  await expect(page.getByLabel("模型思考过程", { exact: true })).toBeVisible();
   await send({ type: "reasoning.delta", delta: " and inspecting their contents" });
+  await expect(expandedThinking).toHaveText("思考中");
+  await expect(page.getByLabel("模型思考过程", { exact: true })).toContainText("Checking available files and inspecting their contents");
+  await expandedThinking.click();
   await expect(page.getByRole("button", { name: "思考中 Checking available files and inspecting their contents", exact: true })).toBeVisible();
   await send({ type: "message.delta", delta: "I will search the workspace." });
   await expect(page.getByRole("button", { name: "回复中 I will search the workspace.", exact: true })).toBeVisible();
@@ -2340,9 +2426,12 @@ test("streamed process updates a single collapsed line until expanded", async ({
   await send({ type: "error", source: "capability", code: "INVALID_REQUEST" });
   await expect(page.getByRole("alert")).toHaveCount(0);
   await toggle.click();
+  const expandedTool = page.getByRole("button", { name: "工具", exact: true });
+  await expect(expandedTool).toHaveAttribute("aria-expanded", "true");
+  await expect(expandedTool).toHaveText("工具");
   await expect(page.getByText("I will search the workspace.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("工具调用 browser.search 失败", { exact: true })).toContainText("Expected a string argument");
-  await toggle.click();
+  await expandedTool.click();
   await send({ type: "reasoning.delta", delta: "I will correct the argument and try again." });
   await expect(page.getByRole("button", { name: "思考中 I will correct the argument and try again.", exact: true })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
@@ -2359,6 +2448,11 @@ test("streamed process updates a single collapsed line until expanded", async ({
   await expect(typeLabel).toBeInViewport();
   expect((await longToggle.boundingBox())!.height).toBeLessThan(40);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await longToggle.click();
+  const expandedReply = page.getByRole("button", { name: "回复中", exact: true });
+  await expect(expandedReply).toHaveAttribute("aria-expanded", "true");
+  await expect(expandedReply).toHaveText("回复中");
+  await expandedReply.click();
   // The same code in a terminal error envelope must still be shown.
   await send({ type: "error", error: { code: "INVALID_REQUEST", message: "The run could not continue." } });
   await expect(page.getByRole("alert")).toContainText("The run could not continue.");
@@ -3707,7 +3801,7 @@ test("FE-E2E-007 拒绝高风险审批并恢复空闲状态", async ({ page }) =
 });
 
 for (const hasTasks of [false, true]) {
-  test(`approval occupies the todo slot and disappears on confirm (todos: ${hasTasks})`, async ({ page }) => {
+  test(`approval occupies the todo slot and disappears on confirm (todos: ${hasTasks})`, async ({ page }, testInfo) => {
     const pendingApproval = {
       id: "approval-panel", conversation_id: "conv-e2e-1", user_id: "anonymous", tenant_id: "default",
       trace_id: "trace-approval-panel", status: "pending", created_at: NOW, resolved_at: null,
@@ -3715,7 +3809,9 @@ for (const hasTasks of [false, true]) {
       tool_calls: [{ id: "send", type: "function", function: { name: "tool_demo_send", arguments: "{}" } }],
     };
     const state = await installMockApi(page, {
-      conversations: [conversation({ run_status: "approval_required" })], approvals: [pendingApproval],
+      conversations: [conversation({ run_status: "approval_required", messages: Array.from({ length: 24 }, (_, i) => ({
+        id: `approval-history-${i}`, role: i % 2 ? "assistant" : "user", content: `History ${i}. `.repeat(30), content_type: "text", widgets: [], created_at: NOW,
+      })) })], approvals: [pendingApproval],
     });
     await page.route("**/tasks?*", (route) => json(route, {
       session_id: "conv-e2e-1", revision: 1,
@@ -3738,6 +3834,14 @@ for (const hasTasks of [false, true]) {
     await expect(page.locator("[aria-live=polite]").getByRole("region", { name: "授权确认", exact: true })).toHaveCount(0);
     const approvalBox = (await approval.boundingBox())!;
     expect(approvalBox.y + approvalBox.height).toBeLessThan((await input.boundingBox())!.y);
+    if (!hasTasks) {
+      const scroller = page.locator("[aria-live=polite]").first();
+      const scrollerBox = (await scroller.boundingBox())!;
+      expect(Math.abs(approvalBox.y - scrollerBox.y - scrollerBox.height)).toBeLessThan(1);
+      await scroller.evaluate((el) => { el.scrollTop -= 100; });
+      await expect(page.getByRole("button", { name: "回到最新内容", exact: true })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath("approval-scroll-boundary.png") });
+    }
     if (hasTasks) {
       await expect(pager).toContainText("1 / 2");
       await expect(tasks).toBeHidden();
@@ -3831,6 +3935,225 @@ test("FE-E2E-005D 长对话发送消息时输入框保持在底部", async ({ pa
   await expect(page.getByRole("button", { name: "停止生成" })).toBeVisible();
   expect(await page.evaluate(() => document.scrollingElement?.scrollTop)).toBe(0);
   expect((await composer.boundingBox())?.y).toBe(before?.y);
+});
+
+test("streaming preserves the reader's scroll position and offers a jump to new content", async ({ page }) => {
+  const messages = Array.from({ length: 24 }, (_, i) => ({
+    id: `history-${i}`, role: i % 2 ? "assistant" : "user", content: `History ${i}. `.repeat(30), content_type: "text", widgets: [], created_at: NOW,
+  }));
+  const state = await installMockApi(page, { conversations: [conversation({ messages })] });
+  await page.goto("/chat/conv-e2e-1");
+  const scroller = page.locator("[aria-live=polite]").first();
+  const distanceFromBottom = () => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  const newContent = page.getByRole("button", { name: "回到最新内容", exact: true });
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+  await scroller.evaluate((el) => { el.scrollTop -= 12; });
+  await expect(newContent).toBeInViewport();
+  await expect(newContent).toHaveText("");
+  await expect(newContent.locator("svg")).toHaveCount(1);
+  await newContent.click();
+  await expect(newContent).toHaveCount(0);
+  await page.evaluate(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      if (!String(args[0]).endsWith("/chat/stream")) return originalFetch(...args);
+      return new Response(new ReadableStream({
+        start(controller) {
+          Object.assign(window, { sendScrollEvent: (event: Record<string, unknown>) => {
+            controller.enqueue(new TextEncoder().encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+            if (event.type === "message.completed") controller.close();
+          } });
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    };
+  });
+  const send = (event: JsonObject) => page.evaluate(async (payload) => {
+    (window as unknown as { sendScrollEvent: (event: Record<string, unknown>) => void }).sendScrollEvent(payload);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  }, event);
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("Keep writing");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect(page.getByRole("button", { name: "停止生成", exact: true })).toBeVisible();
+  await send({ type: "message.delta", delta: "First streamed paragraph.\n\n".repeat(20) });
+  await page.getByRole("button", { name: /^回复中 First streamed paragraph/ }).click();
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+  await expect(newContent).toHaveCount(0);
+
+  // Real wheel input must interrupt following, including while chunks keep arriving.
+  await scroller.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(distanceFromBottom).toBeGreaterThan(598);
+  await expect(newContent).toBeInViewport();
+  await expect(newContent).toHaveText("");
+  await expect(newContent.locator("svg")).toHaveCount(0);
+  const dots = newContent.locator("span[aria-hidden] > span");
+  await expect(dots).toHaveCount(3);
+  await expect(dots.first()).toHaveCSS("animation-name", "bounce");
+  const readingPosition = await scroller.evaluate((el) => el.scrollTop);
+  for (let i = 0; i < 3; i += 1) {
+    await send({ type: "message.delta", delta: `More output ${i}.\n\n`.repeat(8) });
+    await expect(newContent).toBeInViewport();
+    expect(Math.abs(await scroller.evaluate((el) => el.scrollTop) - readingPosition)).toBeLessThan(2);
+  }
+  await newContent.click();
+  await expect(newContent).toHaveCount(0);
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+  await send({ type: "message.delta", delta: "Following again.\n\n".repeat(10) });
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+
+  await scroller.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(distanceFromBottom).toBeGreaterThan(598);
+  await send({ type: "message.delta", delta: "Before completion." });
+  await expect(newContent).toBeVisible();
+  // Manually reaching the bottom also acknowledges new content and resumes following.
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect(newContent).toHaveCount(0);
+  await scroller.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(distanceFromBottom).toBeGreaterThan(598);
+  const beforeCompletion = await scroller.evaluate((el) => el.scrollTop);
+  const finalContent = "Completed answer.\n\n".repeat(80);
+  (state.conversations[0].messages as JsonObject[]).push(
+    { id: "scroll-user", role: "user", content: "Keep writing", content_type: "text", widgets: [], created_at: NOW },
+    { id: "scroll-answer", role: "assistant", content: finalContent, content_type: "text", widgets: [], created_at: NOW },
+  );
+  await send({ type: "message.completed", response: {
+    conversation_id: "conv-e2e-1", message_id: "scroll-answer", content: finalContent, status: "completed", trace_id: "scroll-trace",
+    iterations: 1, usage: { input_tokens: 1, output_tokens: 1 }, approval: null, widgets: [], opened_app_id: null,
+  } });
+  await expect(page.getByRole("button", { name: "发送消息", exact: true })).toBeVisible();
+  await expect(newContent).toBeVisible();
+  await expect(newContent).toHaveText("");
+  await expect(newContent.locator("svg")).toHaveCount(1);
+  await expect(dots).toHaveCount(0);
+  expect(Math.abs(await scroller.evaluate((el) => el.scrollTop) - beforeCompletion)).toBeLessThan(2);
+  await newContent.click();
+  await expect.poll(distanceFromBottom).toBeLessThan(2);
+});
+
+test("scroll prompt reflects the running state across polling and resets on navigation", async ({ page }) => {
+  const messages = Array.from({ length: 24 }, (_, i) => ({
+    id: `poll-${i}`, role: i % 2 ? "assistant" : "user", content: `History ${i}. `.repeat(30), content_type: "text", widgets: [], created_at: NOW,
+  }));
+  const state = await installMockApi(page, { conversations: [conversation({ messages, run_status: "running" }), conversation({ id: "conv-other", title: "Other conversation" })] });
+  await page.goto("/chat/conv-e2e-1");
+  const scroller = page.locator("[aria-live=polite]").first();
+  const newContent = page.getByRole("button", { name: "回到最新内容", exact: true });
+  await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(2);
+  await scroller.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(598);
+  const readingPosition = await scroller.evaluate((el) => el.scrollTop);
+  const loads = state.conversationLoadCount;
+  await expect.poll(() => state.conversationLoadCount).toBeGreaterThan(loads + 1);
+  await expect(newContent).toBeInViewport();
+  await expect(newContent).toHaveText("");
+  await expect(newContent.locator("span[aria-hidden] > span")).toHaveCount(3);
+  await expect(newContent.locator("svg")).toHaveCount(0);
+  state.conversations[0].run_status = "idle";
+  (state.conversations[0].messages as JsonObject[]).push({ id: "poll-output", role: "assistant", content: "Fresh output", content_type: "text", widgets: [], created_at: NOW });
+  await expect(newContent).toBeInViewport();
+  await expect(newContent.locator("svg")).toHaveCount(1);
+  await expect(newContent.locator("span[aria-hidden] > span")).toHaveCount(0);
+  expect(Math.abs(await scroller.evaluate((el) => el.scrollTop) - readingPosition)).toBeLessThan(2);
+  await page.getByTestId("conversation-row-conv-other").click();
+  await expect(page).toHaveURL(/\/chat\/conv-other$/);
+  await expect(newContent).toHaveCount(0);
+});
+
+test("sidebar and canvas dividers resize with minimum widths and keyboard controls", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installMockApi(page, { conversations: [conversation()] });
+  await page.goto("/chat/conv-e2e-1?aina=unibot-memory");
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeVisible();
+  const sidebar = page.getByRole("complementary").filter({ has: page.getByRole("navigation", { name: "主导航", exact: true }) });
+  const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
+  const canvasHandle = page.getByRole("separator", { name: "调整 Canvas 宽度" });
+  const canvas = page.locator("section").filter({ has: page.getByRole("tablist", { name: "已打开的应用" }) });
+  const width = (locator: typeof sidebar) => locator.evaluate((el) => el.getBoundingClientRect().width);
+  const widthDifference = async () => Math.abs(await width(canvas) - await canvasHandle.evaluate((el) => el.parentElement!.getBoundingClientRect().width));
+  const drag = async (handle: typeof sidebarHandle, x: number) => {
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, box.y + box.height / 2, { steps: 10 });
+    await page.mouse.up();
+  };
+  await expect.poll(() => width(sidebar)).toBe(264);
+  await expect.poll(widthDifference).toBeLessThan(1);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect.poll(widthDifference).toBeLessThan(1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await drag(sidebarHandle, 350);
+  await expect.poll(() => width(sidebar)).toBeGreaterThan(340);
+  await drag(sidebarHandle, 0);
+  await expect.poll(() => width(sidebar)).toBe(220);
+  await drag(sidebarHandle, 1300);
+  await expect.poll(() => width(sidebar)).toBe(400);
+  await sidebarHandle.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(() => width(sidebar)).toBe(384);
+  await page.getByRole("button", { name: "收起导航", exact: true }).click();
+  await expect(sidebarHandle).toHaveCount(0);
+  await page.getByRole("button", { name: "展开导航", exact: true }).click();
+  await expect.poll(() => width(sidebar)).toBe(384);
+
+  await expect(canvasHandle).toBeVisible();
+  await expect.poll(widthDifference).toBeLessThan(1);
+  const initialCanvasWidth = await width(canvas);
+  await drag(canvasHandle, 1000);
+  await expect.poll(() => width(canvas)).toBeLessThan(initialCanvasWidth);
+  await drag(canvasHandle, 1430);
+  await expect.poll(() => width(canvas)).toBe(360);
+  await drag(canvasHandle, 100);
+  await expect(canvasHandle).toHaveAttribute("aria-valuenow", "320");
+  await canvasHandle.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(canvasHandle).toHaveAttribute("aria-valuenow", "336");
+  await page.keyboard.press("End");
+  await expect.poll(() => width(canvas)).toBe(360);
+  await page.getByRole("button", { name: "展开画布", exact: true }).click();
+  await expect(canvasHandle).toHaveCount(0);
+  await expect.poll(() => width(canvas)).toBe(1056);
+  await page.getByRole("button", { name: "恢复分栏", exact: true }).click();
+  await expect(canvasHandle).toBeVisible();
+  await expect.poll(() => width(canvas)).toBe(360);
+  await page.screenshot({ path: testInfo.outputPath("resizable-panels.png") });
+});
+
+test("resized panels adapt to available space without horizontal overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installMockApi(page, { conversations: [conversation()] });
+  await page.goto("/chat/conv-e2e-1?aina=unibot-memory");
+  const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
+  const canvasHandle = page.getByRole("separator", { name: "调整 Canvas 宽度" });
+  await sidebarHandle.focus();
+  await page.keyboard.press("End");
+  await canvasHandle.focus();
+  await page.keyboard.press("End");
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await expect(canvasHandle).toHaveAttribute("aria-valuenow", "360");
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(canvasHandle).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeInViewport();
+  await page.getByRole("button", { name: "显示对话", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeInViewport();
+  await page.getByRole("button", { name: "显示应用", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Unibot Memory", selected: true })).toBeInViewport();
+  await page.setViewportSize({ width: 768, height: 900 });
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "288");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(sidebarHandle).toHaveCount(0);
+  await expect(canvasHandle).toHaveCount(0);
+  await page.getByRole("button", { name: "显示对话", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(canvasHandle).toBeVisible();
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "400");
+  await expect(page.getByRole("button", { name: "显示对话", exact: true })).toHaveCount(0);
 });
 
 test("FE-E2E-005E 点击推荐应用打开画布后对话仍停在底部", async ({ page }) => {

@@ -14,6 +14,7 @@ export default {
   },
   newConversation: "新对话",
   loadingConversation: "正在加载对话",
+  jumpToLatest: "回到最新内容",
   canvasShow: "显示应用面板",
   canvasHide: "隐藏应用面板",
   viewObsAria: "查看当前对话观测数据",
