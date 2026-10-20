@@ -1,0 +1,252 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+
+  "aina": {
+    "id": "local.pptist",
+    "version": "1.0.0",
+    "name": "PPTist Slides",
+    "description": "Create, edit and export PowerPoint-style slide decks in the PPTist editor beside the conversation. Use it to draft a presentation from an outline, change slides the user has open, or export the deck as .pptx.",
+    "publisher": { "id": "local", "name": "Local deployment" },
+    "icon": "assets/icon.svg",
+    "locales": {
+      "zh-CN": {
+        "name": "PPTist 幻灯片",
+        "description": "在对话旁的 PPTist 编辑器中创建、编辑并导出 PowerPoint 风格的演示文稿：根据大纲生成整套 PPT、修改用户打开的页面，或导出为 .pptx。"
+      }
+    }
+  },
+
+  "tools": {
+    "mcp": {
+      "url": "http://127.0.0.1:8781/mcp",
+      "auth": { "type": "none" }
+    },
+    "expose": {
+      "list_decks": { "effect": "read", "visibility": ["model", "app"] },
+      "load_deck": { "effect": "read", "visibility": ["app"] },
+      "save_deck": { "effect": "write", "visibility": ["app"] },
+      "delete_deck": { "effect": "destructive", "visibility": ["model", "app"] }
+    }
+  },
+
+  "skills": [
+    {
+      "id": "make-deck",
+      "name": "Make a slide deck",
+      "description": "Use when the user wants a presentation drafted, slides added or changed, a deck reviewed, or a deck exported as .pptx in PPTist.",
+      "path": "skills/make-deck",
+      "tools": [
+        "list_decks",
+        "get_deck",
+        "get_slide",
+        "render_slide",
+        "generate_deck",
+        "add_slides",
+        "update_slide",
+        "update_elements",
+        "delete_slides",
+        "go_to_slide",
+        "new_deck",
+        "open_deck",
+        "set_title",
+        "export_pptx"
+      ]
+    }
+  ],
+
+  "canvas": {
+    "url": "http://127.0.0.1:8781/",
+    "title": "Slides",
+    "tools": [
+      {
+        "name": "get_deck",
+        "description": "Return the open deck: its id, title, size (1000 x 562.5 for 16:9), theme, and every slide's id, title and elements (id, type, box, text).",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "effect": "read"
+      },
+      {
+        "name": "get_slide",
+        "description": "Return one slide of the open deck as full PPTist JSON, to edit it with update_slide. Uploaded pictures show as \"[omitted data URL]\"; send that value back unchanged to keep them.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "slide_id": { "type": "string" } },
+          "required": ["slide_id"],
+          "additionalProperties": false
+        },
+        "effect": "read"
+      },
+      {
+        "name": "render_slide",
+        "description": "Return a picture of one slide (the current one without slide_id). Hosts that do not pass canvas pictures to the model show it as [image omitted]; then check layout with get_slide.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "slide_id": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "effect": "read",
+        "timeout_seconds": 30
+      },
+      {
+        "name": "generate_deck",
+        "description": "Create a new deck from an outline, laid out with one of PPTist's 8 designed templates, and open it. The deck shown before is saved first. Content slides take 1 to 12 items; contents slides 1 to 20.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string", "maxLength": 120 },
+            "template": {
+              "type": "string",
+              "enum": ["template_1", "template_2", "template_3", "template_4", "template_5", "template_6", "template_7", "template_8"],
+              "description": "1 red, formal; 2 city blue; 3 geometric, tech; 4 soft Morandi; 5 fresh green; 6 warm retro; 7 deep and steady; 8 light blue."
+            },
+            "outline": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 60,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": { "enum": ["cover", "contents", "transition", "content", "end"] },
+                  "data": { "type": "object" }
+                },
+                "required": ["type"]
+              },
+              "description": "Slides in order: {type:'cover', data:{title, text}}, {type:'contents', data:{items:[string]}}, {type:'transition', data:{title, text}}, {type:'content', data:{title, items:[{title, text}]}}, {type:'end'}."
+            }
+          },
+          "required": ["template", "outline"],
+          "additionalProperties": false
+        },
+        "effect": "write",
+        "timeout_seconds": 30
+      },
+      {
+        "name": "add_slides",
+        "description": "Insert slides written in PPTist's slide JSON (see the make-deck skill's schema) after slide after_slide_id, or at the end. Returns the new slide ids.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "slides": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 30,
+              "items": {
+                "type": "object",
+                "properties": { "background": { "type": "object" }, "elements": { "type": "array", "items": { "type": "object" } } },
+                "required": ["elements"]
+              }
+            },
+            "after_slide_id": { "type": "string" }
+          },
+          "required": ["slides"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "update_slide",
+        "description": "Replace one slide (matched by its id) with the given slide JSON: background, elements and notes. Get it first with get_slide.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "slide": {
+              "type": "object",
+              "properties": { "id": { "type": "string" }, "elements": { "type": "array", "items": { "type": "object" } } },
+              "required": ["id", "elements"]
+            }
+          },
+          "required": ["slide"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "update_elements",
+        "description": "Change some properties of elements on one slide, e.g. a text's content, an element's position or a chart's data. Properties not given are kept.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "slide_id": { "type": "string" },
+            "changes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": { "element_id": { "type": "string" }, "props": { "type": "object" } },
+                "required": ["element_id", "props"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["slide_id", "changes"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "delete_slides",
+        "description": "Delete slides from the open deck. The user can still undo it in the editor.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "slide_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } } },
+          "required": ["slide_ids"],
+          "additionalProperties": false
+        },
+        "effect": "destructive"
+      },
+      {
+        "name": "go_to_slide",
+        "description": "Show one slide of the open deck to the user.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "slide_id": { "type": "string" } },
+          "required": ["slide_id"],
+          "additionalProperties": false
+        },
+        "effect": "read"
+      },
+      {
+        "name": "new_deck",
+        "description": "Open a new, blank deck. The deck shown before is saved first.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "title": { "type": "string", "maxLength": 120 } },
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "open_deck",
+        "description": "Open one of the user's saved decks (ids from list_decks). The deck shown before is saved first.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "deck_id": { "type": "string" } },
+          "required": ["deck_id"],
+          "additionalProperties": false
+        },
+        "effect": "write",
+        "timeout_seconds": 20
+      },
+      {
+        "name": "set_title",
+        "description": "Rename the open deck; the title is also the exported file's name.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "title": { "type": "string", "minLength": 1, "maxLength": 120 } },
+          "required": ["title"],
+          "additionalProperties": false
+        },
+        "effect": "write"
+      },
+      {
+        "name": "export_pptx",
+        "description": "Export the open deck as an editable .pptx file, which the user's browser downloads.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "effect": "write",
+        "timeout_seconds": 30
+      }
+    ]
+  },
+
+  "permissions": [{ "scope": "storage", "reason": "Save your decks so they are there when you open the canvas again." }]
+}

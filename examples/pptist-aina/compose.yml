@@ -1,0 +1,32 @@
+# The PPTist AINA: the editor (canvas) and its tool server behind one port.
+#   docker compose -f examples/pptist-aina/compose.yml up -d --build
+# Defaults suit a Superbot backend on this machine (http://127.0.0.1:8000); see README.md for a public deployment.
+name: unibot-pptist
+
+services:
+  server:
+    build:
+      context: ./server
+      additional_contexts:
+        unibot_aina: ../../backend/src/unibot_aina
+    environment:
+      AINA_ID: ${PPTIST_AINA_ID:-local.pptist}
+      # Superbot's public Host API base: the issuer of every call's context token.
+      UNIBOT_HOST_API_BASE: ${UNIBOT_HOST_API_BASE:-http://127.0.0.1:8000/aina-host/v1}
+      # Where this container reaches that Host API. Set it to UNIBOT_HOST_API_BASE when that is reachable as is.
+      UNIBOT_HOST_API_URL: ${UNIBOT_HOST_API_URL:-http://host.docker.internal:8000/aina-host/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  canvas:
+    build: ./canvas
+    environment:
+      # Origins allowed to frame the editor: Superbot's web app (space-separated).
+      UNIBOT_ORIGIN: ${UNIBOT_ORIGIN:-http://127.0.0.1:5173 http://localhost:5173 http://127.0.0.1:8080 http://localhost:8080}
+      MCP_UPSTREAM: http://server:8782/mcp
+    depends_on:
+      - server
+    ports:
+      - "127.0.0.1:${PPTIST_PORT:-8781}:80"
+    restart: unless-stopped

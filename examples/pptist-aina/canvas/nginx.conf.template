@@ -1,0 +1,32 @@
+# The nginx image fills in ${UNIBOT_ORIGIN} and ${MCP_UPSTREAM} from the environment when it starts.
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # Only Superbot may show the editor in a frame.
+    add_header Content-Security-Policy "frame-ancestors ${UNIBOT_ORIGIN}" always;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /assets/ {
+        add_header Content-Security-Policy "frame-ancestors ${UNIBOT_ORIGIN}" always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # The AINA's MCP tools (Streamable HTTP). Superbot's own web server takes request bodies of at most 12 MB.
+    location = /mcp {
+        proxy_pass ${MCP_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        client_max_body_size 12m;
+    }
+}
