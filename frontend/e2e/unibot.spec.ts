@@ -1122,14 +1122,21 @@ for (const [surface, path] of [
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await installMockApi(page, {
       conversations: [conversation({
-        messages: replies.map((content, index) => ({
+        messages: replies.flatMap((content, index) => [{
+          id: `msg-copy-user-${index}`,
+          role: "user",
+          content: `问题 ${index + 1}`,
+          content_type: "text",
+          widgets: [],
+          created_at: NOW,
+        }, {
           id: `msg-copy-${index}`,
           role: "assistant",
           content,
           content_type: "text",
           widgets: [],
           created_at: NOW,
-        })),
+        }]),
       })],
     });
     await page.goto(path);
