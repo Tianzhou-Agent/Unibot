@@ -15,6 +15,7 @@ export default {
   closeNav: "Close navigation",
   collapseNav: "Collapse navigation",
   expandNav: "Expand navigation",
+  resizeNav: "Resize sidebar",
   mainNav: "Main navigation",
   quickNav: "Quick navigation",
   nav: {

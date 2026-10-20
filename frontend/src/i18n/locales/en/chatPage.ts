@@ -14,6 +14,7 @@ export default {
   },
   newConversation: "New conversation",
   loadingConversation: "Loading conversation",
+  jumpToLatest: "Jump to latest",
   canvasShow: "Show app panel",
   canvasHide: "Hide app panel",
   viewObsAria: "View observability data for this conversation",

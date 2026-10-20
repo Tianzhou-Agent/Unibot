@@ -12,6 +12,7 @@ export default {
   reorderShortcut: "Alt + ← / → to reorder",
   expand: "Expand canvas",
   restore: "Restore split view",
+  resize: "Resize canvas",
   launcher: {
     newTab: "New tab",
     title: "What’s next?",

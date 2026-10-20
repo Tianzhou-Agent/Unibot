@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { LanguageSwitcher } from "@/i18n/LanguageSwitcher";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Bot, Check, ChevronDown, ChevronRight, Folder, FolderOpen, ListChecks, MessageSquare, MoreHorizontal, PanelLeftOpen, Pencil, Plus, Puzzle, Search, Settings as SettingsIcon, Trash2, UserRound, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, apiErrorMessage } from "@/lib/api";
@@ -11,6 +11,7 @@ import { useMockSession } from "@/lib/mockSession";
 import { useAuth } from "@/lib/auth";
 import { useWorkspace, workspaceChatPath, workspaceHomePath } from "@/lib/workspace";
 import { NotificationBell } from "@/features/notifications/NotificationBell";
+import { ResizeHandle } from "./ResizeHandle";
 
 export const CONVERSATIONS_CHANGED_EVENT = "unibot:conversations-changed";
 
@@ -54,6 +55,10 @@ export function Sidebar() {
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set());
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
+  const [sidebarWidth, setSidebarWidth] = useState(264);
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const maxSidebarWidth = Math.min(400, Math.max(220, viewportWidth - 480));
+  const visibleSidebarWidth = Math.min(sidebarWidth, maxSidebarWidth);
   const navigate = useNavigate();
   const location = useLocation();
   const chatTabActive = isChatNavigationPath(location.pathname);
@@ -62,13 +67,16 @@ export function Sidebar() {
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 768px)");
     const resize = () => setNavigationOpen(desktop.matches);
+    const resizeWidth = () => setViewportWidth(window.innerWidth);
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !desktop.matches) setNavigationOpen(false);
     };
     desktop.addEventListener("change", resize);
+    window.addEventListener("resize", resizeWidth);
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       desktop.removeEventListener("change", resize);
+      window.removeEventListener("resize", resizeWidth);
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, []);
@@ -135,6 +143,7 @@ export function Sidebar() {
   }, [activeWorkspaceId, workspaces]);
 
   function startConversation(workspaceId: string | null = null) {
+    if (workspaceId) setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
     const target = workspaceChatPath(workspaceId);
     if (location.pathname === target) {
       window.dispatchEvent(new Event("unibot:new-conversation"));
@@ -188,7 +197,11 @@ export function Sidebar() {
     <>
     <div className="w-16 shrink-0 md:hidden" />
     <button type="button" onClick={() => setNavigationOpen(false)} className="fixed inset-0 z-20 bg-black/30 md:hidden" aria-label={t("closeNav")} />
-    <aside className="fixed inset-y-0 left-0 z-30 flex h-full w-[264px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg text-ink md:relative md:z-20">
+    <aside
+      className="fixed inset-y-0 left-0 z-30 flex h-full w-[264px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg text-ink md:relative md:z-20 md:w-[var(--sidebar-width)]"
+      style={{ "--sidebar-width": `${visibleSidebarWidth}px` } as CSSProperties}
+    >
+      <ResizeHandle label={t("resizeNav")} value={visibleSidebarWidth} min={220} max={maxSidebarWidth} onChange={setSidebarWidth} className="hidden md:block" />
       <div className="flex items-center justify-between gap-2 px-[18px] pb-2 pt-[18px]">
         <Brand />
         <div className="flex items-center gap-1">
@@ -452,16 +465,17 @@ function WorkspaceConversationGroup({
   const { t } = useTranslation("sidebar");
   const location = useLocation();
   const active = location.pathname.startsWith(`${workspaceHomePath(workspaceId)}/`) || location.pathname === workspaceHomePath(workspaceId);
+  const draft = location.pathname === workspaceChatPath(workspaceId);
   return (
     <div>
-      <div className={classNames("group flex h-9 items-center gap-1 rounded-lg px-1.5", active && "bg-sidebar-hover")}>
+      <div className={classNames("group flex h-9 items-center gap-1 rounded-lg px-1.5", location.pathname === workspaceHomePath(workspaceId) && "bg-sidebar-hover")}>
         <button type="button" onClick={onToggle} className="flex h-7 w-6 shrink-0 items-center justify-center rounded text-ink-subtle hover:bg-white hover:text-ink" aria-label={expanded ? t("collapseWorkspace", { name }) : t("expandWorkspace", { name })}>
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </button>
-        <NavLink to={workspaceHomePath(workspaceId)} className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] font-medium text-ink" title={name}>
+        <NavLink to={workspaceHomePath(workspaceId)} end className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] font-medium text-ink" title={name}>
           {active ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ink" /> : <Folder className="h-3.5 w-3.5 shrink-0 text-ink-muted" />}
           <span className="truncate">{name}</span>
-          <span className="ml-auto shrink-0 font-mono text-[10px] font-normal text-ink-subtle">{conversations.length}</span>
+          <span className="ml-auto shrink-0 font-mono text-[10px] font-normal text-ink-subtle">{conversations.length + Number(draft)}</span>
         </NavLink>
         <button type="button" onClick={onNewConversation} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-subtle opacity-0 transition hover:bg-white hover:text-ink group-hover:opacity-100 focus-visible:opacity-100" aria-label={t("newConversationIn", { name })} title={t("newConversation")}>
           <Plus className="h-3.5 w-3.5" />
@@ -469,6 +483,13 @@ function WorkspaceConversationGroup({
       </div>
       {expanded ? (
         <div className="space-y-0.5 px-1.5 py-1">
+          {draft ? (
+            <div data-testid={`conversation-row-draft-${workspaceId}`}>
+              <NavLink to={workspaceChatPath(workspaceId)} end className="flex items-center rounded-lg border border-transparent bg-sidebar-active py-[7px] pl-[34px] pr-10">
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{t("newConversation")}</span>
+              </NavLink>
+            </div>
+          ) : null}
           {conversations.map((conversation) => (
             <ConversationLink
               key={conversation.id}
@@ -477,7 +498,7 @@ function WorkspaceConversationGroup({
               onRequestDelete={() => onRequestDelete(conversation.id)}
             />
           ))}
-          {!conversations.length ? <p className="px-8 py-1.5 text-[9.5px] text-ink-subtle">{t("noConversationsShort")}</p> : null}
+          {!conversations.length && !draft ? <p className="px-8 py-1.5 text-[9.5px] text-ink-subtle">{t("noConversationsShort")}</p> : null}
         </div>
       ) : null}
     </div>
