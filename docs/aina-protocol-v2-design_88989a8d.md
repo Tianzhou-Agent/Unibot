@@ -949,8 +949,11 @@ runtime type only, never on an AINA id.
 - Chat attachments: the composer uploads files to `POST /attachments` (at most 10 per message, 20 MiB each) and the
   message names them by `file_ref`. Only text, Markdown, code, PDF with a text layer, DOCX and XLSX are accepted
   ([`conversion.py`](../backend/src/tianzhou_agent_platform/conversations/conversion.py)). Sending the message stores
-  each file as a Markdown document in `Uploads/` of the conversation's file tree, with the original kept hidden
-  beside it; deleting the document deletes both. An upload no message names within a day is deleted. The model sees
+  each file under its own name in `Uploads/` of the conversation's file tree. The file tree holds every readable
+  type ([`file_types.py`](../backend/src/tianzhou_agent_platform/aina/document/file_types.py)): Markdown documents
+  have sections, other text files are edited whole, and a PDF, DOCX or XLSX file is read-only and reads as its
+  extracted text, kept hidden beside it and renamed and deleted with it. An upload no message names within a day is
+  deleted. The model sees
   an `<attachments>` block listing each file's name, type, size, document and ref
   ([`attachments.py`](../backend/src/tianzhou_agent_platform/conversations/attachments.py)). In the turn that
   attached them it also reads the documents' text, at most 20,000 characters of a file and, of all files, at most

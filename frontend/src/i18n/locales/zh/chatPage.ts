@@ -43,11 +43,20 @@ export default {
   removeAttachment: "移除 {{name}}",
   attachmentTooLarge: "{{name}} 超过 {{limit}} MB。",
   tooManyAttachments: "每条消息最多附带 {{limit}} 个文件。",
-  welcome: {
   attachmentUnsupported: "无法读取 {{name}}。请添加文本、Markdown、代码、PDF、DOCX 或 XLSX 文件。",
   attachmentFailed: "{{name}} 上传失败：{{error}}",
   attachmentUploading: "正在上传 {{name}}",
   retryAttachment: "重新上传 {{name}}",
+  attachmentProgress: "正在上传 {{percent}}%",
+  attachmentFailedShort: "上传失败",
+  attachmentPreviewLabel: "{{name}} 的预览",
+  downloadAttachment: "下载 {{name}}",
+  openAttachment: "在编辑器中打开 {{name}}",
+  attachmentPreviewPending: "文件上传完成后即可预览。",
+  attachmentPreviewLoading: "正在加载预览…",
+  attachmentPreviewEmpty: "此文件为空。",
+  attachmentPreviewMore: "仅显示文件开头部分。",
+  welcome: {
     title: "开始新对话",
     body: "Unibot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",
     f1: {

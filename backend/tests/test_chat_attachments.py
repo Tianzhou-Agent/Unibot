@@ -121,19 +121,19 @@ def test_a_tool_reads_the_file_the_model_passed_it(chat: Any) -> None:
         },
     ).json()
     messages = client.get(f"/conversations/{conversation_id}").json()["messages"]
-    download = client.get(f"/conversations/{conversation_id}/attachments/{uploaded['file_ref']}")
+    download = client.get(f"/attachments/{uploaded['file_ref']}")
 
     assert reply["status"] == "completed", reply
     assert uploaded["name"] == "taxi receipt.txt" and uploaded["size_bytes"] == 11 and "document" not in uploaded
-    assert f"document: Uploads/taxi receipt.txt.md file_ref: {uploaded['file_ref']}" in seen[0]
-    assert '<attachment document="Uploads/taxi receipt.txt.md">\nTaxi 42 EUR\n</attachment>' in seen[0]
+    assert f"document: Uploads/taxi receipt.txt file_ref: {uploaded['file_ref']}" in seen[0]
+    assert '<attachment document="Uploads/taxi receipt.txt">\nTaxi 42 EUR\n</attachment>' in seen[0]
     tool_result = next(message for message in messages if message["role"] == "tool" and "taxi" in message["content"])
     assert "taxi receipt.txt text/plain Taxi 42 EUR" in tool_result["content"]
     user = next(message for message in messages if message["role"] == "user")
     assert user["content"] == "What is this receipt?"  # the refs reach the model, not the shown message
-    assert user["attachments"] == [{**uploaded, "document": "Uploads/taxi receipt.txt.md"}]
+    assert user["attachments"] == [{**uploaded, "document": "Uploads/taxi receipt.txt"}]
     assert download.content == b"Taxi 42 EUR" and download.headers["content-disposition"].startswith("attachment;")
-    assert client.get("/documents/Uploads/taxi receipt.txt.md").json()["content"] == "Taxi 42 EUR"
+    assert client.get("/documents/Uploads/taxi receipt.txt").json()["content"] == "Taxi 42 EUR"
 
 
 def test_a_message_names_only_its_owners_unsent_files_or_its_own(chat: Any) -> None:
@@ -148,7 +148,7 @@ def test_a_message_names_only_its_owners_unsent_files_or_its_own(chat: Any) -> N
         client.post("/chat", json={"message": "Read it", "conversation_id": mine, "attachments": [ref]})
         for ref in (elsewhere, someone_elses, "file_" + "0" * 32)
     ]
-    missing = client.get(f"/conversations/{mine}/attachments/{elsewhere}")
+    missing = client.get(f"/attachments/{someone_elses}")
 
     assert [response.status_code for response in refused] == [422, 422, 422]
     assert "is not an upload of this conversation's owner" in refused[0].text
@@ -189,7 +189,7 @@ def test_an_unsent_upload_can_be_discarded_but_a_sent_one_is_deleted_as_its_docu
     )
 
     assert discarded.status_code == 204 and named_after.status_code == 422
-    assert refused.status_code == 409 and "Uploads/taxi.txt.md" in refused.text
+    assert refused.status_code == 409 and "Uploads/taxi.txt" in refused.text
 
 
 def test_deleting_the_document_deletes_the_file(chat: Any) -> None:
@@ -201,10 +201,10 @@ def test_deleting_the_document_deletes_the_file(chat: Any) -> None:
     state = client.app.state  # type: ignore[attr-defined]
     conversation = _call(client, state.conversation_service.get, conversation_id)
     views = _call(client, state.chat_attachments.bind, conversation, [ref])
-    before = client.get(f"/conversations/{conversation_id}/attachments/{ref}")
+    before = client.get(f"/attachments/{ref}")
     texts_before = _call(client, state.chat_attachments.texts, conversation, views)
-    deleted = client.delete("/documents/Uploads/taxi.txt.md")
-    after = client.get(f"/conversations/{conversation_id}/attachments/{ref}")
+    deleted = client.delete("/documents/Uploads/taxi.txt")
+    after = client.get(f"/attachments/{ref}")
     texts_after = _call(client, state.chat_attachments.texts, conversation, views)
 
     assert before.content == b"Taxi 42 EUR" and deleted.status_code == 204 and after.status_code == 404
@@ -234,9 +234,9 @@ def test_a_workspace_conversation_stores_its_files_in_the_workspace(chat: Any) -
     ref = _upload(client).json()["file_ref"]
     _send(client, conversation["id"], [ref])
 
-    assert _documents(client, workspace_id=workspace["id"]) == ["Uploads/taxi.txt.md"]
+    assert _documents(client, workspace_id=workspace["id"]) == ["Uploads/taxi.txt"]
     assert _documents(client) == []
-    assert client.get(f"/conversations/{conversation['id']}/attachments/{ref}").content == b"Taxi 42 EUR"
+    assert client.get(f"/attachments/{ref}").content == b"Taxi 42 EUR"
 
 
 def test_uploads_need_the_document_storage() -> None:
@@ -351,3 +351,37 @@ def test_a_messages_files_text_is_clipped_to_its_budget(monkeypatch: pytest.Monk
     assert starved["file_a"].startswith("[Not shown here")  # nothing of it fits in what the message may carry
     assert attachments_module.inline_budget(32_000) == 8_000
     assert attachments_module.inline_budget(1_000_000) == attachments_module.INLINE_MESSAGE_CHARS
+
+
+def test_a_pdf_is_stored_as_uploaded_and_read_through_its_text(chat: Any) -> None:
+    from tests.test_attachment_conversion import pdf
+
+    client, _seen = chat
+    conversation_id = client.post("/conversations", json={"title": "Report"}).json()["id"]
+    payload = pdf("Revenue grew", "Costs fell")
+    ref = client.post("/attachments", files={"file": ("q3.pdf", payload, "application/pdf")}).json()["file_ref"]
+    unsent_preview = client.get(f"/attachments/{ref}/preview").json()
+    (sent,) = _send(client, conversation_id, [ref])
+
+    document = client.get("/documents/Uploads/q3.pdf").json()
+    raw = client.get("/documents/Uploads/q3.pdf/file")
+    preview = client.get(f"/attachments/{ref}/preview").json()
+    someone_else = client.get(f"/attachments/{ref}/preview", params={"user_id": "someone-else"})
+
+    assert sent["document"] == "Uploads/q3.pdf" and _documents(client) == ["Uploads/q3.pdf"]
+    assert document["content"] == "## Page 1\n\nRevenue grew\n\n## Page 2\n\nCosts fell\n"
+    assert raw.content == payload and raw.headers["content-type"] == "application/pdf"
+    assert raw.headers["content-disposition"].startswith("attachment;")
+    assert client.get(f"/attachments/{ref}").content == payload
+    assert unsent_preview == preview == {"text": document["content"], "truncated": False}
+    assert someone_else.status_code == 404
+
+
+def test_a_preview_shows_the_start_of_a_long_file(chat: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tianzhou_agent_platform.conversations import attachment_service
+
+    client, _seen = chat
+    monkeypatch.setattr(attachment_service, "PREVIEW_CHARS", 5)
+    ref = _upload(client, name="long.txt", data=b"0123456789").json()["file_ref"]
+
+    assert client.get(f"/attachments/{ref}/preview").json() == {"text": "01234", "truncated": True}

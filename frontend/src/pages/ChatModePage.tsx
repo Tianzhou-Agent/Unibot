@@ -7,7 +7,6 @@ import {
   Bot,
   Check,
   CirclePause,
-  Loader2,
   MessageSquareText,
   PanelRightClose,
   Paperclip,
@@ -30,6 +29,7 @@ import { applyLiveEvent, LiveTurn, type LiveItem } from "@/components/chat/LiveT
 import { isToolSequenceContinuation, toolLabel, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { ReasoningBlock } from "@/components/chat/ReasoningBlock";
 import { completedAnswerIds, finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
+import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { announceConversationRunning, notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -42,6 +42,7 @@ import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEv
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
+import { isReadableFile, READABLE_EXTENSIONS } from "@/lib/fileTypes";
 import { useMockSession } from "@/lib/mockSession";
 import { classNames, uid } from "@/lib/utils";
 import { canvasQuery, readCanvasRoute, workspaceCanvasPath, workspaceChatPath, type CanvasRoute } from "@/lib/workspace";
@@ -1045,6 +1046,7 @@ function ConversationMessage({
             name: item.name,
             sizeBytes: item.size_bytes,
             mimeType: item.content_type,
+            fileRef: item.file_ref,
             to: item.document
               ? workspaceCanvasPath(workspaceId, "unibot-documents", conversationId || null, item.document)
               : undefined,
@@ -1230,13 +1232,18 @@ function ChatComposer({
     const form = new FormData();
     form.append("file", item.file);
     try {
-      const attachment = await api.postForm<MessageAttachment>(`/attachments?${actorQuery}`, form);
+      const attachment = await api.postFormWithProgress<MessageAttachment>(
+        `/attachments?${actorQuery}`,
+        form,
+        (progress) => updateFile(item.key, { progress }),
+      );
       if (removedRef.current.delete(item.key)) void discardUpload(attachment);
       else updateFile(item.key, { status: "ready", attachment });
     } catch (uploadError) {
       if (removedRef.current.delete(item.key)) return;
-      updateFile(item.key, { status: "failed" });
-      setFileError(t("attachmentFailed", { name: item.file.name, error: apiErrorMessage(uploadError) }));
+      const error = apiErrorMessage(uploadError);
+      updateFile(item.key, { status: "failed", error });
+      setFileError(t("attachmentFailed", { name: item.file.name, error }));
     }
   }
 
@@ -1269,7 +1276,7 @@ function ChatComposer({
   }
 
   function retryFile(item: PickedFile) {
-    updateFile(item.key, { status: "uploading" });
+    updateFile(item.key, { status: "uploading", progress: 0, error: undefined });
     setFileError(null);
     queueUpload(item);
   }
@@ -1307,41 +1314,17 @@ function ChatComposer({
           {files.length ? (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {files.map((item) => (
-                <span
+                <AttachmentChip
                   key={item.key}
-                  data-status={item.status}
-                  className={classNames(
-                    "inline-flex h-7 max-w-[240px] items-center gap-1.5 rounded-lg border bg-app-soft px-2 text-[12px] font-semibold",
-                    item.status === "failed" ? "border-danger-ring text-danger" : "border-line text-ink-muted",
-                  )}
-                >
-                  {item.status === "uploading" ? (
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" role="img" aria-label={t("attachmentUploading", { name: item.file.name })} />
-                  ) : item.status === "failed" ? (
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  ) : (
-                    <Paperclip className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  )}
-                  <span className="truncate">{item.file.name}</span>
-                  {item.status === "failed" ? (
-                    <button
-                      type="button"
-                      onClick={() => retryFile(item)}
-                      className="shrink-0 hover:text-ink"
-                      aria-label={t("retryAttachment", { name: item.file.name })}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => removeFile(item)}
-                    className="shrink-0 hover:text-ink"
-                    aria-label={t("removeAttachment", { name: item.file.name })}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </span>
+                  name={item.file.name}
+                  sizeBytes={item.file.size}
+                  fileRef={item.attachment?.file_ref}
+                  status={item.status}
+                  progress={item.progress}
+                  error={item.error}
+                  onRemove={() => removeFile(item)}
+                  onRetry={() => retryFile(item)}
+                />
               ))}
             </div>
           ) : null}
@@ -1420,26 +1403,14 @@ function ChatComposer({
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_MB = 20;
 const MAX_PARALLEL_UPLOADS = 3;
-// The files the backend can read (conversations/conversion.py); it refuses any other.
-const READABLE_EXTENSIONS = [
-  ".md", ".markdown", ".txt", ".text", ".log", ".rst",
-  ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".html", ".htm", ".toml", ".ini", ".cfg", ".conf",
-  ".sql", ".py", ".ipynb", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte", ".css", ".scss",
-  ".java", ".kt", ".scala", ".go", ".rs", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".rb", ".php", ".swift",
-  ".dart", ".lua", ".r", ".sh", ".bash", ".ps1", ".bat", ".diff", ".patch",
-  ".pdf", ".docx", ".xlsx",
-];
-
-function isReadableFile(name: string): boolean {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 && READABLE_EXTENSIONS.includes(name.slice(dot).toLowerCase());
-}
-
 /** A file picked in the composer: uploaded right away, then sent by its file_ref. */
 interface PickedFile {
   key: string;
   file: File;
   status: "uploading" | "ready" | "failed";
+  /** How much of the upload was sent, 0 to 1. */
+  progress?: number;
+  error?: string;
   attachment?: MessageAttachment;
 }
 

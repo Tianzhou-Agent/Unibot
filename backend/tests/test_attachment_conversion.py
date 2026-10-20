@@ -1,4 +1,4 @@
-"""What an uploaded file becomes as a document, and how the document keeps the file it was made from."""
+"""What an uploaded file's text is, and how the file tree stores every readable type of file."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.conversations import conversion
 from tianzhou_agent_platform.conversations.conversion import convert
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.store.errors import StorageValidationError
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 
 ACTOR = {"user_id": "anonymous", "tenant_id": "default"}
@@ -75,16 +76,14 @@ def refused(name: str, payload: bytes) -> PlatformError:
     return caught.value
 
 
-def test_text_files_are_kept_as_text_and_data_and_code_are_fenced() -> None:
+def test_a_text_file_is_its_own_text() -> None:
     notes = convert("notes.md", b"# Notes\n\nHello")
     log = convert("run.log", "started".encode("utf-16"))  # with a byte order mark
     table = convert("data.csv", b"a,b\n1,2\n")
-    code = convert("tool.py", b'print("```")\n')
 
-    assert (notes.markdown, notes.content_type, notes.is_document) == ("# Notes\n\nHello", "text/markdown", True)
-    assert log.markdown == "started" and not log.is_document
-    assert table.markdown == "```csv\na,b\n1,2\n```\n" and table.content_type == "text/csv"
-    assert code.markdown == '````python\nprint("```")\n````\n'  # a longer fence than any in the code
+    assert (notes.text, notes.content_type, notes.binary) == ("# Notes\n\nHello", "text/markdown", False)
+    assert log.text == "started" and log.content_type == "text/plain"
+    assert (table.text, table.content_type) == ("a,b\n1,2\n", "text/csv")
 
 
 def test_files_unibot_cannot_read_are_refused() -> None:
@@ -104,8 +103,8 @@ def test_files_unibot_cannot_read_are_refused() -> None:
 def test_a_pdf_becomes_one_section_per_page() -> None:
     converted = convert("report.pdf", pdf("Revenue grew", "", "Costs fell"))
 
-    assert converted.content_type == "application/pdf" and not converted.is_document
-    assert converted.markdown == "## Page 1\n\nRevenue grew\n\n## Page 2\n\n## Page 3\n\nCosts fell\n"
+    assert converted.content_type == "application/pdf" and converted.binary
+    assert converted.text == "## Page 1\n\nRevenue grew\n\n## Page 2\n\n## Page 3\n\nCosts fell\n"
 
 
 def test_a_scanned_pdf_without_a_text_layer_is_refused() -> None:
@@ -119,7 +118,7 @@ def test_a_docx_keeps_its_headings_and_tables() -> None:
         "spec.docx", word(heading="Scope", body="Only the API.", table=[["Name", "Owner"], ["API", "a|b"]])
     )
 
-    assert converted.markdown == ("## Scope\n\nOnly the API.\n\n| Name | Owner |\n| --- | --- |\n| API | a\\|b |\n")
+    assert converted.text == ("## Scope\n\nOnly the API.\n\n| Name | Owner |\n| --- | --- |\n| API | a\\|b |\n")
 
 
 def test_an_xlsx_becomes_one_csv_section_per_sheet() -> None:
@@ -128,7 +127,7 @@ def test_an_xlsx_becomes_one_csv_section_per_sheet() -> None:
         workbook({"Q1": [["Item", "Cost"], ["Rent", 1200], [None, None], ["Food", 300.5], [None]], "Empty": []}),
     )
 
-    assert converted.markdown == (
+    assert converted.text == (
         "## Sheet: Q1\n\n```csv\nItem,Cost\nRent,1200\n\nFood,300.5\n```\n\n## Sheet: Empty\n\n(empty)\n"
     )
 
@@ -148,46 +147,94 @@ def test_text_larger_than_a_document_may_hold_is_refused() -> None:
     assert (error.status_code, error.code) == (413, "QUOTA_EXCEEDED")
 
 
-def test_an_upload_is_stored_in_uploads_beside_its_original(tmp_path: Path) -> None:
+def test_an_upload_is_stored_in_uploads_under_its_own_name(tmp_path: Path) -> None:
     service = DocumentService(NasStore(tmp_path))
 
-    async def scenario() -> tuple[list[str], list[str], bytes]:
+    async def scenario() -> tuple[list[str], list[str], bytes, str]:
         names = [
-            await service.add_upload("report.pdf", "## Page 1\n", b"%PDF-1", **ACTOR),
-            await service.add_upload("report.pdf", "## Page 1\n", b"%PDF-2", **ACTOR),
-            await service.add_upload("notes.md", "# Notes", None, **ACTOR),
-            await service.add_upload("a:b?<con>.txt", "text", b"text", **ACTOR),
-            await service.add_upload("con.txt", "text", b"text", **ACTOR),
+            await service.add_upload("report.pdf", b"%PDF-1", "## Page 1\n\nOne", **ACTOR),
+            await service.add_upload("report.pdf", b"%PDF-2", "## Page 1\n\nTwo", **ACTOR),
+            await service.add_upload("notes.md", b"# Notes", None, **ACTOR),
+            await service.add_upload("a:b?<con>.txt", b"text", None, **ACTOR),
+            await service.add_upload("con.txt", b"text", None, **ACTOR),
         ]
         listed = [item.name for item in await service.list_documents(**ACTOR)]
-        return names, listed, await service.upload_original("Uploads/report (2).pdf.md", **ACTOR)
+        second = await service.get_document("Uploads/report (2).pdf", **ACTOR)
+        return names, listed, await service.read_file("Uploads/report (2).pdf", **ACTOR), second.content
 
-    names, listed, original = asyncio.run(scenario())
+    names, listed, original, text = asyncio.run(scenario())
 
     assert names == [
-        "Uploads/report.pdf.md",
-        "Uploads/report (2).pdf.md",
+        "Uploads/report.pdf",
+        "Uploads/report (2).pdf",
         "Uploads/notes.md",
-        "Uploads/a_b__con_.txt.md",
-        "Uploads/con_.txt.md",
+        "Uploads/a_b__con_.txt",
+        "Uploads/con_.txt",
     ]
-    assert listed == sorted(names, key=str.casefold)  # the originals are not documents
-    assert original == b"%PDF-2"
+    assert listed == sorted(names, key=str.casefold)  # the hidden extracted text is not listed
+    assert (original, text) == (b"%PDF-2", "## Page 1\n\nTwo")
 
 
-def test_renaming_or_deleting_an_uploaded_document_carries_its_original(tmp_path: Path) -> None:
+def test_renaming_or_deleting_a_pdf_carries_its_extracted_text(tmp_path: Path) -> None:
     service = DocumentService(NasStore(tmp_path))
     uploads = tmp_path / "documents" / "t-default" / "u-anonymous" / "Uploads"
 
-    async def scenario() -> bytes:
-        await service.add_upload("report.pdf", "## Page 1\n", b"%PDF-1", **ACTOR)
-        await service.rename_document("Uploads/report.pdf.md", "Uploads/q3.pdf.md", **ACTOR)
-        moved = await service.upload_original("Uploads/q3.pdf.md", **ACTOR)
-        await service.delete_document("Uploads/q3.pdf.md", **ACTOR)
+    async def scenario() -> tuple[bytes, str]:
+        await service.add_upload("report.pdf", b"%PDF-1", "## Page 1\n", **ACTOR)
+        await service.rename_document("Uploads/report.pdf", "Uploads/q3.pdf", **ACTOR)
+        moved = (
+            await service.read_file("Uploads/q3.pdf", **ACTOR),
+            (await service.get_document("Uploads/q3.pdf", **ACTOR)).content,
+        )
+        with pytest.raises(StorageValidationError, match="keeps its extension"):
+            await service.rename_document("Uploads/q3.pdf", "Uploads/q3.txt", **ACTOR)
+        await service.delete_document("Uploads/q3.pdf", **ACTOR)
         return moved
 
-    assert asyncio.run(scenario()) == b"%PDF-1"
+    assert asyncio.run(scenario()) == (b"%PDF-1", "## Page 1\n")
     assert list(uploads.iterdir()) == []
+
+
+def test_what_each_kind_of_file_allows(tmp_path: Path) -> None:
+    service = DocumentService(NasStore(tmp_path))
+
+    async def refusal(call: object) -> str:
+        with pytest.raises(StorageValidationError) as caught:
+            await call  # type: ignore[misc]
+        return str(caught.value)
+
+    async def scenario() -> dict[str, object]:
+        await service.add_upload("report.pdf", b"%PDF-1", "## Page 1\n\nRevenue\n", **ACTOR)
+        await service.create_document("tool.py", "# a comment, not a heading\nprint(1)\n", **ACTOR)
+        tool = await service.get_document("tool.py", **ACTOR)
+        saved = await service.update_sections("tool.py", "print(2)\n", _revision(tool.content), **ACTOR)
+        return {
+            "pdf_outline": [
+                item.heading for item in (await service.get_outline("Uploads/report.pdf", **ACTOR)).headings
+            ],
+            "pdf_edit": await refusal(service.update_document("Uploads/report.pdf", "x", **ACTOR)),
+            "pdf_create": await refusal(service.create_document("new.pdf", "x", **ACTOR)),
+            "py_outline": (await service.get_outline("tool.py", **ACTOR)).headings,
+            "py_read_section": await refusal(service.get_section("tool.py", "a", 1, **ACTOR)),
+            "py_section": await refusal(service.update_section("tool.py", "a", 1, "# a", "r", **ACTOR)),
+            "py_saved": (saved.updated_sections, (await service.get_document("tool.py", **ACTOR)).content),
+            "png_name": await refusal(service.create_document("photo.png", "x", **ACTOR)),
+        }
+
+    result = asyncio.run(scenario())
+
+    assert result["pdf_outline"] == ["Page 1"]
+    assert "read-only" in result["pdf_edit"] and "only uploaded" in result["pdf_create"]
+    assert result["py_outline"] == [] and "has no sections" in result["py_read_section"]
+    assert "has no sections to edit" in result["py_section"]
+    assert result["py_saved"] == ([], "print(2)\n")
+    assert "Only Markdown, text, code, PDF, DOCX and XLSX" in result["png_name"]
+
+
+def _revision(content: str) -> str:
+    from tianzhou_agent_platform.aina.document.service import _document_revision
+
+    return _document_revision(content)
 
 
 def test_document_read_pages_through_lines(tmp_path: Path) -> None:

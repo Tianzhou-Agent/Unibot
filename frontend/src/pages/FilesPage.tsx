@@ -1,11 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, FileText, Folder, Search, UserRound } from "lucide-react";
+import { ArrowRight, Folder, Search, UserRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useMockSession } from "@/lib/mockSession";
 import { documentCanvasPath, useWorkspace } from "@/lib/workspace";
+import { fileVisual } from "@/lib/fileTypes";
 import type { DocumentTreeResponse } from "@/types";
 
 interface FileScope {
@@ -157,7 +158,7 @@ function FileScopeCard({ scope }: { scope: FileScope }) {
           ))}
           {scope.tree.documents.map((document) => (
             <Link key={document.name} to={documentCanvasPath(scope.workspaceId, document.name)} className="group flex min-h-10 items-center gap-2.5 px-4 py-2 text-[12px] text-ink-muted hover:bg-app-soft hover:text-ink">
-              <FileText className="h-4 w-4 shrink-0 text-ink-subtle" />
+              <FileTypeIcon name={document.name} />
               <span className="min-w-0 flex-1 truncate">{document.name}</span>
               <span className="shrink-0 font-mono text-[9.5px] text-ink-subtle">{formatBytes(document.size_bytes)}</span>
               <ArrowRight className="h-3.5 w-3.5 text-ink-subtle opacity-0 group-hover:opacity-100" />
@@ -175,4 +176,14 @@ function FileScopeSkeleton() {
 
 function formatBytes(value: number): string {
   return value < 1024 ? `${value} B` : `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+}
+
+function FileTypeIcon({ name }: { name: string }) {
+  const visual = fileVisual(name);
+  const Icon = visual.icon;
+  return (
+    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${visual.tile}`} title={visual.label}>
+      <Icon className="h-3.5 w-3.5" aria-hidden />
+    </span>
+  );
 }

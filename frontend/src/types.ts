@@ -22,6 +22,8 @@ export interface FileChip {
   mimeType?: string;
   /** The app route that shows the file, when it is stored. */
   to?: string;
+  /** The file's ref once it is uploaded: its preview and download. */
+  fileRef?: string;
 }
 
 /** A file the user attached to a chat message; tools read it by its file_ref. */

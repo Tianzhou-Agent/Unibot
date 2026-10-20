@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import quote
 
+from tianzhou_agent_platform.aina.document.file_types import READABLE_EXTENSIONS, FileKind, extension, file_kind
 from tianzhou_agent_platform.aina.document.models import (
     DocumentFolder,
     DocumentHeading,
@@ -66,7 +67,8 @@ class DocumentService:
         items = [
             self._summary(item, prefix)
             for item in metadata
-            if item.path.relative_path.casefold().endswith(".md")
+            if file_kind(item.path.relative_path) is not None
+            and not PurePosixPath(item.path.relative_path).name.startswith(".")
         ]
         return sorted(items, key=lambda item: item.name.casefold())
 
@@ -220,7 +222,17 @@ class DocumentService:
             tenant_id=tenant_id,
             workspace_storage_key=workspace_storage_key,
         )
-        content = await self._nas.read(path)
+        if file_kind(normalized) == "binary":
+            content = await self._nas.read(
+                self._path(
+                    _extracted_name(normalized),
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    workspace_storage_key=workspace_storage_key,
+                )
+            )
+        else:
+            content = await self._nas.read(path)
         try:
             decoded = content.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -244,13 +256,14 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> DocumentOutline:
+        """The document's headings; a text file other than Markdown has none, only a revision."""
         document = await self.get_document(
             name,
             user_id=user_id,
             tenant_id=tenant_id,
             workspace_storage_key=workspace_storage_key,
         )
-        sections = _markdown_sections(document.content)
+        sections = [] if file_kind(document.name) == "text" else _markdown_sections(document.content)
         return DocumentOutline(
             name=document.name,
             size_bytes=document.size_bytes,
@@ -278,6 +291,7 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> DocumentSection:
+        _require(name, {"markdown", "binary"}, "has no sections; read it whole with document.read")
         document = await self.get_document(
             name,
             user_id=user_id,
@@ -305,6 +319,7 @@ class DocumentService:
         workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         normalized = normalize_document_name(name)
+        _require(normalized, {"markdown", "text"}, "cannot be created: PDF, DOCX and XLSX files are only uploaded")
         encoded = _encode_content(content)
         await self._nas.write(
             self._path(
@@ -333,6 +348,7 @@ class DocumentService:
         workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         normalized = normalize_document_name(name)
+        _require(normalized, {"markdown", "text"}, "is read-only: PDF, DOCX and XLSX files cannot be edited")
         path = self._path(
             normalized,
             user_id=user_id,
@@ -361,6 +377,7 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> DocumentSectionUpdateResult:
+        _require(name, {"markdown"}, "has no sections to edit; save it whole instead")
         current = await self.get_document(
             name,
             user_id=user_id,
@@ -418,6 +435,7 @@ class DocumentService:
     ) -> DocumentRecord:
         if not replacements:
             raise StorageValidationError("At least one document section is required")
+        _require(name, {"markdown"}, "has no sections to edit; save it whole instead")
         current = await self.get_document(
             name,
             user_id=user_id,
@@ -483,6 +501,7 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> DocumentSectionsUpdateResult:
+        _require(name, {"markdown", "text"}, "is read-only: PDF, DOCX and XLSX files cannot be edited")
         current = await self.get_document(
             name,
             user_id=user_id,
@@ -493,7 +512,8 @@ class DocumentService:
             raise StorageValidationError(
                 "Document revision changed. Review the latest document before saving."
             )
-        updated_sections = _changed_direct_section_headings(current.content, content)
+        markdown = file_kind(current.name) == "markdown"
+        updated_sections = _changed_direct_section_headings(current.content, content) if markdown else []
         updated = await self.update_document(
             current.name,
             content,
@@ -550,6 +570,8 @@ class DocumentService:
         normalized_new_name = normalize_document_name(new_name)
         if current.name == normalized_new_name:
             return current
+        if file_kind(current.name) == "binary" and extension(normalized_new_name) != extension(current.name):
+            raise StorageValidationError(f"A {extension(current.name)} file keeps its extension when renamed")
         await self._nas.move(
             self._path(
                 current.name,
@@ -564,17 +586,17 @@ class DocumentService:
                 workspace_storage_key=workspace_storage_key,
             ),
         )
-        original = self._path(
-            _original_name(current.name),
+        extracted = self._path(
+            _extracted_name(current.name),
             user_id=user_id,
             tenant_id=tenant_id,
             workspace_storage_key=workspace_storage_key,
         )
-        if await self._nas.exists(original):
+        if file_kind(current.name) == "binary":
             await self._nas.move(
-                original,
+                extracted,
                 self._path(
-                    _original_name(normalized_new_name),
+                    _extracted_name(normalized_new_name),
                     user_id=user_id,
                     tenant_id=tenant_id,
                     workspace_storage_key=workspace_storage_key,
@@ -604,50 +626,49 @@ class DocumentService:
                 workspace_storage_key=workspace_storage_key,
             )
         )
-        await self._nas.delete(
-            self._path(
-                _original_name(normalized),
-                user_id=user_id,
-                tenant_id=tenant_id,
-                workspace_storage_key=workspace_storage_key,
+        if file_kind(normalized) == "binary":
+            await self._nas.delete(
+                self._path(
+                    _extracted_name(normalized),
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    workspace_storage_key=workspace_storage_key,
+                )
             )
-        )
         return result.deleted
 
     async def add_upload(
         self,
         file_name: str,
-        markdown: str,
-        original: bytes | None,
+        content: bytes,
+        extracted: str | None,
         *,
         user_id: str,
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> str:
-        """Store a file the user uploaded as a document in ``Uploads/``; returns the document's name.
+        """Store a file the user uploaded in ``Uploads/`` under its own name; returns its name in the file tree.
 
-        The document holds the text the model reads. ``original`` is the file as uploaded, kept beside the document
-        under a hidden name that the document's rename and delete carry along; None when the upload is Markdown and so
-        is the document itself.
+        ``content`` is a text file's UTF-8 text or a PDF, DOCX or XLSX file as uploaded. ``extracted`` is the text of
+        the latter, kept hidden beside it for reading it; None for a text file, which is its own text.
         """
-        stem, extension = _upload_name(file_name)
-        suffix = "" if original is None else ".md"
+        stem, suffix = _upload_name(file_name)
         for copy in range(1, MAX_UPLOAD_COPIES + 1):
             numbered = stem if copy == 1 else f"{stem} ({copy})"
-            name = normalize_document_name(f"{UPLOADS_FOLDER}/{numbered}{extension}{suffix}")
-            path, original_path = (
+            name = normalize_document_name(f"{UPLOADS_FOLDER}/{numbered}{suffix}")
+            path, extracted_path = (
                 self._path(item, user_id=user_id, tenant_id=tenant_id, workspace_storage_key=workspace_storage_key)
-                for item in (name, _original_name(name))
+                for item in (name, _extracted_name(name))
             )
-            if await self._nas.exists(path) or await self._nas.exists(original_path):
+            if await self._nas.exists(path) or await self._nas.exists(extracted_path):
                 continue
-            await self._nas.write(path, _encode_content(markdown), overwrite=False)
-            if original is not None:
-                await self._nas.write(original_path, original, overwrite=False)
+            if extracted is not None:
+                await self._nas.write(extracted_path, _encode_content(extracted), overwrite=False)
+            await self._nas.write(path, content, overwrite=False)
             return name
         raise StorageValidationError(f"{UPLOADS_FOLDER} already holds {MAX_UPLOAD_COPIES} files named {file_name!r}")
 
-    async def upload_original(
+    async def read_file(
         self,
         name: str,
         *,
@@ -655,10 +676,10 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> bytes:
-        """The file as uploaded that the document ``name`` was made from (see ``add_upload``)."""
+        """The file's own bytes: a text file's UTF-8 text, or a PDF, DOCX or XLSX as uploaded."""
         return await self._nas.read(
             self._path(
-                _original_name(normalize_document_name(name)),
+                normalize_document_name(name),
                 user_id=user_id,
                 tenant_id=tenant_id,
                 workspace_storage_key=workspace_storage_key,
@@ -704,12 +725,14 @@ def normalize_document_name(value: str) -> str:
     path = _normalize_relative_path(value, label="Document path")
     parts = list(PurePosixPath(path).parts)
     name = parts[-1]
-    if not name.casefold().endswith(".md"):
-        if "." in name:
-            raise StorageValidationError("Only Markdown (.md) documents are supported")
+    suffix = extension(name)
+    if not suffix:
         name = f"{name}.md"
+        suffix = ".md"
+    elif suffix not in READABLE_EXTENSIONS:
+        raise StorageValidationError("Only Markdown, text, code, PDF, DOCX and XLSX files are supported")
     _validate_path_segment(name, label="Document name")
-    stem = name[:-3]
+    stem = name[: -len(suffix)]
     if not stem or stem.casefold() in _WINDOWS_RESERVED_NAMES:
         raise StorageValidationError("Document name is reserved by the filesystem")
     parts[-1] = name
@@ -719,10 +742,15 @@ def normalize_document_name(value: str) -> str:
     return normalized
 
 
-def _original_name(document_name: str) -> str:
-    """Where the uploaded file a document was made from is kept: hidden beside it, and never a document itself."""
-    path = PurePosixPath(document_name)
-    return str(path.with_name(f".{path.name}.original"))
+def _extracted_name(name: str) -> str:
+    """Where the text extracted from a PDF, DOCX or XLSX file is kept: hidden beside it, never listed itself."""
+    path = PurePosixPath(name)
+    return str(path.with_name(f".{path.name}.md"))
+
+
+def _require(name: str, kinds: set[FileKind], reason: str) -> None:
+    if file_kind(normalize_document_name(name)) not in kinds:
+        raise StorageValidationError(f"{PurePosixPath(name).name} {reason}")
 
 
 def _upload_name(file_name: str) -> tuple[str, str]:

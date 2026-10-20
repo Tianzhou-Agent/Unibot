@@ -1,4 +1,4 @@
-"""Uploading files for a chat message, storing them as documents when the message is sent, and reading them back.
+"""Uploading files for a chat message, storing them in the file tree when the message is sent, and reading them.
 
 See ``attachments.py`` for an attachment's life. Uploads need the document NAS storage: without it there is no file
 tree to store them in, and uploading is refused.
@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 from typing import TYPE_CHECKING, Any
 
+from tianzhou_agent_platform.aina.document.file_types import file_kind
 from tianzhou_agent_platform.conversations.attachments import (
     UNSENT_LIFETIME,
     Attachment,
@@ -19,7 +20,7 @@ from tianzhou_agent_platform.conversations.attachments import (
     new_file_ref,
     text_blob_key,
 )
-from tianzhou_agent_platform.conversations.conversion import convert, is_markdown
+from tianzhou_agent_platform.conversations.conversion import convert
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.repository import ConversationRepository
 from tianzhou_agent_platform.core.base import utc_now
@@ -28,6 +29,10 @@ from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_fou
 if TYPE_CHECKING:
     from tianzhou_agent_platform.aina.document.service import DocumentService
     from tianzhou_agent_platform.aina.package.files import FileBlobs
+
+
+# How much of a file's text its preview shows.
+PREVIEW_CHARS = 1_500
 
 
 class AttachmentService:
@@ -53,14 +58,19 @@ class AttachmentService:
         )
         # The bytes first: a message can name the file only once they are stored.
         await self.blobs.write(blob_key(attachment), payload)
-        await self.blobs.write(text_blob_key(attachment), converted.markdown.encode("utf-8"))
+        await self.blobs.write(text_blob_key(attachment), converted.text.encode("utf-8"))
         return (await self.repository.put_chat_attachment(attachment)).view()
 
-    async def discard(self, file_ref: str, *, tenant_id: str, user_id: str) -> None:
-        """Delete an upload no message has named; a sent file is deleted as its document."""
+    async def owned(self, file_ref: str, *, tenant_id: str, user_id: str) -> Attachment:
+        """The user's own upload, sent or not; not found for anyone else's."""
         attachment = await self.repository.get_chat_attachment(file_ref)
         if attachment is None or (attachment.tenant_id, attachment.user_id) != (tenant_id, user_id):
             raise not_found("Attachment", file_ref)
+        return attachment
+
+    async def discard(self, file_ref: str, *, tenant_id: str, user_id: str) -> None:
+        """Delete an upload no message has named; a sent file is deleted as its document."""
+        attachment = await self.owned(file_ref, tenant_id=tenant_id, user_id=user_id)
         if attachment.conversation_id is not None:
             raise conflict(f"Attachment {file_ref!r} was sent; delete its document {attachment.document!r} instead")
         await self._remove(attachment)
@@ -107,22 +117,30 @@ class AttachmentService:
         }
 
     async def original(self, attachment: Attachment) -> bytes:
-        """The file as uploaded; not found once the user deleted its document."""
+        """The file itself; not found once the user deleted it from the file tree."""
         if attachment.document is None:
             return await self.blobs.read(blob_key(attachment))
-        documents = self._documents()
         scope = await self._scope(attachment.workspace_id, user_id=attachment.user_id, tenant_id=attachment.tenant_id)
-        if is_markdown(attachment.name):
-            return (await documents.get_document(attachment.document, **scope)).content.encode("utf-8")
-        return await documents.upload_original(attachment.document, **scope)
+        return await self._documents().read_file(attachment.document, **scope)
+
+    async def preview(self, attachment: Attachment) -> tuple[str, bool]:
+        """The start of the file's text (a PDF's, DOCX's or XLSX's extracted text) and whether there is more."""
+        if attachment.document is None:
+            text = (await self.blobs.read(text_blob_key(attachment))).decode("utf-8")
+        else:
+            scope = await self._scope(
+                attachment.workspace_id, user_id=attachment.user_id, tenant_id=attachment.tenant_id
+            )
+            text = (await self._documents().get_document(attachment.document, **scope)).content
+        return text[:PREVIEW_CHARS], len(text) > PREVIEW_CHARS
 
     async def _store_document(self, attachment: Attachment) -> Attachment:
-        markdown = (await self.blobs.read(text_blob_key(attachment))).decode("utf-8")
-        original = None if is_markdown(attachment.name) else await self.blobs.read(blob_key(attachment))
+        text = await self.blobs.read(text_blob_key(attachment))
+        binary = file_kind(attachment.name) == "binary"
         document = await self._documents().add_upload(
             attachment.name,
-            markdown,
-            original,
+            await self.blobs.read(blob_key(attachment)) if binary else text,
+            text.decode("utf-8") if binary else None,
             **await self._scope(attachment.workspace_id, user_id=attachment.user_id, tenant_id=attachment.tenant_id),
         )
         stored = await self.repository.put_chat_attachment(attachment.model_copy(update={"document": document}))

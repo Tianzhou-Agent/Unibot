@@ -12,6 +12,7 @@ from tianzhou_agent_platform.api.dependencies import (
 )
 from tianzhou_agent_platform.conversations.attachments import (
     MAX_ATTACHMENT_BYTES,
+    AttachmentPreview,
     MessageAttachment,
     content_disposition,
     too_large,
@@ -88,17 +89,30 @@ def create_conversation_router() -> APIRouter:
         await chat_attachments(request).discard(file_ref, tenant_id=actor.tenant_id, user_id=actor.user_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @router.get("/attachments/{file_ref}/preview", response_model=AttachmentPreview)
+    async def preview_attachment(
+        file_ref: str, request: Request, user_id: str | None = None, tenant_id: str | None = None
+    ) -> AttachmentPreview:
+        """The start of the user's upload's text, sent or not."""
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        service = chat_attachments(request)
+        attachment = await service.owned(file_ref, tenant_id=actor.tenant_id, user_id=actor.user_id)
+        text, truncated = await service.preview(attachment)
+        return AttachmentPreview(text=text, truncated=truncated)
+
     @router.get(
-        "/conversations/{conversation_id}/attachments/{file_ref}",
+        "/attachments/{file_ref}",
         response_class=Response,
         responses={200: {"content": {"application/octet-stream": {}}, "description": "The file's bytes"}},
     )
-    async def download_attachment(conversation_id: str, file_ref: str, request: Request) -> Response:
-        conversations = conversation_service(request)
-        conversation = await conversations.get(conversation_id)
-        require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
-        attachment = await conversations.attachment(conversation, file_ref)
-        payload = await chat_attachments(request).original(attachment)
+    async def download_attachment(
+        file_ref: str, request: Request, user_id: str | None = None, tenant_id: str | None = None
+    ) -> Response:
+        """The user's upload as a download, sent or not; not found once its file was deleted from the file tree."""
+        actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
+        service = chat_attachments(request)
+        attachment = await service.owned(file_ref, tenant_id=actor.tenant_id, user_id=actor.user_id)
+        payload = await service.original(attachment)
         return Response(
             payload,
             media_type=attachment.content_type,

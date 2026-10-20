@@ -1,4 +1,4 @@
-"""What an uploaded file becomes: the Markdown document the model reads.
+"""What an uploaded file is to Unibot: its text, which the model reads.
 
 Only files Unibot can read are accepted: UTF-8 text (Markdown, plain text, data and code files), PDF with a text
 layer, DOCX and XLSX. Everything else is refused, so the model is never handed a file it cannot see. The type is
@@ -15,8 +15,8 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
+from tianzhou_agent_platform.aina.document.file_types import content_type, extension, file_kind
 from tianzhou_agent_platform.aina.document.service import MAX_DOCUMENT_BYTES
 from tianzhou_agent_platform.core.errors import PlatformError
 
@@ -24,100 +24,26 @@ MAX_PDF_PAGES = 1000
 # What a DOCX or XLSX may unpack to: their XML is parsed in memory.
 MAX_UNPACKED_BYTES = 50 * 1024 * 1024
 
-PDF_TYPE = "application/pdf"
-DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-# Text kept as it is: the document is the text itself.
-_PROSE = {".md", ".markdown", ".txt", ".text", ".log", ".rst"}
-# Text shown in a fenced block of this language.
-_FENCED = {
-    ".csv": "csv",
-    ".tsv": "tsv",
-    ".json": "json",
-    ".jsonl": "json",
-    ".yaml": "yaml",
-    ".yml": "yaml",
-    ".xml": "xml",
-    ".html": "html",
-    ".htm": "html",
-    ".toml": "toml",
-    ".ini": "ini",
-    ".cfg": "ini",
-    ".conf": "",
-    ".sql": "sql",
-    ".py": "python",
-    ".ipynb": "json",
-    ".js": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    ".ts": "typescript",
-    ".tsx": "tsx",
-    ".jsx": "jsx",
-    ".vue": "vue",
-    ".svelte": "svelte",
-    ".css": "css",
-    ".scss": "scss",
-    ".java": "java",
-    ".kt": "kotlin",
-    ".scala": "scala",
-    ".go": "go",
-    ".rs": "rust",
-    ".c": "c",
-    ".h": "c",
-    ".cpp": "cpp",
-    ".cc": "cpp",
-    ".hpp": "cpp",
-    ".cs": "csharp",
-    ".rb": "ruby",
-    ".php": "php",
-    ".swift": "swift",
-    ".dart": "dart",
-    ".lua": "lua",
-    ".r": "r",
-    ".sh": "bash",
-    ".bash": "bash",
-    ".ps1": "powershell",
-    ".bat": "bat",
-    ".diff": "diff",
-    ".patch": "diff",
-}
-_TEXT_TYPES = {
-    ".md": "text/markdown",
-    ".markdown": "text/markdown",
-    ".csv": "text/csv",
-    ".tsv": "text/tab-separated-values",
-    ".json": "application/json",
-    ".html": "text/html",
-    ".htm": "text/html",
-    ".xml": "application/xml",
-}
-ACCEPTED_EXTENSIONS = frozenset({*_PROSE, *_FENCED, ".pdf", ".docx", ".xlsx"})
-
 
 @dataclass(frozen=True)
 class Converted:
     content_type: str
-    markdown: str
-    is_document: bool  # see is_markdown
+    # A text file's own text, or the Markdown extracted from a PDF, DOCX or XLSX.
+    text: str
+    binary: bool  # PDF, DOCX or XLSX: stored as uploaded, read through ``text``
 
 
 def convert(name: str, payload: bytes) -> Converted:
-    """The document ``payload`` becomes; raises when Unibot cannot read the file."""
-    extension = PurePosixPath(name).suffix.lower()
-    if extension in _PROSE or extension in _FENCED:
-        text = _text(payload)
-        markdown = text if extension in _PROSE else _fenced(text, _FENCED[extension])
-        converted = Converted(_TEXT_TYPES.get(extension, "text/plain"), markdown, is_document=is_markdown(name))
-    elif extension == ".pdf":
-        converted = Converted(PDF_TYPE, _pdf(payload), is_document=False)
-    elif extension == ".docx":
-        converted = Converted(DOCX_TYPE, _docx(payload), is_document=False)
-    elif extension == ".xlsx":
-        converted = Converted(XLSX_TYPE, _xlsx(payload), is_document=False)
-    else:
+    """The text of the uploaded file ``name``; raises when Unibot cannot read the file."""
+    kind = file_kind(name)
+    if kind is None:
         raise unsupported(name)
-    if len(converted.markdown.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+    if kind == "binary":
+        extract = {".pdf": _pdf, ".docx": _docx, ".xlsx": _xlsx}[extension(name)]
+        converted = Converted(content_type(name), extract(payload), binary=True)
+    else:
+        converted = Converted(content_type(name), _text(payload), binary=False)
+    if len(converted.text.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise PlatformError(
             "QUOTA_EXCEEDED",
             f"The text of {name!r} is larger than the {MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB a document may hold",
@@ -125,11 +51,6 @@ def convert(name: str, payload: bytes) -> Converted:
             source="attachments",
         )
     return converted
-
-
-def is_markdown(name: str) -> bool:
-    """A Markdown upload is its own document; any other file is kept beside the document it became."""
-    return PurePosixPath(name).suffix.lower() == ".md"
 
 
 def unsupported(name: str) -> PlatformError:

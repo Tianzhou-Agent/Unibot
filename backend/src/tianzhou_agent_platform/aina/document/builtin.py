@@ -70,13 +70,13 @@ DOCUMENT_TOOL_IDS = {
 def document_tool_capabilities() -> list[AinaCapability]:
     name_property = {
         "type": "string",
-        "description": "Markdown document name; the .md extension is added when omitted.",
+        "description": "Document path, such as notes.md or Uploads/data.csv; a name without an extension gets .md.",
         "minLength": 1,
         "maxLength": 500,
     }
     content_property = {
         "type": "string",
-        "description": "UTF-8 Markdown content.",
+        "description": "UTF-8 content: Markdown for a .md document, or the text of a text or code file.",
         "maxLength": 2_000_000,
     }
     heading_property = {
@@ -95,14 +95,14 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=LIST_DOCUMENTS_TOOL_ID,
             name="List documents",
-            description="List every Markdown document. Use only when the user wants to browse all files and gave no name, topic or keyword.",
+            description="List every document and file (Markdown, text, code, PDF, DOCX, XLSX). Use only when the user wants to browse all files and gave no name, topic or keyword.",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
         AinaCapability(
             id=SEARCH_DOCUMENTS_TOOL_ID,
             name="Search documents",
             description=(
-                "Search the file names and bodies of the current user's Markdown documents by keyword. Prefer this "
+                "Search the file names and bodies of the current user's documents and files by keyword. Prefer this "
                 "tool whenever the user gives a name, topic, heading or content keyword; do not list every "
                 "document first."
             ),
@@ -136,7 +136,11 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=OUTLINE_DOCUMENT_TOOL_ID,
             name="Read document outline",
-            description="Read only the Markdown heading outline, line ranges and revision, without body text. Use it first to locate a section before a partial edit.",
+            description=(
+                "Read only the heading outline, line ranges and revision, without body text: the headings of a "
+                "Markdown document, or one section per page or sheet of a PDF, DOCX or XLSX file. Use it first to "
+                "locate a section before a partial edit."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -147,7 +151,10 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=READ_DOCUMENT_SECTION_TOOL_ID,
             name="Read document section",
-            description="Read one Markdown heading and its body, and return the revision needed for a safe update.",
+            description=(
+                "Read one section (a Markdown heading, or a PDF page or XLSX sheet) and its body, and return the "
+                "revision needed for a safe update."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -163,8 +170,9 @@ def document_tool_capabilities() -> list[AinaCapability]:
             id=READ_DOCUMENT_TOOL_ID,
             name="Read document",
             description=(
-                "Read the full content and metadata of one Markdown document, or with offset and limit a range of "
-                "its lines, to read a long document a part at a time. Use only when the task really needs the text."
+                "Read the full content and metadata of one document: the text of a Markdown, text or code file, or "
+                "the text extracted from a PDF, DOCX or XLSX file. With offset and limit, read a range of its lines, "
+                "to read a long document a part at a time. Use only when the task really needs the text."
             ),
             input_schema={
                 "type": "object",
@@ -188,7 +196,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=CREATE_DOCUMENT_TOOL_ID,
             name="Create document",
-            description="Create a new Markdown document; never overwrites an existing file.",
+            description="Create a new Markdown document or text file; never overwrites an existing file.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -222,7 +230,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=APPEND_DOCUMENT_TOOL_ID,
             name="Append to document",
-            description="Append Markdown content to the end of an existing document without replacing it.",
+            description="Append content to the end of an existing Markdown document or text file without replacing it.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "content": content_property},
@@ -233,7 +241,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=RENAME_DOCUMENT_TOOL_ID,
             name="Rename document",
-            description="Rename an existing Markdown document without changing its content.",
+            description="Rename an existing document or file without changing its content; a PDF, DOCX or XLSX keeps its extension.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "new_name": name_property},
@@ -244,7 +252,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=DELETE_DOCUMENT_TOOL_ID,
             name="Delete document",
-            description="Permanently delete an existing Markdown document after the user confirms.",
+            description="Permanently delete an existing document or file after the user confirms.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property},
@@ -397,7 +405,7 @@ def unibot_documents_record() -> AinaRecord:
                 id=UNIBOT_DOCUMENTS_ID,
                 name="Document Editor",
                 version="1.0.0",
-                description="Create, read, edit, rename and delete Markdown documents stored on NAS.",
+                description="Create, read, edit, rename and delete documents and files stored on NAS, including uploaded ones.",
                 publisher=Publisher(id="unibot", name="Unibot"),
             ),
             runtime=BuiltinRuntimeDefinition(),
@@ -427,7 +435,10 @@ def unibot_documents_record() -> AinaRecord:
                             "wants to view the outline, "
                             "browse chapters, or choose a section to read, use document.browse. It attaches an "
                             "interactive chapter widget, so keep the text response to one short sentence and never "
-                            "transcribe the headings into Markdown."
+                            "transcribe the headings into Markdown. Text and code files, such as Uploads/data.csv, have no "
+                            "sections: read them with document.read. PDF, DOCX and XLSX files are read-only; "
+                            "document.read, document.outline and document.read_section read their extracted text, "
+                            "with one section per page or sheet."
                         ),
                     )
                 ],

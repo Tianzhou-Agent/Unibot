@@ -45,6 +45,13 @@ class MessageAttachment(StrictModel):
     document: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
+class AttachmentPreview(StrictModel):
+    """The start of a file's text, as a chip's hover card shows it."""
+
+    text: str
+    truncated: bool
+
+
 class Attachment(StrictModel):
     id: str  # the file_ref
     tenant_id: str

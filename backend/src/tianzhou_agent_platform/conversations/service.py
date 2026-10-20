@@ -7,7 +7,6 @@ the agent or import ChatService.
 from __future__ import annotations
 
 
-from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.conversations.models import (
     Conversation,
     ConversationCreate,
@@ -90,12 +89,6 @@ class ConversationService:
         if conversation is None:
             raise not_found("conversation", conversation_id)
         return conversation
-
-    async def attachment(self, conversation: Conversation, file_ref: str) -> Attachment:
-        found = await self._repo.get_chat_attachment(file_ref)
-        if found is None or found.conversation_id != conversation.id:
-            raise not_found("Attachment", file_ref)
-        return found
 
     async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
         return await self._repo.create_approval(approval)

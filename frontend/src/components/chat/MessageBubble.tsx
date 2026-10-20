@@ -1,10 +1,10 @@
 import { useTranslation } from "react-i18next";
 import { Check, Copy, Paperclip, ArrowUp, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
 import { classNames } from "@/lib/utils";
 import type { ChatMessage, FileChip, MessageBlock } from "@/types";
 import { MessageFeedback } from "@/components/feedback/MessageFeedback";
+import { AttachmentChip } from "./AttachmentChip";
 import { MarkdownContent } from "./MarkdownContent";
 import { SurfaceRenderer } from "./SurfaceRenderer";
 import { ToolCallCard } from "./ToolCallCard";
@@ -17,7 +17,7 @@ export function UserMessage({ content, files }: { content: string; files?: FileC
         {files && files.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
             {files.map((f) => (
-              <FileChipPill key={f.id} file={f} />
+              <AttachmentChip key={f.id} name={f.name} sizeBytes={f.sizeBytes ?? 0} fileRef={f.fileRef} to={f.to} />
             ))}
           </div>
         ) : null}
@@ -95,24 +95,6 @@ function BlockRenderer({ block }: { block: MessageBlock }) {
     );
   }
   return null;
-}
-
-function FileChipPill({ file }: { file: FileChip }) {
-  const className = "inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border border-line bg-app-soft text-ink-muted text-[12px] font-semibold";
-  if (file.to) {
-    return (
-      <Link to={file.to} className={classNames(className, "hover:text-accent")}>
-        <Paperclip className="w-3.5 h-3.5" />
-        {file.name}
-      </Link>
-    );
-  }
-  return (
-    <span className={className}>
-      <Paperclip className="w-3.5 h-3.5" />
-      {file.name}
-    </span>
-  );
 }
 
 function AgentActions({ message, conversationId }: { message: ChatMessage; conversationId?: string }) {

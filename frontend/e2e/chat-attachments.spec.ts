@@ -34,6 +34,7 @@ async function backend(page: Page, onUpload: (name: string, route: Route) => Pro
       const name = request.postDataBuffer()?.toString("utf8").match(/filename="([^"]+)"/)?.[1] ?? "";
       return onUpload(name, route);
     }
+    if (method === "GET" && path.endsWith("/preview")) return json(route, { text: "Taxi 42 EUR", truncated: false });
     if (method === "DELETE" && path.startsWith("/attachments/")) {
       state.deleted.push(path.slice("/attachments/".length));
       return route.fulfill({ status: 204 });
@@ -43,7 +44,7 @@ async function backend(page: Page, onUpload: (name: string, route: Route) => Pro
       state.messages.push(
         {
           id: "m1", role: "user", content: state.streamed?.message, content_type: "text", widgets: [], created_at: NOW,
-          attachments: [{ ...uploaded("receipt.txt", RECEIPT), document: "Uploads/receipt.txt.md" }],
+          attachments: [{ ...uploaded("receipt.txt", RECEIPT), document: "Uploads/receipt.txt" }],
         },
         { id: "m2", role: "assistant", content: "A taxi receipt.", content_type: "text", widgets: [], created_at: NOW },
       );
@@ -75,17 +76,17 @@ test("FE-E2E-ATTACH-01 picked files are uploaded at once, sent by ref and link t
 
   await page.goto(`/chat/${CONVERSATION}`);
   await page.getByTestId("composer-files").setInputFiles([text("receipt.txt", "Taxi 42 EUR"), text("draft.txt", "not this one")]);
-  const chips = page.locator("[data-status]");
+  const chips = page.locator("form [data-status]");
   await expect(chips).toHaveCount(2);
-  await expect(chips.and(page.locator('[data-status="ready"]'))).toHaveCount(2);
+  await expect(chips.and(page.locator(`form [data-status="ready"]`))).toHaveCount(2);
   await page.getByRole("button", { name: "移除 draft.txt" }).click();
   await expect(chips).toHaveCount(1);
   await expect.poll(() => state.deleted).toEqual([DRAFT]);
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("What is this receipt?");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
 
-  const chip = page.locator("main").getByRole("link", { name: "receipt.txt" });
-  await expect(chip).toHaveAttribute("href", `/chat/${CONVERSATION}?aina=unibot-documents&document=Uploads%2Freceipt.txt.md`);
+  const chip = page.locator("main").getByRole("link", { name: /receipt\.txt/ }).first();
+  await expect(chip).toHaveAttribute("href", `/chat/${CONVERSATION}?aina=unibot-documents&document=Uploads%2Freceipt.txt`);
   await expect(chips).toHaveCount(0);
   expect(state.streamed).toMatchObject({ message: "What is this receipt?", attachments: [RECEIPT] });
 });
@@ -104,16 +105,30 @@ test("FE-E2E-ATTACH-02 unreadable files are refused and a failed upload blocks s
   await expect(picker).toHaveAttribute("accept", /\.pdf/);
   await picker.setInputFiles([{ name: "photo.png", mimeType: "image/png", buffer: Buffer.from("png") }]);
   await expect(page.getByText("无法读取 photo.png", { exact: false })).toBeVisible();
-  await expect(page.locator("[data-status]")).toHaveCount(0);
+  await expect(page.locator("form [data-status]")).toHaveCount(0);
 
   await picker.setInputFiles([text("budget.csv", "a,b")]);
-  await expect(page.locator('[data-status="failed"]')).toHaveCount(1);
+  await expect(page.locator(`form [data-status="failed"]`)).toHaveCount(1);
   await expect(page.getByText("budget.csv 上传失败", { exact: false })).toBeVisible();
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("Summarize");
   const send = page.getByRole("button", { name: "发送消息", exact: true });
   await expect(send).toBeDisabled();
 
   await page.getByRole("button", { name: "重新上传 budget.csv" }).click();
-  await expect(page.locator('[data-status="ready"]')).toHaveCount(1);
+  await expect(page.locator(`form [data-status="ready"]`)).toHaveCount(1);
   await expect(send).toBeEnabled();
+});
+
+test("FE-E2E-ATTACH-03 a chip shows the file's type and size, and on hover its preview and download", async ({ page }) => {
+  await backend(page, (name, route) => json(route, uploaded(name, RECEIPT), 201));
+
+  await page.goto(`/chat/${CONVERSATION}`);
+  await page.getByTestId("composer-files").setInputFiles([text("receipt.txt", "Taxi 42 EUR")]);
+  const chip = page.locator(`form [data-status="ready"]`);
+  await expect(chip).toContainText("TXT · 11 B");
+  await chip.hover();
+
+  const card = page.getByRole("dialog", { name: "receipt.txt 的预览" });
+  await expect(card).toContainText("Taxi 42 EUR");
+  await expect(card.getByRole("link", { name: "下载 receipt.txt" })).toHaveAttribute("href", new RegExp(`/api/attachments/${RECEIPT}\?`));
 });
