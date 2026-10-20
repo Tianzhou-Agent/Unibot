@@ -223,7 +223,9 @@ def create_app(
             else "",
             base_url=resolved_settings.llm_base_url,
             timeout_seconds=resolved_settings.llm_timeout_seconds,
-            max_completion_tokens=output_token_reserve(resolved_settings.context_window_tokens),
+            max_completion_tokens=output_token_reserve(
+                resolved_settings.context_window_tokens, resolved_settings.max_output_tokens
+            ),
             max_retries=0,
         )
     def document_model_callbacks(model: BaseChatModel, task_id: str) -> list[Any]:

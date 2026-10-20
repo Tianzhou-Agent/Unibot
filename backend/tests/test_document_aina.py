@@ -872,6 +872,34 @@ def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_pa
     assert "router_model_called" not in resolution["details"]
 
 
+def test_follow_up_after_failed_turn_reenters_the_aina_that_turn_activated(tmp_path: Path) -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(prefix="aina_unibot-documents_", arguments="{}"),
+            LLMResult(message={"role": "assistant", "content": "Partial"}, finish_reason="length"),
+            assistant("Continued."),
+            assistant("Answered."),
+        ]
+    )
+    with TestClient(_app(tmp_path, llm)) as client:
+        conversation = client.post("/conversations", json={"title": "Truncated AINA turn"}).json()
+        first = client.post("/chat", json={"message": "Edit the document", "conversation_id": conversation["id"]})
+        second = client.post("/chat", json={"message": "continue", "conversation_id": conversation["id"]})
+        third = client.post("/chat", json={"message": "Anything else?", "conversation_id": conversation["id"]})
+        trace = client.get(f"/traces/{second.json()['trace_id']}").json()
+
+    assert first.json()["status"] == "failed"
+    assert second.json()["status"] == "completed"
+    assert any(item["function"]["name"].startswith("builtin_document_") for item in llm.calls[2]["tools"])
+    resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
+    assert resolution["target_id"] == "unibot-documents"
+    assert resolution["details"]["source"] == "unfinished_turn"
+    # A turn after a completed one routes through the unified entry again.
+    assert third.json()["status"] == "completed"
+    assert len(llm.calls[3]["tools"]) == 12
+    assert not any(item["function"]["name"].startswith("builtin_document_") for item in llm.calls[3]["tools"])
+
+
 def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_path: Path) -> None:
     llm = ScriptedLLM(
         [

@@ -250,8 +250,12 @@ class AgentRunner:
         event_sink: EventSink | None = None,
         stop: TurnStop | None = None,
         attachments: list[MessageAttachment] | None = None,
+        after_failed_turn: bool = False,
     ) -> ChatResponse:
-        """Run one user turn. The caller holds the conversation's run lease."""
+        """Run one user turn. The caller holds the conversation's run lease.
+
+        After a failed turn, re-enter the AINA scope that turn activated.
+        """
         config = self._config(conversation, trace_id)
         checkpointed = await self._working_messages(config)
         # A conversation without working memory (never run natively, or its checkpoint was lost) is seeded from
@@ -286,7 +290,9 @@ class AgentRunner:
             tenant_id=conversation.tenant_id,
             limit=8,
         )
-        capabilities, system_prompt, forced_capability = await self._plan(conversation, request, run)
+        capabilities, system_prompt, forced_capability = await self._plan(
+            conversation, request, run, after_failed_turn=after_failed_turn
+        )
         invocation = await self._prepare(
             conversation,
             run,
@@ -440,23 +446,25 @@ class AgentRunner:
         conversation: Conversation,
         request: ChatRequest,
         run: AgentRun,
+        *,
+        after_failed_turn: bool = False,
     ) -> tuple[dict[str, Capability], str, str | None]:
         """(visible capabilities, system prompt, forced capability) of a turn from its routing request."""
         everything = await self.catalog.available(conversation)
         requested = request.capability
         preferred = request.preferred_aina_id
         selected: Capability | None = None
+        source = "unified_entry"
         if requested is not None:
             selected = everything[resolve_forced_capability(requested, everything) or ""]
+            source = "explicit_capability"
         elif preferred is not None:
             selected = everything[resolve_forced_capability(f"aina:{preferred}", everything) or ""]
-        source = (
-            "explicit_capability"
-            if requested is not None
-            else "preferred_aina"
-            if preferred is not None
-            else "unified_entry"
-        )
+            source = "preferred_aina"
+        elif after_failed_turn and (selected := unfinished_turn_aina(conversation, everything)) is not None:
+            # The failed turn's scope is not checkpointed: without this, the follow-up sees that AINA's calls only
+            # as non-executable history and may answer without re-activating it.
+            source = "unfinished_turn"
         await run.scope_resolved(
             conversation,
             selected=selected,
@@ -554,7 +562,7 @@ class AgentRunner:
             select=is_summary_call,
         )
         budget_guard = RequestBudgetGuard(
-            input_budget_tokens=request_input_budget(window, current_max_output_tokens()),
+            input_budget_tokens=request_input_budget(window, current_max_output_tokens(self.settings.max_output_tokens)),
             count_tokens=estimate_request_tokens,
         )
         output_guard = OutputGuardMiddleware()
@@ -947,3 +955,25 @@ class AgentRunner:
 
 def _text(message: BaseMessage) -> str:
     return message.content if isinstance(message.content, str) else str(message.content or "")
+
+
+def unfinished_turn_aina(conversation: Conversation, capabilities: dict[str, Capability]) -> Capability | None:
+    """Entry of the scope-activating AINA the conversation's last turn activated, if it is still reachable."""
+    last_user = max((index for index, message in enumerate(conversation.messages) if message.role == "user"), default=-1)
+    called = {
+        str((call.get("function") or {}).get("name") or "")
+        for message in conversation.messages[last_user + 1 :]
+        if message.role == "assistant"
+        for call in message.tool_calls or []
+    }
+    return next(
+        (
+            capability
+            for capability in capabilities.values()
+            if capability.kind == "aina"
+            and capability.capability_id == conversation.last_aina_id
+            and capability.function_name in called
+            and capability.activates_scope
+        ),
+        None,
+    )
