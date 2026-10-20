@@ -43,8 +43,13 @@ from tianzhou_agent_platform.aina.package.storage import MAX_LIST_ITEMS, storage
 from tianzhou_agent_platform.aina.package.tasks import MAX_MESSAGE_CHARS, AinaTask
 from tianzhou_agent_platform.aina.package.tokens import MAX_TOKEN_SECONDS, VerifiedToken, invalid_token
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
-from tianzhou_agent_platform.api.dependencies import aina_file_blobs, aina_packages, aina_tasks, repository
-from tianzhou_agent_platform.conversations.attachments import blob_key as attachment_blob_key
+from tianzhou_agent_platform.api.dependencies import (
+    aina_file_blobs,
+    aina_packages,
+    aina_tasks,
+    chat_attachments,
+    repository,
+)
 from tianzhou_agent_platform.conversations.attachments import content_disposition
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
@@ -326,7 +331,7 @@ def create_aina_host_router() -> APIRouter:
             reference.user_id,
         ):
             raise not_found("File", file_ref)  # also for a ref the call was not passed: its existence is not told
-        payload = await aina_file_blobs(request).read(attachment_blob_key(attachment))
+        payload = await chat_attachments(request).original(attachment)
         return Response(
             payload,
             media_type=attachment.content_type,

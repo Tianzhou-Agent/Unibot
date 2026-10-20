@@ -7,7 +7,6 @@ the agent or import ChatService.
 from __future__ import annotations
 
 
-from tianzhou_agent_platform.conversations.attachments import Attachment, MessageAttachment
 from tianzhou_agent_platform.conversations.models import (
     Conversation,
     ConversationCreate,
@@ -90,36 +89,6 @@ class ConversationService:
         if conversation is None:
             raise not_found("conversation", conversation_id)
         return conversation
-
-    async def add_attachment(self, attachment: Attachment) -> MessageAttachment:
-        return (await self._repo.put_chat_attachment(attachment)).view()
-
-    async def attachment(self, conversation: Conversation, file_ref: str) -> Attachment:
-        found = await self._repo.get_chat_attachment(file_ref)
-        if found is None or found.conversation_id != conversation.id:
-            raise not_found("Attachment", file_ref)
-        return found
-
-    async def message_attachments(self, conversation: Conversation, file_refs: list[str]) -> list[MessageAttachment]:
-        """The attachments a new message names: each must have been uploaded to this conversation by its owner."""
-        refs = list(dict.fromkeys(file_refs))
-        found = {item.id: item for item in await self._repo.list_chat_attachments(refs)}
-        views = []
-        for ref in refs:
-            attachment = found.get(ref)
-            if attachment is None or (attachment.conversation_id, attachment.tenant_id, attachment.user_id) != (
-                conversation.id,
-                conversation.tenant_id,
-                conversation.user_id,
-            ):
-                raise PlatformError(
-                    "INVALID_REQUEST",
-                    f"Attachment {ref!r} was not uploaded to this conversation",
-                    status_code=422,
-                    source="attachments",
-                )
-            views.append(attachment.view())
-        return views
 
     async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
         return await self._repo.create_approval(approval)

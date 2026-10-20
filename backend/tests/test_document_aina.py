@@ -118,14 +118,14 @@ def test_document_section_changes_update_multiple_units_atomically(tmp_path: Pat
     )
 
 
-def test_document_api_isolates_actors_and_rejects_non_markdown_names(tmp_path: Path) -> None:
+def test_document_api_isolates_actors_and_rejects_unsupported_names(tmp_path: Path) -> None:
     with TestClient(_app(tmp_path)) as client:
         created = client.post(
             "/documents",
             json={"name": "private", "content": "secret", "user_id": "alice", "tenant_id": "team-a"},
         )
         other_user = client.get("/documents", params={"user_id": "bob", "tenant_id": "team-a"})
-        invalid = client.post("/documents", json={"name": "notes.txt", "content": "not markdown"})
+        invalid = client.post("/documents", json={"name": "photo.png", "content": "not a text file"})
 
     assert created.status_code == 201
     assert other_user.json()["total"] == 0

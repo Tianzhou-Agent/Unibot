@@ -48,6 +48,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** A form POST that reports how much of the body was sent (0 to 1), which fetch cannot. */
+function postFormWithProgress<T>(path: string, body: FormData, onProgress: (sent: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}${path}`);
+    xhr.withCredentials = true;
+    withClientHeaders(new Headers()).forEach((value, key) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      const parsed = xhr.responseText ? safeJson(xhr.responseText) : null;
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(parsed as T);
+      notifyAuthenticationRequired(path, xhr.status);
+      reject(new ApiError(xhr.status, parsed, i18n.t("common:error.requestPathFailed", { path, status: xhr.status })));
+    };
+    xhr.onerror = () => reject(new Error(i18n.t("common:error.retryLater")));
+    xhr.send(body);
+  });
+}
+
 export interface BlobResponse {
   blob: Blob;
   filename?: string;
@@ -204,6 +225,7 @@ export const api = {
     request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   postForm: <T>(path: string, body: FormData) => request<T>(path, { method: "POST", body }),
+  postFormWithProgress,
   postFormBlob: (path: string, body: FormData) => requestBlob(path, { method: "POST", body }),
   getBlob: (path: string) => requestBlob(path),
   postBlob: (path: string, body?: unknown) =>

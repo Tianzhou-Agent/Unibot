@@ -8,6 +8,7 @@ missing record raise ``not_found`` rather than returning None.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from tianzhou_agent_platform.conversations.attachments import Attachment
@@ -45,6 +46,16 @@ class ConversationRepository(Protocol):
     async def get_chat_attachment(self, file_ref: str) -> Attachment | None: ...
 
     async def list_chat_attachments(self, file_refs: list[str]) -> list[Attachment]: ...
+
+    async def bind_chat_attachment(
+        self, file_ref: str, *, conversation_id: str, workspace_id: str | None
+    ) -> Attachment | None: ...
+
+    async def delete_chat_attachment(self, file_ref: str) -> None: ...
+
+    async def list_unsent_chat_attachments(
+        self, *, tenant_id: str, user_id: str, created_before: datetime
+    ) -> list[Attachment]: ...
 
     async def append_messages(
         self, conversation_id: str, messages: Iterable[Message]
