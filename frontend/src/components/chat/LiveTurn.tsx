@@ -1,11 +1,7 @@
-import { useTranslation } from "react-i18next";
-import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { ReasoningBlock } from "@/components/chat/ReasoningBlock";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import type { StreamEvent } from "@/lib/api";
-import { classNames } from "@/lib/utils";
 
 // The in-flight turn, in arrival order, until the persisted conversation replaces it.
 export type LiveItem =
@@ -81,32 +77,5 @@ export function LiveTurn({ items, compact = false, debugMode = false }: {
         />
       ))}
     </>
-  );
-}
-
-const THINKING_WORD_KEYS = Array.from({ length: 12 }, (_, i) => `thinking.w${i}`);
-
-export function ThinkingIndicator({ label, compact = false }: { label?: string | null; compact?: boolean }) {
-  const { t } = useTranslation("chat");
-  const THINKING_WORDS = THINKING_WORD_KEYS.map((key) => t(key));
-  const [index, setIndex] = useState(() => Math.floor(Math.random() * THINKING_WORDS.length));
-  useEffect(() => {
-    if (label) return;
-    const timer = window.setInterval(() => {
-      // Skip ahead by a random amount so the same word never repeats back to back.
-      setIndex((current) => (current + 1 + Math.floor(Math.random() * (THINKING_WORDS.length - 1))) % THINKING_WORDS.length);
-    }, 2400);
-    return () => window.clearInterval(timer);
-  }, [label]);
-  const text = label || `${THINKING_WORDS[index]}…`;
-
-  return (
-    <div className={classNames("flex items-center gap-2", compact ? "min-h-7" : "min-h-8")} role="status">
-      <Sparkles className={classNames("thinking-glow shrink-0 text-accent", compact ? "h-3.5 w-3.5" : "h-4 w-4")} aria-hidden />
-      <span key={text} className={classNames("thinking-shimmer font-medium", compact ? "text-[12px]" : "text-[13px]")} aria-hidden>
-        {text}
-      </span>
-      <span className="sr-only">{label || t("thinkingNow")}</span>
-    </div>
   );
 }

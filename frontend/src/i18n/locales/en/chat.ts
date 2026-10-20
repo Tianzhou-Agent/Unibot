@@ -16,6 +16,12 @@ export default {
     done: "Thought",
   },
   process: {
+    type: {
+      reasoning: "Thinking",
+      text: "Responding",
+      tool: "Tool",
+      activity: "Working",
+    },
     completed: "Completed",
     completedIn: "Completed in {{duration}}",
     seconds: "{{s}}s",

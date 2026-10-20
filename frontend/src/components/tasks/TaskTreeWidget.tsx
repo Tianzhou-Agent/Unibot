@@ -1,9 +1,11 @@
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Circle,
   CircleDashed,
@@ -16,10 +18,14 @@ import { api, apiUrl } from "@/lib/api";
 import { classNames } from "@/lib/utils";
 import type { SessionTaskNode, TaskStatus, TaskTreeSnapshot } from "@/types";
 
-export function TaskTreeWidget({ sessionId }: { sessionId: string | null }) {
+export function TaskTreeWidget({ sessionId, approval }: {
+  sessionId: string | null;
+  approval?: { id: string; content: ReactNode };
+}) {
   const { t } = useTranslation("tasks");
   const [snapshot, setSnapshot] = useState<TaskTreeSnapshot | null>(null);
   const [open, setOpen] = useState(false);
+  const [taskPageApprovalId, setTaskPageApprovalId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!sessionId) {
@@ -46,9 +52,11 @@ export function TaskTreeWidget({ sessionId }: { sessionId: string | null }) {
   }, [load, sessionId]);
 
   const progress = useMemo(() => taskProgress(snapshot?.tasks ?? []), [snapshot?.tasks]);
-  if (!snapshot?.tasks.length) return null;
+  const hasTasks = Boolean(snapshot?.tasks.length);
+  const showApproval = Boolean(approval && (!hasTasks || taskPageApprovalId !== approval.id));
+  if (!hasTasks && !approval) return null;
 
-  return (
+  const taskPanel = snapshot?.tasks.length ? (
     <section className="overflow-hidden rounded-xl border border-line-strong bg-app-soft shadow-soft" aria-label={t("aria")}>
       <button
         type="button"
@@ -84,6 +92,24 @@ export function TaskTreeWidget({ sessionId }: { sessionId: string | null }) {
         </div>
       ) : null}
     </section>
+  ) : null;
+
+  return (
+    <div className="space-y-1.5">
+      {approval && hasTasks ? (
+        <nav className="flex items-center justify-end gap-2 text-[11.5px] text-ink-muted" aria-label={t("panels.aria")}>
+          <button type="button" aria-label={t("panels.previous")} disabled={showApproval} onClick={() => setTaskPageApprovalId(null)} className="rounded p-1 hover:bg-app-soft disabled:opacity-40">
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <span className="tabular-nums">{showApproval ? t("panels.approval") : t("title")} · {showApproval ? 1 : 2} / 2</span>
+          <button type="button" aria-label={t("panels.next")} disabled={!showApproval} onClick={() => setTaskPageApprovalId(approval.id)} className="rounded p-1 hover:bg-app-soft disabled:opacity-40">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </nav>
+      ) : null}
+      {approval ? <div hidden={!showApproval}>{approval.content}</div> : null}
+      {hasTasks ? <div hidden={showApproval}>{taskPanel}</div> : null}
+    </div>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -25,10 +25,10 @@ import { CanvasTabs, NEW_CANVAS_TAB } from "@/components/canvas/CanvasTabs";
 import { ApprovalCard, type EditedArguments } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
-import { applyLiveEvent, LiveTurn, ThinkingIndicator, type LiveItem } from "@/components/chat/LiveTurn";
-import { isToolSequenceContinuation, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
+import { applyLiveEvent, LiveTurn, type LiveItem } from "@/components/chat/LiveTurn";
+import { isToolSequenceContinuation, toolLabel, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { ReasoningBlock } from "@/components/chat/ReasoningBlock";
-import { finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
+import { completedAnswerIds, finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
 import { ConversationObsDrawer } from "@/components/observability/ConversationObsDrawer";
 import { announceConversationRunning, notifyConversationsChanged } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
@@ -180,6 +180,9 @@ export default function ChatModePage() {
   const failuresByTrace = useMemo(() => {
     const map = new Map<string, MessageFailure[]>();
     const push = (traceId: string, failure: MessageFailure) => {
+      // A failed attempt can be corrected by the model without failing the turn.
+      const trace = traces.find((item) => item.trace_id === traceId);
+      if (trace && trace.status !== "failed") return;
       const list = map.get(traceId) ?? [];
       list.push(failure);
       map.set(traceId, list);
@@ -520,6 +523,8 @@ export default function ChatModePage() {
       runConversationId = targetConversation.id;
       localRunConversationIdRef.current = targetConversation.id;
       const onEvent = (event: StreamEvent) => {
+        // Capability errors are tool feedback for the model; terminal errors come from the stream producer.
+        if (event.type === "error" && event.source === "capability") return;
         if (event.type === "message.completed") completion = event.response;
         if (event.type === "error") {
           streamFailure = event.error?.message ?? event.code ?? t("err.streamFailed");
@@ -720,7 +725,31 @@ export default function ChatModePage() {
     () => finishedTurnProcesses(messages, !sending && conversation?.run_status === "idle"),
     [messages, sending, conversation?.run_status],
   );
+  const answerIds = useMemo(
+    () => completedAnswerIds(messages, !sending && conversation?.run_status === "idle"),
+    [messages, sending, conversation?.run_status],
+  );
   const [openTurnIds, setOpenTurnIds] = useState<ReadonlySet<string>>(() => new Set());
+  const activeTurnStart = sending ? messages.map((message) => message.role).lastIndexOf("user") : -1;
+  const activeTurnId = activeTurnStart >= 0 ? messages[activeTurnStart].id : "live";
+  const activeProcessOpen = openTurnIds.has(activeTurnId);
+  const activeSteps = useMemo(() => {
+    if (!sending) return [];
+    const following = messages.slice(activeTurnStart + 1);
+    const end = following.findIndex((message) => message.id.startsWith("msg_aina_task_"));
+    return (end < 0 ? following : following.slice(0, end)).filter((message) => message.role !== "system");
+  }, [messages, sending, activeTurnStart]);
+  const activeStepIds = new Set(activeSteps.map((message) => message.id));
+  const latestLiveItem = liveItems[liveItems.length - 1];
+  const latestStep = activeSteps[activeSteps.length - 1];
+  const latestCall = latestStep?.tool_calls?.slice(-1)[0];
+  const activeType = activity ? "activity" : latestLiveItem?.kind
+    ?? (latestCall || latestStep?.role === "tool" ? "tool" : latestStep?.content ? "text" : "reasoning");
+  const activePreview = activity || (latestLiveItem
+    ? latestLiveItem.kind === "tool" ? toolLabel(latestLiveItem.name) : latestLiveItem.text
+    : latestCall ? toolLabel(latestCall.function.name)
+      : latestStep?.role === "tool" ? toolLabel(latestStep.name ?? "")
+        : latestStep?.content || latestStep?.reasoning);
   const foldedStepIds = useMemo(() => new Set(
     [...turnProcesses].flatMap(([turnId, process]) => openTurnIds.has(turnId) ? [] : [...process.stepIds]),
   ), [turnProcesses, openTurnIds]);
@@ -829,6 +858,7 @@ export default function ChatModePage() {
                 ? messages.map((message, index) => {
                     if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
                     if (foldedStepIds.has(message.id)) return null;
+                    if (sending && !activeProcessOpen && activeStepIds.has(message.id)) return null;
                     const continuesToolSequence = isToolSequenceContinuation(messages, index);
                     const process = turnProcesses.get(message.id);
                     return (
@@ -845,9 +875,19 @@ export default function ChatModePage() {
                             toolResultsByCallId={toolResultsByCallId}
                             requestedToolCallIds={requestedToolCallIds}
                             showReasoning={!foldedReasoningIds.has(message.id)}
+                            showActions={answerIds.has(message.id)}
                           />
                         </div>
-                        {process ? (
+                        {sending && message.id === activeTurnId ? (
+                          <TurnProcessToggle
+                            durationMs={null}
+                            active
+                            activityType={activeType}
+                            preview={activePreview}
+                            open={activeProcessOpen}
+                            onToggle={() => toggleTurn(activeTurnId)}
+                          />
+                        ) : process ? (
                           <TurnProcessToggle
                             durationMs={process.durationMs}
                             open={openTurnIds.has(message.id)}
@@ -867,18 +907,10 @@ export default function ChatModePage() {
                   onPrompt={sendMessage}
                 />
               ))}
-              <LiveTurn items={liveItems} debugMode={debugMode} />
-              {sending ? <ThinkingIndicator label={activity} /> : null}
-              {approval && !deleted ? (
-                <ApprovalCard
-                  key={approval.id}
-                  approval={approval}
-                  disabled={sending}
-                  debugMode={debugMode}
-                  onConfirm={(edited) => void resolveApproval("confirm", edited)}
-                  onDeny={() => void resolveApproval("deny")}
-                />
+              {sending && activeTurnStart < 0 ? (
+                <TurnProcessToggle durationMs={null} active activityType={activeType} preview={activePreview} open={activeProcessOpen} onToggle={() => toggleTurn(activeTurnId)} />
               ) : null}
+              {!sending || activeProcessOpen ? <LiveTurn items={liveItems} debugMode={debugMode} /> : null}
               {conversation?.run_status === "stopped" && !sending && !deleted ? (
                 <StoppedNotice onResume={() => void runTurn(null)} />
               ) : null}
@@ -894,6 +926,17 @@ export default function ChatModePage() {
               running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
               sessionId={conversation?.id ?? conversationId ?? null}
+              approval={approval ? {
+                id: approval.id,
+                content: <ApprovalCard
+                  key={approval.id}
+                  approval={approval}
+                  disabled={sending}
+                  debugMode={debugMode}
+                  onConfirm={(edited) => void resolveApproval("confirm", edited)}
+                  onDeny={() => void resolveApproval("deny")}
+                />,
+              } : undefined}
               messageCount={conversation?.messages.length ?? 0}
               context={activeCanvas?.main_widget.kind === "document" ? documentTaskContext : null}
               onSend={sendMessage}
@@ -983,6 +1026,7 @@ function ConversationMessage({
   toolResultsByCallId,
   requestedToolCallIds,
   showReasoning = true,
+  showActions,
 }: {
   message: BackendMessage;
   onOpenAina: (ainaId: string) => void;
@@ -994,6 +1038,7 @@ function ConversationMessage({
   toolResultsByCallId: ReadonlyMap<string, BackendMessage>;
   requestedToolCallIds: ReadonlySet<string>;
   showReasoning?: boolean;
+  showActions: boolean;
 }) {
   const failure = failures[0] ?? null;
   if (message.role === "system") return null;
@@ -1029,6 +1074,7 @@ function ConversationMessage({
       {message.content ? (
         <AssistantMessage
           conversationId={conversationId}
+          showActions={showActions}
           message={{
             id: message.id,
             role: "assistant",
@@ -1131,6 +1177,7 @@ function ChatComposer({
   running,
   initialText,
   sessionId,
+  approval,
   messageCount,
   context,
   onSend,
@@ -1141,6 +1188,7 @@ function ChatComposer({
   running: boolean;
   initialText: string;
   sessionId: string | null;
+  approval?: { id: string; content: ReactNode };
   messageCount: number;
   context: DocumentTaskContext | null;
   onSend: (text: string, files: File[]) => Promise<boolean | undefined>;
@@ -1185,7 +1233,7 @@ function ChatComposer({
     <div className="bg-white px-4 pb-5 pt-3 md:px-6">
       <div className="mx-auto max-w-[760px] space-y-2">
         <AinaTaskList conversationId={sessionId} refreshKey={messageCount} onSettled={onBackgroundTaskSettled} />
-        <TaskTreeWidget sessionId={sessionId} />
+        <TaskTreeWidget key={sessionId} sessionId={sessionId} approval={approval} />
         {sendFailed ? <p role="status" className="text-[11.5px] text-ink-muted">{t("sendFailed")}</p> : null}
         {fileError ? <p role="status" className="text-[11.5px] text-ink-muted">{fileError}</p> : null}
         <form

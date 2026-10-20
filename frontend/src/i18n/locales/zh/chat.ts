@@ -16,6 +16,12 @@ export default {
     done: "已思考",
   },
   process: {
+    type: {
+      reasoning: "思考中",
+      text: "回复中",
+      tool: "工具",
+      activity: "处理中",
+    },
     completed: "已完成",
     completedIn: "已完成，用时 {{duration}}",
     seconds: "{{s}} 秒",
