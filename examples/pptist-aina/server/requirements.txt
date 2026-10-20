@@ -1,0 +1,3 @@
+mcp>=2.3,<3
+httpx>=0.27
+cryptography>=42

@@ -1,2 +1,3 @@
 mcp>=2.3,<3
-unibot-aina>=0.1
+# unibot-aina is not on PyPI yet, so it comes from the Superbot repository.
+unibot-aina @ git+https://github.com/Tianzhou-Agent/Unibot#subdirectory=sdk/python

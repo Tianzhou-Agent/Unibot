@@ -68,7 +68,11 @@ def test_init_creates_a_valid_project_whose_server_works_in_unibot(tmp_path: Pat
     report = validate_package_files(_folder(project / "package"))
     assert report.valid, report.errors
     assert sorted(path.name for path in project.iterdir()) == ["README.md", "package", "server"]
-    assert (project / "server" / "requirements.txt").read_text().splitlines() == ["mcp>=2.3,<3", "unibot-aina>=0.1"]
+    requirements = (project / "server" / "requirements.txt").read_text().splitlines()
+    assert [line for line in requirements if not line.startswith("#")] == [
+        "mcp>=2.3,<3",
+        "unibot-aina @ git+https://github.com/Tianzhou-Agent/Unibot#subdirectory=sdk/python",
+    ]
 
     server = _server(project)
     app = create_app(

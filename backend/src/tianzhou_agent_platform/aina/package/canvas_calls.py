@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.store.errors import StorageBackendUnavailableError
 from tianzhou_agent_platform.store.redis import RedisStore
 
 VIEWER_TTL_SECONDS = 20
@@ -44,9 +45,9 @@ class CanvasCallBroker:
         self._redis = redis
         self._clock = clock
         self._viewers: dict[str, dict[str, dict[str, float]]] = defaultdict(dict)
-        self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._queues: dict[str, asyncio.Queue[dict[str, Any] | Exception]] = {}
         self._calls: dict[str, dict[str, Any]] = {}
-        self._call_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._call_queues: dict[str, asyncio.Queue[dict[str, Any] | Exception]] = {}
         self._context: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -79,24 +80,17 @@ class CanvasCallBroker:
     async def listen(self, client_id: str) -> AsyncIterator[Callable[[float], Awaitable[dict[str, Any] | None]]]:
         """Events for one viewer while its channel is open: ``await next_event(timeout)`` gives one, or None.
 
-        Events are buffered in a queue, so a timed-out wait never loses the subscription.
+        Events are buffered in a queue, so a timed-out wait never loses the subscription. If the Redis subscription
+        fails, ``next_event`` raises, ending the viewer's stream so the tab reconnects instead of silently missing calls.
         """
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, Any] | Exception] = asyncio.Queue()
 
         async def next_event(timeout: float) -> dict[str, Any] | None:
-            try:
-                return await asyncio.wait_for(queue.get(), timeout)
-            except TimeoutError:
-                return None
+            return await _next(queue, timeout)
 
         if self._redis is not None:
             async with self._redis.subscribe(_VIEWER_CHANNEL, client_id) as messages:
-
-                async def pump() -> None:
-                    async for message in messages:
-                        queue.put_nowait(dict(message))
-
-                pumping = asyncio.create_task(pump())
+                pumping = asyncio.create_task(_pump(messages, queue))
                 try:
                     yield next_event
                 finally:
@@ -256,22 +250,14 @@ class CanvasCallBroker:
     @asynccontextmanager
     async def _messages(self, call_id: str) -> AsyncIterator[Callable[[float], Awaitable[dict[str, Any] | None]]]:
         """Acknowledgement and result of one call, subscribed before the call is delivered so none can be missed."""
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, Any] | Exception] = asyncio.Queue()
 
         async def next_message(timeout: float) -> dict[str, Any] | None:
-            try:
-                return await asyncio.wait_for(queue.get(), max(timeout, 0))
-            except TimeoutError:
-                return None
+            return await _next(queue, max(timeout, 0))
 
         if self._redis is not None:
             async with self._redis.subscribe(_RESULTS, call_id) as messages:
-
-                async def pump() -> None:
-                    async for message in messages:
-                        queue.put_nowait(dict(message))
-
-                pumping = asyncio.create_task(pump())
+                pumping = asyncio.create_task(_pump(messages, queue))
                 try:
                     yield next_message
                 finally:
@@ -283,6 +269,30 @@ class CanvasCallBroker:
         finally:
             if self._call_queues.get(call_id) is queue:
                 del self._call_queues[call_id]
+
+
+async def _pump(messages: AsyncIterator[Any], queue: asyncio.Queue[dict[str, Any] | Exception]) -> None:
+    """Buffer a subscription's messages; its failure is queued too, so the waiting side raises instead of hanging."""
+    try:
+        async for message in messages:
+            queue.put_nowait(dict(message))
+    except Exception as exc:
+        logger.warning("canvas subscription failed: %s", exc)
+        queue.put_nowait(exc)
+        return
+    queue.put_nowait(StorageBackendUnavailableError("Redis subscription ended"))
+
+
+async def _next(queue: asyncio.Queue[dict[str, Any] | Exception], timeout: float) -> dict[str, Any] | None:
+    """The next buffered message, None if none arrives in time; raises once the subscription has failed."""
+    try:
+        message = await asyncio.wait_for(queue.get(), timeout)
+    except TimeoutError:
+        return None
+    if isinstance(message, Exception):
+        queue.put_nowait(message)  # every later wait fails the same way
+        raise message
+    return message
 
 
 def canvas_state_block(aina_id: str, state: str) -> str:

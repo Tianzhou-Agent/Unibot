@@ -20,6 +20,10 @@ from tianzhou_agent_platform.store.errors import (
 )
 from tianzhou_agent_platform.store.models import CacheEntry, DeleteResult, WriteResult
 
+# How long one pub/sub read waits for a message before polling again. An explicit read timeout replaces the client's
+# socket_timeout, which would otherwise end an idle subscription with a timeout error.
+_PUBSUB_POLL_SECONDS = 1.0
+
 
 class RedisStore:
     def __init__(self, client: redis_async.Redis, default_ttl_seconds: int | None = None) -> None:
@@ -160,8 +164,9 @@ return 0
 
         async def messages() -> AsyncIterator[Any]:
             try:
-                async for message in pubsub.listen():
-                    if message.get("type") == "message":
+                while True:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_PUBSUB_POLL_SECONDS)
+                    if message is not None and message.get("type") == "message":
                         yield self._decode(message["data"])
             except RedisError as exc:
                 raise self._map_redis_error(exc) from exc

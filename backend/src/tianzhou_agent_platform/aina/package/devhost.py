@@ -21,7 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import Body, FastAPI, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from tianzhou_agent_platform.aina.package.cli import read_package_folder
 from tianzhou_agent_platform.aina.package.mcp_client import McpCallResult, McpServerInfo, McpToolClient
@@ -204,7 +204,10 @@ def create_dev_app(folder: Path, *, host: str = "127.0.0.1", port: int = 8790) -
         return response
 
     @app.get("/", include_in_schema=False)
-    async def dev_page() -> FileResponse:
+    async def dev_page(request: Request) -> Response:
+        # Canvases and widgets may only be framed by `origin`, and localhost and 127.0.0.1 are different origins.
+        if request.url.hostname in {"localhost", "127.0.0.1", "::1"} and request.url.netloc != f"{host}:{port}":
+            return RedirectResponse(f"{origin}/", status_code=307)
         return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/dev/static/{name}", include_in_schema=False)

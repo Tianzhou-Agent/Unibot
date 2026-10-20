@@ -1,12 +1,17 @@
 import asyncio
+import os
+from uuid import uuid4
 
 import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from tianzhou_agent_platform.store import RedisStore, StorageValidationError
 
 
 class FakeRedisClient:
-    def __init__(self) -> None:
+    def __init__(self, *, socket_timeout: float | None = None) -> None:
+        # Like redis-py, a blocking pub/sub read (listen()) is bounded by socket_timeout.
+        self.socket_timeout = socket_timeout
         self.values: dict[str, str] = {}
         self.expirations: dict[str, int] = {}
         self.locked: set[str] = set()
@@ -115,7 +120,20 @@ class FakeRedisPubSub:
 
     async def listen(self):  # type: ignore[no-untyped-def]
         while True:
-            yield await self.queue.get()
+            message = await self.get_message(timeout=None)
+            if message is not None:
+                yield message
+
+    async def get_message(
+        self, ignore_subscribe_messages: bool = False, timeout: float | None = 0.0
+    ) -> dict[str, str] | None:
+        """``timeout`` replaces socket_timeout, and returns None when no message comes; None blocks like listen()."""
+        try:
+            return await asyncio.wait_for(self.queue.get(), timeout if timeout is not None else self.client.socket_timeout)
+        except TimeoutError:
+            if timeout is None:
+                raise RedisTimeoutError("Timeout reading from socket") from None
+            return None
 
     async def aclose(self) -> None:
         for channel in list(self.channels):
@@ -186,6 +204,40 @@ async def test_redis_run_lease_refresh_and_release_require_current_owner() -> No
     assert client.expirations["run:conversation"] == 90
     assert (await store.delete_if_value("run", "conversation", new)).deleted
     assert not (await store.refresh_if_value("run", "conversation", new, ttl_seconds=90)).written
+
+
+@pytest.mark.asyncio
+async def test_an_idle_subscription_outlives_the_socket_timeout() -> None:
+    # redis-py bounds a blocking pub/sub read by socket_timeout; an idle subscription must not end with it.
+    store = RedisStore(FakeRedisClient(socket_timeout=0.05))
+
+    async with store.subscribe("events", "session") as messages:
+        waiting = asyncio.create_task(anext(messages))
+        await asyncio.sleep(0.2)
+        assert not waiting.done()
+        assert await store.publish("events", "session", 7) == 1
+        assert await asyncio.wait_for(waiting, 2) == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.getenv("TZ_STORAGE_E2E") != "1",
+    reason="Set TZ_STORAGE_E2E=1 and start backend/docker-compose.storage.yml to run live storage E2E tests",
+)
+async def test_an_idle_subscription_outlives_the_socket_timeout_on_live_redis() -> None:
+    store = RedisStore.from_url(
+        os.getenv("TZ_STORAGE_E2E_REDIS_URL", "redis://127.0.0.1:16379/0"), socket_timeout=0.3
+    )
+    channel = f"idle-{uuid4().hex}"
+    try:
+        async with store.subscribe("events", channel) as messages:
+            waiting = asyncio.create_task(anext(messages))
+            await asyncio.sleep(1.5)
+            assert not waiting.done()
+            assert await store.publish("events", channel, {"n": 1}) == 1
+            assert await asyncio.wait_for(waiting, 3) == {"n": 1}
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio

@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
+from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 
-from tests.store.test_redis_store import FakeRedisClient
+from tests.store.test_redis_store import FakeRedisClient, FakeRedisPubSub
 from tests.support.fake_llm import LLMResult, ScriptedLLM, assistant, call_first_tool
 from tests.test_aina_host_api import RecordingMcp, _call
 from tests.test_aina_package import REPO, _settings
@@ -23,7 +26,7 @@ from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker
 from tianzhou_agent_platform.aina.project import build_project_archive
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.main import create_app
-from tianzhou_agent_platform.store import RedisStore
+from tianzhou_agent_platform.store import RedisStore, StorageBackendUnavailableError
 
 AINA = "com.example.whiteboard"
 WHITEBOARD = REPO / "examples" / "whiteboard-aina"
@@ -476,6 +479,60 @@ async def test_a_result_posted_to_another_node_resumes_the_run() -> None:
     assert await node_b.resolve("c3", conversation_id="conv_1", client_id=TAB_A, result={}) is False  # late
     with pytest.raises(PlatformError, match="not open"):
         await node_a.dispatch("conv_2", {**request, "call_id": "c4"}, timeout=1)
+
+
+async def _call_an_idle_viewer(redis: RedisStore, *, idle: float) -> None:
+    """A call dispatched after the viewer's stream sat idle for ``idle`` seconds is delivered, acknowledged, answered."""
+    conversation = f"conv_{uuid4().hex}"
+    node_a, node_b = CanvasCallBroker(redis), CanvasCallBroker(redis)
+    await node_b.heartbeat(conversation, TAB_A, visible=True)
+
+    async def viewer() -> None:
+        async with node_b.listen(TAB_A) as next_event:
+            event = await next_event(idle + 5)
+            assert event is not None
+            assert await node_b.acknowledge(event["call_id"], conversation_id=conversation, client_id=TAB_A)
+            assert await node_b.resolve(event["call_id"], conversation_id=conversation, client_id=TAB_A, result={"result": {"n": 2}})
+
+    listening = asyncio.create_task(viewer())
+    await asyncio.sleep(idle)
+    assert not listening.done()
+    request = {"call_id": f"c_{uuid4().hex}", "aina_id": AINA, "name": "get_scene", "arguments": {}, "timeout_ms": 5000}
+    assert await node_a.dispatch(conversation, request, timeout=5) == {"result": {"n": 2}}
+    await listening
+
+
+async def test_a_call_reaches_a_viewer_idle_past_the_redis_socket_timeout() -> None:
+    await _call_an_idle_viewer(RedisStore(FakeRedisClient(socket_timeout=0.05)), idle=0.2)
+
+
+@pytest.mark.skipif(
+    os.getenv("TZ_STORAGE_E2E") != "1",
+    reason="Set TZ_STORAGE_E2E=1 and start backend/docker-compose.storage.yml to run live storage E2E tests",
+)
+async def test_a_call_reaches_a_viewer_idle_past_the_socket_timeout_on_live_redis() -> None:
+    redis = RedisStore.from_url(os.getenv("TZ_STORAGE_E2E_REDIS_URL", "redis://127.0.0.1:16379/0"), socket_timeout=0.3)
+    try:
+        await _call_an_idle_viewer(redis, idle=1.5)
+    finally:
+        await redis.close()
+
+
+async def test_a_failed_viewer_subscription_ends_the_stream() -> None:
+    class BrokenPubSub(FakeRedisPubSub):
+        async def get_message(self, ignore_subscribe_messages: bool = False, timeout: float | None = 0.0) -> None:
+            raise RedisConnectionError("Connection closed by server.")
+
+    class BrokenRedis(FakeRedisClient):
+        def pubsub(self) -> FakeRedisPubSub:
+            return BrokenPubSub(self)
+
+    broker = CanvasCallBroker(RedisStore(BrokenRedis()))
+    async with broker.listen(TAB_A) as next_event:
+        with pytest.raises(StorageBackendUnavailableError):
+            await next_event(2)
+        with pytest.raises(StorageBackendUnavailableError):
+            await next_event(0.01)  # a later wait does not hang or time out quietly
 
 
 def test_reference_whiteboard_package_is_valid_and_vendors_the_sdk() -> None:
