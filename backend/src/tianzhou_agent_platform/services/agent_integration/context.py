@@ -43,15 +43,19 @@ def build_summarization(
     settings: AgentSettings,
     run: AgentRun,
     context_window_tokens: int,
+    input_budget_tokens: int,
     overhead_tokens: int,
     call_recorder: StandaloneCallRecorder,
     model_name: str,
 ) -> TurnSummarizationMiddleware:
-    threshold_tokens = int(context_window_tokens * settings.context_compression_threshold_ratio)
+    """Compaction triggered below the request's input budget (the window less the answer's reserve), so it runs
+    before the budget guard refuses a request; a single long turn is cut inside, keeping half of that threshold."""
+    threshold_tokens = int(input_budget_tokens * settings.context_compression_threshold_ratio)
     return TurnSummarizationMiddleware(
         model,
         threshold_tokens=threshold_tokens,
         overhead_tokens=overhead_tokens,
+        retain_tokens=max(1, (threshold_tokens - overhead_tokens) // 2),
         min_messages=settings.context_compression_min_messages,
         keep_turns=settings.context_compression_keep_recent_turns,
         max_summary_input_tokens=request_input_budget(context_window_tokens),

@@ -597,6 +597,7 @@ class AgentRunner:
                     settings=self.settings,
                     run=run,
                     context_window_tokens=window,
+                    input_budget_tokens=budget_guard.input_budget_tokens,
                     overhead_tokens=estimate_request_tokens(
                         [{"role": "system", "content": system_prompt}],
                         [item.llm_definition() for item in capabilities.values()],

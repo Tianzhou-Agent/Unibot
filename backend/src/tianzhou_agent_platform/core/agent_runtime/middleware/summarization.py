@@ -4,7 +4,9 @@ The built-in middleware decides when to summarize, generates the summary (with i
 summarized messages in the checkpointed state. ``TurnSummarizationMiddleware`` only adds policy it cannot express:
 
 - retention by complete user turns (``keep`` supports message, token and fraction counts only), so a tool call is
-  never separated from its result and the current turn is never summarized;
+  never separated from its result. When the retained turns alone are larger than ``retain_tokens`` (one long
+  agentic task: a single turn with many tool calls), the cut moves inside them, at a tool-group boundary, keeping
+  their most recent ``retain_tokens``; without ``retain_tokens`` the retained turns are never summarized;
 - the trigger is a whole-request threshold: request overhead outside the messages (system prompt, tool schemas)
   counts against it;
 - a summary request larger than ``max_summary_input_tokens`` is never sent, and a failed, empty or non-reducing
@@ -62,18 +64,21 @@ class TurnSummarizationMiddleware(SummarizationMiddleware):
         max_summary_input_tokens: int,
         token_counter: TokenCounter,
         overhead_tokens: int = 0,
+        retain_tokens: int | None = None,
         summary_prompt: str = DEFAULT_SUMMARY_PROMPT,
         observer: SummarizationObserver | None = None,
     ) -> None:
         super().__init__(
             model,
             trigger={"tokens": max(1, threshold_tokens - overhead_tokens), "messages": min_messages},
-            keep=("messages", 1),  # replaced by turn retention in ``_determine_cutoff_index``
+            # Only the token retention inside long turns uses ``keep``; turn retention is ``_determine_cutoff_index``.
+            keep=("tokens", max(1, retain_tokens or 1)),
             token_counter=token_counter,
             summary_prompt=summary_prompt,
             trim_tokens_to_summarize=None,
         )
         self.keep_turns = keep_turns
+        self.retain_tokens = retain_tokens
         self.max_summary_input_tokens = max_summary_input_tokens
         self.overhead_tokens = overhead_tokens
         self.observer = observer
@@ -81,13 +86,17 @@ class TurnSummarizationMiddleware(SummarizationMiddleware):
         self._summarized_count = 0
 
     def _determine_cutoff_index(self, messages: list[AnyMessage]) -> int:
-        """Summarize everything before the ``keep_turns`` most recent user turns."""
+        """Summarize everything before the ``keep_turns`` most recent user turns, or more when they are too large."""
         starts = [
             index
             for index, message in enumerate(messages)
             if isinstance(message, HumanMessage) and not is_summary_message(message)
         ]
-        return starts[-self.keep_turns] if len(starts) > self.keep_turns else 0
+        cutoff = starts[-self.keep_turns] if len(starts) > self.keep_turns else 0
+        if self.retain_tokens is None or self.token_counter(messages[cutoff:]) <= self.retain_tokens:
+            return cutoff
+        # Keeps the latest ``retain_tokens`` and never splits a tool call from its results.
+        return max(cutoff, self._find_token_based_cutoff(messages) or 0)
 
     async def _acreate_summary(self, messages_to_summarize: list[AnyMessage]) -> str:
         self._summarized_count = len(messages_to_summarize)
