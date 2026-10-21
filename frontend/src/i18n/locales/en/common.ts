@@ -65,4 +65,7 @@ export default {
     loadingEditor: "Loading code editor…",
   },
   language: "Language",
+  notify: {
+    dismiss: "Dismiss",
+  },
 };

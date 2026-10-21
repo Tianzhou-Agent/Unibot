@@ -41,6 +41,16 @@ export default {
     id: "请使用反向域名格式的 ID，例如 com.example.notes",
     tools: "请加载每个服务器的工具并至少选择一个，或移除该服务器。",
     duplicate: "每个工具只能来自一个服务器。请只在一个服务器上保留 {{names}}。",
+    versionTaken: "版本 {{version}} 已注册且内容不同，请使用更新的版本号。",
+    versionTakenNext: "版本 {{version}} 已注册且内容不同，请使用更新的版本号，例如 {{next}}。",
+  },
+  failed: {
+    load: "无法加载应用包",
+    upload: "无法读取应用包",
+    check: "无法检查应用",
+    download: "无法下载应用包",
+    register: "无法注册应用",
+    save: "无法保存新版本",
   },
   actions: {
     download: "下载应用包",

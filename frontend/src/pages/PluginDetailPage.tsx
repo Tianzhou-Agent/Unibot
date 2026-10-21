@@ -8,6 +8,7 @@ import { ActionMenu, AppIcon, type MenuItem } from "@/components/apps/PluginUi";
 import { Topbar } from "@/components/layout/Topbar";
 import { api, apiErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useNotify } from "@/lib/notify";
 import { ACTOR_QUERY, connectAina, deleteAina, disconnectAina, installAina, isSystemAina, openAina, uninstallAina } from "@/lib/plugins";
 import { classNames } from "@/lib/utils";
 import type { AinaInstallation, AinaRecord } from "@/types";
@@ -31,6 +32,7 @@ export default function PluginDetailPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const notify = useNotify();
 
   const load = useCallback(async () => {
     try {
@@ -58,15 +60,14 @@ export default function PluginDetailPage() {
     if (searchParams.has("aina_oauth")) setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  async function run(action: () => Promise<unknown>, after?: () => void) {
+  async function run(failure: string, action: () => Promise<unknown>, after?: () => void) {
     setBusy(true);
-    setError(null);
     try {
       await action();
       if (after) after();
       else await load();
     } catch (actionError) {
-      setError(apiErrorMessage(actionError));
+      notify.error(failure, actionError);
     } finally {
       setBusy(false);
     }
@@ -77,16 +78,16 @@ export default function PluginDetailPage() {
   const usable = builtin || installed;
   const menuItems: MenuItem[] = [];
   if (manifest && connectedAccount) {
-    menuItems.push({ label: t("detail.disconnect"), icon: <LogOut className="h-4 w-4" />, onSelect: () => void run(() => disconnectAina(ainaId)) });
+    menuItems.push({ label: t("detail.disconnect"), icon: <LogOut className="h-4 w-4" />, onSelect: () => void run(t("failed.disconnect"), () => disconnectAina(ainaId)) });
   }
   if (manifest && (installed || disconnected) && !builtin) {
-    menuItems.push({ label: t("aina.uninstall"), icon: <Unplug className="h-4 w-4" />, onSelect: () => void run(() => uninstallAina(ainaId)) });
+    menuItems.push({ label: t("aina.uninstall"), icon: <Unplug className="h-4 w-4" />, onSelect: () => void run(t("failed.uninstall"), () => uninstallAina(ainaId)) });
   }
   if (manifest && canManageRegistry && manifest.runtime.type === "package" && !builtin) {
     menuItems.push({ label: t("edit"), icon: <Pencil className="h-4 w-4" />, onSelect: () => navigate(`/plugin/${encodeURIComponent(ainaId)}/edit`) });
   }
   if (manifest && canManageRegistry && !builtin && manifest.runtime.type !== "managed") {
-    menuItems.push({ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => void run(() => deleteAina(ainaId), () => navigate("/plugin")) });
+    menuItems.push({ label: t("delete"), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => void run(t("failed.delete"), () => deleteAina(ainaId), () => navigate("/plugin")) });
   }
 
   return (
@@ -124,7 +125,7 @@ export default function PluginDetailPage() {
           {disconnected && record ? (
             <section role="alert" className="mt-4 rounded-xl border border-warning-ring bg-warning-soft px-4 py-3 text-[13px] text-warning-deep">
               <p className="font-semibold">{t("detail.connectRequired", { name: record.manifest.aina.name })}</p>
-              <button type="button" disabled={busy} onClick={() => void run(() => connectAina(ainaId), () => undefined)} className="btn mt-2 h-8 rounded-full bg-ink px-3.5 text-[12px] text-white hover:bg-black">
+              <button type="button" disabled={busy} onClick={() => void run(t("failed.connect"), () => connectAina(ainaId), () => undefined)} className="btn mt-2 h-8 rounded-full bg-ink px-3.5 text-[12px] text-white hover:bg-black">
                 <LogIn className="h-3.5 w-3.5" />{t("detail.connect")}
               </button>
             </section>
@@ -164,7 +165,7 @@ export default function PluginDetailPage() {
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => void run(async () => navigate(await openAina(ainaId)), () => undefined)}
+                        onClick={() => void run(t("failed.open"), async () => navigate(await openAina(ainaId)), () => undefined)}
                         className="btn h-9 rounded-full bg-ink px-4 text-white hover:bg-black"
                       >
                         <AppWindow className="h-4 w-4" />
@@ -175,7 +176,7 @@ export default function PluginDetailPage() {
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => (manifest.runtime.type === "package" ? setConsentOpen(true) : void run(() => installAina(record)))}
+                        onClick={() => (manifest.runtime.type === "package" ? setConsentOpen(true) : void run(t("failed.install"), () => installAina(record)))}
                         className="btn h-9 rounded-full bg-ink px-4 text-white hover:bg-black"
                       >
                         <Download className="h-4 w-4" />{t("aina.install")}

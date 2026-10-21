@@ -65,4 +65,7 @@ export default {
     loadingEditor: "正在加载代码编辑器…",
   },
   language: "语言",
+  notify: {
+    dismiss: "关闭",
+  },
 };

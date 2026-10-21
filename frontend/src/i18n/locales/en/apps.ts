@@ -34,6 +34,14 @@ export default {
     information: "Information",
     version: "Version",
   },
+  failed: {
+    install: "Couldn't install the app",
+    uninstall: "Couldn't uninstall the app",
+    delete: "Couldn't delete the app",
+    open: "Couldn't open the app",
+    connect: "Couldn't start signing in",
+    disconnect: "Couldn't disconnect your account",
+  },
   refreshAria: "Refresh capabilities",
   tab: {
     apps: "Apps",

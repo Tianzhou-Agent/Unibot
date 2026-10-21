@@ -5,7 +5,7 @@ import { AlertTriangle, ChevronRight, Download, Loader2, Package, PackageCheck, 
 import { Topbar } from "@/components/layout/Topbar";
 import { CanvasPart, McpServersPart, SkillsPart } from "@/components/apps/AddAppParts";
 import { PackageScaffoldForm } from "@/components/apps/PackageDeveloper";
-import { api, apiErrorMessage } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import {
   ID_PATTERN,
   MAX_DESCRIPTION,
@@ -15,10 +15,12 @@ import {
   duplicateTools,
   emptyDraft,
   nextVersion,
+  releaseVersion,
   suggestedId,
   type AppDraft,
 } from "@/lib/addApp";
 import { useAuth } from "@/lib/auth";
+import { useNotify } from "@/lib/notify";
 import { classNames, downloadBlob } from "@/lib/utils";
 import type { AinaRecord, PackageValidationReport } from "@/types";
 
@@ -40,14 +42,19 @@ export default function AddAppPage() {
   const canRegister = !config.auth_required || Boolean(user?.is_admin);
   const [draft, setDraft] = useState<AppDraft>(emptyDraft);
   const [base, setBase] = useState<{ file: File; manifest: Record<string, unknown> } | null>(null);
+  // When editing, the version already registered; any package loaded here is saved past it.
+  const [registeredVersion, setRegisteredVersion] = useState<string | null>(null);
   const [check, setCheck] = useState<ComposeCheck | null>(null);
   const [busy, setBusy] = useState<"upload" | "check" | "download" | "register" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Set when registering found this version already taken; a new object each time, so the field is shown again.
+  const [versionTaken, setVersionTaken] = useState<{ version: string } | null>(null);
   const [showProblems, setShowProblems] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [starter, setStarter] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const packageInput = useRef<HTMLInputElement>(null);
+  const versionInput = useRef<HTMLInputElement>(null);
+  const notify = useNotify();
 
   const problems = draftProblems(draft);
   const duplicates = duplicateTools(draft);
@@ -64,15 +71,20 @@ export default function AddAppPage() {
       .getBlob(`/ainas/${encodeURIComponent(ainaId)}/package`)
       .then((result) => usePackage(new File([result.blob], result.filename ?? `${ainaId}.aina.zip`), true))
       .catch((loadError) => {
-        setError(apiErrorMessage(loadError));
+        notify.error(t("failed.load"), loadError);
         setBusy(null);
       });
   }, [ainaId]);
 
-  async function usePackage(file: File | undefined, nextRelease = false) {
+  useEffect(() => {
+    if (!versionTaken) return;
+    versionInput.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    versionInput.current?.focus({ preventScroll: true });
+  }, [versionTaken]);
+
+  async function usePackage(file: File | undefined, isRegistered = false) {
     if (!file) return;
     setBusy("upload");
-    setError(null);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -84,10 +96,12 @@ export default function AddAppPage() {
       const manifest = report.manifest as unknown as Record<string, unknown>;
       setBase({ file, manifest });
       const loaded = draftFromManifest(manifest, report.skills);
-      setDraft(nextRelease ? { ...loaded, version: nextVersion(loaded.version) } : loaded);
+      const taken = isRegistered ? loaded.version : registeredVersion;
+      if (isRegistered) setRegisteredVersion(loaded.version);
+      setDraft(taken ? { ...loaded, version: releaseVersion(loaded.version, taken) } : loaded);
       setCheck(null);
     } catch (uploadError) {
-      setError(apiErrorMessage(uploadError));
+      notify.error(t("failed.upload"), uploadError);
     } finally {
       setBusy(null);
     }
@@ -101,7 +115,6 @@ export default function AddAppPage() {
   async function run(mode: "check" | "download" | "register") {
     if (!ready()) return;
     setBusy(mode);
-    setError(null);
     try {
       const form = composeForm(draft, base);
       if (mode === "download") {
@@ -114,7 +127,11 @@ export default function AddAppPage() {
         navigate(`/plugin/${encodeURIComponent(record.manifest.aina.id)}`);
       }
     } catch (runError) {
-      setError(apiErrorMessage(runError));
+      if (mode === "register" && runError instanceof ApiError && errorCode(runError) === "VERSION_EXISTS") {
+        setVersionTaken({ version: draft.version });
+      } else {
+        notify.error(t(mode !== "register" ? `failed.${mode}` : editing ? "failed.save" : "failed.register"), runError);
+      }
     } finally {
       setBusy(null);
     }
@@ -127,6 +144,11 @@ export default function AddAppPage() {
   }
 
   const report = check?.report;
+  const versionError = versionTaken && versionTaken.version === draft.version
+    ? nextVersion(draft.version) !== draft.version
+      ? t("problems.versionTakenNext", { version: draft.version, next: nextVersion(draft.version) })
+      : t("problems.versionTaken", { version: draft.version })
+    : undefined;
   const title = editing ? t("edit.title") : t("title");
   return (
     <div className="flex h-full flex-col bg-app-bg">
@@ -218,10 +240,16 @@ export default function AddAppPage() {
               />
             </Field>
             {/[^\x00-\x7F]/.test(draft.name + draft.description) ? <p className="mt-1.5 text-[11.5px] text-warning-deep">{t("about.english")}</p> : null}
-            <details open={editing} className="mt-3 text-[12.5px] text-ink-muted">
+            <details open={editing || Boolean(versionError)} className="mt-3 text-[12.5px] text-ink-muted">
               <summary className="cursor-pointer">{t("about.more")}</summary>
-              <Field className="mt-2 w-40" label={t("about.version")} hint={editing ? t("about.versionHint") : undefined}>
-                <input value={draft.version} onChange={(event) => change({ version: event.target.value.trim() })} className="input-soft font-mono" />
+              <Field className="mt-2 max-w-md" label={t("about.version")} hint={editing ? t("about.versionHint") : undefined} error={versionError}>
+                <input
+                  ref={versionInput}
+                  value={draft.version}
+                  onChange={(event) => change({ version: event.target.value.trim() })}
+                  aria-invalid={Boolean(versionError)}
+                  className={classNames("input-soft w-40 font-mono", versionError && "border-danger")}
+                />
               </Field>
             </details>
           </section>
@@ -244,7 +272,6 @@ export default function AddAppPage() {
           </section>
 
           {report ? <CheckResult report={report} /> : null}
-          {error ? <p role="alert" className="mt-4 rounded-lg bg-danger-soft px-3 py-2 text-[12.5px] text-danger-deep">{error}</p> : null}
 
           <footer className="sticky bottom-0 mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-line bg-app-bg py-4">
             {!canRegister ? <span className="mr-auto text-[12px] text-ink-muted">{t("adminOnly")}</span> : null}
@@ -264,6 +291,10 @@ export default function AddAppPage() {
       </div>
     </div>
   );
+}
+
+function errorCode(error: ApiError): string | undefined {
+  return (error.body as { error?: { code?: string } } | null)?.error?.code;
 }
 
 function Field({

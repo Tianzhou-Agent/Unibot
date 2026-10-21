@@ -121,6 +121,28 @@ test("FE-E2E-CREATE-03 a package with problems lists them and fills nothing", as
   await expect(page.getByPlaceholder("Whiteboard")).toHaveValue("");
 });
 
+test("FE-E2E-CREATE-05 editing saves any loaded package past the registered version", async ({ page }) => {
+  await installApi(page);
+  // The registered package is 0.1.0; an upload named newer.aina.zip is already 0.3.0.
+  await page.route("**/api/ainas/packages/validate", (route) => {
+    const version = route.request().postDataBuffer()?.toString("latin1").includes("newer.aina.zip") ? "0.3.0" : "0.1.0";
+    return json(route, { ...VALID_REPORT, manifest: { ...VALID_REPORT.manifest, aina: { ...VALID_REPORT.manifest.aina, version } } });
+  });
+  await page.route(`**/api/ainas/${AINA}/package`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/zip", headers: { "Content-Disposition": `attachment; filename="${AINA}.aina.zip"` }, body: Buffer.from("zip") }));
+  await page.goto(`/plugin/${AINA}/edit`);
+  const version = page.getByRole("textbox", { name: /^版本/ });
+  await expect(version).toHaveValue("0.1.1");
+
+  const upload = (name: string) => page.getByLabel("选择文件").setInputFiles({ name, mimeType: "application/zip", buffer: Buffer.from("zip") });
+  await upload("same.aina.zip");
+  await expect(page.getByText("基于 same.aina.zip")).toBeVisible();
+  await expect(version).toHaveValue("0.1.1");
+  await upload("newer.aina.zip");
+  await expect(page.getByText("基于 newer.aina.zip")).toBeVisible();
+  await expect(version).toHaveValue("0.3.0");
+});
+
 test("FE-E2E-CREATE-04 a developer token is shown once, listed and revoked", async ({ page }) => {
   await installApi(page);
   page.on("dialog", (confirm) => void confirm.accept());
