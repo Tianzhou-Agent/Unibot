@@ -71,6 +71,33 @@ def test_images_follow_their_group_of_tool_results() -> None:
     assert parts[1] == {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG}"}}
 
 
+def test_only_the_latest_tool_results_keep_their_images() -> None:
+    messages: list[Any] = [HumanMessage(content="Render every slide")]
+    for index in range(5):
+        messages += [
+            AIMessage(content="", tool_calls=[{"id": f"r{index}", "name": "render", "args": {}}]),
+            ToolMessage(content="[image omitted]", tool_call_id=f"r{index}"),
+        ]
+    images = {f"r{index}": (f"render_{index}", [{"data": PNG, "mimeType": "image/png"}]) for index in range(5)}
+
+    projected = with_tool_images(messages, images)
+
+    pictured = [message.content[0]["text"] for message in projected if isinstance(message.content, list)]
+    assert [text.rsplit(": ", 1)[1] for text in pictured] == ["render_2", "render_3", "render_4"]
+
+
+def test_an_image_counts_as_a_fixed_number_of_tokens() -> None:
+    from tianzhou_agent_platform.model_providers.tokens import IMAGE_TOKENS, estimate_request_tokens
+
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 400_000}}
+    text = {"type": "text", "text": "Images returned by the tool calls above"}
+
+    with_picture = estimate_request_tokens([{"role": "user", "content": [text, picture]}])
+    without = estimate_request_tokens([{"role": "user", "content": [text]}])
+
+    assert with_picture - without == IMAGE_TOKENS
+
+
 def _chart_server() -> Any:
     server = _example_server()
 

@@ -11,16 +11,31 @@ import math
 from typing import Any
 
 
+# Vision models bill a picture by its pixels, not its encoded size: a 1,280-px slide render costs about 1,100-1,300
+# tokens. An image part is counted as this much instead of its base64 text, which would read as tens of thousands.
+IMAGE_TOKENS = 1_600
+_IMAGE_PARTS = frozenset({"image_url", "image"})
+
+
 def estimate_request_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> int:
     """Conservative tokenizer-free estimate for multilingual JSON chat payloads.
 
     Counts every non-ASCII character as a token, so CJK text is not underestimated the way a characters/4 rule
-    (``count_tokens_approximately``) would underestimate it.
+    (``count_tokens_approximately``) would underestimate it. Each image counts as ``IMAGE_TOKENS``.
     """
-    total = sum(_estimate_value_tokens(message) + 4 for message in messages)
+    total = sum(_estimate_message_tokens(message) + 4 for message in messages)
     if tools:
         total += _estimate_value_tokens(tools)
     return total
+
+
+def _estimate_message_tokens(message: dict[str, Any]) -> int:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return _estimate_value_tokens(message)
+    images = sum(isinstance(part, dict) and part.get("type") in _IMAGE_PARTS for part in content)
+    text = [part for part in content if not (isinstance(part, dict) and part.get("type") in _IMAGE_PARTS)]
+    return _estimate_value_tokens({**message, "content": text}) + images * IMAGE_TOKENS
 
 
 def output_token_reserve(context_window_tokens: int, max_output_tokens: int | None = None) -> int:
