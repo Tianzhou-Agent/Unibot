@@ -218,7 +218,7 @@ for example `UNIBOT_CONTEXT_WINDOW_TOKENS=10000`, `UNIBOT_CONTEXT_COMPRESSION_TH
 scope's tool schemas alone take most of it: those turns then fail on the context budget before compaction can help.) Then run `python -m unibot_eval run --enable compression --case "context.compression*"`
 (and `--case "long.compression*"`).
 
-**Long-run cases** assume the default iteration cap (`UNIBOT_MAX_AGENT_ITERATIONS=20`, one iteration = one model
+**Long-run cases** assume the default iteration cap (`UNIBOT_MAX_AGENT_ITERATIONS=60`, one iteration = one model
 call). Run them with k>=3: `python -m unibot_eval run --tags long_run --k 3`. `long.iteration_cap_honest` needs an
 instance with a cap smaller than its task (`UNIBOT_MAX_AGENT_ITERATIONS=4`) and runs with
 `--enable small_iteration_cap`.
