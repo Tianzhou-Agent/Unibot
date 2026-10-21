@@ -754,14 +754,14 @@ def test_new_turn_cancels_pending_approval_and_closes_trace() -> None:
     assert any(event["kind"] == "approval.cancelled" for event in trace.json()["events"])
 
 
-def test_iteration_limit_stops_repeated_tool_loop() -> None:
+def test_the_last_allowed_call_wraps_up_without_tools() -> None:
     async def remote(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": True})
 
     llm = ScriptedLLM(
         [
             call_first_tool(call_id="call_1"),
-            call_first_tool(call_id="call_2"),
+            assistant("I paused at the step limit after one lookup; reply continue to carry on."),
             assistant("Starting over."),
         ]
     )
@@ -783,13 +783,18 @@ def test_iteration_limit_stops_repeated_tool_loop() -> None:
         follow_up = client.post("/chat", json={"message": "Try again", "conversation_id": response.json()["conversation_id"]})
 
     assert response.status_code == 200
-    assert response.json()["status"] == "failed"
+    # The second call is the last the cap allows: it gets no tools and is told to wrap up, so the turn ends with an
+    # answer instead of failing.
+    assert response.json()["status"] == "completed"
     assert response.json()["iterations"] == 2
-    assert "stopped after 2" in response.json()["content"]
-    # The stopped run leaves consistent working memory: the next turn starts cleanly from it.
+    assert response.json()["content"].startswith("I paused at the step limit")
+    assert llm.calls[0]["tools"] and not llm.calls[1]["tools"]
+    assert "limit of 2 model calls" in llm.calls[1]["messages"][-1]["content"]
+    assert all("limit of 2 model calls" not in str(m.get("content")) for m in llm.calls[2]["messages"])
+    # The next turn starts with a fresh budget and its tools.
     assert follow_up.json()["status"] == "completed"
     assert follow_up.json()["content"] == "Starting over."
-    assert llm.calls[2]["messages"][-1]["content"] == "Try again"
+    assert llm.calls[2]["tools"] and llm.calls[2]["messages"][-1]["content"] == "Try again"
 
 
 def test_validation_errors_use_standard_error_protocol() -> None:

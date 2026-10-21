@@ -137,6 +137,14 @@ COMPLETED_REPLY = "The requested operation was completed."
 EMPTY_REPLY = OutputGuardMiddleware.EMPTY_REPLY
 STOPPED_REPLY = "The response was stopped by the user."
 STOPPED_TOOL_RESULT = "Stopped by the user before this call completed; it may have partially run."
+# Closes the request of a turn's last allowed model call, which is sent without tools.
+WRAP_UP_INSTRUCTION = (
+    "[Platform notice, not from the user] You have reached the limit of {limit} model calls for this request, so "
+    "tools are no longer available. "
+    "Reply to the user now, in text only and in the language of the conversation: say that you paused at the step "
+    "limit, summarize what you completed, list what remains, and tell them to reply \"continue\" to carry on. "
+    "Do not claim that unfinished work is done."
+)
 FORCED_CALL_MISSING_REPLY = (
     "The model answered without using the selected capability, so no result was produced. Please retry, or "
     "choose a model that supports forced tool calls."
@@ -585,6 +593,7 @@ class AgentRunner:
                 f"I stopped after {self.settings.max_agent_iterations} model iterations because the capability loop "
                 "did not produce a final answer."
             ),
+            wrap_up=WRAP_UP_INSTRUCTION.format(limit=self.settings.max_agent_iterations),
         )
         middleware: list[Any] = [
             TerminalDenialMiddleware(denied=denied, tool_result=DENIED_TOOL_RESULT, reply=CANCELLED_REPLY),
@@ -608,13 +617,14 @@ class AgentRunner:
             )
         middleware += [
             CapabilityScopeMiddleware(scope),
+            # Outside the guard and the recorder, so both see the last call's request as sent (without tools).
+            call_budget,
             budget_guard,
             forced_choice,
             ProviderErrorMiddleware(map_model_error),
             model_calls,
             InvalidToolCallMiddleware(failures.invalid_arguments),
             OrderedBatchMiddleware(repeatable=lambda name: getattr(run.registry.get(name), "kind", None) == "canvas"),
-            call_budget,
             build_approval_middleware(run.registry),
             output_guard,
             ToolErrorMiddleware(aon_error=_format_tool_error),

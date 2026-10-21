@@ -257,20 +257,37 @@ def test_side_effect_tool_is_not_in_retry_eligible_set() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_model_call_budget_ends_the_run_with_the_reply() -> None:
+async def test_the_last_allowed_call_has_no_tools_and_must_answer() -> None:
     model = ScriptedChatModel(
-        responses=[tool_calling("ordered_tool", {"tag": str(n)}, call_id=f"c{n}") for n in range(3)]
+        responses=[tool_calling("ordered_tool", {"tag": "0"}, call_id="c0"), assistant("Done one; one remains.")]
     )
-    budget = ModelCallBudgetMiddleware(run_limit=2, reply="stopped")
+    budget = ModelCallBudgetMiddleware(run_limit=2, reply="stopped", wrap_up="WRAP UP NOW")
     result = await build_chat_agent(model=model, tools=[ordered_tool], middleware=[budget]).ainvoke(
         {"messages": [HumanMessage(content="loop")]}
     )
 
     assert len(model.calls) == 2
-    assert budget.exceeded == "stopped"
-    assert result["messages"][-1].content == "stopped"
-    # Every call of the run was answered before it stopped.
-    assert len([m for m in result["messages"] if isinstance(m, ToolMessage)]) == 2
+    assert model.calls[0]["tools"] and not model.calls[1]["tools"]
+    assert model.calls[1]["messages"][-1].content == "WRAP UP NOW"
+    assert budget.wrapped_up and budget.exceeded is None
+    assert result["messages"][-1].content == "Done one; one remains."
+    # The notice is part of that request only, never of working memory.
+    assert all(m.content != "WRAP UP NOW" for m in result["messages"])
+
+
+async def test_tool_calls_returned_on_the_last_call_are_dropped() -> None:
+    model = ScriptedChatModel(
+        responses=[tool_calling("ordered_tool", {"tag": str(n)}, call_id=f"c{n}") for n in range(3)]
+    )
+    budget = ModelCallBudgetMiddleware(run_limit=2, reply="stopped", wrap_up="WRAP UP NOW")
+    result = await build_chat_agent(model=model, tools=[ordered_tool], middleware=[budget]).ainvoke(
+        {"messages": [HumanMessage(content="loop")]}
+    )
+
+    # A provider that answers the tool-less call with a tool call anyway: the call is not run and the turn ends.
+    assert len(model.calls) == 2
+    assert result["messages"][-1].content == "stopped" and not result["messages"][-1].tool_calls
+    assert len([m for m in result["messages"] if isinstance(m, ToolMessage)]) == 1
 
 
 async def test_request_budget_guard_refuses_oversized_requests_locally() -> None:
@@ -433,7 +450,7 @@ async def test_malformed_tool_calls_cannot_loop_past_the_model_call_limit() -> N
         return AIMessage(content="", invalid_tool_calls=[{"name": "x", "args": "{", "id": "c", "error": "bad"}])
 
     model = ScriptedChatModel(responses=[malformed] * 5)
-    budget = ModelCallBudgetMiddleware(run_limit=3, reply="stopped")
+    budget = ModelCallBudgetMiddleware(run_limit=3, reply="stopped", wrap_up="WRAP UP NOW")
     agent = build_agent(model=model, middleware=[InvalidToolCallMiddleware(respond), budget])
     result = await agent.ainvoke({"messages": [HumanMessage(content="go")]})
     assert len(model.calls) == 3

@@ -11,7 +11,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware, hook_config
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.tool import InvalidToolCall
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
@@ -27,18 +27,59 @@ def reject_truncated_call(*, finish_reason: str | None) -> bool:
 
 
 class ModelCallBudgetMiddleware(ModelCallLimitMiddleware):
-    """The built-in per-invocation model-call limit, ending the run with the caller's ``reply``.
+    """The built-in per-invocation model-call limit, with a graceful last call.
 
-    The built-in either raises (leaving a failed step in the checkpoint) or ends with its own English notice.
-    This ends cleanly with ``reply`` as the final message, so working memory and any archive agree; ``exceeded``
-    holds the reply once the budget is spent. The count is per invocation, so an approval continuation gets a
-    fresh budget.
+    The last call the budget allows is sent without tools and with ``wrap_up`` as a closing user-role message (in that
+    request only, never in working memory; at the end of the transcript a model follows it more reliably than in the
+    system prompt), so the model has to end the turn with a text answer (what it did, what remains) instead of being
+    cut off;
+    ``wrapped_up`` records that it happened. Should a call still follow, the built-in limit ends the run cleanly with
+    ``reply`` as the final message, so working memory and any archive agree, and ``exceeded`` holds the reply. The
+    count is per invocation, so an approval continuation gets a fresh budget.
     """
 
-    def __init__(self, *, run_limit: int, reply: str) -> None:
+    def __init__(self, *, run_limit: int, reply: str, wrap_up: str) -> None:
         super().__init__(run_limit=run_limit, exit_behavior="end")
         self.reply = reply
+        self.wrap_up = wrap_up
+        self.wrapped_up = False
         self.exceeded: str | None = None
+
+    def _last_call(self, request: ModelRequest) -> ModelRequest | None:
+        """The request of the budget's last call, without tools and told to wrap up; None for any other call."""
+        if self.run_limit is None or request.state.get("run_model_call_count", 0) + 1 < self.run_limit:
+            return None
+        self.wrapped_up = True
+        return request.override(
+            tools=[], tool_choice=None, messages=[*request.messages, HumanMessage(content=self.wrap_up)]
+        )
+
+    def _text_only(self, response: ModelResponse) -> ModelResponse:
+        """The wrap-up answer without tool calls, should the provider return some anyway."""
+        result: list[BaseMessage] = []
+        for message in response.result:
+            if isinstance(message, AIMessage) and (message.tool_calls or message.invalid_tool_calls):
+                message = message.model_copy(
+                    update={"tool_calls": [], "invalid_tool_calls": [], "content": message.content or self.reply}
+                )
+            result.append(message)
+        return ModelResponse(result=result, structured_response=response.structured_response)
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        last = self._last_call(request)
+        return await handler(request) if last is None else self._text_only(await handler(last))
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        last = self._last_call(request)
+        return handler(request) if last is None else self._text_only(handler(last))
 
     @hook_config(can_jump_to=["end"])
     def before_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
