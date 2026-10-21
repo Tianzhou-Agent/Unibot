@@ -22,7 +22,7 @@ from pydantic import Field
 
 from tianzhou_agent_platform.aina.package.manifest import AinaPackageManifest
 from tianzhou_agent_platform.aina.package.models import PackagedSkill
-from tianzhou_agent_platform.aina.project import read_project_archive
+from tianzhou_agent_platform.aina.project import read_package_archive
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import PlatformError
 
@@ -71,8 +71,7 @@ def manifest_schema() -> dict[str, Any]:
 
 
 def validate_package_archive(payload: bytes) -> PackageValidationReport:
-    files, _size = read_project_archive(payload)
-    report = validate_package_files(files)
+    report = validate_package_files(read_package_archive(payload))
     report.archive_sha256 = hashlib.sha256(payload).hexdigest()
     return report
 
