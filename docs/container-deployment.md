@@ -115,4 +115,4 @@ Compose 读取 `UNIBOT_SANDBOX_DRIVER`，默认 `local`，但默认拒绝本地�
 
 共享工具、技能及远程 AINA 的注册/删除要求平台管理员权限；普通用户仍可发现公开能力并管理自己的 AINA 安装。工具/技能的 `owner_user_id` 和 `tenant_id` 由服务器绑定。私有能力只对其所有者及管理员可见，租户能力还允许同租户用户；升级前没有归属信息的非公开记录对普通用户不可见，需由管理员重新登记。执行与发现使用同一权限规则。
 
-设置 `UNIBOT_CAPABILITY_ALLOWED_ORIGINS` 后才能访问远程 Tools/AINA，例如 `https://connector.example.com,http://trusted-service:8080`。每项必须是完整的 HTTP(S) 来源（协议、主机、端口），不可包含凭据、查询或路径；默认空值拒绝全部目标，且没有通配符。注册时检查端点和健康检查，实际请求（包括重定向和 A2A Agent Card 发现的接口）再次检查目标。内部服务可以显式列入，但只应批准受控服务。此规则不做 DNS 固定或 IP 地址隔离：管理员还需保护获准域名的 DNS、限制出口网络，并避免批准能转发任意 URL 的代理服务。模型提供商、GitHub OAuth 等平台配置地址不属于此远程能力列表。
+设置 `UNIBOT_CAPABILITY_ALLOWED_ORIGINS` 后才能访问远程 Tools/AINA，例如 `https://connector.example.com,http://trusted-service:8080`。每项必须是完整的 HTTP(S) 来源（协议、主机、端口），不可包含凭据、查询或路径；默认空值拒绝全部目标。`*` approves any origin, internal addresses included; use it only where every signed-in user is trusted, since any of them can make the backend probe a server URL from the Add app page.注册时检查端点和健康检查，实际请求（包括重定向和 A2A Agent Card 发现的接口）再次检查目标。内部服务可以显式列入，但只应批准受控服务。此规则不做 DNS 固定或 IP 地址隔离：管理员还需保护获准域名的 DNS、限制出口网络，并避免批准能转发任意 URL 的代理服务。模型提供商、GitHub OAuth 等平台配置地址不属于此远程能力列表。
