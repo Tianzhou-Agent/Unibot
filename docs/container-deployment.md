@@ -106,6 +106,10 @@ YOLO 服务仍使用 `YOLO_DEVICE=auto`，能访问 CUDA 时选择 GPU，否则�
 3. 将 `UNIBOT_FRONTEND_BASE_URL` 和 GitHub OAuth 回调改为正式域名；
 4. 不向公网开放后端的 `8000` 端口，只保留前端/网关入口；
 5. 多后端节点使用同一个 MySQL、Redis、NAS 和 `UNIBOT_AUTH_SECRET`。
+6. Headless canvas host: while no browser tab shows a conversation, the backend runs its canvas tools in a headless
+   Chromium (installed in the backend image) that opens `UNIBOT_FRONTEND_BASE_URL/canvas-host/...` as the
+   conversation's owner. That URL must be reachable from the backend containers. Set
+   `UNIBOT_CANVAS_HOST_ENABLED=false` to turn it off; canvas calls then fail with `CANVAS_NOT_OPEN` when no tab is open.
 
 Compose 读取 `UNIBOT_SANDBOX_DRIVER`，默认 `local`，但默认拒绝本地代码执行。只有可信开发环境才可显式设置 `UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL=true`：该驱动在后端容器的操作系统身份下执行脚本，用户目录划分不是安全隔离。运行不可信脚本时，使用现有 K3s + gVisor 方案并设置 `UNIBOT_SANDBOX_DRIVER=kubernetes`，详见 [用户沙箱平台](sandbox-platform.md)。选择 Kubernetes 还需在 Compose override 中传入对应 `UNIBOT_SANDBOX_KUBERNETES_*` 环境变量、挂载服务账户凭据/CA，并确认 API 连通性及工作区 PVC；只改驱动名称不会配置集群。不要把 Docker Socket 挂载到 Web 后端。
 

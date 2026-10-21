@@ -256,6 +256,14 @@ class AgentSettings(BaseSettings):
         default="http://127.0.0.1:5173",
         validation_alias=AliasChoices("UNIBOT_FRONTEND_BASE_URL", "frontend_base_url"),
     )
+    canvas_host_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_CANVAS_HOST_ENABLED", "canvas_host_enabled"),
+        description=(
+            "Run canvas tools in a server-side headless browser (Playwright Chromium) when no tab shows the "
+            "conversation, so runs keep working after the user leaves."
+        ),
+    )
     github_oauth_client_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("UNIBOT_GITHUB_CLIENT_ID", "github_oauth_client_id"),

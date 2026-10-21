@@ -239,19 +239,19 @@ export function setCanvasToolHost(ainaId: string, host: CanvasToolHost | null) {
   for (const listener of canvasHostListeners) listener();
 }
 
-/** The AINA's open canvas once it has registered ``name``; rejects after ``timeoutMs``. */
-export function waitForCanvasTool(ainaId: string, name: string, timeoutMs: number): Promise<CanvasToolHost> {
+/** The AINA's open canvas once it has registered ``name`` (with null: any tool); rejects after ``timeoutMs``. */
+export function waitForCanvasTool(ainaId: string, name: string | null, timeoutMs: number): Promise<CanvasToolHost> {
   return new Promise((resolve, reject) => {
     const check = () => {
       const host = canvasHosts.get(ainaId);
-      if (!host?.tools.has(name)) return false;
+      if (!host || (name === null ? host.tools.size === 0 : !host.tools.has(name))) return false;
       finish();
       resolve(host);
       return true;
     };
     const timer = window.setTimeout(() => {
       finish();
-      reject(new BridgeError("CANVAS_NOT_READY", `The canvas did not register ${name} in time`));
+      reject(new BridgeError("CANVAS_NOT_READY", `The canvas did not register ${name ?? "its tools"} in time`));
     }, timeoutMs);
     const finish = () => {
       window.clearTimeout(timer);

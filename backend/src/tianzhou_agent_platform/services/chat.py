@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -27,6 +28,9 @@ from tianzhou_agent_platform.services.run_stops import RunStops
 logger = logging.getLogger(__name__)
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
+
+# Turns cut off longer ago than this are left for the user to send again.
+INTERRUPTED_RUN_RECOVERY_WINDOW = timedelta(hours=1)
 
 
 class ChatService:
@@ -128,13 +132,43 @@ class ChatService:
         )
         if conversation.run_status != "stopped":
             raise conflict("This conversation has no stopped request to continue")
+        return await self._continue(conversation, event_sink=event_sink)
+
+    async def resume_interrupted(self) -> None:
+        """Continue the turns a restart or crash cut off recently, each from its last checkpoint.
+
+        Each turn is claimed first, so only one node resumes it, and only once in a while: a turn that brings its
+        process down does not restart itself in a loop. A tool call that was running when the process ended runs
+        again.
+        """
+        since = datetime.now(UTC) - INTERRUPTED_RUN_RECOVERY_WINDOW
+        conversations = [
+            conversation
+            for conversation in await self.conversations.list_interrupted_runs(since=since)
+            if await self.conversations.claim_run_recovery(conversation.id)
+        ]
+        results = await asyncio.gather(
+            *(self._continue(conversation, interrupted=True) for conversation in conversations),
+            return_exceptions=True,
+        )
+        for conversation, result in zip(conversations, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning("Interrupted turn of %s could not be resumed: %s", conversation.id, result)
+            else:
+                logger.info("Resumed the interrupted turn of %s: %s", conversation.id, result.status)
+
+    async def _continue(
+        self, conversation: Conversation, *, event_sink: EventSink | None = None, interrupted: bool = False
+    ) -> ChatResponse:
+        """Run the rest of the conversation's checkpointed turn as a new run."""
+        user_id, tenant_id = conversation.user_id, conversation.tenant_id
         trace_id = f"trace_{uuid4().hex}"
         await self.events.start(
             trace_id=trace_id,
             conversation_id=conversation.id,
             user_id=user_id,
             tenant_id=tenant_id,
-            input_data={"resume": True},
+            input_data={"resume": True, **({"interrupted": True} if interrupted else {})},
         )
         try:
             conversation = await self.conversations.start_run(conversation.id, trace_id)

@@ -79,6 +79,20 @@ class ConversationStore(SqlStore):
             messages = await _load_messages(session, [row["id"] for row in rows])
         return [model_from_mapping(Conversation, row, messages=messages[row["id"]]) for row in rows]
 
+    async def list_with_run_status(
+        self, *, running: bool, failed_with: str, since: datetime
+    ) -> list[Conversation]:
+        """Conversations updated since ``since`` that are running (with ``running``) or failed with ``failed_with``,
+        without their messages."""
+        table = conversations_table
+        statuses = (table.c.run_status == "failed") & (table.c.run_error == failed_with)
+        if running:
+            statuses = statuses | (table.c.run_status == "running")
+        statement = select(table).where(table.c.status != "deleted", table.c.updated_at >= since, statuses)
+        async with self._session() as session:
+            rows = (await session.execute(statement)).mappings().all()
+        return [model_from_mapping(Conversation, row) for row in rows]
+
     async def mutate(
         self,
         conversation_id: str,

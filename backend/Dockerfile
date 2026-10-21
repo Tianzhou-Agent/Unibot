@@ -41,6 +41,11 @@ RUN apt-get update \
 
 COPY --from=builder /opt/venv /opt/venv
 
+# Headless Chromium for the headless canvas host, which runs canvas tools while no tab shows the conversation.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN /opt/venv/bin/playwright install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 RUN mkdir -p /data/nas /data/sandboxes \
     && chown -R unibot:unibot /app /data
