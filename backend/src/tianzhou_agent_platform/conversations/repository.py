@@ -13,6 +13,7 @@ from typing import Protocol, runtime_checkable
 
 from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.conversations.models import (
+    CanvasTabs,
     Conversation,
     ConversationCreate,
     ConversationUpdate,
@@ -104,6 +105,8 @@ class ConversationRunRepository(Protocol):
     async def claim_conversation_run_recovery(self, conversation_id: str) -> bool: ...
 
     async def set_conversation_status(self, conversation_id: str, status: str) -> Conversation: ...
+
+    async def set_conversation_canvas_tabs(self, conversation_id: str, tabs: CanvasTabs) -> Conversation: ...
 
     async def bind_conversation_aina(
         self, conversation_id: str, aina_id: str, *, make_primary: bool = False, mark_used: bool = False

@@ -17,7 +17,12 @@ from tianzhou_agent_platform.conversations.attachments import (
     content_disposition,
     too_large,
 )
-from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate, ConversationUpdate
+from tianzhou_agent_platform.conversations.models import (
+    CanvasTabs,
+    Conversation,
+    ConversationCreate,
+    ConversationUpdate,
+)
 
 
 def create_conversation_router() -> APIRouter:
@@ -132,6 +137,16 @@ def create_conversation_router() -> APIRouter:
         existing = await conversations.get(conversation_id)
         require_actor_ownership(request, user_id=existing.user_id, tenant_id=existing.tenant_id)
         return await conversations.update(conversation_id, payload)
+
+    @router.put("/conversations/{conversation_id}/canvas-tabs", response_model=CanvasTabs)
+    async def set_conversation_canvas_tabs(conversation_id: str, payload: CanvasTabs, request: Request) -> CanvasTabs:
+        """The canvas tabs open beside the conversation, reopened when the user returns to it; it keeps its place in
+        the conversation list."""
+        conversations = conversation_service(request)
+        existing = await conversations.get(conversation_id)
+        require_actor_ownership(request, user_id=existing.user_id, tenant_id=existing.tenant_id)
+        await conversations.set_canvas_tabs(conversation_id, payload)
+        return payload
 
     @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_conversation(conversation_id: str, request: Request) -> Response:

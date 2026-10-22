@@ -55,6 +55,17 @@ class ConversationCreate(StrictModel):
     last_aina_id: str | None = None
 
 
+# The key of Conversation.config that holds the canvas tabs open beside the conversation.
+CANVAS_TABS_KEY = "canvas_tabs"
+
+
+class CanvasTabs(StrictModel):
+    """The canvas tabs (AINA ids, in order) open beside a conversation, and the one shown; reopened on return."""
+
+    ids: list[str] = Field(default_factory=list, max_length=20)
+    active: str | None = None
+
+
 class ConversationUpdate(StrictModel):
     title: str | None = None
     category: str | None = Field(default=None, min_length=1, max_length=40)

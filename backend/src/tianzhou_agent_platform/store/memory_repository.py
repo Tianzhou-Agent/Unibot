@@ -29,6 +29,8 @@ from tianzhou_agent_platform.aina.scheduler import (
     next_scheduled_run,
 )
 from tianzhou_agent_platform.conversations.models import (
+    CANVAS_TABS_KEY,
+    CanvasTabs,
     Conversation,
     ConversationCreate,
     ConversationUpdate,
@@ -850,6 +852,16 @@ class InMemoryRepository:
             if conversation is None:
                 raise not_found("Conversation", conversation_id)
             updated = conversation_with_status(conversation, status)
+            self._conversations[conversation_id] = updated
+            await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
+            return self._copy(updated)
+
+    async def set_conversation_canvas_tabs(self, conversation_id: str, tabs: CanvasTabs) -> Conversation:
+        async with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is None or conversation.status == "deleted":
+                raise not_found("Conversation", conversation_id)
+            updated = with_canvas_tabs(conversation, tabs)
             self._conversations[conversation_id] = updated
             await self._save_record(CONVERSATIONS_RESOURCE, conversation_id, updated)
             return self._copy(updated)
@@ -2284,6 +2296,12 @@ def new_conversation(data: ConversationCreate) -> Conversation:
 def updated_conversation(conversation: Conversation, data: ConversationUpdate) -> Conversation:
     changes = data.model_dump(exclude_none=True)
     return conversation.model_copy(update={**changes, "updated_at": datetime.now(UTC)}, deep=True)
+
+
+def with_canvas_tabs(conversation: Conversation, tabs: CanvasTabs) -> Conversation:
+    # Not a change of the conversation itself, so it keeps its place in the list (updated_at stays).
+    config = {**conversation.config, CANVAS_TABS_KEY: tabs.model_dump()}
+    return conversation.model_copy(update={"config": config}, deep=True)
 
 
 def conversation_with_status(conversation: Conversation, status: str) -> Conversation:

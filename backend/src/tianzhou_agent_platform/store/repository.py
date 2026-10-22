@@ -17,7 +17,13 @@ from tianzhou_agent_platform.aina.package.notifications import AinaNotification
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.conversations.models import Conversation, ConversationCreate, ConversationUpdate, Message
+from tianzhou_agent_platform.conversations.models import (
+    CanvasTabs,
+    Conversation,
+    ConversationCreate,
+    ConversationUpdate,
+    Message,
+)
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
 from tianzhou_agent_platform.core.feedback import FeedbackRecord
@@ -53,6 +59,7 @@ from tianzhou_agent_platform.store.memory_repository import (
     updated_conversation,
     validated_aina_project,
     with_bound_aina,
+    with_canvas_tabs,
 )
 from tianzhou_agent_platform.store.conversation_store import ConversationStore
 from tianzhou_agent_platform.store.user_store import UserStore
@@ -923,6 +930,11 @@ class PersistentRepository(InMemoryRepository):
     async def update_conversation(self, conversation_id: str, data: ConversationUpdate) -> Conversation:
         return await self._conversation_store.mutate(
             conversation_id, lambda conversation: updated_conversation(conversation, data)
+        )
+
+    async def set_conversation_canvas_tabs(self, conversation_id: str, tabs: CanvasTabs) -> Conversation:
+        return await self._conversation_store.mutate(
+            conversation_id, lambda conversation: with_canvas_tabs(conversation, tabs)
         )
 
     async def set_conversation_status(self, conversation_id: str, status: str) -> Conversation:
