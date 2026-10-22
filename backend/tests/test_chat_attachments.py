@@ -239,6 +239,42 @@ def test_a_workspace_conversation_stores_its_files_in_the_workspace(chat: Any) -
     assert client.get(f"/attachments/{ref}").content == b"Taxi 42 EUR"
 
 
+def _save(client: TestClient, name: str, data: bytes, **form: str) -> Any:
+    return client.post(f"/ainas/{AINA_ID}/files", files={"file": (name, data, "application/octet-stream")}, data=form)
+
+
+def test_an_app_saves_files_it_made_to_the_files_of_the_conversation_beside_it(chat: Any) -> None:
+    client, _seen = chat
+    workspace = client.post("/workspaces", json={"name": "Team"}).json()
+    team_chat = client.post("/conversations", json={"title": "Team", "workspace_id": workspace["id"]}).json()
+    own_chat = client.post("/conversations", json={"title": "Mine"}).json()
+
+    saved = _save(client, "report.md", b"# Report", conversation_id=own_chat["id"])
+    again = _save(client, "report.md", b"# Report v2")
+    shared = _save(client, "report.md", b"# Team report", conversation_id=team_chat["id"])
+    unreadable = _save(client, "photo.png", b"\x89PNG\r\n")
+    unknown = _save(client, "report.md", b"# Report", conversation_id="conv_missing")
+
+    assert saved.status_code == 201 and saved.json() == {"name": "Uploads/report.md"}
+    assert again.json() == {"name": "Uploads/report (2).md"}  # never replaces a file
+    assert shared.json() == {"name": "Uploads/report.md"}
+    assert _documents(client) == ["Uploads/report (2).md", "Uploads/report.md"]
+    assert _documents(client, workspace_id=workspace["id"]) == ["Uploads/report.md"]
+    assert client.get("/documents/Uploads/report.md/file", params={"workspace_id": workspace["id"]}).content == (
+        b"# Team report"
+    )
+    assert unreadable.status_code == 415
+    assert unknown.status_code == 404
+
+
+def test_an_app_the_user_has_not_installed_cannot_save_files(chat: Any) -> None:
+    client, _seen = chat
+    client.delete(f"/ainas/{AINA_ID}/install")
+
+    assert _save(client, "report.md", b"# Report").status_code == 403
+    assert _documents(client) == []
+
+
 def test_uploads_need_the_document_storage() -> None:
     with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
         assert _upload(client).status_code == 503

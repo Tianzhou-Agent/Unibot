@@ -1,7 +1,7 @@
 """The kinds of file a user's file tree holds, by extension.
 
 Markdown documents have sections (outline, section edits, edit tasks). Other text files (plain text, data and code)
-are edited as a whole. PDF, DOCX and XLSX files are stored as uploaded and read through the text extracted from them,
+are edited as a whole. PDF, DOCX, XLSX and PPTX files are stored as uploaded and read through the text extracted from them,
 kept hidden beside the file; they cannot be edited.
 """
 
@@ -74,6 +74,7 @@ BINARY_TYPES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 TEXT_TYPES = {
     ".md": "text/markdown",

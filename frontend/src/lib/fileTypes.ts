@@ -1,4 +1,4 @@
-import { FileCode2, FileSpreadsheet, FileText, type LucideIcon } from "lucide-react";
+import { FileCode2, FileSpreadsheet, FileText, Presentation, type LucideIcon } from "lucide-react";
 
 // The files Superbot reads (backend aina/document/file_types.py); it refuses any other upload.
 const MARKDOWN = [".md"];
@@ -10,7 +10,7 @@ const CODE = [
   ".java", ".kt", ".scala", ".go", ".rs", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".rb", ".php", ".swift",
   ".dart", ".lua", ".r", ".sh", ".bash", ".ps1", ".bat", ".diff", ".patch",
 ];
-const BINARY = [".pdf", ".docx", ".xlsx"];
+const BINARY = [".pdf", ".docx", ".xlsx", ".pptx"];
 export const READABLE_EXTENSIONS = [...MARKDOWN, ...PROSE, ...SHEETS, ...CODE, ...BINARY];
 
 /** How the file tree treats a file: Markdown has sections, text is edited whole, binary is read-only. */
@@ -46,6 +46,7 @@ export function fileVisual(name: string): FileVisual {
   if (extension === ".pdf") return { icon: FileText, label, tile: "bg-red-50 text-red-600" };
   if (extension === ".docx") return { icon: FileText, label, tile: "bg-blue-50 text-blue-600" };
   if (extension === ".xlsx" || SHEETS.includes(extension)) return { icon: FileSpreadsheet, label, tile: "bg-emerald-50 text-emerald-700" };
+  if (extension === ".pptx") return { icon: Presentation, label, tile: "bg-orange-50 text-orange-600" };
   if (CODE.includes(extension)) return { icon: FileCode2, label, tile: "bg-violet-50 text-violet-600" };
   return { icon: FileText, label, tile: "bg-slate-100 text-slate-600" };
 }

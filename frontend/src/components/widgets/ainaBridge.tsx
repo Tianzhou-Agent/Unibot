@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { ShieldAlert } from "lucide-react";
 import i18n from "@/i18n";
 import { api, apiErrorMessage, apiUrl } from "@/lib/api";
-import { classNames } from "@/lib/utils";
+import { formatFileSize } from "@/lib/fileTypes";
+import { classNames, downloadBlob } from "@/lib/utils";
 import type { AinaInstallation, AinaRecord } from "@/types";
 
 // The UI bridge of AINA Protocol 2.0 (design §9.4), host side, shared by canvases and widgets. An AINA's UI runs in
@@ -41,7 +42,11 @@ export class BridgeError extends Error {
   }
 }
 
-type Confirmation = { tool: PackageTool; args: Record<string, unknown>; resolve: (allowed: boolean) => void };
+// What the host asks the user before it acts for the frame: a tool call that changes data, or saving a file.
+type Confirmation = (
+  | { tool: PackageTool; args: Record<string, unknown> }
+  | { file: { name: string; size: number } }
+) & { resolve: (allowed: boolean) => void };
 
 /** URL of a packaged UI file (served sandboxed by the backend). */
 export function packageUiUrl(ainaId: string, version: string, entry: string): string {
@@ -82,6 +87,7 @@ export function useAinaBridge({
   const hostRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
   const nextHostRequest = useRef(1);
   const approvedWrites = useRef(new Set<string>());
+  const approvedSaves = useRef(false);
   const latest = useRef({ context, conversationId, onPrompt, extra });
   latest.current = { context, conversationId, onPrompt, extra };
 
@@ -149,6 +155,27 @@ export function useAinaBridge({
             confirmed: tool.effect !== "read",
             ...(latest.current.conversationId ? { conversation_id: latest.current.conversationId } : {}),
           });
+        }
+        case "saveFile": {
+          const name = String(params.name ?? "").trim();
+          const data = params.data;
+          if (!name || !(data instanceof Blob)) throw new BridgeError("INVALID_REQUEST", "saveFile needs a name and a Blob");
+          // A saved file lands in the user's Files: asked once per opened frame, like writes, and not while they are away.
+          if (!headless && !approvedSaves.current) {
+            const allowed = await new Promise<boolean>((resolve) => {
+              pending.current = { file: { name, size: data.size }, resolve };
+              setConfirmation(pending.current);
+            });
+            if (!allowed) throw new BridgeError("DENIED", t("ainaFrame.declined"));
+            approvedSaves.current = true;
+          }
+          const body = new FormData();
+          body.append("file", data, name);
+          if (latest.current.conversationId) body.append("conversation_id", latest.current.conversationId);
+          const saved = await api.postForm<{ name: string }>(`/ainas/${encodeURIComponent(ainaId)}/files`, body);
+          // This page downloads it, not the sandboxed frame, so the browser does not block it.
+          if (!headless) downloadBlob(data, name);
+          return { name: saved.name, downloaded: !headless };
         }
         case "sendPrompt": {
           const text = String(params.text ?? "").trim().slice(0, 4000);
@@ -291,7 +318,7 @@ export function waitForCanvasTool(ainaId: string, name: string | null, timeoutMs
   });
 }
 
-/** The host's own confirmation for a tool call an AINA's UI requested; drawn outside the iframe. */
+/** The host's own confirmation for a tool call or file save an AINA's UI requested; drawn outside the iframe. */
 export function BridgeConfirmDialog({
   appName,
   confirmation,
@@ -303,23 +330,30 @@ export function BridgeConfirmDialog({
 }) {
   const { t } = useTranslation("canvas");
   if (!confirmation) return null;
-  const destructive = confirmation.tool.effect === "destructive";
+  const destructive = "tool" in confirmation && confirmation.tool.effect === "destructive";
+  const title = t("file" in confirmation ? "ainaFrame.confirmSaveTitle" : "ainaFrame.confirmTitle");
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-4" role="presentation">
-      <div role="alertdialog" aria-modal="true" aria-label={t("ainaFrame.confirmTitle")} className="w-full max-w-sm rounded-xl border border-line bg-white p-4 shadow-xl">
+      <div role="alertdialog" aria-modal="true" aria-label={title} className="w-full max-w-sm rounded-xl border border-line bg-white p-4 shadow-xl">
         <div className="flex items-start gap-3">
           <span className={classNames("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", destructive ? "bg-danger-soft text-danger" : "bg-accent-soft text-accent")}>
             <ShieldAlert className="h-4 w-4" />
           </span>
           <div className="min-w-0">
-            <h3 className="text-[13.5px] font-bold text-ink">{t("ainaFrame.confirmTitle")}</h3>
+            <h3 className="text-[13.5px] font-bold text-ink">{title}</h3>
             <p className="mt-0.5 text-[12px] text-ink-muted">
-              {t(destructive ? "ainaFrame.confirmDestructive" : "ainaFrame.confirmWrite", { app: appName, tool: confirmation.tool.title || confirmation.tool.name })}
+              {"file" in confirmation
+                ? t("ainaFrame.confirmSave", { app: appName, name: confirmation.file.name, size: formatFileSize(confirmation.file.size) })
+                : t(destructive ? "ainaFrame.confirmDestructive" : "ainaFrame.confirmWrite", { app: appName, tool: confirmation.tool.title || confirmation.tool.name })}
             </p>
           </div>
         </div>
-        <p className="mt-3 text-[11.5px] text-ink-muted">{confirmation.tool.description}</p>
-        <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-app-soft p-2 font-mono text-[11px] text-ink">{JSON.stringify(confirmation.args, null, 2)}</pre>
+        {"tool" in confirmation ? (
+          <>
+            <p className="mt-3 text-[11.5px] text-ink-muted">{confirmation.tool.description}</p>
+            <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-app-soft p-2 font-mono text-[11px] text-ink">{JSON.stringify(confirmation.args, null, 2)}</pre>
+          </>
+        ) : null}
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={() => onDecide(false)} className="btn-outline">{t("ainaFrame.deny")}</button>
           <button type="button" autoFocus onClick={() => onDecide(true)} className={classNames("btn-primary", destructive && "bg-danger hover:bg-danger")}>{t("ainaFrame.allow")}</button>

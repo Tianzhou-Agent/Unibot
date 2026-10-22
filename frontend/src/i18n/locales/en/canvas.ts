@@ -31,6 +31,8 @@ export default {
     confirmTitle: "Allow this change?",
     confirmWrite: "{{app}} wants to run {{tool}}, which changes your data.",
     confirmDestructive: "{{app}} wants to run {{tool}}, which deletes data. This cannot be undone.",
+    confirmSaveTitle: "Save this file?",
+    confirmSave: "{{app}} wants to save {{name}} ({{size}}) to your Files and download it.",
     allow: "Allow",
     deny: "Deny",
     declined: "You declined this action.",

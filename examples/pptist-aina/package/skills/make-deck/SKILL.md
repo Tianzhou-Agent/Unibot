@@ -56,4 +56,5 @@ CJK characters.
   save the deck shown before they replace it.
 - `list_decks` lists saved decks even when the canvas is closed; `open_deck` shows one.
 - Delete slides (`delete_slides`) or decks (`delete_deck`) only when the user asks; Superbot asks them to confirm.
-- `export_pptx` downloads the open deck as .pptx in the user's browser; use it when the user asks for a file.
+- `export_pptx` saves the open deck as .pptx to the user's Files and downloads it when they are there; use it when
+  the user asks for a file, and tell them its name in Files (e.g. `Uploads/Deck.pptx`).

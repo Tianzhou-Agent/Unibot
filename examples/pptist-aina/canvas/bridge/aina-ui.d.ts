@@ -52,6 +52,13 @@ export interface Host {
   sendPrompt(text: string): Promise<void>;
   setTitle(text: string): Promise<void>;
   notify(text: string): Promise<void>;
+  /**
+   * Save a file the app made to the user's Files (the workspace's, beside a workspace conversation), and download it
+   * when the user is there. The shell asks the user first, once per opened frame. Files keeps only types Superbot can
+   * read: text, Markdown, code, PDF, DOCX, XLSX and PPTX, of at most 20 MiB. Resolves to the file's name in Files, e.g.
+   * "Uploads/Deck.pptx", and whether the browser downloaded it.
+   */
+  saveFile(name: string, data: Blob): Promise<{ name: string; downloaded: boolean }>;
   /** URL canvases only: a short-lived pairwise identity token for your own backend. */
   getIdentityToken(): Promise<string>;
   /** Widgets only: open this AINA's canvas beside the conversation. */

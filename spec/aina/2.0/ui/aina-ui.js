@@ -84,6 +84,13 @@ export const host = {
   notify(text) {
     return request("notify", { text });
   },
+  /**
+   * Save a file the app made (a Blob) to the user's Files, beside the conversation's other files, and download it
+   * when the user is there. The shell asks the user first. Resolves to { name, downloaded }: its name in Files.
+   */
+  saveFile(name, data) {
+    return request("saveFile", { name, data });
+  },
   /** URL canvases only: a short-lived pairwise identity token for your own backend. */
   getIdentityToken() {
     return request("getIdentityToken", {}).then((value) => value.token);

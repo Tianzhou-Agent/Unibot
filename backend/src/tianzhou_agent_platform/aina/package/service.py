@@ -481,6 +481,10 @@ class AinaPackageService:
         )
         return outcome.visible
 
+    async def require_usable(self, aina_id: str, *, tenant_id: str, user_id: str) -> None:
+        """Refuse a user who has not installed and authorized the AINA."""
+        await self._usable_installation(aina_id, tenant_id=tenant_id, user_id=user_id)
+
     async def identity_token(self, aina_id: str, *, tenant_id: str, user_id: str) -> str:
         """Design §9.1: a short-lived pairwise identity for a URL canvas's own backend; it carries no Host API scope."""
         record, installation = await self._usable_installation(aina_id, tenant_id=tenant_id, user_id=user_id)

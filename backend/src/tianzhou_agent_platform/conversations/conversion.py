@@ -1,7 +1,7 @@
 """What an uploaded file is to Superbot: its text, which the model reads.
 
 Only files Superbot can read are accepted: UTF-8 text (Markdown, plain text, data and code files), PDF with a text
-layer, DOCX and XLSX. Everything else is refused, so the model is never handed a file it cannot see. The type is
+layer, DOCX, XLSX and PPTX. Everything else is refused, so the model is never handed a file it cannot see. The type is
 decided from the file's name and bytes, never from what the browser said.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import codecs
 import csv
 import io
+import posixpath
 import re
 import zipfile
 from collections.abc import Iterator
@@ -21,16 +22,16 @@ from tianzhou_agent_platform.aina.document.service import MAX_DOCUMENT_BYTES
 from tianzhou_agent_platform.core.errors import PlatformError
 
 MAX_PDF_PAGES = 1000
-# What a DOCX or XLSX may unpack to: their XML is parsed in memory.
+# What a DOCX, XLSX or PPTX may unpack to: their XML is parsed in memory.
 MAX_UNPACKED_BYTES = 50 * 1024 * 1024
 
 
 @dataclass(frozen=True)
 class Converted:
     content_type: str
-    # A text file's own text, or the Markdown extracted from a PDF, DOCX or XLSX.
+    # A text file's own text, or the Markdown extracted from a PDF, DOCX, XLSX or PPTX.
     text: str
-    binary: bool  # PDF, DOCX or XLSX: stored as uploaded, read through ``text``
+    binary: bool  # PDF, DOCX, XLSX or PPTX: stored as uploaded, read through ``text``
 
 
 def convert(name: str, payload: bytes) -> Converted:
@@ -39,7 +40,7 @@ def convert(name: str, payload: bytes) -> Converted:
     if kind is None:
         raise unsupported(name)
     if kind == "binary":
-        extract = {".pdf": _pdf, ".docx": _docx, ".xlsx": _xlsx}[extension(name)]
+        extract = {".pdf": _pdf, ".docx": _docx, ".xlsx": _xlsx, ".pptx": _pptx}[extension(name)]
         converted = Converted(content_type(name), extract(payload), binary=True)
     else:
         converted = Converted(content_type(name), _text(payload), binary=False)
@@ -56,7 +57,7 @@ def convert(name: str, payload: bytes) -> Converted:
 def unsupported(name: str) -> PlatformError:
     return PlatformError(
         "UNSUPPORTED_FILE_TYPE",
-        f"{name!r} is not a file Superbot can read: attach text, Markdown, code, PDF, DOCX or XLSX files",
+        f"{name!r} is not a file Superbot can read: attach text, Markdown, code, PDF, DOCX, XLSX or PPTX files",
         status_code=415,
         source="attachments",
     )
@@ -202,3 +203,37 @@ def _xlsx(payload: bytes) -> str:
     if size == 0:
         raise _unreadable("contains no values")
     return "\n".join(sections)
+
+
+_PPTX_NS = {
+    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
+}
+_PPTX_RELATIONSHIP_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+
+
+def _pptx(payload: bytes) -> str:
+    from xml.etree import ElementTree
+
+    _office_archive(payload, "ppt/presentation.xml", "PPTX")
+    slides: list[str] = []
+    with _parsing("PPTX"), zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        presentation = ElementTree.fromstring(archive.read("ppt/presentation.xml"))
+        relations = ElementTree.fromstring(archive.read("ppt/_rels/presentation.xml.rels"))
+        targets = {
+            item.get("Id"): item.get("Target") or "" for item in relations.iterfind("rel:Relationship", _PPTX_NS)
+        }
+        # In the order the deck shows them, not the order of the slide files' names.
+        for slide_id in presentation.iterfind("p:sldIdLst/p:sldId", _PPTX_NS):
+            part = posixpath.normpath(posixpath.join("ppt", targets[slide_id.get(_PPTX_RELATIONSHIP_ID)])).lstrip("/")
+            slide = ElementTree.fromstring(archive.read(part))
+            lines = (
+                "".join(run.text or "" for run in paragraph.iterfind(".//a:t", _PPTX_NS)).strip()
+                for paragraph in slide.iterfind(".//a:p", _PPTX_NS)
+            )
+            slides.append("\n".join(line for line in lines if line))
+    # A slide of pictures alone is still a slide, so a deck without text reads as its slide headings.
+    if not slides:
+        raise _unreadable("contains no slides")
+    return "\n\n".join(f"## Slide {number}\n\n{text}".rstrip() for number, text in enumerate(slides, start=1)) + "\n"

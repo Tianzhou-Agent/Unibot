@@ -61,6 +61,21 @@ class AttachmentService:
         await self.blobs.write(text_blob_key(attachment), converted.text.encode("utf-8"))
         return (await self.repository.put_chat_attachment(attachment)).view()
 
+    async def save_file(
+        self, name: str | None, payload: bytes, *, tenant_id: str, user_id: str, workspace_id: str | None
+    ) -> str:
+        """Store a file an app made for the user in ``Uploads/`` of their file tree (the workspace's, when given);
+        returns its name there. Refused unless Superbot can read it, like an upload."""
+        documents = self._documents()
+        file_name = clean_name(name)
+        converted = await asyncio.to_thread(convert, file_name, payload)
+        return await documents.add_upload(
+            file_name,
+            payload if converted.binary else converted.text.encode("utf-8"),
+            converted.text if converted.binary else None,
+            **await self._scope(workspace_id, user_id=user_id, tenant_id=tenant_id),
+        )
+
     async def owned(self, file_ref: str, *, tenant_id: str, user_id: str) -> Attachment:
         """The user's own upload, sent or not; not found for anyone else's."""
         attachment = await self.repository.get_chat_attachment(file_ref)

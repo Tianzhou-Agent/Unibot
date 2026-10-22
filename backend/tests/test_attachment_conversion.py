@@ -70,6 +70,38 @@ def workbook(sheets: dict[str, list[list[object]]]) -> bytes:
     return buffer.getvalue()
 
 
+def presentation(*slides: list[str]) -> bytes:
+    """A PPTX whose slides hold ``slides`` as paragraphs; the slide files are named in reverse of the deck's order."""
+    main = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    relationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    ids = "".join(f'<p:sldId id="{256 + index}" r:id="rId{index}"/>' for index in range(1, len(slides) + 1))
+    targets = "".join(
+        f'<Relationship Id="rId{index}" Target="slides/slide{len(slides) + 1 - index}.xml"/>'
+        for index in range(1, len(slides) + 1)
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "ppt/presentation.xml",
+            f'<p:presentation xmlns:p="{main}" xmlns:r="{relationships}"><p:sldIdLst>{ids}</p:sldIdLst></p:presentation>',
+        )
+        archive.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{targets}</Relationships>',
+        )
+        for index, paragraphs in enumerate(slides, start=1):
+            # A paragraph's text may be split across runs.
+            body = "".join(
+                f"<a:p>{''.join(f'<a:r><a:t>{part}</a:t></a:r>' for part in text.split('|'))}</a:p>" for text in paragraphs
+            )
+            archive.writestr(
+                f"ppt/slides/slide{len(slides) + 1 - index}.xml",
+                f'<p:sld xmlns:p="{main}" xmlns:a="{drawing}"><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:sld>',
+            )
+    return buffer.getvalue()
+
+
 def refused(name: str, payload: bytes) -> PlatformError:
     with pytest.raises(PlatformError) as caught:
         convert(name, payload)
@@ -130,6 +162,17 @@ def test_an_xlsx_becomes_one_csv_section_per_sheet() -> None:
     assert converted.text == (
         "## Sheet: Q1\n\n```csv\nItem,Cost\nRent,1200\n\nFood,300.5\n```\n\n## Sheet: Empty\n\n(empty)\n"
     )
+
+
+def test_a_pptx_becomes_one_section_per_slide_in_the_deck_order() -> None:
+    converted = convert("deck.pptx", presentation(["Apples", "A quick |look"], [], ["Thank you", " "]))
+    fake = refused("deck.pptx", b"PK\x03\x04 not an archive")
+
+    assert converted.binary
+    assert converted.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    # A slide of pictures alone keeps its heading.
+    assert converted.text == "## Slide 1\n\nApples\nA quick look\n\n## Slide 2\n\n## Slide 3\n\nThank you\n"
+    assert fake.status_code == 422
 
 
 def test_an_office_file_that_unpacks_to_too_much_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,7 +271,7 @@ def test_what_each_kind_of_file_allows(tmp_path: Path) -> None:
     assert result["py_outline"] == [] and "has no sections" in result["py_read_section"]
     assert "has no sections to edit" in result["py_section"]
     assert result["py_saved"] == ([], "print(2)\n")
-    assert "Only Markdown, text, code, PDF, DOCX and XLSX" in result["png_name"]
+    assert "Only Markdown, text, code, PDF, DOCX, XLSX and PPTX" in result["png_name"]
 
 
 def _revision(content: str) -> str:

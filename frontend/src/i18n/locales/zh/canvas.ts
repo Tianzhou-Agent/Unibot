@@ -31,6 +31,8 @@ export default {
     confirmTitle: "允许这次修改吗？",
     confirmWrite: "{{app}} 想要运行 {{tool}}，它会修改你的数据。",
     confirmDestructive: "{{app}} 想要运行 {{tool}}，它会删除数据，且无法撤销。",
+    confirmSaveTitle: "保存这个文件吗？",
+    confirmSave: "{{app}} 想要把 {{name}}（{{size}}）保存到你的文件中，并下载到本机。",
     allow: "允许",
     deny: "拒绝",
     declined: "你拒绝了这次操作。",
