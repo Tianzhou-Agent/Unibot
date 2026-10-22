@@ -60,7 +60,6 @@ class CapabilityExecutor:
         prompts: SystemPrompts,
         document_service: Any | None = None,
         document_edit_task_service: Any | None = None,
-        sandbox_service: Any | None = None,
         task_service: Any | None = None,
         packages: AinaPackageService | None = None,
         aina_tasks: AinaTaskService | None = None,
@@ -74,7 +73,6 @@ class CapabilityExecutor:
         self.prompts = prompts
         self.document_service = document_service
         self.document_edit_task_service = document_edit_task_service
-        self.sandbox_service = sandbox_service
         self.task_service = task_service
         self.packages = packages
         self.aina_tasks = aina_tasks
@@ -220,7 +218,6 @@ class CapabilityExecutor:
                 conversation_id=run.conversation_id,
                 document_service=self.document_service,
                 document_edit_task_service=self.document_edit_task_service,
-                sandbox_service=self.sandbox_service,
             )
         run.scope.widgets.extend(widgets)
         if capability.capability_id == OPEN_APP_TOOL_ID:

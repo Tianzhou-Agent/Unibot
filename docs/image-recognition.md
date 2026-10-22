@@ -1,8 +1,8 @@
 # 图片识别 AINA
 
-`unibot.image-recognition` 是随 Superbot 一起发布的第一方 AINA 2.0 包（设计 §11）。用户可以在 Canvas 中粘贴、
+`unibot.image-recognition` 是 `examples/image-recognition-aina/` 中的可选 AINA 2.0 示例。用户可以在 Canvas 中粘贴、
 拖入或选择 JPEG、PNG、WebP 图片，Canvas 会自动调用 YOLO26m，并显示目标框、中英文类别、置信度、目标数量、
-推理耗时和实际运行设备。它对所有用户可用，无需安装。
+推理耗时和实际运行设备。Superbot 默认不注册或使用它；用户必须手动添加包并安装后才能使用，卸载后即失去访问权限。安装步骤见 [示例说明](../examples/image-recognition-aina/README.md)。
 
 ## 架构
 
@@ -11,7 +11,7 @@ Browser
   └─ Canvas（沙箱 iframe，aina-ui 桥接）
        └─ callTool("detect", {image_base64, content_type, filename})
             └─ Superbot FastAPI  POST /ainas/unibot.image-recognition/app-tools/detect
-                 └─ 进程内 MCP 服务器  backend/src/unibot_plugins/image_recognition/server.py
+                 └─ 独立 MCP 服务器  examples/image-recognition-aina/server/main.py
                       └─ POST /v1/detect (multipart)
                            └─ unibot/vision-service
                                 └─ Ultralytics YOLO26m
@@ -25,9 +25,9 @@ Canvas 运行在不能访问网络的沙箱 iframe 中，只能通过宿主调�
 
 | 位置 | 内容 |
 | --- | --- |
-| `backend/src/unibot_plugins/image_recognition/package/` | `aina.json` 与构建好的 Canvas |
-| `backend/src/unibot_plugins/image_recognition/server.py` | MCP 服务器（只依赖 MCP SDK，不导入平台代码） |
-| `frontend/src/aina-canvases/image-recognition/` | Canvas 的 React 源码与中英文文案 |
+| `examples/image-recognition-aina/package/` | `aina.json` 与构建好的 Canvas |
+| `examples/image-recognition-aina/server/main.py` | MCP 服务器（只依赖 MCP SDK，不导入平台代码） |
+| `examples/image-recognition-aina/canvas/` | Canvas 的 React 源码与中英文文案 |
 
 修改 Canvas 源码后，在 `frontend/` 执行 `npm run build:canvases` 重新构建，并提交 `package/canvas/` 下的产物。
 
@@ -54,7 +54,7 @@ docker compose -f backend/docker-compose.vision.yml ps
 Invoke-RestMethod http://127.0.0.1:18081/healthz
 ```
 
-插件的 MCP 服务器默认通过 `http://127.0.0.1:18081` 访问服务，并从环境变量或 `backend/.env` 读取以下设置：
+插件的 MCP 服务器默认通过 `http://127.0.0.1:18081` 访问服务，并从独立服务的环境变量读取以下设置：
 
 ```dotenv
 UNIBOT_VISION_BASE_URL=http://127.0.0.1:18081

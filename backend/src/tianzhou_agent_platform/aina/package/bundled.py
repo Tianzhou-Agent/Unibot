@@ -1,89 +1,20 @@
-"""Bundled first-party AINAs (design §11): packages shipped with Superbot under ``unibot_plugins``.
-
-Each ``unibot_plugins/<name>/`` holds ``package/`` (an ordinary AINA 2.0 package folder) and ``server.py`` (its MCP
-server, an ``mcp`` object built with the MCP SDK). The host registers them at startup and serves their tools in
-process; their code imports only the MCP SDK and ``unibot_aina``, so moving one to its own remote MCP server needs
-no change apart from its URL.
-
-Bundled packages are platform-signed: they are available to every user without an installation, with every
-declared scope granted, like the built-in AINAs they replace.
-"""
+"""Compatibility helpers for existing bundled package records and ordinary user installations."""
 
 from __future__ import annotations
 
-import importlib
-import json
-import logging
-import pkgutil
-from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
-from tianzhou_agent_platform.aina.project import build_project_archive
 from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
 from tianzhou_agent_platform.core.errors import PlatformError
 
-if TYPE_CHECKING:
-    from tianzhou_agent_platform.aina.package.service import AinaPackageService
-
-PLUGINS_PACKAGE = "unibot_plugins"
-# The MCP URL host of bundled packages; it never resolves, their servers are reached in process.
+# Reserved for legacy in-process packages; external packages cannot claim this host.
 BUNDLED_HOST = "bundled.unibot.invalid"
-
-
-@dataclass(frozen=True)
-class BundledPlugin:
-    name: str
-    archive: bytes
-    server: Any
-    mcp_url: str
 
 
 def is_bundled_url(url: str) -> bool:
     return urlsplit(url).hostname == BUNDLED_HOST
-
-
-def discover_bundled() -> list[BundledPlugin]:
-    """Every bundled plugin, with its archive built from its package folder."""
-    root = importlib.import_module(PLUGINS_PACKAGE)
-    plugins: list[BundledPlugin] = []
-    for module in sorted(pkgutil.iter_modules(root.__path__), key=lambda item: item.name):
-        folder = Path(root.__path__[0]) / module.name / "package"
-        if not (folder / "aina.json").is_file():
-            continue
-        files = {
-            path.relative_to(folder).as_posix(): path.read_bytes()
-            for path in sorted(folder.rglob("*"))
-            if path.is_file() and not any(part.startswith(".") for part in path.relative_to(folder).parts)
-        }
-        mcp_url = str(json.loads(files["aina.json"])["tools"]["mcp"]["url"])
-        if not is_bundled_url(mcp_url):
-            raise RuntimeError(f"Bundled plugin {module.name!r} must serve its MCP tools at https://{BUNDLED_HOST}/")
-        server = _import_server(f"{PLUGINS_PACKAGE}.{module.name}.server")
-        plugins.append(BundledPlugin(module.name, build_project_archive(files), server, mcp_url))
-    return plugins
-
-
-def _import_server(name: str) -> Any:
-    """A plugin's ``mcp`` server, imported without the MCP SDK's ``logging.basicConfig`` reconfiguring the host."""
-    root = logging.getLogger()
-    handlers, level = list(root.handlers), root.level
-    try:
-        return importlib.import_module(name).mcp
-    finally:
-        root.handlers[:] = handlers
-        root.setLevel(level)
-
-
-async def register_bundled(service: AinaPackageService) -> list[AinaRecord]:
-    """Serve every bundled plugin in process and register (or update) its package."""
-    records: list[AinaRecord] = []
-    for plugin in discover_bundled():
-        service.mcp.servers[plugin.mcp_url] = plugin.server
-        records.append(await service.register(plugin.archive, bundled=True))
-    return records
 
 
 def is_bundled(record: AinaRecord) -> bool:

@@ -12,12 +12,6 @@ from tianzhou_agent_platform.aina.document.builtin import (
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
-from tianzhou_agent_platform.aina.code_runner.builtin import (
-    CODE_RUNNER_TOOL_IDS,
-    UNIBOT_CODE_RUNNER_ID,
-    invoke_code_runner_tool,
-    unibot_code_runner_record,
-)
 from tianzhou_agent_platform.aina.memory.builtin import (
     FORGET_TOOL_ID,
     MEMORY_TOOL_IDS,
@@ -28,6 +22,7 @@ from tianzhou_agent_platform.aina.memory.builtin import (
     invoke_memory_tool,
     unibot_memory_record,
 )
+from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.schedule.builtin import (
     UNIBOT_SCHEDULER_ID,
@@ -36,16 +31,14 @@ from tianzhou_agent_platform.aina.schedule.builtin import (
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
-from tianzhou_agent_platform.sandbox.service import SandboxService
 
 BUILTIN_AINA_IDS = {
     UNIBOT_MEMORY_ID,
     UNIBOT_DOCUMENTS_ID,
     UNIBOT_SCHEDULER_ID,
-    UNIBOT_CODE_RUNNER_ID,
 }
 
-# Retired built-ins; Image Recognition is now the bundled ``unibot.image-recognition`` package.
+# Retired built-ins; these apps are now manually installed examples.
 _LEGACY_AINA_IDS = ("unibot-assistant", "unibot-image-recognition")
 
 
@@ -57,10 +50,20 @@ async def ensure_builtin_ainas(
     builtins = [
         (UNIBOT_MEMORY_ID, unibot_memory_record),
         (UNIBOT_SCHEDULER_ID, unibot_scheduler_record),
-        (UNIBOT_CODE_RUNNER_ID, unibot_code_runner_record),
     ]
     if document_enabled:
         builtins.append((UNIBOT_DOCUMENTS_ID, unibot_documents_record))
+    # Remove only the old automatic registrations, preserving explicitly added packages.
+    for aina_id in ("unibot-code-runner", "unibot.image-recognition"):
+        try:
+            record = await repository.get_aina(aina_id)
+        except PlatformError as exc:
+            if exc.code != "RESOURCE_NOT_FOUND":
+                raise
+            continue
+        runtime = record.manifest.runtime
+        if runtime.type == "builtin" or (isinstance(runtime, PackageRuntimeDefinition) and runtime.bundled):
+            await repository.remove_aina(aina_id)
     for legacy_id in _LEGACY_AINA_IDS:
         try:
             await repository.remove_aina(legacy_id)
@@ -97,29 +100,7 @@ async def invoke_builtin(
     conversation_id: str,
     document_service: DocumentService | None = None,
     document_edit_task_service: DocumentEditTaskService | None = None,
-    sandbox_service: SandboxService | None = None,
 ) -> tuple[dict[str, Any], list[WidgetDefinition]]:
-    if tool_id in CODE_RUNNER_TOOL_IDS:
-        if sandbox_service is None:
-            raise PlatformError(
-                "DEPENDENCY_FAILED",
-                "Sandbox execution is unavailable",
-                status_code=503,
-                source="sandbox",
-            )
-        conversation = await repository.require_conversation_actor(
-            conversation_id,
-            user_id=user_id,
-            tenant_id=tenant_id,
-        )
-        return await invoke_code_runner_tool(
-            sandbox_service,
-            tool_id,
-            arguments,
-            user_id=user_id,
-            tenant_id=tenant_id,
-            workspace_id=conversation.workspace_id,
-        )
     if tool_id in DOCUMENT_TOOL_IDS:
         if document_service is None:
             raise PlatformError(
@@ -221,11 +202,9 @@ __all__ = [
     "UNIBOT_DOCUMENTS_ID",
     "UNIBOT_MEMORY_ID",
     "UNIBOT_SCHEDULER_ID",
-    "UNIBOT_CODE_RUNNER_ID",
     "ensure_builtin_ainas",
     "invoke_builtin",
     "unibot_documents_record",
     "unibot_memory_record",
     "unibot_scheduler_record",
-    "unibot_code_runner_record",
 ]

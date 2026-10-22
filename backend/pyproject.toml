@@ -61,8 +61,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# unibot_aina is the AINA server helper and unibot_plugins the bundled first-party AINAs; neither imports the platform.
-packages = ["src/tianzhou_agent_platform", "src/unibot_aina", "src/unibot_plugins"]
+# unibot_aina is the standalone AINA server helper; examples are not shipped with the host.
+packages = ["src/tianzhou_agent_platform", "src/unibot_aina"]
 
 [tool.ruff]
 line-length = 120

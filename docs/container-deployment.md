@@ -5,12 +5,13 @@
 根目录的 Docker Compose 会启动完整的 Superbot Web 平台：
 
 - `frontend`：React 静态页面与 `/api` 反向代理；
-- `backend`：FastAPI、AINA 调度器与开发模式代码运行器；
+- `backend`：FastAPI、AINA 调度器与托管运行时沙箱；
 - `mysql`：业务数据；
 - `redis`：分布式锁、缓存和运行状态；
-- `vision`：YOLO26m 图片目标检测。
 
-MySQL、Redis、NAS 文件和代码运行器工作区都使用 Docker 持久卷。重新创建容器不会删除这些数据。
+`vision` 是可选的 YOLO26m 推理服务，仅在启用 `image-recognition` profile 时启动。图片识别与 Code Runner 均为 `examples/` 下的手动安装示例。
+
+MySQL、Redis、NAS 文件和托管运行时工作区都使用 Docker 持久卷。重新创建容器不会删除这些数据。
 
 ## 启动
 
@@ -89,10 +90,10 @@ CI 同时发布 `ghcr.io/tianzhou-agent/unibot-frontend-superbot`（`/superbot/`
 
 ## GPU 图片识别
 
-默认编排使用 CPU 镜像，可在所有 Docker 环境运行。安装 NVIDIA Container Toolkit 且 Docker 可访问 GPU 后，使用 GPU 覆盖文件：
+可选的图片识别编排使用 CPU 镜像。安装 NVIDIA Container Toolkit 且 Docker 可访问 GPU 后，使用 GPU 覆盖文件：
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+docker compose --profile image-recognition -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 ```
 
 YOLO 服务仍使用 `YOLO_DEVICE=auto`，能访问 CUDA 时选择 GPU，否则选择 CPU。

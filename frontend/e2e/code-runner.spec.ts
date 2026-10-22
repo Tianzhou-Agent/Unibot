@@ -1,144 +1,56 @@
-import { expect, test, type Page, type Route } from "playwright/test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, test } from "playwright/test";
 
-const NOW = "2026-07-25T04:00:00.000Z";
+const AINA = "unibot.code-runner";
+const PACKAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../examples/code-runner-aina/package");
 
-function json(route: Route, body: unknown, status = 200) {
-  return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
-}
-
-async function installSandboxApi(page: Page) {
-  const state: {
-    sandbox: Record<string, unknown> | null;
-    executions: Record<string, unknown>[];
-  } = {
-    sandbox: {
-      id: "sandbox-e2e",
-      user_id: "anonymous",
-      tenant_id: "default",
-      image: "unibot/python-sandbox:3.12",
-      driver: "kubernetes",
-      status: "ready",
-      runtime_name: "unibot-e2e",
-      workspace: "/workspace",
-      endpoint: "unibot-e2e.unibot-sandboxes.svc",
-      last_error: null,
-      created_at: NOW,
-      updated_at: NOW,
-      last_activity_at: NOW,
-    },
-    executions: [],
-  };
-
+test("FE-E2E-009 explicitly installed Code Runner uses the package canvas and MCP bridge", async ({ page }) => {
+  const calls: Record<string, unknown>[] = [];
+  const tools = ["run_python", "run_bash", "run_node"].map((name) => ({ name, effect: "write", visibility: ["model", "app"], status: "active" }));
   await page.route("**/api/**", async (route) => {
     const request = route.request();
-    const url = new URL(request.url());
-    const path = url.pathname.replace(/^\/api/, "");
-    const method = request.method();
-
-    if (method === "GET" && path === "/auth/config") {
-      return json(route, { auth_required: false, registration_enabled: true, github_enabled: false });
-    }
-
-    if (method === "POST" && path === "/ainas/unibot-code-runner/open") {
-      return json(route, {
-        aina_id: "unibot-code-runner",
-        name: "代码运行器",
-        description: "在隔离沙箱中执行脚本。",
-        version: "1.0.0",
-        conversation_id: null,
-        route: "/chat?aina=unibot-code-runner",
-        main_widget: {
-          id: "unibot-code-runner-main",
-          kind: "panel",
-          title: "代码运行器",
-          description: "在隔离沙箱中执行脚本。",
-          markdown: null,
-          fields: [],
-          actions: [],
-          apps: [],
-        },
+    const apiPath = new URL(request.url()).pathname.replace(/^\/api/, "");
+    const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (apiPath === "/auth/config") return reply({ auth_required: false, registration_enabled: true });
+    if (apiPath.startsWith(`/aina-ui/${AINA}/2.0.0/`)) {
+      const file = apiPath.slice(`/aina-ui/${AINA}/2.0.0/`.length);
+      return route.fulfill({
+        contentType: file.endsWith(".html") ? "text/html" : "text/javascript",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: readFileSync(path.join(PACKAGE, file)),
       });
     }
-    if (method === "POST" && path === "/sandboxes/ensure") {
-      state.sandbox ??= {
-        id: "sandbox-e2e",
-        user_id: "anonymous",
-        tenant_id: "default",
-        image: "unibot/python-sandbox:3.12",
-        driver: "kubernetes",
-        status: "ready",
-        runtime_name: "unibot-e2e",
-        workspace: "/workspace",
-        endpoint: "unibot-e2e.unibot-sandboxes.svc",
-        last_error: null,
-        created_at: NOW,
-        updated_at: NOW,
-        last_activity_at: NOW,
-      };
-      state.sandbox.status = "ready";
-      return json(route, state.sandbox);
+    if (apiPath === `/ainas/${AINA}/open`) return reply({
+      aina_id: AINA, name: "Code Runner", version: "2.0.0", conversation_id: null,
+      route: `/chat?aina=${AINA}`,
+      main_widget: {
+        id: `${AINA}-canvas`, kind: "aina_canvas", title: "Code Runner", fields: [], actions: [], apps: [],
+        canvas: { kind: "package", version: "2.0.0", entry: "canvas/index.html", url: null },
+      },
+    });
+    if (apiPath === `/ainas/${AINA}`) return reply({ manifest: {
+      aina: { id: AINA, name: "Code Runner", version: "2.0.0" },
+      runtime: { type: "package", bundled: false, tools },
+    } });
+    if (apiPath === "/installations") return reply([{ aina_id: AINA, status: "active", installed_version: "2.0.0", granted_permissions: [] }]);
+    if (apiPath === `/ainas/${AINA}/app-tools/run_python`) {
+      calls.push(request.postDataJSON().arguments);
+      return reply({ structuredContent: { status: "succeeded", stdout: "42", stderr: "", exit_code: 0 } });
     }
-    if (method === "GET" && path === "/sandboxes/executions") {
-      return json(route, state.executions);
-    }
-    if (method === "POST" && path === "/sandboxes/execute") {
-      const payload = request.postDataJSON() as Record<string, unknown>;
-      const execution = {
-        id: `execution-e2e-${state.executions.length + 1}`,
-        sandbox_id: "sandbox-e2e",
-        user_id: "anonymous",
-        tenant_id: "default",
-        language: payload.language,
-        script: payload.script,
-        working_directory: payload.working_directory ?? ".",
-        status: "succeeded",
-        stdout: "这是保存在用户工作区的内容\n",
-        stderr: "",
-        exit_code: 0,
-        duration_ms: 42,
-        truncated: false,
-        started_at: NOW,
-        finished_at: NOW,
-      };
-      state.executions.unshift(execution);
-      return json(route, execution);
-    }
-    if (method === "POST" && path === "/sandboxes/stop") {
-      if (!state.sandbox) return json(route, { error: { message: "Sandbox not found" } }, 404);
-      state.sandbox.status = "stopped";
-      return json(route, state.sandbox);
-    }
-    if (method === "DELETE" && path === "/sandboxes/current") {
-      state.sandbox = null;
-      state.executions = [];
-      return route.fulfill({ status: 204, body: "" });
-    }
-    if (method === "GET" && path.startsWith("/approvals")) return json(route, []);
-    return json(route, { error: { message: `Unhandled ${method} ${path}` } }, 404);
+    if (apiPath.startsWith("/approvals")) return reply([]);
+    return reply({ error: { message: `Unexpected request ${apiPath}` } }, 404);
   });
-  return state;
-}
-
-test("FE-E2E-009 在代码运行器中执行脚本并查看输入输出历史", async ({ page }) => {
-  const state = await installSandboxApi(page);
-  await page.goto("/chat?aina=unibot-code-runner");
-
-  await expect(page.getByRole("heading", { name: "代码运行器", exact: true })).toBeVisible();
-  await expect(page.getByText("Kubernetes · gVisor", { exact: true })).toBeVisible();
-
-  const editor = page.getByRole("textbox", { name: "脚本编辑器" });
-  await editor.press("ControlOrMeta+A");
-  await editor.type("print('这是保存在用户工作区的内容')");
-  await page.getByRole("button", { name: "运行脚本" }).click();
-
-  await expect(page.getByText("执行成功，退出码 0", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "运行输出", exact: true })).toBeVisible();
-  await expect(page.getByText("python 输入", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("这是保存在用户工作区的内容", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "执行历史", exact: true })).toBeVisible();
-  expect(state.executions).toHaveLength(1);
-  expect(state.executions[0].script).toBe("print('这是保存在用户工作区的内容')");
-
-  await page.getByRole("button", { name: "停止容器" }).click();
-  await expect(page.getByText("运行容器已停止，工作区文件仍会保留。", { exact: true })).toBeVisible();
+  await page.goto(`/chat?aina=${AINA}`);
+  const canvas = page.frameLocator('iframe[title="Code Runner"]');
+  await expect(canvas.getByRole("heading", { name: "Code Runner" })).toBeVisible();
+  await canvas.getByRole("textbox", { name: "Script", exact: true }).fill("print(42)");
+  await canvas.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  expect(calls).toEqual([]);
+  await page.getByRole("button", { name: "允许", exact: true }).click();
+  await expect(canvas.getByRole("status")).toContainText("succeeded · exit 0");
+  await expect(canvas.getByRole("status")).toContainText("42");
+  expect(calls).toEqual([{ script: "print(42)", timeout_seconds: 60, working_directory: "." }]);
 });

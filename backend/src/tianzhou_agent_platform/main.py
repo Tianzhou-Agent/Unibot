@@ -9,7 +9,6 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-from unibot_aina import set_default_transport
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -20,7 +19,6 @@ from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker
 from tianzhou_agent_platform.aina.package.canvas_host import HeadlessCanvasHost
-from tianzhou_agent_platform.aina.package.bundled import register_bundled
 from tianzhou_agent_platform.core.client_preferences import LOCALE_HEADER, TIMEZONE_HEADER, remember_client_preferences
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
@@ -320,9 +318,6 @@ def create_app(
                 resolved_repository,
                 document_enabled=resolved_document_service is not None,
             )
-            # Bundled servers reach the Host API in process, through this app.
-            set_default_transport(httpx.ASGITransport(app=lifespan_app), api_base=f"http://unibot{HOST_API_PREFIX}")
-            await register_bundled(aina_packages)
             scheduler_task = asyncio.create_task(scheduler.run())
             lifespan_app.state.background_tasks.add(scheduler_task)
             if resolved_settings.aina_tool_check_hours > 0:
@@ -440,7 +435,6 @@ def create_app(
         settings=resolved_settings,
         registry=resolved_repository,
         document_service=resolved_document_service,
-        sandbox_service=resolved_sandbox_service,
         auth_enforced=enforce_auth,
     )
     prompts = SystemPrompts(settings=resolved_settings, registry=resolved_repository, auth_enforced=enforce_auth)
@@ -464,7 +458,6 @@ def create_app(
                 prompts=prompts,
                 document_service=resolved_document_service,
                 document_edit_task_service=document_edit_task_service,
-                sandbox_service=resolved_sandbox_service,
                 task_service=task_service,
                 packages=aina_packages,
                 aina_tasks=aina_tasks,

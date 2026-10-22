@@ -4,9 +4,7 @@ import {
   Brain,
   CalendarClock,
   FileText,
-  Image as ImageIcon,
   MoreHorizontal,
-  TerminalSquare,
 } from "lucide-react";
 import { classNames } from "@/lib/utils";
 
@@ -25,8 +23,6 @@ const BUILTIN_ICONS: Record<string, typeof FileText> = {
   "unibot-documents": FileText,
   "unibot-scheduler": CalendarClock,
   "unibot-memory": Brain,
-  "unibot-code-runner": TerminalSquare,
-  "unibot.image-recognition": ImageIcon,
 };
 
 /** Manifests carry no icon, so each plugin gets a stable colored tile: a glyph for known built-ins, else its initial. */

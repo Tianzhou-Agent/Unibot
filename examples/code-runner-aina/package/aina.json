@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unibot.example/schemas/aina/2.0/aina.schema.json",
+  "protocol_version": "2.0",
+  "aina": {
+    "id": "unibot.code-runner",
+    "version": "2.0.0",
+    "name": "Code Runner",
+    "description": "Run Python, Bash and Node.js scripts in a separately configured sandbox.",
+    "publisher": { "id": "unibot", "name": "Superbot" }
+  },
+  "tools": {
+    "mcp": { "url": "http://127.0.0.1:8768/mcp", "auth": { "type": "none" } },
+    "expose": {
+      "run_python": { "effect": "write", "visibility": ["model", "app"], "timeout_seconds": 120 },
+      "run_bash": { "effect": "write", "visibility": ["model", "app"], "timeout_seconds": 120 },
+      "run_node": { "effect": "write", "visibility": ["model", "app"], "timeout_seconds": 120 }
+    }
+  },
+  "canvas": { "entry": "canvas/index.html", "title": "Code Runner" }
+}

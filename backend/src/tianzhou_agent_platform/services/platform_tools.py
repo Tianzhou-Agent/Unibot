@@ -55,7 +55,6 @@ async def _available_apps(
     user_id: str,
     tenant_id: str,
 ) -> list[WidgetApp]:
-    from tianzhou_agent_platform.aina.code_runner.builtin import UNIBOT_CODE_RUNNER_ID
     from tianzhou_agent_platform.aina.document.builtin import UNIBOT_DOCUMENTS_ID
     from tianzhou_agent_platform.aina.memory.builtin import UNIBOT_MEMORY_ID
     from tianzhou_agent_platform.aina.schedule.builtin import UNIBOT_SCHEDULER_ID
@@ -63,7 +62,6 @@ async def _available_apps(
     builtin_aina_ids = {
         UNIBOT_MEMORY_ID,
         UNIBOT_DOCUMENTS_ID,
-        UNIBOT_CODE_RUNNER_ID,
         UNIBOT_SCHEDULER_ID,
     }
     installations = {

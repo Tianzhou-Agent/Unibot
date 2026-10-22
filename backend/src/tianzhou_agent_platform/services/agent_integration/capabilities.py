@@ -16,12 +16,10 @@ from tianzhou_agent_platform.aina.builtin import (
     FORGET_TOOL_ID,
     RECALL_TOOL_ID,
     REMEMBER_TOOL_ID,
-    UNIBOT_CODE_RUNNER_ID,
     UNIBOT_MEMORY_ID,
     UNIBOT_SCHEDULER_ID,
     UPDATE_TOOL_ID,
 )
-from tianzhou_agent_platform.aina.code_runner.builtin import code_runner_tool_capabilities
 from tianzhou_agent_platform.aina.document.builtin import (
     ABANDON_EDIT_SECTION_TOOL_ID,
     DELETE_DOCUMENT_TOOL_ID,
@@ -133,13 +131,11 @@ class CapabilityCatalog:
         settings: AgentSettings,
         registry: CapabilityRegistry,
         document_service: Any | None = None,
-        sandbox_service: Any | None = None,
         auth_enforced: bool = False,
     ) -> None:
         self.settings = settings
         self.registry = registry
         self.document_service = document_service
-        self.sandbox_service = sandbox_service
         self.auth_enforced = auth_enforced
 
     async def available(self, conversation: Conversation) -> dict[str, Capability]:
@@ -198,8 +194,6 @@ class CapabilityCatalog:
                 **task_capabilities,
                 **switch_capabilities,
             }, aina
-        if aina_id == UNIBOT_CODE_RUNNER_ID:
-            return {**self._sandbox(), **task_capabilities, **switch_capabilities}, aina
         if aina_id == UNIBOT_SCHEDULER_ID:
             return {**task_capabilities, **switch_capabilities}, aina
         declared_tool_ids = {item.id for item in aina.manifest.capabilities.tools}
@@ -328,7 +322,6 @@ class CapabilityCatalog:
             UNIBOT_MEMORY_ID,
             UNIBOT_SCHEDULER_ID,
             UNIBOT_DOCUMENTS_ID,
-            UNIBOT_CODE_RUNNER_ID,
         ):
             capabilities.update(await self._builtin_aina(conversation, aina_id))
         return capabilities
@@ -339,7 +332,6 @@ class CapabilityCatalog:
             **await self.system(conversation),
             **self._memory(),
             **self._documents(),
-            **self._sandbox(),
         }
 
     async def _builtin_aina(self, conversation: Conversation, aina_id: str) -> dict[str, Capability]:
@@ -467,25 +459,6 @@ class CapabilityCatalog:
                 in {DELETE_DOCUMENT_TOOL_ID, MERGE_EDIT_SECTION_TOOL_ID, ABANDON_EDIT_SECTION_TOOL_ID},
                 value=tool.id,
                 owner_aina_id=UNIBOT_DOCUMENTS_ID,
-            )
-        return capabilities
-
-    def _sandbox(self) -> dict[str, Capability]:
-        if self.sandbox_service is None:
-            return {}
-        capabilities: dict[str, Capability] = {}
-        for tool in code_runner_tool_capabilities():
-            name = function_name("builtin", tool.id)
-            capabilities[name] = Capability(
-                kind="builtin",
-                capability_id=tool.id,
-                function_name=name,
-                display_name=tool.name,
-                description=tool.description,
-                input_schema=tool.input_schema,
-                requires_confirmation=True,
-                value=tool.id,
-                owner_aina_id=UNIBOT_CODE_RUNNER_ID,
             )
         return capabilities
 
@@ -787,7 +760,7 @@ def is_routable_aina(capability: Capability) -> bool:
         return any(tool.model_visible for tool in runtime.tools) or bool(runtime.skills) or bool(canvas and canvas.tools)
     if runtime.type in {"remote", "managed"}:
         return True
-    return aina.manifest.aina.id in {UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID, UNIBOT_CODE_RUNNER_ID}
+    return aina.manifest.aina.id in {UNIBOT_MEMORY_ID, UNIBOT_DOCUMENTS_ID}
 
 
 def aina_entry_description(aina: AinaRecord, *, executable: bool) -> str:

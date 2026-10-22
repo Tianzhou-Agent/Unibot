@@ -11,7 +11,6 @@ import {
   Maximize2,
   Minimize2,
   Plus,
-  SquareTerminal,
   X,
 } from "lucide-react";
 import { classNames } from "@/lib/utils";
@@ -119,7 +118,7 @@ export function CanvasTabs({ tabs, activeId, expanded, onSelect, onClose, onReor
       <div ref={stripRef} role="tablist" aria-label={t("tabs")} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1 py-0.5">
         {tabs.map((tab, index) => {
           const active = tab.id === activeId;
-          const Icon = tab.id === NEW_CANVAS_TAB ? LayoutGrid : tab.id === "unibot-code-runner" ? SquareTerminal : tab.kind === "document" ? FileText : tab.kind === "memory" ? Brain : AppWindow;
+          const Icon = tab.id === NEW_CANVAS_TAB ? LayoutGrid : tab.kind === "document" ? FileText : tab.kind === "memory" ? Brain : AppWindow;
           return (
             <div
               key={tab.id}

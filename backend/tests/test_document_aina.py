@@ -351,7 +351,7 @@ def test_wrong_scope_document_call_recovers_by_activating_owner_aina(tmp_path: P
 
     llm = ScriptedLLM(
         [
-            call_first_tool(prefix="aina_unibot-code-runner_", call_id="call_code_scope"),
+            call_first_tool(prefix="aina_unibot-memory_", call_id="call_memory_scope"),
             call_unadvertised_document_tool,
             call_first_tool(prefix="aina_unibot-documents_", call_id="call_document_scope"),
             call_first_tool(
@@ -363,7 +363,7 @@ def test_wrong_scope_document_call_recovers_by_activating_owner_aina(tmp_path: P
         ]
     )
     with TestClient(_app(tmp_path, llm)) as client:
-        response = client.post("/chat", json={"message": "Run code, then create a document"})
+        response = client.post("/chat", json={"message": "Recall memory, then create a document"})
         document = client.get("/documents/recovered.md")
         trace = client.get(f"/traces/{response.json()['trace_id']}").json()
 
@@ -852,7 +852,7 @@ def test_short_follow_up_routes_with_all_candidates_and_last_aina_context(tmp_pa
     assert first.status_code == 200
     assert second.status_code == 200
     assert len(llm.calls) == 3
-    assert len(llm.calls[1]["tools"]) == 12
+    assert len(llm.calls[1]["tools"]) == 11
     assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[1]["tools"])
     assert any(
         item["function"]["name"].startswith("builtin_document_")
@@ -896,7 +896,7 @@ def test_follow_up_after_failed_turn_reenters_the_aina_that_turn_activated(tmp_p
     assert resolution["details"]["source"] == "unfinished_turn"
     # A turn after a completed one routes through the unified entry again.
     assert third.json()["status"] == "completed"
-    assert len(llm.calls[3]["tools"]) == 12
+    assert len(llm.calls[3]["tools"]) == 11
     assert not any(item["function"]["name"].startswith("builtin_document_") for item in llm.calls[3]["tools"])
 
 
@@ -927,7 +927,7 @@ def test_single_active_primary_aina_is_context_but_does_not_limit_router(tmp_pat
 
     assert response.status_code == 200
     assert len(llm.calls) == 2
-    assert len(llm.calls[0]["tools"]) == 12
+    assert len(llm.calls[0]["tools"]) == 11
     assert any(item["function"]["name"].startswith("builtin_open_app_") for item in llm.calls[0]["tools"])
     resolution = next(
         event
@@ -967,7 +967,7 @@ def test_ambiguous_turn_routes_across_active_ainas_with_model(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert len(llm.calls) == 2
-    assert len(llm.calls[0]["tools"]) == 12
+    assert len(llm.calls[0]["tools"]) == 11
     assert any(item["function"]["name"].startswith("builtin_list_app_") for item in llm.calls[0]["tools"])
     resolution = next(
         event
