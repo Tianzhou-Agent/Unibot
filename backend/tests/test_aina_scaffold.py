@@ -63,7 +63,9 @@ def _settings(**overrides: Any) -> AgentSettings:
 # --- aina init ----------------------------------------------------------------------------------------------------
 
 
-def test_init_creates_a_valid_project_whose_server_works_in_unibot(tmp_path: Path) -> None:
+def test_init_creates_a_valid_project_whose_server_works_in_unibot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = tmp_path / "notes"
     assert _init(project) == 0
 
@@ -81,6 +83,11 @@ def test_init_creates_a_valid_project_whose_server_works_in_unibot(tmp_path: Pat
         settings=_settings(env="development"),
         llm=ScriptedLLM([]),
         mcp_client=McpToolClient(servers={MCP_URL: server.mcp}),
+    )
+    # The scaffold server runs in process, so route its Host API callbacks to this app.
+    monkeypatch.setattr(
+        "unibot_aina.host._in_process",
+        (httpx.ASGITransport(app=app), app.state.settings.aina_host_api_base),
     )
     with TestClient(app) as client:
         archive = build_project_archive(_folder(project / "package"))

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,11 +15,16 @@ from tianzhou_agent_platform.aina.package.devhost import create_dev_app
 
 
 @pytest.fixture
-def dev(tmp_path: Path) -> Any:
+def dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     project = tmp_path / "notes"
     _init(project)
     app = create_dev_app(project / "package", port=8790)
     app.state.aina_packages.mcp.servers[MCP_URL] = _server(project).mcp  # the developer's server, in process
+    # The example server runs in process too; its callbacks must reach this test host.
+    monkeypatch.setattr(
+        "unibot_aina.host._in_process",
+        (httpx.ASGITransport(app=app), app.state.settings.aina_host_api_base),
+    )
     with TestClient(app) as client:
         yield client, project / "package"
 
