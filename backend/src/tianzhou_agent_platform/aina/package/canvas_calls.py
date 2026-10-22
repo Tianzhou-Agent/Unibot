@@ -31,6 +31,10 @@ VIEWER_TTL_SECONDS = 20
 ACK_SECONDS = 3.0
 # Time a headless canvas-host page gets to load and join as a viewer, before the call's own timeout starts.
 HEADLESS_START_SECONDS = 60.0
+# While a viewer runs a call, how often the run checks that the viewer is still there.
+LIVENESS_SECONDS = 1.0
+# The result of a call whose viewer left after acknowledging it (a closed tab or page).
+VIEWER_LEFT: dict[str, Any] = {"viewer_left": True}
 MAX_MODEL_CONTEXT_CHARS = 4_000
 MAX_STRUCTURED_BYTES = 64 * 1024
 MAX_IMAGE_BYTES = 1024 * 1024
@@ -124,6 +128,10 @@ class CanvasCallBroker:
         acknowledge (a closed or frozen tab), is dropped and the next most recent viewer is tried, so a call never
         waits out its timeout on a tab that will not answer. When no viewer takes it, the headless canvas host opens
         the conversation and gets the call; once a tab takes a call again, the headless page is closed.
+
+        A viewer that leaves after acknowledging a call (its tab closed) does not answer either: a read (``effect``
+        "read") then runs in the next viewer, or the headless page; any other call fails as CANVAS_INTERRUPTED, since
+        it may have taken effect and running it again could apply it twice.
         """
         call_id = str(request["call_id"])
         title = request.get("canvas_title") or "AINA"
@@ -157,6 +165,14 @@ class CanvasCallBroker:
         )
         if self._headless is not None and not is_headless(client_id):
             await self._headless.close(conversation_id)
+        if result is VIEWER_LEFT:
+            raise PlatformError(
+                "CANVAS_INTERRUPTED",
+                f"The {title} canvas closed while running {request['name']!r}, so whether it took effect is unknown. "
+                "Check the canvas state before calling it again.",
+                status_code=409,
+                source="canvas",
+            )
         if result is None:
             raise PlatformError(
                 "TIMEOUT",
@@ -192,8 +208,28 @@ class CanvasCallBroker:
                     logger.info("canvas call %s: viewer %s did not acknowledge", call_id, client_id)
                     await self.disconnect(conversation_id, client_id)
                     continue
-                result = first if "ack" not in first else await next_message(deadline - self._clock())
+                result = first if "ack" not in first else await self._result(conversation_id, client_id, next_message, deadline)
+            if result is VIEWER_LEFT:
+                logger.info("canvas call %s: viewer %s left while running it", call_id, client_id)
+                if request.get("effect") == "read":
+                    continue  # a read has no effect to repeat, so the next viewer runs it
             return client_id, result
+        return None
+
+    async def _result(
+        self,
+        conversation_id: str,
+        client_id: str,
+        next_message: Callable[[float], Awaitable[dict[str, Any] | None]],
+        deadline: float,
+    ) -> dict[str, Any] | None:
+        """The result of an acknowledged call; None if it times out, ``VIEWER_LEFT`` if its viewer leaves first."""
+        while (remaining := deadline - self._clock()) > 0:
+            message = await next_message(min(LIVENESS_SECONDS, remaining))
+            if message is not None:
+                return message
+            if client_id not in await self.viewers(conversation_id):
+                return VIEWER_LEFT
         return None
 
     async def _joined(self, conversation_id: str, client_id: str) -> bool:

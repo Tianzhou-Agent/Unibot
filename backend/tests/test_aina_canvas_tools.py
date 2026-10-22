@@ -599,6 +599,49 @@ async def test_a_tab_takes_calls_over_from_the_headless_canvas_host() -> None:
     assert len(host.opened) == 1
 
 
+async def _tab_that_closes_after_acknowledging(broker: CanvasCallBroker) -> None:
+    async with broker.listen(TAB_A) as next_event:
+        event = await next_event(2)
+        assert event is not None
+        assert await broker.acknowledge(event["call_id"], conversation_id="conv_1", client_id=TAB_A)
+    await broker.disconnect("conv_1", TAB_A)  # its stream ends as the tab closes
+
+
+async def test_a_read_whose_tab_closes_while_running_it_runs_again_in_the_headless_page() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    await broker.heartbeat("conv_1", TAB_A, visible=True)
+    closing = asyncio.create_task(_tab_that_closes_after_acknowledging(broker))
+    await asyncio.sleep(0.01)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "get_scene", "effect": "read", "arguments": {}, "timeout_ms": 5000}
+    started = time.monotonic()
+    try:
+        result = await broker.dispatch("conv_1", request, timeout=5)
+    finally:
+        await host.close("conv_1")
+    await closing
+
+    assert result == {"result": {"by": "headless"}}
+    assert time.monotonic() - started < 4  # well before the call's timeout
+
+
+async def test_a_write_whose_tab_closes_while_running_it_is_reported_and_not_run_again() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    await broker.heartbeat("conv_1", TAB_A, visible=True)
+    closing = asyncio.create_task(_tab_that_closes_after_acknowledging(broker))
+    await asyncio.sleep(0.01)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "draw_circle", "effect": "write", "arguments": {}, "timeout_ms": 5000}
+
+    with pytest.raises(PlatformError) as raised:
+        await broker.dispatch("conv_1", request, timeout=5)
+    await closing
+
+    assert raised.value.code == "CANVAS_INTERRUPTED"
+    assert "whether it took effect is unknown" in raised.value.message
+    assert host.opened == []  # a write that may have run is never sent to another canvas
+
+
 async def test_without_a_headless_browser_the_call_reports_the_canvas_is_not_open() -> None:
     host = FakeHeadlessHost(available=False)
     broker = _headless_broker(host)
