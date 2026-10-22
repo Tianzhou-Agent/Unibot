@@ -3,7 +3,8 @@
 This app puts [PPTist](https://github.com/pipipi-pikachu/PPTist), an open-source PowerPoint-style editor, beside the
 conversation. The agent drafts decks from an outline with PPTist's own designed templates, edits slides the user has
 open, checks their layout, and exports .pptx. The user edits the same deck by hand at the same
-time. Decks are saved in the user's private AINA storage, so they are there the next time the canvas opens.
+time. Decks are saved in the user's private AINA storage, and each conversation has its own deck, so the canvas shows
+it again whenever the user returns to that conversation.
 
 PPTist itself is not changed. It is built from a pinned commit with one extra module, the bridge, which shares the
 editor's stores and hooks.
@@ -97,7 +98,14 @@ styles of PPTist's schema before it is shown, and pictures must be `https://` or
 ## Saving
 
 The canvas saves the open deck on its own, 1.5 seconds after a change, with `save_deck`. Superbot asks the user once per
-opened canvas before the first save. If the user declines, the canvas stops saving and says so. A saved deck is one
+opened canvas before the first save.
+
+Each conversation has its own deck: the one last saved or opened in it (`conversations/<id>` in storage holds its id).
+When the user switches conversations with the canvas open, Superbot sends `context_changed`; the canvas saves the open
+deck and shows that conversation's deck, or a blank one if it has none yet. A deck started before the conversation
+existed (in a new chat) becomes that conversation's deck when the first message creates it. `list_decks` and
+`open_deck` still reach every saved deck, so a deck from another conversation can be opened here; it then becomes this
+conversation's deck too. If the user declines, the canvas stops saving and says so. A saved deck is one
 PPTist JSON file (the format of PPTist's own JSON export) of at most 9 MiB, including uploaded pictures.
 
 ## Upgrading PPTist

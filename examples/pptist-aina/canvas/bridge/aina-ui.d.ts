@@ -16,6 +16,12 @@ export interface AinaContext {
    */
   background: boolean;
   aina: { id: string; version: string };
+  /**
+   * Canvas only: whether the canvas is open beside a conversation. Its tool calls are made in that conversation, so
+   * the MCP server gets its (pairwise) `conversation_id`. `context_changed` tells the canvas when the user moves it to
+   * another conversation, or a new conversation starts.
+   */
+  conversation?: boolean;
   /** Widgets only. */
   purpose?: "confirmation" | "result" | "display";
   /** Widgets only: the tool call the widget shows. */
@@ -58,7 +64,10 @@ export interface Host {
   registerTool(name: string, handler: (args: Record<string, unknown>) => CanvasToolResult | void | Promise<CanvasToolResult | void>): Promise<void>;
   /** Canvas only: a summary of what the canvas shows (at most 4000 characters), sent with the agent's requests. */
   setModelContext(value: string): Promise<void>;
-  /** "tool_result": the agent changed data in chat; "context_changed": settings or locale changed. Returns an unsubscribe. */
+  /**
+   * "tool_result": the agent changed data in chat; "context_changed": settings, locale or, for a canvas, the
+   * conversation changed (data `{ conversation: boolean }`). Returns an unsubscribe.
+   */
   on(type: "tool_result" | "context_changed", listener: (data: unknown) => void): () => void;
 }
 

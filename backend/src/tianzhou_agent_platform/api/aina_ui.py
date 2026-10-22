@@ -14,7 +14,14 @@ from fastapi import APIRouter, Request, Response
 
 from tianzhou_agent_platform.aina.package.service import package_runtime
 from tianzhou_agent_platform.aina.package.ui import origin_of, ui_headers
-from tianzhou_agent_platform.api.dependencies import aina_packages, repository, request_actor, settings
+from tianzhou_agent_platform.api.dependencies import (
+    aina_packages,
+    conversation_service,
+    repository,
+    request_actor,
+    require_actor_ownership,
+    settings,
+)
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import not_found
 
@@ -25,6 +32,8 @@ _SDK_FILES = {"aina-ui.js": "text/javascript; charset=utf-8", "aina-ui.css": "te
 class AppToolCall(StrictModel):
     arguments: dict[str, Any]
     source: Literal["canvas", "widget"] = "canvas"
+    # The conversation the canvas or widget is open beside, so the AINA can keep data per conversation.
+    conversation_id: str | None = None
     # Set by the shell after it asked the user; the AINA's UI cannot set it.
     confirmed: bool = False
 
@@ -83,6 +92,9 @@ def create_aina_ui_router() -> APIRouter:
     ) -> dict[str, Any]:
         """A tool call relayed from the AINA's canvas or widget (design §9.4 ``callTool``)."""
         actor = request_actor(request)
+        if payload.conversation_id is not None:
+            conversation = await conversation_service(request).get(payload.conversation_id)
+            require_actor_ownership(request, user_id=conversation.user_id, tenant_id=conversation.tenant_id)
         return await aina_packages(request).call_app_tool(
             aina_id,
             tool_name,
@@ -91,6 +103,7 @@ def create_aina_ui_router() -> APIRouter:
             user_id=actor.user_id,
             source=payload.source,
             confirmed=payload.confirmed,
+            conversation_id=payload.conversation_id,
         )
 
     @router.post("/ainas/{aina_id}/identity-token", response_model=IdentityToken)

@@ -47,7 +47,8 @@ export function AinaCanvasFrame({
     frame,
     origin,
     source: "canvas",
-    context: { mode: "canvas", aina: { id: ainaId, version: canvas?.version } },
+    context: { mode: "canvas", aina: { id: ainaId, version: canvas?.version }, conversation: Boolean(conversationId) },
+    conversationId,
     onPrompt,
     extra: (method, params) => {
       switch (method) {
@@ -100,9 +101,17 @@ export function AinaCanvasFrame({
     return () => setCanvasToolHost(ainaId, null);
   }, [ainaId]);
 
-  // A canvas opened before its conversation existed sends its summary once there is one.
+  // The pane stays open when the user switches conversations: tell the canvas, so it can show what belongs to the
+  // conversation now beside it. A canvas opened before its conversation existed also sends its summary once there is
+  // one; one moved to another conversation sends the summary of what it shows there.
+  const previousConversation = useRef(conversationId ?? null);
   useEffect(() => {
-    if (conversationId) void sendModelContext().catch(() => undefined);
+    const previous = previousConversation.current;
+    previousConversation.current = conversationId ?? null;
+    if ((conversationId ?? null) === previous) return;
+    if (conversationId && !previous) void sendModelContext().catch(() => undefined);
+    else modelContext.current = null;
+    postEvent("context_changed", { conversation: Boolean(conversationId) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
