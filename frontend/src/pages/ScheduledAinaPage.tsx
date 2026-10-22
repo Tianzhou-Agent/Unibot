@@ -411,6 +411,11 @@ export default function ScheduledAinaPage({ embedded = false }: { embedded?: boo
               <Clock3 className="h-7 w-7 text-ink-subtle" />
               <h2 className="mt-2 text-[13px] font-bold text-ink">{t("emptyTitle")}</h2>
               <p className="mt-1 max-w-md text-[12px] leading-5 text-ink-muted">{t("emptyBody")}</p>
+              {!editorOpen ? (
+                <button type="button" onClick={openCreate} className="btn-primary mt-4 h-8">
+                  <Plus className="h-3.5 w-3.5" />{t("createFirst")}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {!loading && tasks.length > 0 ? (

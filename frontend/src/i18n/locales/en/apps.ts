@@ -18,6 +18,8 @@ export default {
   more: "More actions for {{name}}",
   installNamed: "Install {{name}}",
   permissionCount: "Needs {{count}} permission(s)",
+  permissionCount_one: "Needs {{count}} permission",
+  permissionCount_other: "Needs {{count}} permissions",
   noMatches: "No plugins match “{{query}}”.",
   delete: "Delete",
   edit: "Edit",

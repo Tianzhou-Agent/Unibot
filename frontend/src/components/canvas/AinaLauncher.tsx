@@ -2,10 +2,10 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { ArrowUpRight, Search } from "lucide-react";
 import { AppIcon } from "@/components/apps/PluginUi";
-import { api, apiErrorMessage } from "@/lib/api";
-import { isSystemAina } from "@/lib/plugins";
+import { apiErrorMessage } from "@/lib/api";
+import { fetchOpenableAinas } from "@/lib/plugins";
 import { useMockSession } from "@/lib/mockSession";
-import type { AinaInstallation, AinaRecord } from "@/types";
+import type { AinaRecord } from "@/types";
 
 /**
  * The content of a canvas "new tab", like a browser's new-tab page: every app the user can open,
@@ -24,21 +24,10 @@ export function AinaLauncher({ conversationAinaIds, openAinaIds, onSelect }: {
 
   useEffect(() => {
     let active = true;
-    const actor = new URLSearchParams({ user_id: profile.actorUserId, tenant_id: profile.tenantId });
-    Promise.all([
-      api.get<AinaRecord[]>("/ainas"),
-      api.get<AinaInstallation[]>(`/installations?${actor}`),
-    ])
-      .then(([records, installations]) => {
+    fetchOpenableAinas({ user_id: profile.actorUserId, tenant_id: profile.tenantId })
+      .then((records) => {
         if (!active) return;
-        // Mirrors the backend's openable check: built-in or bundled, or installed with every permission granted.
-        const installed = new Map(installations.filter((item) => item.status === "active").map((item) => [item.aina_id, item]));
-        setAinas(records.filter((record) => {
-          if (record.status !== "registered") return false;
-          if (isSystemAina(record.manifest.runtime)) return true;
-          const installation = installed.get(record.manifest.aina.id);
-          return Boolean(installation) && record.manifest.permissions.every((permission) => installation?.granted_permissions.includes(permission));
-        }));
+        setAinas(records);
         setError(null);
       })
       .catch((loadError) => active && setError(apiErrorMessage(loadError)));
@@ -90,7 +79,7 @@ export function AinaLauncher({ conversationAinaIds, openAinaIds, onSelect }: {
 
   return (
     <div className="mx-auto w-full max-w-[680px] px-5 py-10 sm:px-8 sm:py-12">
-      <p className="mb-2 text-[11px] tracking-[0.14em] text-ink-subtle">YOUR WORKSPACE</p>
+      <p className="mb-2 text-[11px] tracking-[0.14em] text-ink-subtle">{t("launcher.eyebrow")}</p>
       <h2 className="text-[24px] font-medium tracking-tight text-ink">{t("launcher.title")}</h2>
       <p className="mt-2 text-[12px] text-ink-muted">{t("launcher.subtitle")}</p>
       <label className="relative mt-6 block">

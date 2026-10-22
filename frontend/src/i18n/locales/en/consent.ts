@@ -4,7 +4,7 @@ export default {
   close: "Close",
   server: "Tool server",
   oauthNext: "Next, you sign in to {{origin}} with your own account; Superbot keeps the access it grants, encrypted.",
-  serverHint: "Your requests to this AINA are sent to this server.",
+  serverHint: "Your requests to this app are sent to this server.",
   canvas: "Canvas web app",
   tools: "What it can do",
   effect: {
@@ -15,7 +15,7 @@ export default {
   appOnly: "Only from its own UI",
   disabled: "Disabled: changed after review",
   permissions: "Access to your Superbot data",
-  noPermissions: "This AINA asks for no access to your Superbot data.",
+  noPermissions: "This app asks for no access to your Superbot data.",
   auto: "Granted automatically",
   required: "Required",
   optionalHint: "Optional",

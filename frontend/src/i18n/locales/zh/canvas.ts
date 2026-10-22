@@ -14,6 +14,7 @@ export default {
   restore: "恢复分栏",
   resize: "调整 Canvas 宽度",
   launcher: {
+    eyebrow: "你的工作区",
     newTab: "新标签页",
     title: "接下来，做点什么？",
     subtitle: "在这里打开应用，与对话一起完成工作。",

@@ -30,6 +30,8 @@ export default {
   saveAria: "Save memory",
   longTerm: "Long-term memory",
   results: "{{count}} result(s)",
+  results_one: "{{count}} result",
+  results_other: "{{count}} results",
   searchAria: "Search memories",
   clearSearch: "Clear search",
   closeError: "Dismiss error",

@@ -10,6 +10,21 @@ export function isSystemAina(runtime: AinaRecord["manifest"]["runtime"]): boolea
   return runtime.type === "builtin" || (runtime.type === "package" && Boolean(runtime.bundled));
 }
 
+/** The apps `actor` can open: built-in or bundled, or installed with every permission granted (the backend's check). */
+export async function fetchOpenableAinas(actor: { user_id: string; tenant_id: string }): Promise<AinaRecord[]> {
+  const [records, installations] = await Promise.all([
+    api.get<AinaRecord[]>("/ainas"),
+    api.get<AinaInstallation[]>(`/installations?${new URLSearchParams(actor)}`),
+  ]);
+  const installed = new Map(installations.filter((item) => item.status === "active").map((item) => [item.aina_id, item]));
+  return records.filter((record) => {
+    if (record.status !== "registered") return false;
+    if (isSystemAina(record.manifest.runtime)) return true;
+    const installation = installed.get(record.manifest.aina.id);
+    return Boolean(installation) && record.manifest.permissions.every((permission) => installation?.granted_permissions.includes(permission));
+  });
+}
+
 export function installAina(aina: AinaRecord) {
   return api.post(`/ainas/${aina.manifest.aina.id}/install`, {
     ...ACTOR,

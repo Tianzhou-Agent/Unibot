@@ -14,6 +14,7 @@ export default {
   restore: "Restore split view",
   resize: "Resize canvas",
   launcher: {
+    eyebrow: "YOUR WORKSPACE",
     newTab: "New tab",
     title: "What’s next?",
     subtitle: "Open an app and keep working alongside your conversation.",

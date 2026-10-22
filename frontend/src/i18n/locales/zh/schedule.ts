@@ -25,11 +25,11 @@ export default {
   refresh: "刷新",
   newTask: "新建任务",
   header: "定时任务",
-  headerMeta: "{{count}} 个任务 · Redis 分布式单次执行",
+  headerMeta: "{{count}} 个任务",
   topTitle: "定时任务",
   badge: "{{count}} 个任务",
-  heroTitle: "分布式 Agent 调度",
-  heroBody: "让 Agent 自主执行任务，或指定一个应用运行。支持固定间隔和五段 Cron 表达式，多个后端节点通过 Redis 租约协调执行。",
+  heroTitle: "让 Superbot 按计划工作",
+  heroBody: "描述一项任务和运行时间：每小时、每个工作日 9:00，或自定义 Cron 表达式。Superbot 会自主执行，或交给你指定的应用，并保留每次运行的记录。",
   summary: {
     aria: "定时任务概览",
     total: "任务总数",
@@ -47,6 +47,7 @@ export default {
   },
   noRunnable: "暂无可选应用，仍可使用 Agent 自主运行；也可以到 <link>插件</link> 安装应用。",
   emptyTitle: "暂无定时任务",
+  createFirst: "创建第一个任务",
   emptyBody: "描述任务并设置运行时间，无需选择应用；也可指定应用，立即调试并查看输入和输出。",
   target: { agent: "Agent 自主运行" },
   editor: {

@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
-import { AppWindow, ChevronRight, Download, LogIn, LogOut, Pencil, Trash2, Unplug } from "lucide-react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { AppWindow, Download, LogIn, LogOut, Pencil, Trash2, Unplug } from "lucide-react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AinaCapabilitySections } from "@/components/apps/AinaCapabilities";
 import { InstallConsentDialog } from "@/components/apps/InstallConsentDialog";
 import { ActionMenu, AppIcon, type MenuItem } from "@/components/apps/PluginUi";
@@ -103,15 +103,9 @@ export default function PluginDetailPage() {
           }}
         />
       ) : null}
-      <Topbar title={t("title")} />
+      <Topbar title={manifest?.aina.name ?? ainaId} trail={{ label: t("breadcrumb"), links: [{ label: t("title"), to: "/plugin" }] }} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-5 py-6 md:px-8 md:py-8">
-          <nav aria-label={t("breadcrumb")} className="flex min-w-0 items-center gap-1.5 text-[13px] text-ink-subtle">
-            <Link to="/plugin" className="hover:text-ink">{t("title")}</Link>
-            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate text-ink-muted">{manifest?.aina.name ?? ainaId}</span>
-          </nav>
-
           {error ? <p role="alert" className="mt-4 rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger-deep">{error}</p> : null}
           {loading ? <div className="mt-8 h-40 animate-pulse rounded-2xl bg-line/60" /> : null}
           {oauthOutcome.status === "connected" ? (

@@ -37,9 +37,11 @@ export default {
   dismissError: "关闭错误",
   sendFailed: "发送未完成，草稿已保留，可重试。",
   composerPlaceholder: "补充约束，或继续安排下一步…",
+  composerPlaceholderNew: "问 Superbot 任何问题，或添加文件…",
   messageAria: "消息",
   stopAria: "停止生成",
   sendAria: "发送消息",
+  dropFiles: "松开即可添加文件",
   attachAria: "添加附件",
   removeAttachment: "移除 {{name}}",
   attachmentTooLarge: "{{name}} 超过 {{limit}} MB。",
@@ -60,18 +62,19 @@ export default {
   welcome: {
     title: "开始新对话",
     body: "Superbot 会保留多轮上下文、根据目标自动组合合适的能力，并在高风险操作前等待你的确认。",
-    f1: {
-      title: "多轮上下文",
-      body: "会话历史自动恢复",
+    startersLabel: "从你的应用开始",
+    starter: {
+      documents: "起草一页项目简介，保存为新文档",
+      scheduler: "每个工作日 9:00 给我发一份当天的简短计划",
+      memory: "记住：我喜欢简短、分点的回答",
+      useApp: "用 {{name}} ",
     },
-    f2: {
-      title: "能力调度",
-      body: "按任务自动组合",
-    },
-    f3: {
-      title: "安全确认",
-      body: "高风险操作可控",
-    },
+  },
+  loadFailed: {
+    title: "无法打开此对话",
+    body: "服务器没有正常响应，请稍后重试。",
+    notFound: "对话可能已被删除，或链接已失效。",
+    retry: "重试",
   },
   deleted: {
     title: "“{{title}}”已删除",

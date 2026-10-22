@@ -19,6 +19,11 @@ export function notifyConversationsChanged() {
   window.dispatchEvent(new Event(CONVERSATIONS_CHANGED_EVENT));
 }
 
+// How the keyboard shortcuts are written on this platform.
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+const SEARCH_SHORTCUT = MAC ? "⌘K" : "Ctrl+K";
+const NEW_CHAT_SHORTCUT = MAC ? "⇧⌘O" : "Ctrl+Shift+O";
+
 const RUN_STATUS_EVENT = "unibot:run-status";
 // Conversations whose turn is streaming in this tab right now; the stored run_status lags behind it.
 const runningConversationIds = new Set<string>();
@@ -84,6 +89,32 @@ export function Sidebar() {
   useEffect(() => {
     if (!window.matchMedia("(min-width: 768px)").matches) setNavigationOpen(false);
   }, [location.pathname, location.search]);
+
+  // ⌘K / Ctrl+K searches the conversations; ⇧⌘O / Ctrl+Shift+O starts a new one in the current workspace.
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // A collapsed sidebar renders the search box only once it opens: the focus waits for the render that opens it.
+  const [focusSearch, setFocusSearch] = useState(0);
+  useEffect(() => {
+    if (focusSearch) searchInputRef.current?.focus();
+  }, [focusSearch]);
+  const shortcutActionsRef = useRef({ newConversation: () => {} });
+  shortcutActionsRef.current.newConversation = () => startConversation(activeWorkspaceId ?? null);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "k" && !event.shiftKey) {
+        event.preventDefault();
+        setNavigationOpen(true);
+        setFocusSearch((count) => count + 1);
+      } else if (key === "o" && event.shiftKey) {
+        event.preventDefault();
+        shortcutActionsRef.current.newConversation();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -223,6 +254,7 @@ export function Sidebar() {
         <label className="flex h-8 items-center gap-2 rounded-lg border border-sidebar-border bg-white px-2.5 focus-within:border-line-strong">
           <Search className="w-3.5 h-3.5 text-ink-subtle" />
           <input
+            ref={searchInputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             type="search"
@@ -230,6 +262,7 @@ export function Sidebar() {
             aria-label={t("searchConversations")}
             className="flex-1 min-w-0 bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-subtle"
           />
+          {!query ? <kbd aria-hidden className="hidden shrink-0 font-sans text-[10px] text-ink-subtle md:inline">{SEARCH_SHORTCUT}</kbd> : null}
         </label>
       </div>
 
@@ -298,7 +331,7 @@ export function Sidebar() {
             <div className="mb-1 flex items-center gap-2 px-2 text-[11px] font-medium text-ink-subtle">
               <span>{t("standalone")}</span>
               <span>{independentConversations.length}</span>
-              <button type="button" onClick={() => startConversation(null)} className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-ink-subtle transition hover:bg-sidebar-hover hover:text-ink" aria-label={t("newStandalone")} title={t("newStandalone")}>
+              <button type="button" onClick={() => startConversation(null)} className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-ink-subtle transition hover:bg-sidebar-hover hover:text-ink" aria-label={t("newStandalone")} title={activeWorkspaceId ? t("newStandalone") : `${t("newStandalone")} (${NEW_CHAT_SHORTCUT})`}>
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>

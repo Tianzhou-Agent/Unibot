@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { AppIcon } from "@/components/apps/PluginUi";
 import { AinaLauncher } from "@/components/canvas/AinaLauncher";
 import { CanvasTabs, NEW_CANVAS_TAB } from "@/components/canvas/CanvasTabs";
 import { ApprovalCard, type EditedArguments } from "@/components/chat/ApprovalCard";
@@ -41,15 +42,18 @@ import { AinaTaskList } from "@/components/tasks/AinaTaskList";
 import { useCanvasViewer } from "@/components/canvas/useCanvasViewer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
 import { api, ApiError, apiErrorMessage, streamApprovalConfirm, streamChat, streamResume, type StreamEvent } from "@/lib/api";
+import { useCapabilityNames } from "@/lib/capabilityNames";
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
 import { isReadableFile, READABLE_EXTENSIONS } from "@/lib/fileTypes";
 import { useMockSession } from "@/lib/mockSession";
+import { fetchOpenableAinas } from "@/lib/plugins";
 import { classNames, uid } from "@/lib/utils";
 import { canvasQuery, readCanvasRoute, workspaceCanvasPath, workspaceChatPath, type CanvasRoute } from "@/lib/workspace";
 import type {
   AinaCanvasResponse,
+  AinaRecord,
   ApprovalRecord,
   BackendMessage,
   ChatResponse,
@@ -79,6 +83,8 @@ export default function ChatModePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { debugMode } = useDebugMode();
+  // The live line names the running tool by its app's names.
+  useCapabilityNames();
   const { profile } = useMockSession();
   const actor = useMemo(() => ({ user_id: profile.actorUserId, tenant_id: profile.tenantId }), [profile.actorUserId, profile.tenantId]);
   const [llmCalls, setLlmCalls] = useState<LLMCallRecord[]>([]);
@@ -88,6 +94,8 @@ export default function ChatModePage() {
   const loadingConversation = loading && !conversation;
   const [sending, setSending] = useState(false);
   const [composerVersion, setComposerVersion] = useState(0);
+  // A starter prompt picked from the welcome panel, put into the composer for the user to edit and send.
+  const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   const composerConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [optimisticUser, setOptimisticUser] = useState<BackendMessage | null>(null);
   // Archived message count when the optimistic message was sent; a later archived copy replaces it.
@@ -107,6 +115,8 @@ export default function ChatModePage() {
   const setError = useCallback((message: string | null, code: string | null = null) => {
     setErrorInfo(message ? { message, code } : null);
   }, []);
+  // Why the conversation in the route could not be loaded; shown in place of it until a load succeeds.
+  const [loadFailure, setLoadFailure] = useState<{ message: string; status: number | null } | null>(null);
   const [approval, setApproval] = useState<ApprovalRecord | null>(null);
   const [lastRun, setLastRun] = useState<ChatResponse | null>(null);
   const [clarificationWidgets, setClarificationWidgets] = useState<WidgetDefinition[]>([]);
@@ -254,6 +264,7 @@ export default function ChatModePage() {
         throw new Error(t("err.wrongWorkspace"));
       }
       setConversation(record);
+      setLoadFailure(null);
       setApproval(pendingApprovals[0] ?? null);
       setTitleDraft(record.title);
       setDeleted(false);
@@ -265,6 +276,7 @@ export default function ChatModePage() {
     } catch (loadError) {
       if (requestId !== loadRequestRef.current || activeConversationIdRef.current !== id) return;
       setError(apiErrorMessage(loadError));
+      setLoadFailure({ message: apiErrorMessage(loadError), status: loadError instanceof ApiError ? loadError.status : null });
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
@@ -299,6 +311,8 @@ export default function ChatModePage() {
     setApproval(null);
     setLastRun(null);
     setError(null);
+    setLoadFailure(null);
+    setPrefill(null);
     setDeleted(false);
     setUsedAinaIds([]);
     setNewTab(null);
@@ -335,6 +349,7 @@ export default function ChatModePage() {
       setApproval(null);
       setLastRun(null);
       setError(null);
+      setPrefill(null);
       setDeleted(false);
       setOptimisticUser(null);
       setLiveItems([]);
@@ -847,6 +862,7 @@ export default function ChatModePage() {
     });
   }
 
+  const loadFailed = !conversation && !loadingConversation && loadFailure !== null;
   const title = conversation?.title === "New conversation" ? t("newConversation") : conversation?.title ?? t("newConversation");
   return (
     <>
@@ -936,7 +952,16 @@ export default function ChatModePage() {
               {!loadingConversation && deleted ? (
                 <DeletedConversation title={title} onRestore={() => void restoreConversation()} />
               ) : null}
-              {!loadingConversation && !deleted && messages.length === 0 ? <WelcomePanel /> : null}
+              {loadFailed && loadFailure ? (
+                <ConversationLoadError
+                  {...loadFailure}
+                  newConversationHref={workspaceChatPath(routeWorkspaceId)}
+                  onRetry={() => { if (conversationId) void loadConversation(conversationId); }}
+                />
+              ) : null}
+              {!loadingConversation && !deleted && !loadFailed && messages.length === 0 ? (
+                <WelcomePanel onStarter={(prompt) => setPrefill({ text: prompt, nonce: Date.now() })} />
+              ) : null}
               {!deleted
                 ? messages.map((message, index) => {
                     if (message.role === "tool" && message.tool_call_id && requestedToolCallIds.has(message.tool_call_id)) return null;
@@ -1010,7 +1035,7 @@ export default function ChatModePage() {
               {conversation?.run_status === "stopped" && !sending && !deleted ? (
                 <StoppedNotice onResume={() => void runTurn(null)} />
               ) : null}
-              {error && !hasRecordedRunError ? <ErrorNotice message={error} code={errorCode} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
+              {error && !hasRecordedRunError && !loadFailed ? <ErrorNotice message={error} code={errorCode} detailsHref={errorLogHref} onDismiss={() => setError(null)} /> : null}
               {debugMode && lastRun && !sending ? <RunSummary response={lastRun} /> : null}
               <div />
             </div>
@@ -1033,12 +1058,13 @@ export default function ChatModePage() {
               </button>
             </div>
           ) : null}
-          {!deleted ? (
+          {!deleted && !loadFailed ? (
             <ChatComposer
               key={`${profile.tenantId}:${profile.actorUserId}:${routeWorkspaceId}:${composerVersion}`}
               disabled={sending || loadingConversation}
               running={sending && Boolean(conversation?.id)}
               initialText={initialPrompt}
+              prefill={prefill}
               sessionId={conversation?.id ?? conversationId ?? null}
               approval={approval ? {
                 id: approval.id,
@@ -1291,6 +1317,7 @@ function ChatComposer({
   disabled,
   running,
   initialText,
+  prefill,
   sessionId,
   approval,
   messageCount,
@@ -1302,6 +1329,8 @@ function ChatComposer({
   disabled: boolean;
   running: boolean;
   initialText: string;
+  /** Text to put in the box in place of the draft; a new nonce puts it there again. */
+  prefill: { text: string; nonce: number } | null;
   sessionId: string | null;
   approval?: { id: string; content: ReactNode };
   messageCount: number;
@@ -1317,7 +1346,9 @@ function ChatComposer({
   const [sendFailed, setSendFailed] = useState(false);
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const composingRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadQueueRef = useRef<PickedFile[]>([]);
   const activeUploadsRef = useRef(0);
@@ -1325,6 +1356,36 @@ function ChatComposer({
   const removedRef = useRef(new Set<string>());
   const actorQuery = new URLSearchParams({ user_id: profile.actorUserId, tenant_id: profile.tenantId }).toString();
   const filesReady = files.every((item) => item.status === "ready");
+
+  useLayoutEffect(() => {
+    if (textareaRef.current) fitToText(textareaRef.current);
+  }, [text]);
+
+  // A new width re-wraps the draft: a resized split, or a hidden pane shown again.
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    let width = textarea.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (textarea.clientWidth === width) return;
+      width = textarea.clientWidth;
+      fitToText(textarea);
+    });
+    observer.observe(textarea);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!prefill) return;
+    setText(prefill.text);
+    setSendFailed(false);
+    textareaRef.current?.focus();
+  }, [prefill]);
+
+  // Once a picked starter is in the box, the caret goes after it so the user can keep typing.
+  useEffect(() => {
+    if (prefill && text === prefill.text) textareaRef.current?.setSelectionRange(text.length, text.length);
+  }, [prefill, text]);
 
   function updateFile(key: string, change: Partial<PickedFile>) {
     setFiles((current) => current.map((item) => item.key === key ? { ...item, ...change } : item));
@@ -1423,8 +1484,31 @@ function ChatComposer({
         {fileError ? <p role="status" className="text-[11.5px] text-ink-muted">{fileError}</p> : null}
         <form
           onSubmit={submit}
-          className="rounded-2xl border border-line-strong bg-white px-4 py-3 shadow-soft focus-within:border-accent"
+          // Files dropped anywhere on the box are attached like picked ones.
+          onDragOver={(event) => {
+            if (disabled || !event.dataTransfer.types.includes("Files")) return;
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+          }}
+          onDrop={(event) => {
+            if (disabled || !event.dataTransfer.files.length) return;
+            event.preventDefault();
+            setDragging(false);
+            addFiles(event.dataTransfer.files);
+          }}
+          className={classNames(
+            "relative rounded-2xl border bg-white px-4 py-3 shadow-soft focus-within:border-accent",
+            dragging ? "border-accent" : "border-line-strong",
+          )}
         >
+          {dragging ? (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-2xl bg-accent-softer/95 text-[13px] font-medium text-accent">
+              <Paperclip className="h-4 w-4" />{t("dropFiles")}
+            </div>
+          ) : null}
           {context ? (
             <div className="mb-2 flex min-w-0 items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-[10.5px] text-accent">
               <Sparkles className="h-3 w-3 shrink-0" />
@@ -1449,8 +1533,15 @@ function ChatComposer({
             </div>
           ) : null}
           <textarea
+            ref={textareaRef}
             value={text}
             onChange={(event) => { setText(event.target.value); setSendFailed(false); }}
+            onPaste={(event) => {
+              // Pasted files (copied in a file manager) are attached; pasted text is typed as usual.
+              if (!event.clipboardData.files.length) return;
+              event.preventDefault();
+              addFiles(event.clipboardData.files);
+            }}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={() => { composingRef.current = false; }}
             onKeyDown={(event) => {
@@ -1462,9 +1553,9 @@ function ChatComposer({
             }}
             disabled={disabled}
             rows={1}
-            placeholder={context ? tCanvas("placeholderEdit") : t("composerPlaceholder")}
+            placeholder={context ? tCanvas("placeholderEdit") : messageCount ? t("composerPlaceholder") : t("composerPlaceholderNew")}
             aria-label={t("messageAria")}
-            className="w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
+            className="max-h-60 w-full resize-none bg-transparent text-[14px] leading-[1.7] text-ink outline-none placeholder:text-ink-subtle disabled:opacity-60"
           />
           <div className="mt-2 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1">
@@ -1502,10 +1593,10 @@ function ChatComposer({
                 type="submit"
                 disabled={disabled || !text.trim() || !filesReady}
                 className={classNames(
-                  "flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors",
+                  "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
                   !disabled && text.trim() && filesReady
-                    ? "bg-accent hover:bg-accent-hover"
-                    : "bg-ink cursor-not-allowed opacity-80",
+                    ? "bg-accent text-white hover:bg-accent-hover"
+                    : "cursor-not-allowed bg-line-strong text-ink-subtle",
                 )}
                 aria-label={t("sendAria")}
               >
@@ -1517,6 +1608,16 @@ function ChatComposer({
       </div>
     </div>
   );
+}
+
+/** Grows the box with its text up to its max height; past that it scrolls. */
+function fitToText(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+  // In a hidden pane it measures nothing: it keeps its natural height until it shows again.
+  if (!textarea.scrollHeight) return;
+  textarea.style.height = `${textarea.scrollHeight}px`;
+  // Below the max height everything shows; scrolling there would only reveal a rounding scrollbar.
+  textarea.style.overflowY = textarea.scrollHeight > textarea.clientHeight ? "auto" : "hidden";
 }
 
 // Key of the running turn in the set of turns whose steps are shown.
@@ -1537,30 +1638,64 @@ interface PickedFile {
   attachment?: MessageAttachment;
 }
 
-function WelcomePanel() {
+// Starter prompts of the built-in apps; any other app starts a sentence that names it.
+const STARTER_KEYS: Record<string, string> = {
+  "unibot-documents": "welcome.starter.documents",
+  "unibot-scheduler": "welcome.starter.scheduler",
+  "unibot-memory": "welcome.starter.memory",
+};
+
+function WelcomePanel({ onStarter }: { onStarter: (prompt: string) => void }) {
   const { t } = useTranslation("chatPage");
+  const { profile } = useMockSession();
+  const [apps, setApps] = useState<AinaRecord[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    // Starters are extras: without the app list the panel simply has none.
+    fetchOpenableAinas({ user_id: profile.actorUserId, tenant_id: profile.tenantId })
+      .then((records) => { if (active) setApps(records); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [profile.actorUserId, profile.tenantId]);
+
+  const starters = apps.slice(0, 6).map(({ manifest: { aina } }) => {
+    const key = STARTER_KEYS[aina.id];
+    const prompt = key ? t(key) : t("welcome.starter.useApp", { name: aina.name });
+    return { id: aina.id, name: aina.name, prompt, label: key ? prompt : `${prompt.trimEnd()}…` };
+  });
+
   return (
     <div className="min-h-[420px] flex items-center justify-center">
-      <div className="max-w-lg text-center">
+      <div className="w-full max-w-xl text-center">
         <div className="mx-auto w-14 h-14 rounded-2xl bg-accent-soft text-accent flex items-center justify-center">
           <Bot className="w-7 h-7" />
         </div>
         <h2 className="mt-4 text-[22px] font-extrabold font-display text-ink">{t("welcome.title")}</h2>
-        <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+        <p className="mx-auto mt-2 max-w-lg text-[13px] leading-relaxed text-ink-muted">
           {t("welcome.body")}
         </p>
-        <div className="mt-5 grid grid-cols-3 gap-2 text-left">
-          {[
-            [t("welcome.f1.title"), t("welcome.f1.body")],
-            [t("welcome.f2.title"), t("welcome.f2.body")],
-            [t("welcome.f3.title"), t("welcome.f3.body")],
-          ].map(([label, detail]) => (
-            <div key={label} className="rounded-lg border border-line bg-white p-3">
-              <div className="text-[12px] font-bold text-ink">{label}</div>
-              <div className="mt-1 text-[10.5px] text-ink-muted">{detail}</div>
+        {starters.length ? (
+          <div className="mt-6 text-left">
+            <p className="mb-2 px-1 text-[11px] font-medium text-ink-subtle">{t("welcome.startersLabel")}</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {starters.map((starter) => (
+                <button
+                  key={starter.id}
+                  type="button"
+                  onClick={() => onStarter(starter.prompt)}
+                  className="flex min-w-0 items-start gap-2.5 rounded-xl border border-line-strong bg-white p-3 text-left transition-colors hover:border-accent/40 hover:bg-accent-softer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <span className="mt-0.5"><AppIcon id={starter.id} name={starter.name} size="sm" /></span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[11px] font-medium text-ink-subtle">{starter.name}</span>
+                    <span className="mt-0.5 block text-[13px] leading-snug text-ink">{starter.label}</span>
+                  </span>
+                </button>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1577,6 +1712,33 @@ function DeletedConversation({ title, onRestore }: { title: string; onRestore: (
         <button type="button" onClick={onRestore} className="btn-primary mt-4">
           <RotateCcw className="w-4 h-4" />{t("deleted.restore")}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ConversationLoadError({ message, status, newConversationHref, onRetry }: {
+  message: string;
+  status: number | null;
+  newConversationHref: string;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation("chatPage");
+  return (
+    <div role="alert" className="min-h-[420px] flex items-center justify-center">
+      <div className="max-w-md text-center">
+        <AlertTriangle className="mx-auto w-10 h-10 text-ink-subtle" />
+        <h2 className="mt-3 text-[17px] font-bold text-ink">{t("loadFailed.title")}</h2>
+        <p className="mt-1 text-[12.5px] text-ink-muted">{status === 404 ? t("loadFailed.notFound") : t("loadFailed.body")}</p>
+        <p className="mt-2 break-all text-[11px] text-ink-subtle">{message}</p>
+        <div className="mt-4 flex justify-center gap-2">
+          <button type="button" onClick={onRetry} className="btn-primary">
+            <RotateCcw className="w-4 h-4" />{t("loadFailed.retry")}
+          </button>
+          <Link to={newConversationHref} className="btn-outline">
+            <Plus className="w-4 h-4" />{t("newConversation")}
+          </Link>
+        </div>
       </div>
     </div>
   );

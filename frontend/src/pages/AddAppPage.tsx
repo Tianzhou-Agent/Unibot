@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ChevronRight, Download, Loader2, Package, PackageCheck, ShieldCheck } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
+import { AlertTriangle, Download, Loader2, Package, PackageCheck, ShieldCheck } from "lucide-react";
 import { Topbar } from "@/components/layout/Topbar";
 import { CanvasPart, McpServersPart, SkillsPart } from "@/components/apps/AddAppParts";
 import { PackageScaffoldForm } from "@/components/apps/PackageDeveloper";
@@ -152,21 +152,19 @@ export default function AddAppPage() {
   const title = editing ? t("edit.title") : t("title");
   return (
     <div className="flex h-full flex-col bg-app-bg">
-      <Topbar title={title} />
+      <Topbar
+        title={title}
+        trail={{
+          label: t("breadcrumb"),
+          links: [
+            { label: t("plugins"), to: "/plugin" },
+            ...(ainaId ? [{ label: draft.name || ainaId, to: `/plugin/${encodeURIComponent(ainaId)}` }] : []),
+          ],
+        }}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-5 py-7 md:px-8 md:py-9">
-          <nav className="flex items-center gap-1 text-[12.5px] text-ink-muted" aria-label={t("breadcrumb")}>
-            <Link to="/plugin" className="hover:text-ink">{t("plugins")}</Link>
-            <ChevronRight className="h-3.5 w-3.5" />
-            {ainaId ? (
-              <>
-                <Link to={`/plugin/${encodeURIComponent(ainaId)}`} className="hover:text-ink">{draft.name || ainaId}</Link>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </>
-            ) : null}
-            <span className="text-ink">{title}</span>
-          </nav>
-          <header className="mt-2 flex flex-wrap items-baseline justify-between gap-3">
+          <header className="flex flex-wrap items-baseline justify-between gap-3">
             <div>
               <h2 className="text-[26px] font-semibold text-ink">{title}</h2>
               <p className="mt-1 text-[14px] text-ink-muted">{editing ? t("edit.subtitle") : t("subtitle")}</p>

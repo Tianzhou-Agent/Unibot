@@ -2015,7 +2015,7 @@ test("FE-E2E-003B 查看 AINA 的 Skill 提示词和 Tool Input", async ({ page 
   await page.goto("/plugin");
   await page.getByRole("link", { name: /文档编辑器/ }).click();
   await expect(page).toHaveURL(/\/plugin\/unibot-documents$/);
-  await expect(page.getByRole("heading", { name: "文档编辑器", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "文档编辑器", exact: true, level: 2 })).toBeVisible();
 
   const openAppButton = page.getByRole("button", { name: "打开应用", exact: true });
   await expect(openAppButton).toBeVisible();
