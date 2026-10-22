@@ -11,7 +11,7 @@
   },
 
   "tools": {
-    "mcp": { "url": "https://bundled.unibot.invalid/unibot.image-recognition/mcp", "auth": { "type": "none" } },
+    "mcp": { "url": "http://127.0.0.1:8767/mcp", "auth": { "type": "none" } },
     "expose": {
       "detect": { "effect": "read", "visibility": ["app"], "timeout_seconds": 90 },
       "vision_status": { "effect": "read", "visibility": ["app"] }

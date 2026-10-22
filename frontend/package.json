@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "lint": "tsc -b --noEmit",
     "test:e2e": "playwright test",
-    "build:canvases": "AINA_CANVAS=image-recognition vite build -c vite.canvas.config.ts"
+    "build:canvases": "vite build -c vite.canvas.config.ts"
   },
   "dependencies": {
     "ace-builds": "^1.44.0",

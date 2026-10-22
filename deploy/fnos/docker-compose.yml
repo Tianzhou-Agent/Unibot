@@ -31,6 +31,7 @@ services:
     restart: unless-stopped
 
   vision:
+    profiles: ["image-recognition"]
     image: ghcr.io/tianzhou-agent/unibot-vision:latest
     pull_policy: always
     environment:
@@ -94,9 +95,6 @@ services:
       UNIBOT_SANDBOX_DRIVER: ${UNIBOT_SANDBOX_DRIVER:-local}
       UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL: ${UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL:-false}
       UNIBOT_SANDBOX_WORKSPACE_ROOT: /data/sandboxes
-      UNIBOT_VISION_BASE_URL: http://vision:8080
-      UNIBOT_VISION_TIMEOUT_SECONDS: ${UNIBOT_VISION_TIMEOUT_SECONDS:-60}
-      UNIBOT_VISION_MAX_IMAGE_BYTES: ${UNIBOT_VISION_MAX_IMAGE_BYTES:-10485760}
     volumes:
       - nas-data:/data/nas
       - sandbox-data:/data/sandboxes
@@ -104,8 +102,6 @@ services:
       mysql:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      vision:
         condition: service_healthy
     ports:
       - "${UNIBOT_BACKEND_PORT:-8000}:8000"

@@ -1,0 +1,17 @@
+services:
+  sandbox:
+    build:
+      context: ../../sandbox/sandboxd
+    ports:
+      - "127.0.0.1:18082:8080"
+    volumes:
+      - workspace:/workspace
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+
+volumes:
+  workspace:

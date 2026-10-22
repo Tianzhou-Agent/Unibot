@@ -30,7 +30,7 @@ Superbot 由两层能力构成：
 | **文件附件**        | 文件上传、签名 URL、                               |
 | **多 LLM Provider** | 支持多LLM Provider配置，用户级隔离                 |
 | **用户与认证**      | 邮箱密码注册登录、HttpOnly 会话、GitHub OAuth、跨节点用户数据隔离 |
-| **用户代码沙箱**    | Code Runner AINA、每用户持久工作区、本地/K3s 双驱动与 gVisor 隔离 |
+| **用户代码沙箱**    | 可选 Code Runner AINA 示例；托管运行时支持持久工作区、本地/K3s 双驱动与 gVisor 隔离 |
 | **图片目标检测**    | 图片识别 AINA、YOLO26m 容器推理、GPU 优先与 CPU 自动回退 |
 
 ## 项目结构
@@ -98,7 +98,7 @@ MySQL、Redis 和 NAS 执行读写探测。MySQL 是业务数据的
 AOF，仓库自带的 compose 已包含该配置。NAS 默认位于仓库根目录的 `data/nas/`。可观测链路的部署、
 积压和恢复说明见 [`docs/observability-wal-ops.md`](docs/observability-wal-ops.md)。
 
-图片识别 AINA 还需要启动独立 YOLO26m 推理容器。在仓库根目录运行：
+图片识别是[手动添加并安装的可选 AINA 示例](examples/image-recognition-aina/README.md)，需要启动独立 YOLO26m 推理容器。在仓库根目录运行：
 
 ```powershell
 .\scripts\start-vision.cmd
@@ -171,7 +171,7 @@ TZ_STORAGE_NAS_ROOT_PATH=../data/nas
 - 内置 `unibot-code-runner`：在每用户独立沙箱中执行 Python、Bash 和 Node.js，查看输入输出与历史，并停止或重置环境；
 - `/sandboxes`：沙箱初始化、脚本执行、执行历史、停止和重置；完整部署说明见 [`docs/sandbox-platform.md`](docs/sandbox-platform.md)。
 - 内置 `unibot-image-recognition`：粘贴、拖入或选择图片，使用 YOLO26m 展示目标框、类别、数量和置信度；
-- `/vision/health`、`/vision/detect`：查询实际推理设备并代理图片目标检测，原图不会持久化保存。
+- 图片识别和 Code Runner 是 `examples/image-recognition-aina/` 与 `examples/code-runner-aina/` 下的可选 AINA 包；默认不注册、不安装，用户手动添加并安装后才可使用。
 
 最小对话请求：
 

@@ -1,5 +1,4 @@
-import { useTranslation } from "react-i18next";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Play, Send } from "lucide-react";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { classNames } from "@/lib/utils";
@@ -9,10 +8,6 @@ import { DocumentWidget } from "./DocumentWidget";
 import { MemoryMainWidget } from "./MemoryMainWidget";
 import { WidgetFormFields } from "./WidgetFormFields";
 import { ScheduledAinaMainWidget } from "@/pages/ScheduledAinaPage";
-
-const CodeRunnerMainWidget = lazy(() =>
-  import("./CodeRunnerMainWidget").then((module) => ({ default: module.CodeRunnerMainWidget })),
-);
 
 export function MainWidgetRenderer({
   ainaId,
@@ -37,18 +32,10 @@ export function MainWidgetRenderer({
   refreshToken?: string | null;
   conversationId?: string | null;
 }) {
-  const { t } = useTranslation("common");
   if (widget.kind === "aina_canvas") {
     return <AinaCanvasFrame ainaId={ainaId} widget={widget} conversationId={conversationId} refreshToken={refreshToken} onPrompt={onPrompt} />;
   }
   if (ainaId === "unibot-scheduler") return <ScheduledAinaMainWidget />;
-  if (ainaId === "unibot-code-runner") {
-    return (
-      <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-ink-muted">{t("widget.loadingEditor")}</div>}>
-        <CodeRunnerMainWidget workspaceId={workspaceId} />
-      </Suspense>
-    );
-  }
   if (widget.kind === "document") return <DocumentWidget workspaceId={workspaceId} initialDocumentName={documentName} disabled={disabled} refreshToken={refreshToken} onTaskContextChange={onDocumentTaskContextChange} />;
   if (widget.kind === "memory") return <MemoryMainWidget disabled={disabled} onPrompt={onPrompt} />;
   return <DeclarativeMainWidget widget={widget} disabled={disabled} onOpenAina={onOpenAina} onPrompt={onPrompt} />;

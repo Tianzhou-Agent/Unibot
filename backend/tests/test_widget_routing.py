@@ -153,10 +153,8 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     assert widget["kind"] == "aina_chooser"
     assert widget["title"] == "Suggested apps"
     assert [item["aina_id"] for item in widget["apps"]] == [
-        "unibot-code-runner",
         "unibot-memory",
         "unibot-scheduler",
-        "unibot.image-recognition",
     ]
     assert conversation.json()["messages"][-1]["widgets"] == response.json()["widgets"]
     assert any(event["kind"] == "builtin.completed" for event in trace.json()["events"])
@@ -164,7 +162,6 @@ def test_list_app_builtin_persists_an_interactive_widget() -> None:
     entry_names = {item["function"]["name"] for item in llm.calls[0]["tools"]}
     assert any(name.startswith("builtin_list_app_") for name in entry_names)
     assert {name.split("_")[1] for name in entry_names if name.startswith("aina_")} == {
-        "unibot-code-runner",
         "unibot-memory",
     }
 
@@ -381,7 +378,7 @@ def test_open_document_app_uses_open_app_even_when_documents_is_primary(tmp_path
     assert response.status_code == 200
     assert response.json()["widgets"] == []
     assert response.json()["opened_app_id"] == "unibot-documents"
-    assert len(llm.calls[0]["tools"]) == 12
+    assert len(llm.calls[0]["tools"]) == 11
     assert any(item["function"]["name"].startswith("builtin_open_app_") for item in llm.calls[0]["tools"])
     resolution = next(event for event in trace["events"] if event["kind"] == "routing.scope.resolved")
     assert resolution["details"]["source"] == "unified_entry"
@@ -413,11 +410,9 @@ def test_application_discovery_routes_across_all_ainas_from_document_context(tmp
 
     assert response.status_code == 200
     assert {item["aina_id"] for item in response.json()["widgets"][0]["apps"]} == {
-        "unibot-code-runner",
         "unibot-documents",
         "unibot-memory",
         "unibot-scheduler",
-        "unibot.image-recognition",
     }
     entry_ainas = {
         item["function"]["name"].split("_")[1]
@@ -425,7 +420,6 @@ def test_application_discovery_routes_across_all_ainas_from_document_context(tmp
         if item["function"]["name"].startswith("aina_")
     }
     assert entry_ainas == {
-        "unibot-code-runner",
         "unibot-documents",
         "unibot-memory",
     }
@@ -460,7 +454,7 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
         trace = client.get(f"/traces/{response.json()['trace_id']}")
 
     assert response.status_code == 200
-    assert len(llm.calls[0]["tools"]) == 13
+    assert len(llm.calls[0]["tools"]) == 12
     entry_names = [item["function"]["name"] for item in llm.calls[0]["tools"]]
     assert any(name.startswith("builtin_list_app_") for name in entry_names)
     assert any(name.startswith("tool_report_data_") for name in entry_names)
@@ -484,10 +478,10 @@ def test_unified_entry_can_invoke_remote_aina_then_scopes_follow_up() -> None:
     remote_aina = next(
         item for item in discovery["aina_graph"]["available"] if item["id"] == "com.example.canvas"
     )
-    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 3, "remote_aina": 1}
+    assert discovery["aina_graph"]["counts"] == {"builtin_aina": 2, "remote_aina": 1}
     assert discovery["model_scope"]["counts"] == {
         "remote_tool": 1,
-        "remote_aina": 3,
+        "remote_aina": 2,
             "builtin_capability": 9,
     }
     assert remote_aina["availability"] == "installed"
@@ -630,7 +624,7 @@ def test_suggest_ainas_returns_a_ranked_chooser_without_opening_anything() -> No
     assert response.status_code == 200
     widget = response.json()["widgets"][0]
     assert widget["kind"] == "aina_chooser"
-    assert [app["aina_id"] for app in widget["apps"]] == ["unibot-code-runner", "unibot-memory"]
+    assert [app["aina_id"] for app in widget["apps"]] == ["unibot-memory"]
     assert widget["description"] == "Run the analysis in the code runner; memory keeps the decisions."
     assert widget["actions"] == []
     assert bound["active_aina_ids"] == []
