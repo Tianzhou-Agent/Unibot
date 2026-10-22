@@ -642,6 +642,34 @@ async def test_a_write_whose_tab_closes_while_running_it_is_reported_and_not_run
     assert host.opened == []  # a write that may have run is never sent to another canvas
 
 
+async def test_a_tab_taking_over_after_a_headless_change_reloads_its_canvas_first() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    draw = {"call_id": "c1", "aina_id": AINA, "name": "draw_circle", "effect": "write", "arguments": {}, "timeout_ms": 2000}
+    assert await broker.dispatch("conv_1", draw, timeout=2) == {"result": {"by": "headless"}}
+    await broker.heartbeat("conv_1", TAB_A, visible=True)  # the user came back, perhaps while that change was saving
+    received: list[dict[str, Any]] = []
+
+    async def tab() -> None:
+        async with broker.listen(TAB_A) as next_event:
+            for _ in range(2):
+                event = await next_event(2)
+                assert event is not None
+                received.append(event)
+                call = {"conversation_id": "conv_1", "client_id": TAB_A}
+                assert await broker.acknowledge(event["call_id"], **call)
+                assert await broker.resolve(event["call_id"], **call, result={"result": {"by": "tab"}})
+
+    listening = asyncio.create_task(tab())
+    await asyncio.sleep(0.01)
+    scene = {"call_id": "c2", "aina_id": AINA, "name": "get_scene", "effect": "read", "arguments": {}, "timeout_ms": 2000}
+    await broker.dispatch("conv_1", scene, timeout=2)
+    await broker.dispatch("conv_1", {**scene, "call_id": "c3"}, timeout=2)
+    await listening
+
+    assert [event.get("reload", False) for event in received] == [True, False]  # only the first call after the handoff
+
+
 async def test_without_a_headless_browser_the_call_reports_the_canvas_is_not_open() -> None:
     host = FakeHeadlessHost(available=False)
     broker = _headless_broker(host)

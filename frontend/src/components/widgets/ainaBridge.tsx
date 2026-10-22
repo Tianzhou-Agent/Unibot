@@ -244,6 +244,8 @@ export function useAinaBridge({
 export type CanvasToolHost = {
   tools: Set<string>;
   invoke: (name: string, args: Record<string, unknown>, timeoutMs: number) => Promise<unknown>;
+  /** Load the canvas again; it counts as registered once it registers its tools anew. */
+  reload: () => void;
 };
 
 const canvasHosts = new Map<string, CanvasToolHost>();
@@ -254,6 +256,11 @@ export function setCanvasToolHost(ainaId: string, host: CanvasToolHost | null) {
   if (host) canvasHosts.set(ainaId, host);
   else canvasHosts.delete(ainaId);
   for (const listener of canvasHostListeners) listener();
+}
+
+/** Reload the AINA's canvas if it is open, so it shows its saved state again. */
+export function reloadCanvas(ainaId: string) {
+  canvasHosts.get(ainaId)?.reload();
 }
 
 /** The AINA's open canvas once it has registered ``name`` (with null: any tool); rejects after ``timeoutMs``. */

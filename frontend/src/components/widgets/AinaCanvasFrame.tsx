@@ -88,8 +88,13 @@ export function AinaCanvasFrame({
   const host = useRef<CanvasToolHost>({
     tools: registered,
     invoke: (name, args, timeoutMs) => requestFrame("invokeTool", { name, arguments: args }, timeoutMs),
+    reload: () => undefined,
   });
   host.current.invoke = (name, args, timeoutMs) => requestFrame("invokeTool", { name, arguments: args }, timeoutMs);
+  host.current.reload = () => {
+    registered.clear();
+    if (frame.current && src) frame.current.src = src;
+  };
   useEffect(() => {
     setCanvasToolHost(ainaId, host.current);
     return () => setCanvasToolHost(ainaId, null);

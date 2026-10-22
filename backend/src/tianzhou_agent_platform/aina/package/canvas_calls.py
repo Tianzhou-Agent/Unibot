@@ -47,6 +47,7 @@ _VIEWER_CHANNEL = "canvas-viewer"
 _CALLS = "canvas-call"
 _RESULTS = "canvas-call-messages"
 _CONTEXT = "canvas-model-context"
+_HEADLESS_CHANGES = "canvas-headless-changes"
 
 
 class CanvasCallBroker:
@@ -65,6 +66,7 @@ class CanvasCallBroker:
         self._calls: dict[str, dict[str, Any]] = {}
         self._call_queues: dict[str, asyncio.Queue[dict[str, Any] | Exception]] = {}
         self._context: dict[str, str] = {}
+        self._headless_changes: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # --- Viewers --------------------------------------------------------------------------------------------------
@@ -132,19 +134,32 @@ class CanvasCallBroker:
         A viewer that leaves after acknowledging a call (its tab closed) does not answer either: a read (``effect``
         "read") then runs in the next viewer, or the headless page; any other call fails as CANVAS_INTERRUPTED, since
         it may have taken effect and running it again could apply it twice.
+
+        A tab that takes a call after the headless page ran a change gets it with ``reload``: it may have loaded the
+        canvas while that change was being saved, so it loads the saved state again before it runs the call.
         """
         call_id = str(request["call_id"])
         title = request.get("canvas_title") or "AINA"
-        async with self._locks[f"{conversation_id}\x1f{request['aina_id']}"]:
+        canvas = f"{conversation_id}\x1f{request['aina_id']}"
+        async with self._locks[canvas]:
             tried: list[str] = []
             tabs = [client_id for client_id in await self.viewers(conversation_id) if not is_headless(client_id)]
-            outcome = await self._offer(conversation_id, request, tabs, self._clock() + timeout, tried)
+            # A tab may have loaded the canvas before the headless page saved its changes: it reloads it first.
+            handed_over = await self._changed_headless(canvas)
+            to_tab = {**request, "reload": True} if handed_over else request
+            outcome = await self._offer(conversation_id, to_tab, tabs, self._clock() + timeout, tried)
             if outcome is None and self._headless is not None:
                 client_id = await self._headless.open(conversation_id, str(request["aina_id"]))
                 if client_id is not None and await self._joined(conversation_id, client_id):
                     outcome = await self._offer(conversation_id, request, [client_id], self._clock() + timeout, tried)
                 elif client_id is not None:
                     await self._headless.close(conversation_id)
+            if outcome is not None:
+                ran_in = outcome[0]
+                if not is_headless(ran_in):
+                    await self._set_changed_headless(canvas, False)
+                elif request.get("effect") != "read":
+                    await self._set_changed_headless(canvas, True)
             await self._forget_call(call_id)
         if outcome is None:
             logger.info("canvas call %s: no viewer took it (tried %s)", call_id, tried or "none")
@@ -284,6 +299,23 @@ class CanvasCallBroker:
         return self._context.get(key)
 
     # --- Storage ----------------------------------------------------------------------------------------------------
+
+    async def _changed_headless(self, canvas: str) -> bool:
+        """Whether the headless page ran a change on the canvas since a tab last ran one of its calls."""
+        if self._redis is not None:
+            return await self._redis.get(_HEADLESS_CHANGES, canvas) is not None
+        return canvas in self._headless_changes
+
+    async def _set_changed_headless(self, canvas: str, changed: bool) -> None:
+        if self._redis is not None:
+            if changed:
+                await self._redis.set(_HEADLESS_CHANGES, canvas, True, ttl_seconds=_CONTEXT_TTL_SECONDS)
+            else:
+                await self._redis.delete(_HEADLESS_CHANGES, canvas)
+        elif changed:
+            self._headless_changes.add(canvas)
+        else:
+            self._headless_changes.discard(canvas)
 
     def _live(self, viewers: dict[str, dict[str, float]], now: float) -> dict[str, dict[str, float]]:
         return {client: entry for client, entry in viewers.items() if now - entry["seen_at"] < VIEWER_TTL_SECONDS}
