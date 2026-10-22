@@ -2356,20 +2356,20 @@ test("running process stays on one updating line and expands after a reload", as
     ] })],
   });
   await page.goto("/chat/conv-e2e-1");
-  const toggle = page.getByRole("button", { name: "工具 联网搜索", exact: true });
+  const toggle = page.getByRole("button", { name: "执行中… 联网搜索", exact: true });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByText("Checking workspace files.", { exact: true })).toBeHidden();
   await expect(page.getByLabel("模型思考")).toBeHidden();
   await expect(page.locator(".thinking-glow")).toHaveCount(1);
   await toggle.click();
-  const expanded = page.getByRole("button", { name: "工具", exact: true });
+  const expanded = page.getByRole("button", { name: "执行中…", exact: true });
   await expect(expanded).toHaveAttribute("aria-expanded", "true");
-  await expect(expanded).toHaveText("工具");
+  await expect(expanded).toHaveText(/^执行中…/);
   await expect(page.getByText("Checking workspace files.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("工具调用 browser.search 运行中", { exact: true })).toBeVisible();
   await expanded.click();
   (state.conversations[0].messages as JsonObject[]).push(message("next-step", "assistant", "Now reading the results."));
-  const updated = page.getByRole("button", { name: "回复中 Now reading the results.", exact: true });
+  const updated = page.getByRole("button", { name: "回复中… Now reading the results.", exact: true });
   await expect(updated).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator(".thinking-glow")).toHaveCount(1);
   await page.reload();
@@ -2405,44 +2405,45 @@ test("streamed process updates a single collapsed line until expanded", async ({
     (window as unknown as { sendProcessEvent: (event: Record<string, unknown>) => void }).sendProcessEvent(payload);
   }, event);
   await send({ type: "reasoning.delta", delta: "Checking available files" });
-  const thinking = page.getByRole("button", { name: "思考中 Checking available files", exact: true });
+  // While thinking, the action word rotates through a set, so only its trailing "…" is fixed.
+  const thinking = page.getByRole("button", { name: /^\S+… Checking available files$/ });
   await expect(thinking).toHaveAttribute("aria-expanded", "false");
   await thinking.click();
-  const expandedThinking = page.getByRole("button", { name: "思考中", exact: true });
+  const expandedThinking = page.getByRole("button", { name: /^\S+…$/ });
   await expect(expandedThinking).toHaveAttribute("aria-expanded", "true");
-  await expect(expandedThinking).toHaveText("思考中");
+  await expect(expandedThinking).toHaveText(/^\S+…/);
   await expect(page.getByLabel("模型思考过程", { exact: true })).toBeVisible();
   await send({ type: "reasoning.delta", delta: " and inspecting their contents" });
-  await expect(expandedThinking).toHaveText("思考中");
+  await expect(expandedThinking).toHaveText(/^\S+…/);
   await expect(page.getByLabel("模型思考过程", { exact: true })).toContainText("Checking available files and inspecting their contents");
   await expandedThinking.click();
-  await expect(page.getByRole("button", { name: "思考中 Checking available files and inspecting their contents", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^\S+… Checking available files and inspecting their contents$/ })).toBeVisible();
   await send({ type: "message.delta", delta: "I will search the workspace." });
-  await expect(page.getByRole("button", { name: "回复中 I will search the workspace.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "回复中… I will search the workspace.", exact: true })).toBeVisible();
   await send({ type: "tool.requested", call_id: "search", name: "browser.search", arguments: "{}" });
-  const toggle = page.getByRole("button", { name: "工具 联网搜索", exact: true });
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("button", { name: "执行中… 联网搜索", exact: true })).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByText("I will search the workspace.", { exact: true })).toBeHidden();
   await expect(page.locator(".thinking-glow")).toHaveCount(1);
   await send({ type: "tool.completed", call_id: "search", status: "failed", result: JSON.stringify({ error: { code: "INVALID_REQUEST", message: "Expected a string argument" } }) });
   await send({ type: "error", source: "capability", code: "INVALID_REQUEST" });
   await expect(page.getByRole("alert")).toHaveCount(0);
+  // Once the call has ended, the model is thinking about its result.
+  const toggle = page.getByRole("button", { name: /^\S+…$/ });
   await toggle.click();
-  const expandedTool = page.getByRole("button", { name: "工具", exact: true });
+  const expandedTool = page.getByRole("button", { name: /^\S+…$/ });
   await expect(expandedTool).toHaveAttribute("aria-expanded", "true");
-  await expect(expandedTool).toHaveText("工具");
   await expect(page.getByText("I will search the workspace.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("工具调用 browser.search 失败", { exact: true })).toContainText("Expected a string argument");
   await expandedTool.click();
   await send({ type: "reasoning.delta", delta: "I will correct the argument and try again." });
-  await expect(page.getByRole("button", { name: "思考中 I will correct the argument and try again.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^\S+… I will correct the argument and try again\.$/ })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await send({ type: "tool.requested", call_id: "read", name: "document.read", arguments: "{}" });
-  await expect(page.getByRole("button", { name: "工具 读取文档", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("button", { name: "执行中… 读取文档", exact: true })).toHaveAttribute("aria-expanded", "false");
   await send({ type: "message.delta", delta: "A very long progress update. ".repeat(100) });
-  const longToggle = page.getByRole("button", { name: /^回复中 A very long progress update/ });
+  const longToggle = page.getByRole("button", { name: /^回复中… A very long progress update/ });
   await expect(longToggle).toHaveAttribute("aria-expanded", "false");
-  const typeLabel = longToggle.getByText("回复中", { exact: true });
+  const typeLabel = longToggle.getByText("回复中…", { exact: true });
   await expect(typeLabel).toBeVisible();
   await expect(typeLabel).toHaveCSS("flex-shrink", "0");
   expect((await longToggle.boundingBox())!.height).toBeLessThan(40);
@@ -2451,9 +2452,9 @@ test("streamed process updates a single collapsed line until expanded", async ({
   expect((await longToggle.boundingBox())!.height).toBeLessThan(40);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await longToggle.click();
-  const expandedReply = page.getByRole("button", { name: "回复中", exact: true });
+  const expandedReply = page.getByRole("button", { name: "回复中…", exact: true });
   await expect(expandedReply).toHaveAttribute("aria-expanded", "true");
-  await expect(expandedReply).toHaveText("回复中");
+  await expect(expandedReply).toHaveText(/^回复中…/);
   await expandedReply.click();
   // The same code in a terminal error envelope must still be shown.
   await send({ type: "error", error: { code: "INVALID_REQUEST", message: "The run could not continue." } });
@@ -3821,11 +3822,18 @@ for (const hasTasks of [false, true]) {
     }));
     let finishApproval!: () => void;
     const approvalGate = new Promise<void>((resolve) => { finishApproval = resolve; });
-    await page.route("**/approvals/approval-panel/confirm", async (route) => {
+    await page.route("**/approvals/approval-panel/confirm/stream", async (route) => {
       await approvalGate;
       state.approvals[0].status = "approved";
       state.conversations[0].run_status = "idle";
-      await json(route, { conversation_id: "conv-e2e-1", status: "completed", widgets: [], trace_id: "trace-approval-panel" });
+      const response = { conversation_id: "conv-e2e-1", status: "completed", widgets: [], trace_id: "trace-approval-panel" };
+      await route.fulfill({
+        contentType: "text/event-stream",
+        body: `event: message.completed
+data: ${JSON.stringify({ type: "message.completed", response })}
+
+`,
+      });
     });
     await page.goto("/chat/conv-e2e-1");
     const approval = page.getByRole("region", { name: "授权确认", exact: true });
@@ -3977,7 +3985,7 @@ test("streaming preserves the reader's scroll position and offers a jump to new 
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
   await expect(page.getByRole("button", { name: "停止生成", exact: true })).toBeVisible();
   await send({ type: "message.delta", delta: "First streamed paragraph.\n\n".repeat(20) });
-  await page.getByRole("button", { name: /^回复中 First streamed paragraph/ }).click();
+  await page.getByRole("button", { name: /^回复中… First streamed paragraph/ }).click();
   await expect.poll(distanceFromBottom).toBeLessThan(2);
   await expect(newContent).toHaveCount(0);
 

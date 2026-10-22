@@ -26,7 +26,7 @@ import { CanvasTabs, NEW_CANVAS_TAB } from "@/components/canvas/CanvasTabs";
 import { ApprovalCard, type EditedArguments } from "@/components/chat/ApprovalCard";
 import { AssistantMessage, UserMessage } from "@/components/chat/MessageBubble";
 import { ModelSelector } from "@/components/chat/ModelSelector";
-import { applyLiveEvent, LiveTurn, type LiveItem } from "@/components/chat/LiveTurn";
+import { applyLiveEvent, currentStep, LiveTurn, type LiveItem } from "@/components/chat/LiveTurn";
 import { isToolSequenceContinuation, toolLabel, ToolCallList, ToolResultCard } from "@/components/chat/ToolCallCard";
 import { ReasoningBlock } from "@/components/chat/ReasoningBlock";
 import { completedAnswerIds, finishedTurnProcesses, TurnProcessToggle } from "@/components/chat/TurnProcess";
@@ -40,7 +40,7 @@ import { isClarificationWidget, SessionWidgetRenderer } from "@/components/widge
 import { AinaTaskList } from "@/components/tasks/AinaTaskList";
 import { useCanvasViewer } from "@/components/canvas/useCanvasViewer";
 import { TaskTreeWidget } from "@/components/tasks/TaskTreeWidget";
-import { api, ApiError, apiErrorMessage, streamChat, streamResume, type StreamEvent } from "@/lib/api";
+import { api, ApiError, apiErrorMessage, streamApprovalConfirm, streamChat, streamResume, type StreamEvent } from "@/lib/api";
 import { useDebugMode } from "@/lib/debugMode";
 import { getObsSession, loadLegacyPersonalObsSession } from "@/lib/obsData";
 import { adaptSessionDetail } from "@/lib/obsAdapter";
@@ -73,6 +73,7 @@ interface MessageFailure {
 export default function ChatModePage() {
   const { t } = useTranslation("chatPage");
   const { t: tCanvas } = useTranslation("canvas");
+  const { t: tChat } = useTranslation("chat");
   const { workspaceId, conversationId } = useParams<{ workspaceId?: string; conversationId?: string }>();
   const routeWorkspaceId = workspaceId ?? null;
   const navigate = useNavigate();
@@ -94,6 +95,13 @@ export default function ChatModePage() {
   const optimisticBaselineRef = useRef<number | null>(null);
   const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
   const [activity, setActivity] = useState<string | null>(null);
+  // When the running turn (or its continuation after an approval) and the current activity began, for the timers.
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
+  const [activitySince, setActivitySince] = useState<number | null>(null);
+  useEffect(() => setActivitySince(activity ? Date.now() : null), [activity]);
+  useEffect(() => {
+    if (!sending) setTurnStartedAt(null);
+  }, [sending]);
   const [errorInfo, setErrorInfo] = useState<{ message: string; code: string | null } | null>(null);
   const error = errorInfo?.message ?? null;
   const setError = useCallback((message: string | null, code: string | null = null) => {
@@ -516,6 +524,8 @@ export default function ChatModePage() {
     setActivity(null);
     setError(null);
     setApproval(null);
+    setTurnStartedAt(Date.now());
+    setOpenTurnIds((current) => new Set([...current].filter((id) => id !== LIVE_TURN)));
     setSending(true);
     let runConversationId = conversation?.id ?? null;
     localRunConversationIdRef.current = runConversationId;
@@ -657,8 +667,23 @@ export default function ChatModePage() {
     setActivity(action === "confirm" ? t("activity.runningApproved") : t("activity.cancelling"));
     try {
       if (action === "confirm") {
-        const response = await api.post<ChatResponse>(`/approvals/${decided.id}/confirm`, { ...actor, edited_arguments: edited });
-        setLastRun(response);
+        // The approved calls and the rest of the turn stream in like any turn, so a long continuation shows progress.
+        let completion: ChatResponse | null = null;
+        let failure: string | null = null;
+        setLiveItems([]);
+        setTurnStartedAt(Date.now());
+        await streamApprovalConfirm(decided.id, { ...actor, edited_arguments: edited }, (event) => {
+          if (event.type === "error" && event.source === "capability") return;
+          if (event.type === "message.completed") completion = event.response;
+          else if (event.type === "error") failure = event.error?.message ?? event.code ?? t("err.streamFailed");
+          else if (event.type === "approval.required") setActivity(t("activity.awaitingApproval"));
+          else setActivity(null);
+          setLiveItems((current) => applyLiveEvent(current, event));
+        });
+        if (!completion) throw new Error(failure ?? t("err.noCompletion"));
+        const completed = completion as ChatResponse;
+        setLastRun(completed);
+        setApproval(completed.approval ?? null);
       } else {
         await api.post(`/approvals/${decided.id}/deny`, actor);
       }
@@ -669,6 +694,7 @@ export default function ChatModePage() {
       await loadConversation(decided.conversation_id, true);
       setError(apiErrorMessage(approvalError));
     } finally {
+      setLiveItems([]);
       setSending(false);
       setActivity(null);
     }
@@ -756,7 +782,8 @@ export default function ChatModePage() {
   const [openTurnIds, setOpenTurnIds] = useState<ReadonlySet<string>>(() => new Set());
   const activeTurnStart = sending ? messages.map((message) => message.role).lastIndexOf("user") : -1;
   const activeTurnId = activeTurnStart >= 0 ? messages[activeTurnStart].id : "live";
-  const activeProcessOpen = openTurnIds.has(activeTurnId);
+  // The running turn's user message changes id once the archive echoes it, so its open state has a fixed key.
+  const activeProcessOpen = openTurnIds.has(LIVE_TURN);
   const activeSteps = useMemo(() => {
     if (!sending) return [];
     const following = messages.slice(activeTurnStart + 1);
@@ -767,13 +794,22 @@ export default function ChatModePage() {
   const latestLiveItem = liveItems[liveItems.length - 1];
   const latestStep = activeSteps[activeSteps.length - 1];
   const latestCall = latestStep?.tool_calls?.slice(-1)[0];
-  const activeType = activity ? "activity" : latestLiveItem?.kind
-    ?? (latestCall || latestStep?.role === "tool" ? "tool" : latestStep?.content ? "text" : "reasoning");
-  const activePreview = activity || (latestLiveItem
-    ? latestLiveItem.kind === "tool" ? toolLabel(latestLiveItem.name) : latestLiveItem.text
+  // The live line: an action word, what it acts on, and how long this step and the whole turn have taken.
+  // A run this page did not start (it was running when the page loaded) is timed from its user message.
+  const runStartedAt = turnStartedAt ?? (activeTurnStart >= 0 ? Date.parse(messages[activeTurnStart].created_at) || null : null);
+  const liveStep = currentStep(liveItems, runStartedAt ?? 0);
+  const activeType = activity ? "activity" : latestLiveItem
+    ? ({ thinking: "reasoning", responding: "text", preparing: "tool", running: "tool" } as const)[liveStep.kind]
+    : latestCall || latestStep?.role === "tool" ? "tool" : latestStep?.content ? "text" : "reasoning";
+  const activeVerb = activity || (latestLiveItem
+    ? liveStep.kind !== "thinking" ? tChat(`process.verb.${liveStep.kind}`) : null
+    : activeType === "tool" ? tChat("process.verb.running") : activeType === "text" ? tChat("process.verb.responding") : null);
+  const activePreview = activity ? null : latestLiveItem
+    ? liveStep.tool ? toolLabel(liveStep.tool) : latestLiveItem.kind !== "tool" ? latestLiveItem.text : null
     : latestCall ? toolLabel(latestCall.function.name)
       : latestStep?.role === "tool" ? toolLabel(latestStep.name ?? "")
-        : latestStep?.content || latestStep?.reasoning);
+        : latestStep?.content || latestStep?.reasoning;
+  const activeStepStartedAt = activity ? activitySince : latestLiveItem ? liveStep.since : runStartedAt;
   const foldedStepIds = useMemo(() => new Set(
     [...turnProcesses].flatMap(([turnId, process]) => openTurnIds.has(turnId) ? [] : [...process.stepIds]),
   ), [turnProcesses, openTurnIds]);
@@ -907,9 +943,12 @@ export default function ChatModePage() {
                             durationMs={null}
                             active
                             activityType={activeType}
+                            verb={activeVerb}
                             preview={activePreview}
+                            stepStartedAt={activeStepStartedAt}
+                            turnStartedAt={runStartedAt}
                             open={activeProcessOpen}
-                            onToggle={() => toggleTurn(activeTurnId)}
+                            onToggle={() => toggleTurn(LIVE_TURN)}
                           />
                         ) : process ? (
                           <TurnProcessToggle
@@ -932,7 +971,17 @@ export default function ChatModePage() {
                 />
               ))}
               {sending && activeTurnStart < 0 ? (
-                <TurnProcessToggle durationMs={null} active activityType={activeType} preview={activePreview} open={activeProcessOpen} onToggle={() => toggleTurn(activeTurnId)} />
+                <TurnProcessToggle
+                  durationMs={null}
+                  active
+                  activityType={activeType}
+                  verb={activeVerb}
+                  preview={activePreview}
+                  stepStartedAt={activeStepStartedAt}
+                  turnStartedAt={runStartedAt}
+                  open={activeProcessOpen}
+                  onToggle={() => toggleTurn(LIVE_TURN)}
+                />
               ) : null}
               {!sending || activeProcessOpen ? <LiveTurn items={liveItems} debugMode={debugMode} /> : null}
               {conversation?.run_status === "stopped" && !sending && !deleted ? (
@@ -1446,6 +1495,9 @@ function ChatComposer({
     </div>
   );
 }
+
+// Key of the running turn in the set of turns whose steps are shown.
+const LIVE_TURN = "live";
 
 // The backend's limits (conversations/attachments.py), checked here so the user learns before sending.
 const MAX_ATTACHMENTS = 10;

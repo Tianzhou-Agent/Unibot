@@ -107,9 +107,16 @@ async function installApi(page: Page, { approval }: { approval: boolean }) {
         },
       ]);
     }
-    if (method === "POST" && apiPath === "/approvals/approval_1/confirm") {
+    if (method === "POST" && apiPath === "/approvals/approval_1/confirm/stream") {
       confirmations.push(request.postDataJSON());
-      return json(route, { conversation_id: CONVERSATION, content: "Recorded.", status: "completed", trace_id: "trace_1", iterations: 1, widgets: [] });
+      const response = { conversation_id: CONVERSATION, content: "Recorded.", status: "completed", trace_id: "trace_1", iterations: 1, widgets: [] };
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `event: message.completed
+data: ${JSON.stringify({ type: "message.completed", response })}
+
+`,
+      });
     }
     if (method === "POST" && apiPath === `/ainas/${AINA}/open`) {
       return json(route, {

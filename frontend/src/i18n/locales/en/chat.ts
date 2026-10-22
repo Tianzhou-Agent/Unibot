@@ -24,6 +24,12 @@ export default {
     },
     completed: "Completed",
     completedIn: "Completed in {{duration}}",
+    stepAndTotal: "{{step}} · {{total}} total",
+    verb: {
+      responding: "Responding",
+      preparing: "Preparing",
+      running: "Running",
+    },
     seconds: "{{s}}s",
     minutes: "{{m}}m {{s}}s",
     hours: "{{h}}h {{m}}m {{s}}s",

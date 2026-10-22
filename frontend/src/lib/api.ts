@@ -102,6 +102,8 @@ export function apiErrorMessage(error: unknown): string {
 export type StreamEvent =
   | { type: "message.delta"; delta: string }
   | { type: "reasoning.delta"; delta: string }
+  /** The model started writing a call; ``tool.requested`` follows once its arguments are complete. */
+  | { type: "tool.preparing"; name: string }
   | { type: "tool.requested"; kind: "tool" | "aina" | "builtin" | "mcp" | "skill"; id: string; call_id: string; name: string; arguments: string }
   | {
       type: "tool.completed";
@@ -144,6 +146,16 @@ export async function streamResume(
   signal?: AbortSignal,
 ): Promise<void> {
   return streamEvents(`/conversations/${conversationId}/resume/stream`, actor, onEvent, signal);
+}
+
+/** Confirms an approval, streaming the approved calls and the rest of the turn like a new turn. */
+export async function streamApprovalConfirm(
+  approvalId: string,
+  payload: { user_id?: string; tenant_id?: string; edited_arguments?: Record<string, Record<string, unknown>> },
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamEvents(`/approvals/${approvalId}/confirm/stream`, payload, onEvent, signal);
 }
 
 async function streamEvents(

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Lightbulb, MessageSquareText, Sparkles, Wrench } from "lucide-react";
 import { classNames } from "@/lib/utils";
@@ -55,17 +56,26 @@ export function finishedTurnProcesses(messages: BackendMessage[], lastTurnFinish
   return processes;
 }
 
-export function TurnProcessToggle({ durationMs, open, onToggle, active = false, activityType = "reasoning", preview }: {
+export function TurnProcessToggle({ durationMs, open, onToggle, active = false, activityType = "reasoning", verb, preview, stepStartedAt, turnStartedAt }: {
   durationMs: number | null;
   open: boolean;
   onToggle: () => void;
   active?: boolean;
   activityType?: "reasoning" | "text" | "tool" | "activity";
+  /** What the turn is doing now, e.g. "Running"; while thinking, a word from the rotating set. */
+  verb?: string | null;
   preview?: string | null;
+  /** When the current step and the whole turn began (epoch ms), for the live timers. */
+  stepStartedAt?: number | null;
+  turnStartedAt?: number | null;
 }) {
   const { t } = useTranslation("chat");
+  const now = useNow(active);
+  const thinkingWord = useThinkingWord(active && !verb);
   const Icon = { reasoning: Lightbulb, text: MessageSquareText, tool: Wrench, activity: Sparkles }[activityType];
   const detail = open ? undefined : preview?.replace(/\s+/g, " ").trim();
+  const step = active && stepStartedAt ? Math.max(0, now - stepStartedAt) : null;
+  const total = active && turnStartedAt ? Math.max(0, now - turnStartedAt) : null;
   return (
     <button
       type="button"
@@ -76,7 +86,7 @@ export function TurnProcessToggle({ durationMs, open, onToggle, active = false, 
       {active ? (
         <>
           <Icon className="thinking-glow mr-1 h-4 w-4 shrink-0 text-accent" aria-hidden />
-          <span className="shrink-0">{t(`process.type.${activityType}`)}</span>
+          <span key={verb ?? thinkingWord} className="thinking-shimmer shrink-0 font-medium">{verb ?? thinkingWord}…</span>
           {detail ? <span className="mx-1 shrink-0" aria-hidden>·</span> : null}
         </>
       ) : null}
@@ -85,12 +95,57 @@ export function TurnProcessToggle({ durationMs, open, onToggle, active = false, 
           {active ? detail : durationMs === null ? t("process.completed") : t("process.completedIn", { duration: formatDuration(durationMs, t) })}
         </span>
       </span> : null}
+      {total !== null ? (
+        // Hidden from screen readers: a name that changes every second would be announced over and over.
+        <span className="ml-auto shrink-0 pl-2 tabular-nums text-ink-subtle" aria-hidden>
+          {step !== null && total - step >= 1000
+            ? t("process.stepAndTotal", { step: formatDuration(step, t, true), total: formatDuration(total, t) })
+            : formatDuration(total, t, true)}
+        </span>
+      ) : null}
       <ChevronDown className={classNames("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-180")} />
     </button>
   );
 }
 
-function formatDuration(ms: number, t: (key: string, options: Record<string, number>) => string): string {
+/** The current time, updated every second while ``ticking``. */
+export function useNow(ticking: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ticking) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [ticking]);
+  return now;
+}
+
+const THINKING_WORD_KEYS = Array.from({ length: 12 }, (_, i) => `thinking.w${i}`);
+
+/** A word for the model thinking, changed every few seconds so a long wait still looks alive. */
+function useThinkingWord(rotating: boolean): string {
+  const { t } = useTranslation("chat");
+  const [index, setIndex] = useState(() => Math.floor(Math.random() * THINKING_WORD_KEYS.length));
+  useEffect(() => {
+    if (!rotating) return;
+    const timer = window.setInterval(() => {
+      setIndex((current) => (current + 1 + Math.floor(Math.random() * (THINKING_WORD_KEYS.length - 1))) % THINKING_WORD_KEYS.length);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [rotating]);
+  return t(THINKING_WORD_KEYS[index]);
+}
+
+/** A step's duration on a tool line: ticking while it runs, fixed once it ends. */
+export function StepDuration({ startedAt, endedAt }: { startedAt: number; endedAt?: number | null }) {
+  const { t } = useTranslation("chat");
+  const now = useNow(!endedAt);
+  return <span className="shrink-0 pl-1.5 tabular-nums text-ink-subtle" aria-hidden>{formatDuration(Math.max(0, (endedAt ?? now) - startedAt), t, true)}</span>;
+}
+
+/** ``fine``: tenths of a second under ten seconds, for steps that are often that short. */
+function formatDuration(ms: number, t: (key: string, options: Record<string, number | string>) => string, fine = false): string {
+  if (fine && ms < 10_000) return t("process.seconds", { s: (Math.floor(ms / 100) / 10).toFixed(1) });
   const total = Math.floor(ms / 1000);
   const h = Math.floor(total / 3600);
   const m = Math.floor(total / 60) % 60;
