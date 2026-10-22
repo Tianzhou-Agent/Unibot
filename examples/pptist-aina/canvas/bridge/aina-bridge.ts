@@ -49,6 +49,9 @@ let deckId = nanoid(10)
 let lastSaved = ''
 let autosave = true
 let saving: Promise<void> = Promise.resolve()
+// In Superbot's headless canvas host (getContext().background): nobody sees this canvas while the user is away.
+let background = false
+let saveError = ''
 
 // --- the deck ---------------------------------------------------------------------------------------------------------
 
@@ -97,9 +100,12 @@ const save = () => {
       lastSaved = json
     }
     catch (error) {
+      saveError = (error as Error).message
+      // In the background nobody declines a save: the next change tries again, and the agent hears of the failure.
+      if (background) return
       // The user declined the save, or the server refused it: stop saving until the canvas is opened again.
       autosave = false
-      message.warning(`Changes are no longer saved to Superbot: ${(error as Error).message}`, { duration: 6000 })
+      message.warning(`Changes are no longer saved to Superbot: ${saveError}`, { duration: 6000 })
     }
   })
   return saving
@@ -425,14 +431,17 @@ const start = async () => {
   }
   // The tools are registered once the saved deck is shown, so no agent call edits PPTist's demo deck that the saved
   // one then replaces. In Superbot's headless canvas host, where the user may open a tab and load the saved deck at
-  // any moment, each call saves its changes before it answers.
-  const { background } = await host.getContext()
+  // any moment, each call saves its changes before it answers, and tells the agent when they could not be saved.
+  background = (await host.getContext()).background
   for (const [name, handler] of Object.entries(tools)) {
     await host.registerTool(name, background
       ? async (args) => {
         const result = await handler(args)
         await flushSave()
-        return result
+        if (JSON.stringify(currentDeck()) === lastSaved) return result
+        const warning = `Not saved: ${saveError}. The saved deck lacks this change, so it is lost when the user opens `
+          + 'the conversation, unless a later call saves it.'
+        return { ...result, content: [...(result.content ?? []), { type: 'text' as const, text: warning }] }
       }
       : handler)
   }
