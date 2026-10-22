@@ -112,13 +112,13 @@ def _app_call(client: TestClient, tool: str, arguments: dict[str, Any], **extra:
     return client.post(f"/ainas/{AINA_ID}/app-tools/{tool}", json={"arguments": arguments, **extra})
 
 
-def test_app_tool_calls_follow_visibility_and_need_host_confirmation_to_change_data(ui: Any) -> None:
+def test_app_tool_calls_follow_visibility_and_need_host_confirmation_to_delete_data(ui: Any) -> None:
     client, mcp = ui
 
     listed = _app_call(client, "list_expenses", {})
-    unconfirmed = _app_call(client, "add_expense", {"amount": 4.5, "category": "food"})
-    added = _app_call(client, "add_expense", {"amount": 4.5, "category": "food"}, confirmed=True)
-    app_only = _app_call(client, "sync_bank", {}, confirmed=True)
+    added = _app_call(client, "add_expense", {"amount": 4.5, "category": "food"})
+    app_only = _app_call(client, "sync_bank", {})
+    unconfirmed = _app_call(client, "delete_expense", {"expense_id": "e_1"})
     long_running = _app_call(client, "monthly_report", {"month": "2026-10"})
     invalid = _app_call(client, "list_expenses", {"month": 10})
     unknown = _app_call(client, "send_invoice", {}, confirmed=True)

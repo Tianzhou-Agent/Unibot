@@ -1064,9 +1064,10 @@ runtime type only, never on an AINA id.
     production. Only the registered version is served, and never `aina.json` or skill folders.
   - Package archives are now kept in the AINA project artifact store (NAS, or memory without storage), so packages
     registered before this change must be registered again to show their canvas.
-  - The shell relays only `app`-visible tools. It asks the user itself before every `destructive` call and before the
-    first call of each `write` tool while the canvas is open; the backend refuses a non-`read` call the shell did not
-    mark as confirmed. Long-running tools cannot be started from the UI.
+  - The shell relays only `app`-visible tools. It asks the user itself before every `destructive` call; the backend
+    refuses a `destructive` call the shell did not mark as confirmed. `write` calls from the UI are not asked (§6.1's
+    first-call confirmation is for the agent's calls): the UI calls its own AINA's tools, often to autosave, and a
+    prompt for that only trains the user to click Allow. Long-running tools cannot be started from the UI.
   - `tool_result` is sent to the canvas after every finished chat run, without details yet.
   - The theme is a fixed light token set. `getIdentityToken` is answered only for URL canvases; the token has
     `use: identity` and no scopes, and the Host API refuses it.

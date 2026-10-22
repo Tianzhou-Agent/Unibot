@@ -1,6 +1,6 @@
 // aina dev page: the host side of the UI bridge (design §9.4), as the Superbot shell implements it, for one package.
 // Packaged UI runs sandboxed with an opaque origin; the page answers only its own frames, relays app-visible tools,
-// and asks before any call that changes data.
+// and asks before any call that deletes data.
 const PROTOCOL = "aina-ui/2.0";
 const PACKAGE_SANDBOX = "allow-scripts allow-forms allow-downloads";
 const URL_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads";
@@ -39,7 +39,6 @@ function log(kind, summary, details) {
 // --- the bridge ----------------------------------------------------------------------------------------------------
 
 function attachBridge(frame, { source, origin, context, extra }) {
-  const approvedWrites = new Set();
   const waiting = new Map();
   let nextId = 1;
   const target = () => frame.contentWindow;
@@ -55,14 +54,13 @@ function attachBridge(frame, { source, origin, context, extra }) {
         const name = String(params.name ?? "");
         const tool = record.manifest.runtime.tools.find((item) => item.name === name);
         if (!tool || !tool.visibility.includes("app") || tool.status !== "active") throw bridgeError("PERMISSION_DENIED", `Tool ${name} cannot be called from the app's UI`);
-        // Design §6.1: destructive calls are confirmed every time, writes once per opened frame.
-        const ask = tool.effect === "destructive" || (tool.effect === "write" && !approvedWrites.has(name));
+        // Destructive calls are confirmed every time; writes from the app's own UI are not.
+        const ask = tool.effect === "destructive";
         if (ask && !window.confirm(`${record.manifest.aina.name} wants to run ${name} (${tool.effect}):\n\n${JSON.stringify(params.arguments ?? {}, null, 2)}`)) {
           throw bridgeError("DENIED", "The user declined this call");
         }
-        if (tool.effect === "write") approvedWrites.add(name);
         return api("POST", `/ainas/${encodeURIComponent(record.manifest.aina.id)}/app-tools/${encodeURIComponent(name)}`, {
-          arguments: params.arguments ?? {}, source, confirmed: tool.effect !== "read",
+          arguments: params.arguments ?? {}, source, confirmed: ask,
         });
       }
       case "sendPrompt":
