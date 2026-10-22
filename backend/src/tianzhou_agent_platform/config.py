@@ -102,11 +102,15 @@ class AgentSettings(BaseSettings):
         ),
     )
     max_agent_iterations: int = Field(
-        # One iteration is one model call. 20 matches CrewAI's max_iter and smolagents' max_steps; OpenAI Agents
-        # SDK (10) and LangChain AgentExecutor (15) are lower. 8 cut off multi-document tasks mid-way.
-        default=20,
+        # One iteration is one model call; the cap guards against a loop that never answers, per turn (an approval
+        # continuation starts a new count). Library defaults (OpenAI Agents SDK 10, LangChain AgentExecutor 15,
+        # CrewAI and smolagents 20) suit short tool chats, not canvas work that runs while nobody watches: a
+        # 16-slide PPTist deck took 32+ calls (build, then read, render and fix each slide), so 20 failed it
+        # half-way, and 8 cut off multi-document tasks. With compaction a call stays under ~65k input tokens, so
+        # 60 calls bound a runaway turn to about 4M input tokens and a few minutes.
+        default=60,
         ge=1,
-        le=32,
+        le=200,
         validation_alias=AliasChoices("UNIBOT_MAX_AGENT_ITERATIONS", "max_agent_iterations"),
     )
     context_compression_enabled: bool = Field(
@@ -255,6 +259,14 @@ class AgentSettings(BaseSettings):
     frontend_base_url: str = Field(
         default="http://127.0.0.1:5173",
         validation_alias=AliasChoices("UNIBOT_FRONTEND_BASE_URL", "frontend_base_url"),
+    )
+    canvas_host_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("UNIBOT_CANVAS_HOST_ENABLED", "canvas_host_enabled"),
+        description=(
+            "Run canvas tools in a server-side headless browser (Playwright Chromium) when no tab shows the "
+            "conversation, so runs keep working after the user leaves."
+        ),
     )
     github_oauth_client_id: str | None = Field(
         default=None,

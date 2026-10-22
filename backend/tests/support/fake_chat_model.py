@@ -46,7 +46,8 @@ class ScriptedChatModel(BaseChatModel):
         return self
 
     def bind(self, **kwargs: Any) -> BaseChatModel:
-        self._bound = {**self._bound, **kwargs}
+        # The agent binds a call without tools this way; like a real model's fresh binding, it has none.
+        self._bound = {**{k: v for k, v in self._bound.items() if k not in {"tools", "tool_choice"}}, **kwargs}
         return self
 
     def _next(self, messages: Sequence[BaseMessage], kwargs: dict[str, Any]) -> AIMessage:

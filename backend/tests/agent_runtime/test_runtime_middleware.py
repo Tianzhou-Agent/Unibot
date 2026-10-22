@@ -239,6 +239,41 @@ def test_summarization_keeps_complete_recent_turns() -> None:
     assert is_summary_message(messages[0]) and not is_summary_message(messages[1])
 
 
+def _tool_round(index: int, size: int) -> list[Any]:
+    call = {"id": f"call_{index}", "name": "demo", "args": {}}
+    return [AIMessage(content="", tool_calls=[call]), ToolMessage(content="r" * size, tool_call_id=f"call_{index}")]
+
+
+def test_one_long_turn_is_cut_inside_at_a_tool_group_boundary() -> None:
+    middleware = _summarization(ScriptedChatModel(responses=[]), RecordingObserver(), keep_turns=4, retain_tokens=250)
+    # One user turn with many tool rounds, as when the agent builds a whole deck in one request.
+    messages = [HumanMessage(content="build the deck"), *[m for i in range(6) for m in _tool_round(i, 100)]]
+
+    cutoff = middleware._determine_cutoff_index(messages)
+
+    # The latest rounds that fit in retain_tokens are kept whole, each call with its result.
+    assert cutoff == 9 and isinstance(messages[cutoff], AIMessage) and messages[cutoff].tool_calls
+    assert _tokens(messages[cutoff:]) <= 250
+    # Without retain_tokens, the retained turns are never cut.
+    assert _summarization(ScriptedChatModel(responses=[]), RecordingObserver(), keep_turns=4)._determine_cutoff_index(
+        messages
+    ) == 0
+
+
+async def test_a_long_turn_is_summarized_and_its_latest_rounds_kept() -> None:
+    observer = RecordingObserver()
+    model = ScriptedChatModel(responses=[assistant("built slides 1-4"), assistant("done")])
+    middleware = _summarization(model, observer, keep_turns=4, retain_tokens=250)
+    messages = [HumanMessage(content="build the deck"), *[m for i in range(6) for m in _tool_round(i, 100)]]
+
+    result = await build_agent(model=model, middleware=[middleware]).ainvoke({"messages": messages})
+
+    assert is_summary_message(result["messages"][0]) and "built slides 1-4" in result["messages"][0].content
+    assert [m.tool_call_id for m in result["messages"] if isinstance(m, ToolMessage)] == ["call_4", "call_5"]
+    assert result["messages"][-1].content == "done"
+    assert [kind for kind, _ in observer.events] == ["started", "completed"]
+
+
 OLD_TURN = [HumanMessage(content="old question " * 20), AIMessage(content="old answer " * 20)]
 
 

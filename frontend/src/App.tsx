@@ -15,13 +15,16 @@ import { AdminLayout } from "@/components/admin/AdminLayout";
 import LoginPage from "@/pages/LoginPage";
 import WorkspacePage from "@/pages/WorkspacePage";
 import FilesPage from "@/pages/FilesPage";
+import CanvasHostPage from "@/pages/CanvasHostPage";
 import { RequireAuth } from "@/lib/auth";
+import { MockSessionProvider } from "@/lib/mockSession";
 import { workspaceCanvasPath } from "@/lib/workspace";
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/canvas-host/:conversationId" element={<RequireAuth><MockSessionProvider><CanvasHostPage /></MockSessionProvider></RequireAuth>} />
       <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatModePage />} />

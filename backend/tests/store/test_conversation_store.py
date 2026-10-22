@@ -144,3 +144,32 @@ async def test_approvals_are_shared_and_only_pending_ones_are_cancelled() -> Non
     assert statuses == {"a1": "approved", "a2": "denied", "a3": "pending"}
     with pytest.raises(PlatformError):
         await first.set_approval_status("missing", "approved")
+
+
+async def test_interrupted_runs_are_listed_across_users() -> None:
+    from datetime import timedelta
+
+    from tianzhou_agent_platform.store.memory_repository import INTERRUPTED_RUN_ERROR, finished_run, started_run
+
+    first, _second = _replicas()
+    store = first._conversation_store
+    running, interrupted, failed, idle = [
+        await first.create_conversation(ConversationCreate(user_id=f"u{index}", tenant_id="t1"))
+        for index in range(4)
+    ]
+    await store.mutate(running.id, lambda conversation: started_run(conversation, "tr1"))
+    await store.mutate(
+        interrupted.id, lambda conversation: finished_run(conversation, status="failed", error=INTERRUPTED_RUN_ERROR)
+    )
+    await store.mutate(failed.id, lambda conversation: finished_run(conversation, status="failed", error="boom"))
+    since = datetime.now(UTC) - timedelta(minutes=5)
+
+    listed = await store.list_with_run_status(running=True, failed_with=INTERRUPTED_RUN_ERROR, since=since)
+    only_failed = await store.list_with_run_status(running=False, failed_with=INTERRUPTED_RUN_ERROR, since=since)
+    later = await store.list_with_run_status(
+        running=True, failed_with=INTERRUPTED_RUN_ERROR, since=datetime.now(UTC) + timedelta(minutes=5)
+    )
+
+    assert sorted(item.id for item in listed) == sorted([running.id, interrupted.id])
+    assert [item.id for item in only_failed] == [interrupted.id]
+    assert later == [] and idle.id not in {item.id for item in listed}

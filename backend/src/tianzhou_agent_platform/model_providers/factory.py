@@ -33,6 +33,10 @@ SLOWEST_TOKENS_PER_SECOND = 40
 # Providers occasionally accept a request and never answer it; the same request then succeeds at once. A call that
 # timed out before producing anything has shown the user nothing, so it is sent again this many times.
 SILENT_TIMEOUT_RETRIES = 1
+# A rate limit (429), a provider error (5xx) or an unreachable provider is waited out and the call sent again after
+# each of these delays, so a run that nobody is watching survives a busy minute instead of failing. Like a silent
+# timeout, only a call that has produced nothing yet is sent again.
+TRANSIENT_ERROR_DELAYS = (2.0, 4.0, 8.0, 16.0, 32.0)
 
 
 class UnibotChatOpenAI(ChatOpenAI):
@@ -44,11 +48,13 @@ class UnibotChatOpenAI(ChatOpenAI):
     subsequent requests that use tools, and MiniMax as a ``<think>`` block in the content; other providers keep
     their standard message format.
     A call past ``call_deadline_seconds`` fails with ``openai.APITimeoutError``, the provider's own timeout error;
-    a timeout before the first chunk is retried ``silent_timeout_retries`` times.
+    a timeout before the first chunk is retried ``silent_timeout_retries`` times, and a transient provider failure
+    before the first chunk after each of ``transient_error_delays``.
     """
 
     call_deadline_seconds: float = CALL_DEADLINE_SECONDS
     silent_timeout_retries: int = SILENT_TIMEOUT_RETRIES
+    transient_error_delays: tuple[float, ...] = TRANSIENT_ERROR_DELAYS
 
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
         messages = self._convert_input(input_).to_messages()
@@ -71,16 +77,20 @@ class UnibotChatOpenAI(ChatOpenAI):
         return payload
 
     async def _astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
-        for attempt in range(self.silent_timeout_retries + 1):
+        failures: list[openai.OpenAIError] = []
+        while True:
             received = False
             try:
                 async for chunk in split_think_stream(self._astream_with_deadline(*args, **kwargs)):
                     received = True
                     yield chunk
                 return
-            except openai.APITimeoutError:
-                if received or attempt == self.silent_timeout_retries:
+            except openai.OpenAIError as exc:
+                delay = None if received else self._retry_delay(exc, failures)
+                if delay is None:
                     raise
+                failures.append(exc)
+            await asyncio.sleep(delay)
 
     async def _astream_with_deadline(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
         loop = asyncio.get_running_loop()
@@ -99,16 +109,32 @@ class UnibotChatOpenAI(ChatOpenAI):
             await stream.aclose()
 
     async def _agenerate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        for attempt in range(self.silent_timeout_retries + 1):
+        failures: list[openai.OpenAIError] = []
+        while True:
             try:
-                return await asyncio.wait_for(super()._agenerate(*args, **kwargs), self.deadline_seconds)
-            except openai.APITimeoutError:
-                if attempt == self.silent_timeout_retries:
-                    raise
-            except TimeoutError as exc:
-                if attempt == self.silent_timeout_retries:
+                try:
+                    return await asyncio.wait_for(super()._agenerate(*args, **kwargs), self.deadline_seconds)
+                except TimeoutError as exc:
                     raise self._deadline_error() from exc
-        raise AssertionError("unreachable")
+            except openai.OpenAIError as exc:
+                delay = self._retry_delay(exc, failures)
+                if delay is None:
+                    raise
+                failures.append(exc)
+            await asyncio.sleep(delay)
+
+    def _retry_delay(self, exc: openai.OpenAIError, failures: list[openai.OpenAIError]) -> float | None:
+        """Seconds to wait before sending a call again that failed with ``exc`` after ``failures``; None to give up."""
+        if isinstance(exc, openai.APITimeoutError):
+            silent = sum(isinstance(failure, openai.APITimeoutError) for failure in failures)
+            return 0.0 if silent < self.silent_timeout_retries else None
+        transient = isinstance(exc, openai.APIConnectionError) or (
+            isinstance(exc, openai.APIStatusError) and (exc.status_code == 429 or exc.status_code >= 500)
+        )
+        if not transient:
+            return None
+        waited = sum(not isinstance(failure, openai.APITimeoutError) for failure in failures)
+        return self.transient_error_delays[waited] if waited < len(self.transient_error_delays) else None
 
     @property
     def deadline_seconds(self) -> float:

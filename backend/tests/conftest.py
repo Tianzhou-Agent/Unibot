@@ -19,6 +19,8 @@ def ignore_local_env_files(request: pytest.FixtureRequest, monkeypatch: pytest.M
         return
     for settings_class in (AgentSettings, StorageSettings):
         monkeypatch.setitem(settings_class.model_config, "env_file", None)
+    # Tests never start a real headless browser; the ones about the canvas host give the broker a fake one.
+    monkeypatch.setenv("UNIBOT_CANVAS_HOST_ENABLED", "false")
     # DeepEval's pytest plugin copies the working directory's dotenv files into os.environ when pytest starts.
     for path in dotenv_search_paths():
         for key, value in read_dotenv_file(path).items():

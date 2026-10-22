@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ from tianzhou_agent_platform.store.memory_repository import (
     TRACES_RESOURCE,
     InMemoryRepository,
     INTERRUPTED_RUN_ERROR,
+    RUN_RECOVERY_CLAIM,
     conversation_with_status,
     deployed_aina_project,
     finished_run,
@@ -818,6 +819,29 @@ class PersistentRepository(InMemoryRepository):
                 if entry is None:
                     return await self._finish_run_row(conversation_id, status="failed", error=INTERRUPTED_RUN_ERROR)
         return await super().reconcile_conversation_run(conversation_id)
+
+    async def list_interrupted_conversation_runs(self, *, since: datetime) -> list[Conversation]:
+        """Conversations whose turn ended with the process running it, since ``since``: still marked running while
+        no process holds the run lease, or already reconciled as interrupted."""
+        candidates = await self._conversation_store.list_with_run_status(
+            running=True, failed_with=INTERRUPTED_RUN_ERROR, since=since
+        )
+        return [
+            conversation
+            for conversation in candidates
+            if conversation.run_status == "failed"
+            or await self.stores.redis.get("conversation-run", conversation.id) is None
+        ]
+
+    async def claim_conversation_run_recovery(self, conversation_id: str) -> bool:
+        """Whether this node may resume the conversation's interrupted turn: once an hour, by one node."""
+        claimed = await self.stores.redis.set_if_absent(
+            "conversation-run-recovery",
+            conversation_id,
+            {"claimed_at": datetime.now(UTC).isoformat()},
+            ttl_seconds=int(RUN_RECOVERY_CLAIM.total_seconds()),
+        )
+        return claimed.written
 
     async def _has_live_conversation_run(self, conversation: Conversation) -> bool:
         entry = await self.stores.redis.get("conversation-run", conversation.id)

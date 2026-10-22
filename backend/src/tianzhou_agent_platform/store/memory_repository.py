@@ -67,6 +67,9 @@ APPROVALS_RESOURCE = "approvals"
 MODEL_PROVIDERS_RESOURCE = "model_providers"
 SCHEDULED_AINA_TASKS_RESOURCE = "scheduled_aina_tasks"
 INTERRUPTED_RUN_ERROR = "上一次处理未正常结束，请重新发送请求。"
+# An interrupted turn is resumed automatically at most once in this window, so a turn that brings its process down
+# cannot restart itself in a loop.
+RUN_RECOVERY_CLAIM = timedelta(hours=1)
 SCHEDULED_AINA_EXECUTIONS_RESOURCE = "scheduled_aina_executions"
 OBS_TRACE_VISIBILITY_GRACE = timedelta(minutes=15)
 # A confirmed approval resumes its paused run under the same trace, which keeps reading approval_required.
@@ -90,6 +93,7 @@ class InMemoryRepository:
         self._lock = asyncio.Lock()
         self._workspaces: dict[str, Workspace] = {}
         self._conversations: dict[str, Conversation] = {}
+        self._run_recovery_claims: dict[str, datetime] = {}
         self._tools: dict[str, ToolRecord] = {}
         self._skills: dict[str, SkillRecord] = {}
         self._ainas: dict[str, AinaRecord] = {}
@@ -898,6 +902,30 @@ class InMemoryRepository:
 
     async def _has_live_conversation_run(self, conversation: Conversation) -> bool:
         return False
+
+    async def list_interrupted_conversation_runs(self, *, since: datetime) -> list[Conversation]:
+        """Conversations whose turn ended with the process running it, since ``since``.
+
+        In memory every running turn belongs to this process, so only turns already reconciled as interrupted count.
+        """
+        async with self._lock:
+            return [
+                self._copy(item)
+                for item in self._conversations.values()
+                if item.status != "deleted"
+                and item.updated_at >= since
+                and item.run_status == "failed"
+                and item.run_error == INTERRUPTED_RUN_ERROR
+            ]
+
+    async def claim_conversation_run_recovery(self, conversation_id: str) -> bool:
+        """Whether this caller may resume the conversation's interrupted turn: once an hour, by one caller."""
+        async with self._lock:
+            claimed = self._run_recovery_claims.get(conversation_id)
+            if claimed is not None and datetime.now(UTC) - claimed < RUN_RECOVERY_CLAIM:
+                return False
+            self._run_recovery_claims[conversation_id] = datetime.now(UTC)
+            return True
 
     async def reconcile_conversation_run(self, conversation_id: str) -> Conversation:
         conversation = await self.get_conversation(conversation_id)

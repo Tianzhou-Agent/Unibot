@@ -19,6 +19,7 @@ from tianzhou_agent_platform.aina.builtin import ensure_builtin_ainas
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService, DocumentEditWorker
 from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker
+from tianzhou_agent_platform.aina.package.canvas_host import HeadlessCanvasHost
 from tianzhou_agent_platform.aina.package.bundled import register_bundled
 from tianzhou_agent_platform.core.client_preferences import LOCALE_HEADER, TIMEZONE_HEADER, remember_client_preferences
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
@@ -66,7 +67,11 @@ from tianzhou_agent_platform.store.observability_raw import RawIoWriter
 from tianzhou_agent_platform.store.observability_store import ObservabilityStore
 from tianzhou_agent_platform.store.observability_buffer import build_producer_instance_id
 from tianzhou_agent_platform.store.observability_redis import RedisObsBuffer
-from tianzhou_agent_platform.store.repository import PersistentRepository, repository_tables
+from tianzhou_agent_platform.store.repository import (
+    CONVERSATION_RUN_TTL_SECONDS,
+    PersistentRepository,
+    repository_tables,
+)
 from tianzhou_agent_platform.store.runtime_check import (
     RUNTIME_CHECK_RESOURCE,
     run_storage_runtime_check,
@@ -328,18 +333,23 @@ def create_app(
             if document_edit_worker is not None:
                 document_worker_task = asyncio.create_task(document_edit_worker.run())
                 lifespan_app.state.background_tasks.add(document_worker_task)
+            # Not in background_tasks: it waits for the old run leases to expire, so shutdown cancels it.
+            lifespan_app.state.run_recovery_task = asyncio.create_task(_resume_interrupted_runs(lifespan_app))
             yield
         finally:
             scheduler.stop()
-            tool_check_task = getattr(lifespan_app.state, "tool_check_task", None)
-            if tool_check_task is not None:
-                tool_check_task.cancel()
-                await asyncio.gather(tool_check_task, return_exceptions=True)
+            for name in ("tool_check_task", "run_recovery_task"):
+                waiting_task = getattr(lifespan_app.state, name, None)
+                if waiting_task is not None:
+                    waiting_task.cancel()
+                    await asyncio.gather(waiting_task, return_exceptions=True)
             if document_edit_worker is not None:
                 document_edit_worker.stop()
             background_tasks = cast(set[asyncio.Task[Any]], lifespan_app.state.background_tasks)
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
+            if canvas_host is not None:
+                await canvas_host.aclose()
             # Stop new records, flush the Redis producer, then stop the consumer.
             if obs_log_handler is not None:
                 logging.getLogger().removeHandler(obs_log_handler)
@@ -394,7 +404,17 @@ def create_app(
         resolved_repository, app.state.aina_file_blobs, resolved_document_service
     )
     app.state.aina_tasks = aina_tasks
-    canvas_calls = CanvasCallBroker(storage_stores.redis if storage_stores is not None else None)
+    async def canvas_host_session(conversation_id: str) -> str | None:
+        """A session of the conversation's owner for the headless canvas host (none for the dev auth bypass user)."""
+        owner = await resolved_repository.find_user_by_id((await conversation_service.get(conversation_id)).user_id)
+        return auth_service.issue_session(owner) if owner is not None else None
+
+    canvas_host = (
+        HeadlessCanvasHost(frontend_base_url=resolved_settings.frontend_base_url, session_token=canvas_host_session)
+        if resolved_settings.canvas_host_enabled
+        else None
+    )
+    canvas_calls = CanvasCallBroker(storage_stores.redis if storage_stores is not None else None, headless=canvas_host)
     app.state.canvas_calls = canvas_calls
     app.state.managed_aina_runtime = managed_aina_runtime
     app.state.document_edit_task_service = document_edit_task_service
@@ -542,6 +562,25 @@ async def _check_package_tools(packages: AinaPackageService, interval_seconds: f
         for aina_id, outcome in outcomes.items():
             if outcome != "ok":
                 log.warning("AINA %s tool check: %s", aina_id, outcome)
+
+
+async def _resume_interrupted_runs(app: FastAPI) -> None:
+    """Continue the turns a restart or crash cut off: at once, and again once the run leases of the process that
+    ran them have expired. The resumed runs are background tasks, so shutdown waits for them like any other run."""
+    log = logging.getLogger("tianzhou_agent_platform.run_recovery")
+    background_tasks = cast(set[asyncio.Task[Any]], app.state.background_tasks)
+
+    async def resume() -> None:
+        try:
+            await app.state.chat_service.resume_interrupted()
+        except Exception:  # noqa: BLE001 - the next round tries again
+            log.exception("Interrupted turns could not be resumed")
+
+    for delay in (0, CONVERSATION_RUN_TTL_SECONDS + 10):
+        await asyncio.sleep(delay)
+        task = asyncio.create_task(resume())
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
 
 def run() -> None:

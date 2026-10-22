@@ -302,6 +302,75 @@ async def test_silent_timeouts_are_retried_a_bounded_number_of_times(monkeypatch
     assert len(attempts) == 2
 
 
+def _status_error(status: int) -> openai.APIStatusError:
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    return openai.APIStatusError("busy", response=httpx.Response(status, request=request), body=None)
+
+
+async def test_a_rate_limited_call_waits_and_is_sent_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+    slept: list[float] = []
+
+    async def limited_twice(self: Any, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        attempts.append(1)
+        if len(attempts) <= 2:
+            raise _status_error(429 if len(attempts) == 1 else 503)
+        yield ChatGenerationChunk(message=AIMessageChunk(content="Answer"))
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(ChatOpenAI, "_astream", limited_twice)
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    chunks = [chunk.message.content async for chunk in _reasoning_model()._astream([HumanMessage(content="hi")])]
+
+    assert chunks == ["Answer"] and len(attempts) == 3
+    assert slept == [2.0, 4.0]
+
+
+async def test_transient_failures_are_waited_out_a_bounded_number_of_times(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+
+    async def always_limited(self: Any, *args: Any, **kwargs: Any) -> ChatResult:
+        attempts.append(1)
+        raise _status_error(429)
+
+    monkeypatch.setattr(ChatOpenAI, "_agenerate", always_limited)
+    model = _reasoning_model()
+    model.transient_error_delays = (0.0, 0.0)
+
+    with pytest.raises(openai.APIStatusError):
+        await model._agenerate([HumanMessage(content="hi")])
+    assert len(attempts) == 3
+
+
+async def test_a_rejected_request_or_a_failure_after_streaming_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[int] = []
+
+    async def fail(self: Any, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        attempts.append(1)
+        if len(attempts) == 2:
+            yield ChatGenerationChunk(message=AIMessageChunk(content="Part"))
+            raise _status_error(502)
+        raise _status_error(400)
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(ChatOpenAI, "_astream", fail)
+    model = _reasoning_model()
+    model.transient_error_delays = (0.0,)
+
+    with pytest.raises(openai.APIStatusError):
+        async for _chunk in model._astream([HumanMessage(content="hi")]):
+            pass
+    with pytest.raises(openai.APIStatusError):
+        async for _chunk in model._astream([HumanMessage(content="hi")]):
+            pass
+    assert len(attempts) == 2
+
+
 def test_tool_results_still_follow_their_call_when_a_sibling_call_left_the_scope() -> None:
     from tianzhou_agent_platform.services.agent_integration.capabilities import provider_messages_for_scope
 

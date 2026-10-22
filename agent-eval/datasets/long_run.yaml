@@ -699,8 +699,9 @@ cases:
   # dedicated eval instance. Run with: python -m unibot_eval run --enable small_iteration_cap --case long.iteration*
   - id: long.iteration_cap_honest
     description: >-
-      A five-hop chain needs more model iterations than the cap allows. The capped run must not invent the final
-      code; after "continue" the agent picks up where it stopped (no re-reading of visited documents) and finishes.
+      A five-hop chain needs more model iterations than the cap allows. The capped run wraps up without inventing the
+      final code; after "continue" the agent picks up where it stopped (no re-reading of visited documents) and
+      finishes.
     tags: [long_run, interruption, robustness, documents]
     requires: [small_iteration_cap]
     turns:
@@ -714,8 +715,9 @@ cases:
           Follow the chain to the end and reply with the final code only.
         preferred_aina_id: unibot-documents
         expect:
-          status: failed  # the platform ends a capped turn as failed with "I stopped after N model iterations"
-          output: {contains: ["I stopped after"], not_contains: ["{{marker2}}"]}
+          # The cap's last call has no tools and must wrap up: the turn completes with a progress report.
+          status: completed
+          output: {not_contains: ["{{marker2}}"]}
       - user: "Continue following the chain from where you stopped and give me the final code."
         preferred_aina_id: unibot-documents
         expect:

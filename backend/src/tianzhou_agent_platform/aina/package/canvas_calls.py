@@ -5,7 +5,9 @@ to the conversation's most recently active viewer, which acknowledges it at once
 a viewer that has no open stream or does not acknowledge is skipped for the next one, so two tabs never both run a
 call and a dead tab never holds it. With Redis the run waits on the call's pub/sub channel, subscribed before the
 call is sent, so the viewer and the run may be served by different nodes; without Redis everything stays in
-process. Canvas calls are never queued: no viewer, or no answer in time, is an error the model reads.
+process. When no tab takes a call, the platform's headless canvas host (``canvas_host``) opens the conversation and
+takes it, so a run keeps working after the user leaves. Canvas calls are never queued: no viewer at all, or no answer
+in time, is an error the model reads.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
+from tianzhou_agent_platform.aina.package.canvas_host import HeadlessCanvasHost, is_headless
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.store.errors import StorageBackendUnavailableError
 from tianzhou_agent_platform.store.redis import RedisStore
@@ -26,6 +29,8 @@ from tianzhou_agent_platform.store.redis import RedisStore
 VIEWER_TTL_SECONDS = 20
 # A viewer must confirm it received a call this quickly, or the next one is tried.
 ACK_SECONDS = 3.0
+# Time a headless canvas-host page gets to load and join as a viewer, before the call's own timeout starts.
+HEADLESS_START_SECONDS = 60.0
 MAX_MODEL_CONTEXT_CHARS = 4_000
 MAX_STRUCTURED_BYTES = 64 * 1024
 MAX_IMAGE_BYTES = 1024 * 1024
@@ -41,8 +46,15 @@ _CONTEXT = "canvas-model-context"
 
 
 class CanvasCallBroker:
-    def __init__(self, redis: RedisStore | None = None, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        redis: RedisStore | None = None,
+        *,
+        headless: HeadlessCanvasHost | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self._redis = redis
+        self._headless = headless
         self._clock = clock
         self._viewers: dict[str, dict[str, dict[str, float]]] = defaultdict(dict)
         self._queues: dict[str, asyncio.Queue[dict[str, Any] | Exception]] = {}
@@ -110,56 +122,90 @@ class CanvasCallBroker:
 
         A viewer must acknowledge the call within ``ACK_SECONDS``. One that has no open stream, or does not
         acknowledge (a closed or frozen tab), is dropped and the next most recent viewer is tried, so a call never
-        waits out its timeout on a tab that will not answer.
+        waits out its timeout on a tab that will not answer. When no viewer takes it, the headless canvas host opens
+        the conversation and gets the call; once a tab takes a call again, the headless page is closed.
         """
         call_id = str(request["call_id"])
-        deadline = self._clock() + timeout
         title = request.get("canvas_title") or "AINA"
         async with self._locks[f"{conversation_id}\x1f{request['aina_id']}"]:
             tried: list[str] = []
-            for client_id in await self.viewers(conversation_id):
-                remaining = deadline - self._clock()
-                if remaining <= 0:
-                    break
-                tried.append(client_id)
-                await self._remember_call(call_id, conversation_id, client_id, remaining)
-                async with self._messages(call_id) as next_message:
-                    if not await self._deliver(client_id, {"type": "canvas.tool.requested", **request}):
-                        logger.info("canvas call %s: viewer %s has no open stream", call_id, client_id)
-                        await self.disconnect(conversation_id, client_id)
-                        continue
-                    first = await next_message(min(ACK_SECONDS, remaining))
-                    if first is None:
-                        logger.info("canvas call %s: viewer %s did not acknowledge", call_id, client_id)
-                        await self.disconnect(conversation_id, client_id)
-                        continue
-                    result = first if "ack" not in first else await next_message(deadline - self._clock())
-                await self._forget_call(call_id)
-                logger.info(
-                    "canvas call %s (%s) in viewer %s: %s",
-                    call_id,
-                    request["name"],
-                    client_id,
-                    "answered" if result is not None else "timed out",
-                )
-                if result is None:
-                    raise PlatformError(
-                        "TIMEOUT",
-                        f"The {title} canvas received {request['name']!r} but did not answer within {timeout:g} "
-                        "seconds",
-                        status_code=504,
-                        source="canvas",
-                    )
-                return dict(result)
+            tabs = [client_id for client_id in await self.viewers(conversation_id) if not is_headless(client_id)]
+            outcome = await self._offer(conversation_id, request, tabs, self._clock() + timeout, tried)
+            if outcome is None and self._headless is not None:
+                client_id = await self._headless.open(conversation_id, str(request["aina_id"]))
+                if client_id is not None and await self._joined(conversation_id, client_id):
+                    outcome = await self._offer(conversation_id, request, [client_id], self._clock() + timeout, tried)
+                elif client_id is not None:
+                    await self._headless.close(conversation_id)
             await self._forget_call(call_id)
-        logger.info("canvas call %s: no viewer took it (tried %s)", call_id, tried or "none")
-        raise PlatformError(
-            "CANVAS_NOT_OPEN",
-            f"The {title} canvas is not open in any Superbot tab that responds, so the call could not run. "
-            "Ask the user to open the conversation in Superbot (in a visible tab) and try again.",
-            status_code=409,
-            source="canvas",
+        if outcome is None:
+            logger.info("canvas call %s: no viewer took it (tried %s)", call_id, tried or "none")
+            raise PlatformError(
+                "CANVAS_NOT_OPEN",
+                f"The {title} canvas is not open in any Superbot tab that responds, so the call could not run. "
+                "Ask the user to open the conversation in Superbot (in a visible tab) and try again.",
+                status_code=409,
+                source="canvas",
+            )
+        client_id, result = outcome
+        logger.info(
+            "canvas call %s (%s) in viewer %s: %s",
+            call_id,
+            request["name"],
+            client_id,
+            "answered" if result is not None else "timed out",
         )
+        if self._headless is not None and not is_headless(client_id):
+            await self._headless.close(conversation_id)
+        if result is None:
+            raise PlatformError(
+                "TIMEOUT",
+                f"The {title} canvas received {request['name']!r} but did not answer within {timeout:g} seconds",
+                status_code=504,
+                source="canvas",
+            )
+        return dict(result)
+
+    async def _offer(
+        self,
+        conversation_id: str,
+        request: dict[str, Any],
+        viewers: list[str],
+        deadline: float,
+        tried: list[str],
+    ) -> tuple[str, dict[str, Any] | None] | None:
+        """(viewer, its result or None if it timed out) of the first of ``viewers`` that takes the call; else None."""
+        call_id = str(request["call_id"])
+        for client_id in viewers:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                break
+            tried.append(client_id)
+            await self._remember_call(call_id, conversation_id, client_id, remaining)
+            async with self._messages(call_id) as next_message:
+                if not await self._deliver(client_id, {"type": "canvas.tool.requested", **request}):
+                    logger.info("canvas call %s: viewer %s has no open stream", call_id, client_id)
+                    await self.disconnect(conversation_id, client_id)
+                    continue
+                first = await next_message(min(ACK_SECONDS, remaining))
+                if first is None:
+                    logger.info("canvas call %s: viewer %s did not acknowledge", call_id, client_id)
+                    await self.disconnect(conversation_id, client_id)
+                    continue
+                result = first if "ack" not in first else await next_message(deadline - self._clock())
+            return client_id, result
+        return None
+
+    async def _joined(self, conversation_id: str, client_id: str) -> bool:
+        """Wait for a headless page that is starting to join as a viewer (it joins once its canvas is ready)."""
+        loop = asyncio.get_running_loop()
+        give_up = loop.time() + HEADLESS_START_SECONDS
+        while client_id not in await self.viewers(conversation_id):
+            if loop.time() >= give_up:
+                logger.info("canvas viewer %s did not join in time", client_id)
+                return False
+            await asyncio.sleep(0.25)
+        return True
 
     async def acknowledge(self, call_id: str, *, conversation_id: str, client_id: str) -> bool:
         """The viewer received the call and is running it."""

@@ -457,3 +457,43 @@ def test_a_call_that_returned_keeps_its_result_when_the_stop_cancelled_its_step_
     assert response.json()["content"] == "answer after stop"
     assert executed == ["/demo.fast"]
     assert list(_tool_results(llm.calls[-1]["messages"]).values()) == ['{"result": "fast result"}']
+
+
+def test_a_turn_cut_off_by_a_restart_is_resumed_once_from_its_checkpoint() -> None:
+    from tianzhou_agent_platform.store.memory_repository import INTERRUPTED_RUN_ERROR
+
+    llm = FirstCallBlocksLLM([assistant("recovered answer")])
+    repository = InMemoryRepository()
+    app = create_app(settings=_settings(), llm=llm, repository=repository)
+    with TestClient(app) as client:
+        conversation = client.post("/conversations", json={"title": "Cut off"}).json()
+        thread, _result = _run_in_thread(
+            lambda: client.post("/chat", json={"message": "long question", "conversation_id": conversation["id"]})
+        )
+        assert llm.started.wait(timeout=2)
+        client.post(f"/conversations/{conversation['id']}/stop", json={})
+        thread.join(timeout=5)
+
+        def interrupt() -> None:
+            # What reconciliation records once the process that ran the turn is gone.
+            client.portal.call(  # type: ignore[union-attr]
+                lambda: repository.finish_conversation_run(
+                    conversation["id"], status="failed", error=INTERRUPTED_RUN_ERROR
+                )
+            )
+
+        interrupt()
+        client.portal.call(app.state.chat_service.resume_interrupted)  # type: ignore[union-attr]
+        recovered = client.get(f"/conversations/{conversation['id']}").json()
+        interrupt()
+        client.portal.call(app.state.chat_service.resume_interrupted)  # type: ignore[union-attr]
+        again = client.get(f"/conversations/{conversation['id']}").json()
+
+    assert recovered["run_status"] == "idle"
+    assert [(m["role"], m["content"]) for m in recovered["messages"]] == [
+        ("user", "long question"),
+        ("assistant", "recovered answer"),
+    ]
+    # Recovered at most once in a while, so a turn that takes its process down cannot loop.
+    assert again["run_status"] == "failed"
+    assert len(again["messages"]) == 2

@@ -6,6 +6,7 @@ the agent or import ChatService.
 
 from __future__ import annotations
 
+from datetime import datetime
 
 from tianzhou_agent_platform.conversations.models import (
     Conversation,
@@ -98,6 +99,14 @@ class ConversationService:
 
     async def require_for_actor(self, conversation_id: str, *, user_id: str, tenant_id: str) -> Conversation:
         return await self._repo.require_conversation_actor(conversation_id, user_id=user_id, tenant_id=tenant_id)
+
+    async def list_interrupted_runs(self, *, since: datetime) -> list[Conversation]:
+        """Conversations whose turn ended with the process running it (a restart or crash), since ``since``."""
+        return await self._repo.list_interrupted_conversation_runs(since=since)
+
+    async def claim_run_recovery(self, conversation_id: str) -> bool:
+        """Whether this caller may resume the conversation's interrupted turn (one caller, once in a while)."""
+        return await self._repo.claim_conversation_run_recovery(conversation_id)
 
     async def start_run(self, conversation_id: str, trace_id: str) -> Conversation:
         """Take the conversation's run lease; fails with CONFLICT while another run holds it."""

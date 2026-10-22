@@ -25,15 +25,19 @@ function clientId(): string {
   return tabClientId;
 }
 
-export function useCanvasViewer(conversationId: string | null, openCanvas: (ainaId: string) => void) {
+/**
+ * ``headlessClientId``: this page is the platform's headless canvas host (pages/CanvasHostPage), a background viewer
+ * under the id the platform gave it; it never counts as a tab the user looks at.
+ */
+export function useCanvasViewer(conversationId: string | null, openCanvas: (ainaId: string) => void, headlessClientId?: string) {
   const openRef = useRef(openCanvas);
   openRef.current = openCanvas;
 
   useEffect(() => {
     if (!conversationId) return;
-    const client = clientId();
+    const client = headlessClientId ?? clientId();
     const base = `/conversations/${encodeURIComponent(conversationId)}`;
-    const visible = () => document.visibilityState === "visible";
+    const visible = () => !headlessClientId && document.visibilityState === "visible";
     const source = new EventSource(apiUrl(`${base}/canvas-viewer?client_id=${client}&visible=${visible()}`), { withCredentials: true });
 
     async function run(call: CanvasCall) {
@@ -66,5 +70,5 @@ export function useCanvasViewer(conversationId: string | null, openCanvas: (aina
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", beat);
     };
-  }, [conversationId]);
+  }, [conversationId, headlessClientId]);
 }

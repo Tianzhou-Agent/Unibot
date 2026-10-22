@@ -481,6 +481,102 @@ async def test_a_result_posted_to_another_node_resumes_the_run() -> None:
         await node_a.dispatch("conv_2", {**request, "call_id": "c4"}, timeout=1)
 
 
+class FakeHeadlessHost:
+    """A headless canvas host whose page joins the conversation as a viewer and answers every call."""
+
+    def __init__(self, *, available: bool = True) -> None:
+        self.broker: CanvasCallBroker | None = None
+        self.available = available
+        self.opened: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+        self.pages: dict[str, asyncio.Task[None]] = {}
+
+    async def open(self, conversation_id: str, aina_id: str) -> str | None:
+        self.opened.append((conversation_id, aina_id))
+        if not self.available:
+            return None
+        client_id = f"headless_{conversation_id}"
+        if conversation_id not in self.pages:
+            self.pages[conversation_id] = asyncio.create_task(self._page(conversation_id, client_id))
+        return client_id
+
+    async def close(self, conversation_id: str) -> None:
+        page = self.pages.pop(conversation_id, None)
+        if page is not None:
+            self.closed.append(conversation_id)
+            page.cancel()
+
+    async def _page(self, conversation_id: str, client_id: str) -> None:
+        broker = self.broker
+        assert broker is not None
+        async with broker.listen(client_id) as next_event:
+            await asyncio.sleep(0.3)  # the page loads its canvas before it joins
+            await broker.heartbeat(conversation_id, client_id, visible=False)
+            while True:
+                event = await next_event(5)
+                if event is None:
+                    continue
+                call = {"conversation_id": conversation_id, "client_id": client_id}
+                assert await broker.acknowledge(event["call_id"], **call)
+                assert await broker.resolve(event["call_id"], **call, result={"result": {"by": "headless"}})
+
+
+def _headless_broker(host: FakeHeadlessHost) -> CanvasCallBroker:
+    broker = CanvasCallBroker(headless=host)  # type: ignore[arg-type]
+    host.broker = broker
+    return broker
+
+
+async def test_without_a_tab_the_headless_canvas_host_takes_the_call() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "get_scene", "arguments": {}, "timeout_ms": 2000}
+    try:
+        first = await broker.dispatch("conv_1", request, timeout=2)
+        second = await broker.dispatch("conv_1", {**request, "call_id": "c2"}, timeout=2)
+    finally:
+        await host.close("conv_1")
+
+    assert first == second == {"result": {"by": "headless"}}
+    assert host.opened == [("conv_1", AINA), ("conv_1", AINA)]  # the open page is reused
+    assert len(host.closed) == 1
+
+
+async def test_a_tab_takes_calls_over_from_the_headless_canvas_host() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "get_scene", "arguments": {}, "timeout_ms": 2000}
+    assert await broker.dispatch("conv_1", request, timeout=2) == {"result": {"by": "headless"}}
+    await broker.heartbeat("conv_1", TAB_A, visible=True)
+
+    async def tab() -> None:
+        async with broker.listen(TAB_A) as next_event:
+            event = await next_event(2)
+            assert event is not None
+            call = {"conversation_id": "conv_1", "client_id": TAB_A}
+            assert await broker.acknowledge(event["call_id"], **call)
+            assert await broker.resolve(event["call_id"], **call, result={"result": {"by": "tab"}})
+
+    listening = asyncio.create_task(tab())
+    await asyncio.sleep(0.01)
+    result = await broker.dispatch("conv_1", {**request, "call_id": "c2"}, timeout=2)
+    await listening
+
+    assert result == {"result": {"by": "tab"}}
+    assert host.closed == ["conv_1"]  # the tab now shows the canvas, so the headless page is closed
+    assert len(host.opened) == 1
+
+
+async def test_without_a_headless_browser_the_call_reports_the_canvas_is_not_open() -> None:
+    host = FakeHeadlessHost(available=False)
+    broker = _headless_broker(host)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "get_scene", "arguments": {}, "timeout_ms": 1000}
+
+    with pytest.raises(PlatformError, match="not open"):
+        await broker.dispatch("conv_1", request, timeout=1)
+    assert host.opened == [("conv_1", AINA)]
+
+
 async def _call_an_idle_viewer(redis: RedisStore, *, idle: float) -> None:
     """A call dispatched after the viewer's stream sat idle for ``idle`` seconds is delivered, acknowledged, answered."""
     conversation = f"conv_{uuid4().hex}"

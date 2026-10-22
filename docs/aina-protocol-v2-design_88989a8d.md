@@ -637,9 +637,10 @@ sequenceDiagram
 
 - **Routing to one viewer.** The shell reports which conversation and canvas it shows, with a client id and a
   heartbeat. The host sends a canvas call to the most recently active viewer only, so two open tabs never both draw.
-- **No viewer.** If no client is connected to the conversation (the SSE stream is closed, or the run is a scheduled
-  run), the call returns `isError: true` with "The Whiteboard canvas is not open", and the model tells the user. Canvas
-  tools are never queued for later replay.
+- **No viewer.** If no tab is connected to the conversation (the user closed it, or the run is a scheduled run), the
+  platform's headless canvas host opens the conversation's canvas in a server-side headless browser and the call runs
+  there, so the run keeps working. Only when that is unavailable does the call return `isError: true` with "The
+  Whiteboard canvas is not open". Canvas tools are never queued for later replay.
 - **Waiting.** The backend run awaits the posted result through a Redis-backed future keyed by `call_id`, so the
   result may arrive at any node. Timeout is `timeout_seconds` (default 10 s, ≤ 30 s). A late result is discarded.
 - **Same policy as other tools.** Arguments are validated against `inputSchema` before dispatch; `effect` drives
@@ -1097,8 +1098,14 @@ runtime type only, never on an AINA id.
     (`POST …/canvas-calls/{call_id}/ack`). A viewer with no open stream, or one that does not acknowledge within
     3 s (a closed or frozen tab), is dropped and the next most recent viewer is tried. Routing decisions are logged
     at INFO.
-  - **No viewer:** the call fails at once with `CANVAS_NOT_OPEN`, and the model is told to ask the user to open the
-    conversation; calls are never queued.
+  - **No viewer:** when no tab takes the call, the headless canvas host
+    ([`canvas_host.py`](../backend/src/tianzhou_agent_platform/aina/package/canvas_host.py)) opens the shell's
+    `/canvas-host/{conversation}` page in a server-side headless Chromium, signed in as the conversation's owner. The
+    page opens the canvas, joins as a background viewer (client id `headless_…`) once the canvas has registered its
+    tools (it gets up to 60 s for that before the call's own timeout starts), and runs the call, so a run keeps working
+    after the user leaves. Tabs are always tried first; when a tab takes a call again, or after 5 idle minutes, the
+    headless page is closed. Only when no headless browser can start (`UNIBOT_CANVAS_HOST_ENABLED=false`, no Chromium)
+    does the call fail with `CANVAS_NOT_OPEN`. Calls are never queued.
   - **The call:** the shell opens a closed canvas (C2), waits up to 10 s for it to `registerTool` the tool, runs it
     with `invokeTool`, and posts `POST /conversations/{id}/canvas-calls/{call_id}` with the result or an error.
     Only the viewer the call was sent to may answer, and only while the run waits (`timeout_seconds`, default 10,

@@ -194,12 +194,23 @@ def filter_advertised_tools(
     return result
 
 
+# Tool results whose images are still sent to the model; earlier ones keep only their text.
+MAX_TOOL_IMAGE_RESULTS = 3
+
+
 def with_tool_images(messages: list[Any], images: dict[str, tuple[str, list[dict[str, str]]]]) -> list[Any]:
     """After each group of tool results, one user-role message with the images those results returned.
 
     OpenAI-style tool messages carry text only, so the images follow them; they are marked as tool output, which the
-    model must not treat as instructions.
+    model must not treat as instructions. Only the latest ``MAX_TOOL_IMAGE_RESULTS`` results with images keep them:
+    in a long run (rendering slide after slide) older pictures are out of date and would fill the context.
     """
+    with_images = [
+        message.tool_call_id
+        for message in messages
+        if isinstance(message, ToolMessage) and message.tool_call_id in images
+    ]
+    images = {call_id: images[call_id] for call_id in with_images[-MAX_TOOL_IMAGE_RESULTS:]}
     projected: list[Any] = []
     pending: list[tuple[str, list[dict[str, str]]]] = []
 

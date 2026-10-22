@@ -217,6 +217,8 @@ def create_model_settings_router() -> APIRouter:
                 timeout_seconds=provider.timeout_seconds,
                 http_client=client,
                 max_completion_tokens=1,
+                # A health check reports a rate limit or outage at once instead of waiting it out.
+                transient_error_delays=(),
             )
             await chat_model.ainvoke([{"role": "user", "content": "Reply with OK."}])
         except Exception as exc:

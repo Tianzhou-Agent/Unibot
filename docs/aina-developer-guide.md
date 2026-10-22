@@ -368,8 +368,10 @@ host.setModelContext(`The canvas shows ${count} notes.`);   // sent with the age
 
 How the calls behave:
 
-- **Routing:** the call goes to the user's most recently active tab. If no tab has the conversation open, the agent
-  is told to ask the user to open it.
+- **Routing:** the call goes to the user's most recently active tab. If no tab has the conversation open, Superbot
+  opens your canvas in a headless browser on the server and the call runs there, so the agent keeps working after the
+  user leaves. Save the canvas's state through your own tools or backend: the tab the user opens later loads it from
+  there, not from the headless page.
 - **Timeout:** the default is 10 seconds; set `timeout_seconds`, at most 30.
 - **Result limits:** `structuredContent` at most 64 KiB, and at most one image of at most 1 MiB.
 - **Registration:** call `registerTool` before you load data that the agent's drawings would overwrite.
