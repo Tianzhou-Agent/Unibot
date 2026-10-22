@@ -370,7 +370,7 @@ def create_app(
 
     app = FastAPI(
         title="Tianzhou Agent Platform",
-        version="0.1.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings

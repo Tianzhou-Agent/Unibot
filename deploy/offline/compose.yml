@@ -1,0 +1,184 @@
+name: unibot
+services:
+  mysql:
+    image: mysql:8.0
+    platform: linux/amd64
+    pull_policy: never
+    command:
+    - --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: ${UNIBOT_MYSQL_ROOT_PASSWORD:?Set UNIBOT_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${UNIBOT_MYSQL_DATABASE:-unibot}
+      MYSQL_USER: ${UNIBOT_MYSQL_USER:-unibot}
+      MYSQL_PASSWORD: ${UNIBOT_MYSQL_PASSWORD:?Set UNIBOT_MYSQL_PASSWORD}
+    volumes:
+    - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    platform: linux/amd64
+    pull_policy: never
+    command:
+    - redis-server
+    - --appendonly
+    - 'yes'
+    volumes:
+    - redis-data:/data
+    healthcheck:
+      test:
+      - CMD
+      - redis-cli
+      - ping
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  backend:
+    image: unibot/backend:0.3.0-amd64
+    platform: linux/amd64
+    pull_policy: never
+    environment:
+      TZ_STORAGE_MYSQL_DSN: mysql+aiomysql://${UNIBOT_MYSQL_USER:-unibot}:${UNIBOT_MYSQL_PASSWORD:?Set UNIBOT_MYSQL_PASSWORD}@mysql:3306/${UNIBOT_MYSQL_DATABASE:-unibot}
+      TZ_STORAGE_REDIS_DSN: ${TZ_STORAGE_REDIS_DSN:-redis://redis:6379/0}
+      TZ_STORAGE_NAS_ROOT_PATH: /data/nas
+      UNIBOT_OBS_RAW_ROOT: /data/nas/observability/raw
+      UNIBOT_OBS_WAL_ROOT: /data/nas/observability/wal
+      UNIBOT_LLM_BASE_URL: ${UNIBOT_LLM_BASE_URL:-}
+      UNIBOT_LLM_API_KEY: ${UNIBOT_LLM_API_KEY:-}
+      UNIBOT_LLM_MODEL: ${UNIBOT_LLM_MODEL:-}
+      UNIBOT_AUTH_SECRET: ${UNIBOT_AUTH_SECRET:?Set UNIBOT_AUTH_SECRET in .env}
+      UNIBOT_AUTH_SESSION_HOURS: ${UNIBOT_AUTH_SESSION_HOURS:-168}
+      UNIBOT_AUTH_COOKIE_SECURE: ${UNIBOT_AUTH_COOKIE_SECURE:-false}
+      UNIBOT_AUTH_REGISTRATION_ENABLED: ${UNIBOT_AUTH_REGISTRATION_ENABLED:-true}
+      UNIBOT_FRONTEND_BASE_URL: ${UNIBOT_FRONTEND_BASE_URL:-http://127.0.0.1:8080/superbot}
+      UNIBOT_GITHUB_CLIENT_ID: ${UNIBOT_GITHUB_CLIENT_ID:-}
+      UNIBOT_GITHUB_CLIENT_SECRET: ${UNIBOT_GITHUB_CLIENT_SECRET:-}
+      UNIBOT_GITHUB_CALLBACK_URL: ${UNIBOT_GITHUB_CALLBACK_URL:-http://127.0.0.1:8080/superbot/api/auth/github/callback}
+      UNIBOT_ADMIN_IDENTITIES: ${UNIBOT_ADMIN_IDENTITIES:-}
+      UNIBOT_CAPABILITY_ALLOWED_ORIGINS: ${UNIBOT_CAPABILITY_ALLOWED_ORIGINS:?Set UNIBOT_CAPABILITY_ALLOWED_ORIGINS}
+      UNIBOT_NODE_ID: ${UNIBOT_NODE_ID:-unibot-compose-1}
+      UNIBOT_SANDBOX_DRIVER: ${UNIBOT_SANDBOX_DRIVER:-local}
+      UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL: ${UNIBOT_SANDBOX_ALLOW_UNSAFE_LOCAL:-false}
+      UNIBOT_SANDBOX_WORKSPACE_ROOT: /data/sandboxes
+      UNIBOT_HUAWEI_BASE_URL: ${UNIBOT_HUAWEI_BASE_URL:-${UNIPORTAL_URL:-}}
+      UNIBOT_HUAWEI_CLIENT_ID: ${UNIBOT_HUAWEI_CLIENT_ID:-${HUAWEI_OAUTH_CLIENT_ID:-}}
+      UNIBOT_HUAWEI_CLIENT_SECRET: ${UNIBOT_HUAWEI_CLIENT_SECRET:-${HUAWEI_OAUTH_CLIENT_SECRET:-}}
+      UNIBOT_HUAWEI_CALLBACK_URL: ${UNIBOT_HUAWEI_CALLBACK_URL:-http://127.0.0.1:8080/superbot/api/auth/huawei/callback}
+      UNIBOT_HUAWEI_SSL_VERIFY: ${UNIBOT_HUAWEI_SSL_VERIFY:-true}
+      UNIBOT_HUAWEI_CA_BUNDLE: ${UNIBOT_HUAWEI_CA_BUNDLE:-}
+      UNIBOT_GOOGLE_CLIENT_ID: ${UNIBOT_GOOGLE_CLIENT_ID:-}
+      UNIBOT_GOOGLE_CLIENT_SECRET: ${UNIBOT_GOOGLE_CLIENT_SECRET:-}
+      UNIBOT_GOOGLE_CALLBACK_URL: ${UNIBOT_GOOGLE_CALLBACK_URL:-http://127.0.0.1:8080/superbot/api/auth/google/callback}
+      UNIBOT_MICROSOFT_CLIENT_ID: ${UNIBOT_MICROSOFT_CLIENT_ID:-}
+      UNIBOT_MICROSOFT_CLIENT_SECRET: ${UNIBOT_MICROSOFT_CLIENT_SECRET:-}
+      UNIBOT_MICROSOFT_CALLBACK_URL: ${UNIBOT_MICROSOFT_CALLBACK_URL:-http://127.0.0.1:8080/superbot/api/auth/microsoft/callback}
+      UNIBOT_MICROSOFT_TENANT: ${UNIBOT_MICROSOFT_TENANT:-common}
+      UNIBOT_APPLE_CLIENT_ID: ${UNIBOT_APPLE_CLIENT_ID:-}
+      UNIBOT_APPLE_CLIENT_SECRET: ${UNIBOT_APPLE_CLIENT_SECRET:-}
+      UNIBOT_APPLE_CALLBACK_URL: ${UNIBOT_APPLE_CALLBACK_URL:-}
+      UNIBOT_AINA_HOST_API_BASE: ${UNIBOT_FRONTEND_BASE_URL:?Set UNIBOT_FRONTEND_BASE_URL}/api/aina-host/v1
+      UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS: ${UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS:?Set UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS}
+    volumes:
+    - nas-data:/data/nas
+    - sandbox-data:/data/sandboxes
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+    - 127.0.0.1:${UNIBOT_BACKEND_PORT:-8000}:8000
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3))['status']
+        == 'ok'
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+    restart: unless-stopped
+  frontend:
+    image: unibot/frontend:0.3.0-amd64-superbot
+    platform: linux/amd64
+    pull_policy: never
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+  gateway:
+    image: unibot/gateway:0.3.0-amd64
+    platform: linux/amd64
+    pull_policy: never
+    ports:
+    - ${UNIBOT_HTTP_BIND:-0.0.0.0}:${UNIBOT_HTTP_PORT:-8080}:80
+    depends_on:
+      frontend:
+        condition: service_healthy
+      drawio:
+        condition: service_healthy
+      pptist-canvas:
+        condition: service_healthy
+    restart: unless-stopped
+  drawio:
+    image: unibot/drawio:0.3.0-amd64
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+  pptist-server:
+    image: unibot/pptist-server:0.3.0-amd64
+    platform: linux/amd64
+    pull_policy: never
+    environment:
+      AINA_ID: local.pptist
+      UNIBOT_HOST_API_BASE: ${UNIBOT_FRONTEND_BASE_URL:?Set UNIBOT_FRONTEND_BASE_URL}/api/aina-host/v1
+      UNIBOT_HOST_API_URL: http://backend:8000/aina-host/v1
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import socket; socket.create_connection(('127.0.0.1',8782),3).close()
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  pptist-canvas:
+    image: unibot/pptist-canvas:0.3.0-amd64
+    platform: linux/amd64
+    pull_policy: never
+    environment:
+      UNIBOT_ORIGIN: ${UNIBOT_PUBLIC_ORIGIN:?Set UNIBOT_PUBLIC_ORIGIN}
+      MCP_UPSTREAM: http://pptist-server:8782/mcp
+    depends_on:
+      pptist-server:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -q
+      - -O
+      - /dev/null
+      - http://127.0.0.1/
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+volumes:
+  mysql-data: null
+  redis-data: null
+  nas-data: null
+  sandbox-data: null

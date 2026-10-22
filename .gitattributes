@@ -1,0 +1,2 @@
+/deploy/offline/*.sh text eol=lf
+/examples/pptist-aina/canvas/prepare.sh text eol=lf

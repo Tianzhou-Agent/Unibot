@@ -1,0 +1,15 @@
+{
+  "name": "drawio",
+  "version": "1.0.0",
+  "description": "Local draw.io editor and MCP deployment",
+  "private": true,
+  "scripts": {
+    "up": "docker compose up -d --build",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "drawio-mcp-server": "2.3.0"
+  }
+}
