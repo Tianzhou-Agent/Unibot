@@ -131,6 +131,25 @@ def test_conversations_can_be_categorized_filtered_and_deleted() -> None:
     assert remaining.json() == []
 
 
+def test_a_conversation_keeps_its_canvas_tabs_without_moving_up_the_list() -> None:
+    with TestClient(create_app(settings=_settings(), llm=ScriptedLLM([]))) as client:
+        older = client.post("/conversations", json={"title": "Slides"}).json()
+        newer = client.post("/conversations", json={"title": "Notes"}).json()
+        tabs = {"ids": ["local.pptist", "unibot-documents"], "active": "local.pptist"}
+        saved = client.put(f"/conversations/{older['id']}/canvas-tabs", json=tabs)
+        reloaded = client.get(f"/conversations/{older['id']}").json()
+        listed = client.get("/conversations").json()
+        too_many = client.put(f"/conversations/{older['id']}/canvas-tabs", json={"ids": [f"a{n}" for n in range(21)]})
+        missing = client.put("/conversations/conv_missing/canvas-tabs", json=tabs)
+
+    assert saved.status_code == 200 and saved.json() == tabs
+    assert reloaded["config"]["canvas_tabs"] == tabs
+    assert reloaded["updated_at"] == older["updated_at"]
+    assert [item["id"] for item in listed] == [newer["id"], older["id"]]
+    assert too_many.status_code == 422
+    assert missing.status_code == 404
+
+
 def test_admin_summary_uses_actor_scope_and_counts_aina_capabilities() -> None:
     repository = InMemoryRepository()
 

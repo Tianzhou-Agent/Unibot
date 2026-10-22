@@ -355,6 +355,29 @@ export default function ChatModePage() {
   // Canvas tool calls (AINA 2.0 §9.5) reach the canvas of this tab while it shows the conversation.
   useCanvasViewer(conversation?.id ?? null, (id) => openAinas([id]));
 
+  // Each conversation keeps the canvas tabs open beside it: opened without tabs in its address (from the list, say),
+  // it brings back the ones it had; after that, every change of its tabs is saved.
+  const canvasTabsRestoredRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!conversation || conversation.id !== conversationId) return;
+    const saved = savedCanvasTabs(conversation);
+    if (canvasTabsRestoredRef.current !== conversation.id) {
+      canvasTabsRestoredRef.current = conversation.id;
+      if (!ainaIds.length && saved.ids.length) {
+        navigateCanvas({ ainaIds: saved.ids, activeAinaId: saved.active, documentName: null }, conversation.id, true);
+        return;
+      }
+    }
+    if (saved.ids.join("\n") === ainaKey && saved.active === activeAinaId) return;
+    const tabs = { ids: ainaIds, active: activeAinaId };
+    void api.put(`/conversations/${encodeURIComponent(conversation.id)}/canvas-tabs`, tabs).then(() => {
+      setConversation((current) => (
+        current?.id === conversation.id ? { ...current, config: { ...current.config, canvas_tabs: tabs } } : current
+      ));
+    }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation, conversationId, ainaKey, activeAinaId]); // ainaKey stands for ainaIds.
+
   /** Opens `ids` as tabs beside the conversation, activating the first; open tabs are kept. */
   function openAinas(ids: string[], targetConversationId = conversation?.id ?? conversationId ?? null) {
     if (!ids.length) return;
@@ -1585,6 +1608,14 @@ function CanvasPaneToggle({ pane, onChange }: { pane: "chat" | "app"; onChange: 
       ))}
     </div>
   );
+}
+
+/** The canvas tabs the conversation had open (backend `config.canvas_tabs`); the last one is shown unless another was. */
+function savedCanvasTabs(conversation: ConversationRecord): { ids: string[]; active: string | null } {
+  const saved = conversation.config.canvas_tabs as { ids?: unknown; active?: unknown } | undefined;
+  const ids = Array.isArray(saved?.ids) ? saved.ids.filter((id): id is string => typeof id === "string") : [];
+  const active = typeof saved?.active === "string" && ids.includes(saved.active) ? saved.active : ids.at(-1) ?? null;
+  return { ids, active };
 }
 
 function documentTaskUiContext(context: DocumentTaskContext): string {

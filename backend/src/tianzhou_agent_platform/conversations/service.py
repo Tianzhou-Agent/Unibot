@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from tianzhou_agent_platform.conversations.models import (
+    CanvasTabs,
     Conversation,
     ConversationCreate,
     ConversationUpdate,
@@ -42,6 +43,9 @@ class ConversationService:
 
     async def update(self, conversation_id: str, payload: ConversationUpdate) -> Conversation:
         return await self._repo.update_conversation(conversation_id, payload)
+
+    async def set_canvas_tabs(self, conversation_id: str, tabs: CanvasTabs) -> Conversation:
+        return await self._repo.set_conversation_canvas_tabs(conversation_id, tabs)
 
     async def restore(self, conversation_id: str) -> Conversation:
         return await self._repo.set_conversation_status(conversation_id, "active")
