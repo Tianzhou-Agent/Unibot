@@ -81,6 +81,30 @@ def _run_in_thread(target: Any) -> tuple[threading.Thread, dict[str, Any]]:
     return thread, result
 
 
+def test_a_turn_stopped_before_any_tool_call_resumes_in_its_aina_scope() -> None:
+    def resumed(*, messages: list[dict[str, Any]], tools: list[dict[str, Any]], **_: Any) -> LLMResult:
+        assert "(unibot-memory)" in messages[0]["content"]  # the AINA's instructions, not the unified entry
+        assert not any(item["function"]["name"].startswith("builtin_list_app_") for item in tools)
+        return assistant("resumed in the memory scope")
+
+    llm = FirstCallBlocksLLM([resumed])
+    with TestClient(create_app(settings=_settings(), llm=llm)) as client:
+        conversation = client.post("/conversations", json={"title": "Scoped"}).json()
+        thread, result = _run_in_thread(
+            lambda: client.post(
+                "/chat",
+                json={"message": "What do you remember?", "conversation_id": conversation["id"], "preferred_aina_id": "unibot-memory"},
+            )
+        )
+        assert llm.started.wait(timeout=2)
+        client.post(f"/conversations/{conversation['id']}/stop", json={})
+        thread.join(timeout=5)
+        resumed_response = client.post(f"/conversations/{conversation['id']}/resume", json={})
+
+    assert result["response"].json()["status"] == "stopped"
+    assert resumed_response.json()["content"] == "resumed in the memory scope"
+
+
 def test_stop_during_model_call_ends_turn_as_stopped_and_resume_answers_it() -> None:
     llm = FirstCallBlocksLLM([assistant("resumed answer")])
     with TestClient(create_app(settings=_settings(), llm=llm)) as client:

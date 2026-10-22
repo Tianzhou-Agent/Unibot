@@ -132,6 +132,8 @@ from tianzhou_agent_platform.services.run_stops import TurnStop
 logger = logging.getLogger(__name__)
 
 THREAD_PREFIX = "lc-v2:"
+# Checkpoint metadata key of the AINA whose scope a run started in.
+TURN_AINA_KEY = "aina_id"
 ABANDONED_CALL_RESULT = "Cancelled because the user started a new turn before granting approval."
 COMPLETED_REPLY = "The requested operation was completed."
 EMPTY_REPLY = OutputGuardMiddleware.EMPTY_REPLY
@@ -511,12 +513,19 @@ class AgentRunner:
     async def _continued_scope(self, conversation: Conversation, run: AgentRun) -> tuple[dict[str, Capability], str]:
         """(visible capabilities, system prompt) of a turn continued after a stop or an approval.
 
-        The routing scope is not checkpointed, so it is found again from the turn's transcript: a turn that worked in
-        an AINA continues with that AINA's tools, instructions and canvas state; any other offers every capability.
-        Every capability stays registered (``_prepare``), so a paused call always runs.
+        A turn that worked in an AINA continues with that AINA's tools, instructions and canvas state; any other
+        offers every capability. The AINA is found from the turn's transcript (which also shows an AINA the turn
+        switched to), else from the scope its checkpoints recorded when the run started. Every capability stays
+        registered (``_prepare``), so a paused call always runs.
         """
         everything = await self.catalog.available(conversation)
         selected = unfinished_turn_aina(conversation, everything)
+        if selected is None:
+            checkpoint = await self.checkpointer.aget_tuple(self._config(conversation, ""))
+            aina_id = checkpoint.metadata.get(TURN_AINA_KEY) if checkpoint is not None else None
+            selected = next(
+                (item for item in everything.values() if item.kind == "aina" and item.capability_id == aina_id), None
+            )
         await run.scope_resolved(conversation, selected=selected, source="continued_turn")
         if selected is None:
             return everything, await self.prompts.build(conversation)
@@ -657,6 +666,8 @@ class AgentRunner:
             checkpointer=self.checkpointer,
         )
         config = self._config(conversation, run.trace_id)
+        # Kept in the run's checkpoints, so a continuation finds the scope of a turn that called no tool yet.
+        config["metadata"][TURN_AINA_KEY] = run.active_aina_id
         config["callbacks"] = [summary_calls]
         return _Invocation(
             agent=agent,
