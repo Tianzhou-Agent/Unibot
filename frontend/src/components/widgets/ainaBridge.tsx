@@ -59,6 +59,7 @@ export function useAinaBridge({
   origin,
   source,
   context,
+  conversationId,
   onPrompt,
   extra,
 }: {
@@ -68,6 +69,8 @@ export function useAinaBridge({
   origin: string | null;
   source: "canvas" | "widget";
   context: Record<string, unknown>;
+  /** The conversation the frame is open beside; its tool calls are made in it. */
+  conversationId?: string | null;
   onPrompt?: (prompt: string) => void;
   extra?: (method: string, params: Record<string, unknown>) => Promise<unknown> | undefined;
 }) {
@@ -79,8 +82,8 @@ export function useAinaBridge({
   const hostRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
   const nextHostRequest = useRef(1);
   const approvedWrites = useRef(new Set<string>());
-  const latest = useRef({ context, onPrompt, extra });
-  latest.current = { context, onPrompt, extra };
+  const latest = useRef({ context, conversationId, onPrompt, extra });
+  latest.current = { context, conversationId, onPrompt, extra };
 
   // What the bridge needs before it answers: the reviewed tools and this user's (non-secret) configuration.
   const loaded = useMemo(
@@ -144,6 +147,7 @@ export function useAinaBridge({
             arguments: args,
             source,
             confirmed: tool.effect !== "read",
+            ...(latest.current.conversationId ? { conversation_id: latest.current.conversationId } : {}),
           });
         }
         case "sendPrompt": {

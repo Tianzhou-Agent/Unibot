@@ -47,6 +47,10 @@ const snapshotStore = useSnapshotStore()
 let host: Host
 let deckId = nanoid(10)
 let lastSaved = ''
+// Whether the open deck has been saved: one kept when a conversation starts is then made that conversation's deck.
+let deckSaved = false
+// Whether the canvas is open beside a conversation (getContext().conversation, then context_changed).
+let inConversation = false
 let autosave = true
 let saving: Promise<void> = Promise.resolve()
 // In Superbot's headless canvas host (getContext().background): nobody sees this canvas while the user is away.
@@ -73,8 +77,9 @@ const blankSlide = (): Slide => ({
 })
 
 // Show another deck and start its undo history from it, so undo never brings back the previous deck.
-const showDeck = async (id: string, deck: Partial<Deck> | null) => {
+const showDeck = async (id: string, deck: Partial<Deck> | null, saved = false) => {
   deckId = id
+  deckSaved = saved
   slidesStore.setTitle(deck?.title || '')
   if (deck?.width && deck.height) {
     slidesStore.setViewportSize(deck.width)
@@ -90,14 +95,18 @@ const showDeck = async (id: string, deck: Partial<Deck> | null) => {
   await snapshotStore.initSnapshotDatabase()
 }
 
-const save = () => {
+// Each save also makes the deck the conversation's own (bind), except the last save of a deck the user moved away from:
+// that save is made in the conversation now beside the canvas, which must not get it. `force` saves an unchanged deck,
+// to make it the conversation's.
+const save = ({ bind = true, force = false } = {}) => {
   saving = saving.then(async () => {
     const deck = currentDeck()
     const json = JSON.stringify(deck)
-    if (!autosave || json === lastSaved) return
+    if (!autosave || (json === lastSaved && !force)) return
     try {
-      await host.callTool('save_deck', { id: deckId, deck })
+      await host.callTool('save_deck', { id: deckId, deck, bind })
       lastSaved = json
+      deckSaved = true
     }
     catch (error) {
       saveError = (error as Error).message
@@ -110,10 +119,10 @@ const save = () => {
   })
   return saving
 }
-const saveSoon = debounce(save, AUTOSAVE_MS)
-const flushSave = () => {
+const saveSoon = debounce(() => save(), AUTOSAVE_MS)
+const flushSave = (options?: { bind?: boolean }) => {
   saveSoon.cancel()
-  return save()
+  return save(options)
 }
 
 // --- what the agent sees ----------------------------------------------------------------------------------------------
@@ -394,7 +403,9 @@ const tools: Record<string, (args: Args) => Promise<ToolResult> | ToolResult> = 
     const loaded = await host.callTool<{ id: string | null; deck: Deck | null }>('load_deck', { id: String(deck_id) })
     if (!loaded.structuredContent?.deck) throw new Error(`There is no saved deck ${String(deck_id)}; call list_decks`)
     await flushSave()
-    await showDeck(loaded.structuredContent.id!, loaded.structuredContent.deck)
+    await showDeck(loaded.structuredContent.id!, loaded.structuredContent.deck, true)
+    // It is this conversation's deck from now on, also when nothing in it changes.
+    if (inConversation) await save({ force: true })
     return result({ deck_id: deckId, title: slidesStore.title, slides: changed() })
   },
 
@@ -413,26 +424,62 @@ const tools: Record<string, (args: Args) => Promise<ToolResult> | ToolResult> = 
   },
 }
 
+// --- one deck per conversation ---------------------------------------------------------------------------------------
+
+let moving: Promise<void> = Promise.resolve()
+
+// Show the deck of the conversation beside the canvas; returns false when it has none.
+const showConversationDeck = async () => {
+  if (!inConversation) return false
+  const loaded = await host.callTool<{ id: string | null; deck: Deck | null }>('load_deck', {})
+  if (!loaded.structuredContent?.id || !loaded.structuredContent.deck) return false
+  await showDeck(loaded.structuredContent.id, loaded.structuredContent.deck, true)
+  return true
+}
+
+// The user moved the canvas to another conversation, or a new conversation started beside it.
+const moveTo = async (conversation: boolean) => {
+  const before = inConversation
+  inConversation = conversation
+  // What was open stays saved, but does not become the deck of the conversation now beside the canvas.
+  await flushSave({ bind: false })
+  if (await showConversationDeck()) return
+  // A conversation that just started keeps the deck the user began before it.
+  if (conversation && !before) {
+    if (deckSaved) await save({ force: true })
+    return
+  }
+  await showDeck(nanoid(10), null)
+}
+
 // --- start ------------------------------------------------------------------------------------------------------------
 
 const start = async () => {
   // PPTist asks before every unload because it keeps nothing; this canvas saves to Superbot instead.
   window.onbeforeunload = null
-  // Wait for PPTist's own first load (public/mocks/slides.json), so it cannot replace the deck shown here.
-  while (!slidesStore.slides.length || snapshotStore.snapshotLength === 0) await new Promise(resolve => setTimeout(resolve, 50))
-
-  lastSaved = JSON.stringify(currentDeck()) // PPTist's blank first slide is not worth saving
-  try {
-    const loaded = await host.callTool<{ id: string | null; deck: Deck | null }>('load_deck', {})
-    if (loaded.structuredContent?.id && loaded.structuredContent.deck) await showDeck(loaded.structuredContent.id, loaded.structuredContent.deck)
+  const context = await host.getContext()
+  inConversation = context.conversation === true
+  // Listen from the start, so a conversation that changes while PPTist loads is followed once the first deck is shown.
+  const follow = (step: () => Promise<unknown>) => {
+    moving = moving.then(step).then(() => undefined, (error: Error) => {
+      message.warning(`Could not load this conversation's deck: ${error.message}`, { duration: 6000 })
+    })
   }
-  catch (error) {
-    message.warning(`Could not load your last deck: ${(error as Error).message}`, { duration: 6000 })
-  }
+  host.on('context_changed', (data) => {
+    const conversation = (data as { conversation?: unknown } | null)?.conversation
+    if (typeof conversation === 'boolean') follow(() => moveTo(conversation))
+  })
+  follow(async () => {
+    // Wait for PPTist's own first load (public/mocks/slides.json), so it cannot replace the deck shown here.
+    while (!slidesStore.slides.length || snapshotStore.snapshotLength === 0) await new Promise(resolve => setTimeout(resolve, 50))
+    lastSaved = JSON.stringify(currentDeck()) // PPTist's blank first slide is not worth saving
+    await showConversationDeck()
+  })
+  await moving
   // The tools are registered once the saved deck is shown, so no agent call edits PPTist's demo deck that the saved
   // one then replaces. In Superbot's headless canvas host, where the user may open a tab and load the saved deck at
   // any moment, each call saves its changes before it answers, and tells the agent when they could not be saved.
-  background = (await host.getContext()).background
+  background = context.background
   for (const [name, handler] of Object.entries(tools)) {
     await host.registerTool(name, background
       ? async (args) => {

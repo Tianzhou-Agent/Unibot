@@ -2,7 +2,8 @@
 
 The editing happens in the canvas (PPTist, through canvas tools). This server only lists, loads, saves and deletes
 decks: each deck is one PPTist JSON file (``decks/<id>.json``, the format PPTist's own JSON export writes), and the
-storage key ``decks`` indexes them.
+storage key ``decks`` indexes them. Each conversation has its own deck: the storage key ``conversations/<id>`` holds the
+id of the deck last saved in that conversation, which the canvas opens there.
 
 Configuration (environment):
   UNIBOT_HOST_API_BASE  your Superbot's public Host API base, e.g. https://unibot.example.com/api/aina-host/v1. Every
@@ -25,7 +26,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
-from unibot_aina import ContextError, ContextVerifier, HostApi, set_default_transport
+from unibot_aina import ContextError, ContextVerifier, HostApi, UnibotContext, set_default_transport
 
 AINA_ID = os.environ.get("AINA_ID", "local.pptist")
 HOST_API_BASE = os.environ.get("UNIBOT_HOST_API_BASE", "http://127.0.0.1:8000/aina-host/v1").rstrip("/")
@@ -64,11 +65,15 @@ class LoadedDeck(BaseModel):
     deck: dict[str, Any] | None
 
 
-async def _host(ctx: Context) -> HostApi:
+async def _context(ctx: Context) -> UnibotContext:
     try:
-        return (await verifier.verify(ctx)).host
+        return await verifier.verify(ctx)
     except (ContextError, ValueError) as exc:
         raise ToolError(f"This server only answers calls from its Superbot host: {exc}") from exc
+
+
+async def _host(ctx: Context) -> HostApi:
+    return (await _context(ctx)).host
 
 
 async def _index(host: HostApi) -> dict[str, Any]:
@@ -85,9 +90,13 @@ async def list_decks(ctx: Context) -> Decks:
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
 async def load_deck(ctx: Context, id: DeckId | None = None) -> LoadedDeck:
-    """Return a saved deck as PPTist JSON (title, width, height, theme, slides); without an id, the last one saved."""
-    host = await _host(ctx)
-    deck_id = id or (await _index(host)).get("last")
+    """Return a saved deck as PPTist JSON (title, width, height, theme, slides); without an id, the deck of the
+    conversation the canvas is open beside, if it has one."""
+    context = await _context(ctx)
+    host = context.host
+    deck_id = id
+    if deck_id is None and context.conversation_id:
+        deck_id = await host.storage_get(f"conversations/{context.conversation_id}")
     data = await host.get_file(f"decks/{deck_id}.json") if deck_id else None
     if data is None:
         return LoadedDeck(id=None, deck=None)
@@ -95,16 +104,20 @@ async def load_deck(ctx: Context, id: DeckId | None = None) -> LoadedDeck:
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False))
-async def save_deck(id: DeckId, deck: dict[str, Any], ctx: Context) -> DeckInfo:
-    """Save the deck open in the canvas (the canvas calls this as the user edits)."""
+async def save_deck(id: DeckId, deck: dict[str, Any], ctx: Context, bind: bool = True) -> DeckInfo:
+    """Save the deck open in the canvas (the canvas calls this as the user edits). With ``bind``, it also becomes the
+    deck of the conversation the canvas is open beside; the canvas saves without it what was open before it moved."""
     slides = deck.get("slides")
     if not isinstance(slides, list) or not slides:
         raise ToolError("A deck needs a non-empty slides list")
     data = json.dumps(deck, ensure_ascii=False, separators=(",", ":")).encode()
     if len(data) > MAX_DECK_BYTES:
         raise ToolError(f"The deck is {len(data) // (1024 * 1024)} MiB; a saved deck holds at most 9 MiB of slides and pictures")
-    host = await _host(ctx)
+    context = await _context(ctx)
+    host = context.host
     await host.put_file(f"decks/{id}.json", data, "application/json")
+    if bind and context.conversation_id:
+        await host.storage_put(f"conversations/{context.conversation_id}", id)
     info = DeckInfo(
         id=id,
         title=str(deck.get("title") or "Untitled"),

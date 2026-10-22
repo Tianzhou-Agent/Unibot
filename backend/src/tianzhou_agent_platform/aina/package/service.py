@@ -437,6 +437,7 @@ class AinaPackageService:
         user_id: str,
         source: Source,
         confirmed: bool,
+        conversation_id: str | None = None,
     ) -> dict[str, Any]:
         """A tool call from the AINA's own canvas or widget, made by the host shell for the signed-in user.
 
@@ -474,7 +475,7 @@ class AinaPackageService:
             name,
             arguments,
             invocation_id=f"app_{uuid4().hex}",
-            conversation_id=None,
+            conversation_id=conversation_id,
             workspace_id=None,
             source=source,
         )

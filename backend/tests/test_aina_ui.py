@@ -134,6 +134,22 @@ def test_app_tool_calls_follow_visibility_and_need_host_confirmation_to_change_d
     assert {meta["unibot/context"]["source"] for meta in mcp.metas} == {"canvas"}
 
 
+def test_app_tool_calls_tell_the_mcp_server_which_conversation_the_canvas_is_open_beside(ui: Any) -> None:
+    client, mcp = ui
+    conversation_id = client.post("/conversations", json={"title": "Expenses"}).json()["id"]
+
+    beside = _app_call(client, "list_expenses", {}, conversation_id=conversation_id)
+    alone = _app_call(client, "list_expenses", {})
+    unknown = _app_call(client, "list_expenses", {}, conversation_id="conv_missing")
+
+    assert beside.status_code == 200 and alone.status_code == 200
+    assert unknown.status_code == 404
+    # A pairwise id, never the host's own conversation id.
+    first, second = (meta["unibot/context"] for meta in mcp.metas)
+    assert first["conversation_id"].startswith("conv_") and first["conversation_id"] != conversation_id
+    assert "conversation_id" not in second
+
+
 def test_model_only_tools_and_uninstalled_users_are_refused() -> None:
     files = _with_manifest(_example_files(), _set("tools.expose.delete_expense.visibility", ["model"]))
     client, _mcp = _client(files)
