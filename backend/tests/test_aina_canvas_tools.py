@@ -253,6 +253,38 @@ def test_destructive_canvas_tools_ask_first_and_canvas_errors_reach_the_model() 
     assert error["code"] == "TOOL_ERROR" and "Board is locked" in error["message"]
 
 
+def test_an_approved_canvas_call_continues_in_the_aina_scope_of_its_turn() -> None:
+    def after_approval(*, messages: list[dict[str, Any]], tools: list[dict[str, Any]], **_: Any) -> LLMResult:
+        system = messages[0]["content"]
+        assert f"({AINA})" in system  # the AINA's instructions
+        assert f'<aina-canvas-state aina="{AINA}">' in system and "el_1 rectangle" in system
+        names = [item["function"]["name"] for item in tools]
+        assert any(name.startswith(GET_SCENE) for name in names)
+        assert not any(name.startswith("builtin_list_app_") for name in names)  # not the unified entry
+        return assistant("Cleared.")
+
+    # Routed to the AINA directly, so the turn never calls its entry.
+    llm = ScriptedLLM([call_first_tool(prefix=CLEAR, call_id="clear"), after_approval])
+    client = _client(llm)
+    received: list[dict[str, Any]] = []
+    viewers: list[Any] = []
+    try:
+        conversation_id = _conversation(client)
+        client.put(f"/conversations/{conversation_id}/canvas-context/{AINA}", json={"value": "1 shape(s): el_1 rectangle"})
+        _heartbeat(client, conversation_id, TAB_A)
+        viewers.append(_fake_canvas(client, conversation_id, TAB_A, lambda _event: {"result": {"content": "ok"}}, received))
+        pending = client.post(
+            "/chat", json={"message": "Clear it", "conversation_id": conversation_id, "preferred_aina_id": AINA}
+        ).json()
+        confirmed = client.post(f"/approvals/{pending['approval']['id']}/confirm", json={}).json()
+    finally:
+        _close(client, viewers)
+
+    assert pending["status"] == "approval_required"
+    assert confirmed["status"] == "completed" and confirmed["content"] == "Cleared."
+    assert [event["name"] for event in received] == ["clear_scene"]
+
+
 def test_a_result_from_another_viewer_or_conversation_is_refused() -> None:
     client = _client(ScriptedLLM([]))
     try:
