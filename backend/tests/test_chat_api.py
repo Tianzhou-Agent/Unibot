@@ -565,6 +565,36 @@ def test_high_risk_tool_waits_for_confirmation() -> None:
     assert calls == 1
 
 
+def test_an_approval_can_be_confirmed_with_the_continuation_streamed() -> None:
+    llm = ScriptedLLM(
+        [
+            call_first_tool(arguments='{"recipient": "user@example.com"}', call_id="call_send"),
+            assistant("Sent after your approval."),
+        ]
+    )
+    remote = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"sent": True})))
+    with TestClient(create_app(settings=_settings(), llm=llm, capability_http_client=remote)) as client:
+        client.post(
+            "/tools",
+            json={
+                "tool_id": "demo.send",
+                "name": "Send message",
+                "description": "Send a message to an external recipient.",
+                "input_schema": {"type": "object", "properties": {"recipient": {"type": "string"}}, "required": ["recipient"]},
+                "endpoint": "https://tool.invalid/send",
+                "side_effect_level": "high",
+            },
+        )
+        pending = client.post("/chat", json={"message": "Send the message"}).json()
+        streamed = client.post(f"/approvals/{pending['approval']['id']}/confirm/stream", json={})
+
+    events = [json.loads(line[5:]) for line in streamed.text.splitlines() if line.startswith("data:")]
+    kinds = [event["type"] for event in events]
+    assert kinds.index("tool.requested") < kinds.index("tool.completed") < kinds.index("message.completed")
+    assert "".join(event["delta"] for event in events if event["type"] == "message.delta") == "Sent after your approval."
+    assert events[-1]["response"]["status"] == "completed"
+
+
 def test_approved_tool_call_is_traced_under_the_resumed_root_span(caplog: Any) -> None:
     # Resuming after an approval used to finish tool spans that were never started (no root span on the
     # resume path), logging "Trace span ... was not found" and dropping the executed call from the trace.

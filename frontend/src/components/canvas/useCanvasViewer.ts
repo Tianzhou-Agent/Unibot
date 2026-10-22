@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { api, apiUrl } from "@/lib/api";
-import { waitForCanvasTool } from "@/components/widgets/ainaBridge";
+import { reloadCanvas, waitForCanvasTool } from "@/components/widgets/ainaBridge";
 
 // The shell's viewer channel for canvas tools (AINA Protocol 2.0 §9.5). While a conversation is shown, this tab keeps
 // an SSE stream open and sends heartbeats saying whether the user is looking at it; the host sends each canvas call to
@@ -15,6 +15,8 @@ type CanvasCall = {
   name: string;
   arguments: Record<string, unknown>;
   timeout_ms: number;
+  /** The headless canvas host changed this canvas since this tab may have loaded it. */
+  reload?: boolean;
 };
 
 let tabClientId: string | null = null;
@@ -51,6 +53,8 @@ export function useCanvasViewer(conversationId: string | null, openCanvas: (aina
       try {
         // Design decision C2: a closed canvas is opened, then the call runs.
         openRef.current(call.aina_id);
+        // The tab takes over from the headless canvas host: an open canvas loads the work saved there first.
+        if (call.reload) reloadCanvas(call.aina_id);
         const host = await waitForCanvasTool(call.aina_id, call.name, Math.max(0, Math.min(REGISTER_TIMEOUT_MS, deadline - Date.now())));
         body = { client_id: client, result: await host.invoke(call.name, call.arguments, Math.max(0, deadline - Date.now())) };
       } catch (error) {

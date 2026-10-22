@@ -35,6 +35,27 @@ async def test_only_the_answering_model_text_is_streamed() -> None:
     assert relay.streamed == "Hello"
 
 
+async def test_a_tool_call_is_announced_when_the_model_starts_writing_it() -> None:
+    events: list[dict[str, Any]] = []
+
+    async def sink(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    def call_chunk(name: str | None, args: str, index: int) -> AIMessageChunk:
+        return AIMessageChunk(content="", id="run-1", tool_call_chunks=[{"name": name, "args": args, "id": None, "index": index}])
+
+    await StreamRelay(sink).relay(
+        _stream(
+            (call_chunk("add_slides", "", 0), {"langgraph_node": "model"}),
+            (call_chunk(None, '{"slides": [', 0), {"langgraph_node": "model"}),
+            (call_chunk(None, "]}", 0), {"langgraph_node": "model"}),
+            (call_chunk("get_deck", "{}", 1), {"langgraph_node": "model"}),
+        )
+    )
+
+    assert events == [{"type": "tool.preparing", "name": "add_slides"}, {"type": "tool.preparing", "name": "get_deck"}]
+
+
 async def test_final_answer_is_sent_once() -> None:
     events: list[dict[str, Any]] = []
 

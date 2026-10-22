@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useCanvasViewer } from "@/components/canvas/useCanvasViewer";
 import { MainWidgetRenderer } from "@/components/widgets/MainWidgetRenderer";
-import { waitForCanvasTool } from "@/components/widgets/ainaBridge";
+import { HeadlessCanvasHost, waitForCanvasTool } from "@/components/widgets/ainaBridge";
 import { api } from "@/lib/api";
 import { useMockSession } from "@/lib/mockSession";
 import type { AinaCanvasResponse, ConversationRecord } from "@/types";
@@ -65,21 +65,23 @@ export default function CanvasHostPage() {
   );
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-app-bg">
-      {ainaIds.map((id) => {
-        const opened = canvases[id];
-        if (!opened) return null;
-        return (
-          <div key={id} className={id === activeAinaId ? "absolute inset-0" : "absolute inset-0 hidden"}>
-            <MainWidgetRenderer
-              ainaId={opened.aina_id}
-              widget={opened.main_widget}
-              workspaceId={conversation?.workspace_id ?? null}
-              conversationId={conversation?.id ?? null}
-            />
-          </div>
-        );
-      })}
-    </div>
+    <HeadlessCanvasHost.Provider value>
+      <div className="relative h-screen w-screen overflow-hidden bg-app-bg">
+        {ainaIds.map((id) => {
+          const opened = canvases[id];
+          if (!opened) return null;
+          return (
+            <div key={id} className={id === activeAinaId ? "absolute inset-0" : "absolute inset-0 hidden"}>
+              <MainWidgetRenderer
+                ainaId={opened.aina_id}
+                widget={opened.main_widget}
+                workspaceId={conversation?.workspace_id ?? null}
+                conversationId={conversation?.id ?? null}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </HeadlessCanvasHost.Provider>
   );
 }

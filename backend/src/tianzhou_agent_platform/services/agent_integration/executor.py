@@ -290,6 +290,7 @@ class CapabilityExecutor:
                 "version": aina.manifest.aina.version,
                 "canvas_title": canvas.title if canvas is not None else aina.manifest.aina.name,
                 "name": tool.name,
+                "effect": tool.effect,
                 "arguments": arguments,
                 "timeout_ms": int(timeout * 1000),
             },

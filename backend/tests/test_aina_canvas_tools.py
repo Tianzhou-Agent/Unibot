@@ -253,6 +253,38 @@ def test_destructive_canvas_tools_ask_first_and_canvas_errors_reach_the_model() 
     assert error["code"] == "TOOL_ERROR" and "Board is locked" in error["message"]
 
 
+def test_an_approved_canvas_call_continues_in_the_aina_scope_of_its_turn() -> None:
+    def after_approval(*, messages: list[dict[str, Any]], tools: list[dict[str, Any]], **_: Any) -> LLMResult:
+        system = messages[0]["content"]
+        assert f"({AINA})" in system  # the AINA's instructions
+        assert f'<aina-canvas-state aina="{AINA}">' in system and "el_1 rectangle" in system
+        names = [item["function"]["name"] for item in tools]
+        assert any(name.startswith(GET_SCENE) for name in names)
+        assert not any(name.startswith("builtin_list_app_") for name in names)  # not the unified entry
+        return assistant("Cleared.")
+
+    # Routed to the AINA directly, so the turn never calls its entry.
+    llm = ScriptedLLM([call_first_tool(prefix=CLEAR, call_id="clear"), after_approval])
+    client = _client(llm)
+    received: list[dict[str, Any]] = []
+    viewers: list[Any] = []
+    try:
+        conversation_id = _conversation(client)
+        client.put(f"/conversations/{conversation_id}/canvas-context/{AINA}", json={"value": "1 shape(s): el_1 rectangle"})
+        _heartbeat(client, conversation_id, TAB_A)
+        viewers.append(_fake_canvas(client, conversation_id, TAB_A, lambda _event: {"result": {"content": "ok"}}, received))
+        pending = client.post(
+            "/chat", json={"message": "Clear it", "conversation_id": conversation_id, "preferred_aina_id": AINA}
+        ).json()
+        confirmed = client.post(f"/approvals/{pending['approval']['id']}/confirm", json={}).json()
+    finally:
+        _close(client, viewers)
+
+    assert pending["status"] == "approval_required"
+    assert confirmed["status"] == "completed" and confirmed["content"] == "Cleared."
+    assert [event["name"] for event in received] == ["clear_scene"]
+
+
 def test_a_result_from_another_viewer_or_conversation_is_refused() -> None:
     client = _client(ScriptedLLM([]))
     try:
@@ -565,6 +597,77 @@ async def test_a_tab_takes_calls_over_from_the_headless_canvas_host() -> None:
     assert result == {"result": {"by": "tab"}}
     assert host.closed == ["conv_1"]  # the tab now shows the canvas, so the headless page is closed
     assert len(host.opened) == 1
+
+
+async def _tab_that_closes_after_acknowledging(broker: CanvasCallBroker) -> None:
+    async with broker.listen(TAB_A) as next_event:
+        event = await next_event(2)
+        assert event is not None
+        assert await broker.acknowledge(event["call_id"], conversation_id="conv_1", client_id=TAB_A)
+    await broker.disconnect("conv_1", TAB_A)  # its stream ends as the tab closes
+
+
+async def test_a_read_whose_tab_closes_while_running_it_runs_again_in_the_headless_page() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    await broker.heartbeat("conv_1", TAB_A, visible=True)
+    closing = asyncio.create_task(_tab_that_closes_after_acknowledging(broker))
+    await asyncio.sleep(0.01)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "get_scene", "effect": "read", "arguments": {}, "timeout_ms": 5000}
+    started = time.monotonic()
+    try:
+        result = await broker.dispatch("conv_1", request, timeout=5)
+    finally:
+        await host.close("conv_1")
+    await closing
+
+    assert result == {"result": {"by": "headless"}}
+    assert time.monotonic() - started < 4  # well before the call's timeout
+
+
+async def test_a_write_whose_tab_closes_while_running_it_is_reported_and_not_run_again() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    await broker.heartbeat("conv_1", TAB_A, visible=True)
+    closing = asyncio.create_task(_tab_that_closes_after_acknowledging(broker))
+    await asyncio.sleep(0.01)
+    request = {"call_id": "c1", "aina_id": AINA, "name": "draw_circle", "effect": "write", "arguments": {}, "timeout_ms": 5000}
+
+    with pytest.raises(PlatformError) as raised:
+        await broker.dispatch("conv_1", request, timeout=5)
+    await closing
+
+    assert raised.value.code == "CANVAS_INTERRUPTED"
+    assert "whether it took effect is unknown" in raised.value.message
+    assert host.opened == []  # a write that may have run is never sent to another canvas
+
+
+async def test_a_tab_taking_over_after_a_headless_change_reloads_its_canvas_first() -> None:
+    host = FakeHeadlessHost()
+    broker = _headless_broker(host)
+    draw = {"call_id": "c1", "aina_id": AINA, "name": "draw_circle", "effect": "write", "arguments": {}, "timeout_ms": 2000}
+    assert await broker.dispatch("conv_1", draw, timeout=2) == {"result": {"by": "headless"}}
+    await broker.heartbeat("conv_1", TAB_A, visible=True)  # the user came back, perhaps while that change was saving
+    received: list[dict[str, Any]] = []
+
+    async def tab() -> None:
+        async with broker.listen(TAB_A) as next_event:
+            for _ in range(2):
+                event = await next_event(2)
+                assert event is not None
+                received.append(event)
+                call = {"conversation_id": "conv_1", "client_id": TAB_A}
+                assert await broker.acknowledge(event["call_id"], **call)
+                assert await broker.resolve(event["call_id"], **call, result={"result": {"by": "tab"}})
+
+    listening = asyncio.create_task(tab())
+    await asyncio.sleep(0.01)
+    scene = {"call_id": "c2", "aina_id": AINA, "name": "get_scene", "effect": "read", "arguments": {}, "timeout_ms": 2000}
+    await broker.dispatch("conv_1", scene, timeout=2)
+    await broker.dispatch("conv_1", {**scene, "call_id": "c3"}, timeout=2)
+    await listening
+
+    assert [event.get("reload", False) for event in received] == [True, False]  # only the first call after the handoff
 
 
 async def test_without_a_headless_browser_the_call_reports_the_canvas_is_not_open() -> None:

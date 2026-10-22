@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import {
@@ -76,6 +77,7 @@ export function ToolCallCard({
   state,
   compact = false,
   debugMode = false,
+  duration,
 }: {
   name: string;
   argumentsText?: string | null;
@@ -83,6 +85,8 @@ export function ToolCallCard({
   state: ToolCallState;
   compact?: boolean;
   debugMode?: boolean;
+  /** How long the call has taken, shown after its summary (live calls only). */
+  duration?: ReactNode;
 }) {
   const { t } = useTranslation("chat");
   const label = toolLabel(name);
@@ -112,6 +116,7 @@ export function ToolCallCard({
             </span>
           </>
         ) : null}
+        {duration}
         {hasDetails ? (
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-subtle opacity-0 transition group-open:rotate-90 group-open:opacity-100 group-hover:opacity-100" />
         ) : null}

@@ -24,7 +24,7 @@ def create_chat_router() -> APIRouter:
     async def stream_chat(payload: ChatRequest, request: Request) -> StreamingResponse:
         service = chat_service(request)
         scoped_payload = bind_actor(request, payload)
-        return _event_stream(request, lambda sink: service.run_turn(scoped_payload, event_sink=sink))
+        return event_stream(request, lambda sink: service.run_turn(scoped_payload, event_sink=sink))
 
     @router.post("/conversations/{conversation_id}/stop", status_code=status.HTTP_202_ACCEPTED)
     async def stop_conversation(conversation_id: str, payload: ConversationAction, request: Request) -> Response:
@@ -47,7 +47,7 @@ def create_chat_router() -> APIRouter:
     ) -> StreamingResponse:
         service = chat_service(request)
         scoped = bind_actor(request, payload)
-        return _event_stream(
+        return event_stream(
             request,
             lambda sink: service.resume(
                 conversation_id, user_id=scoped.user_id, tenant_id=scoped.tenant_id, event_sink=sink
@@ -57,7 +57,7 @@ def create_chat_router() -> APIRouter:
     return router
 
 
-def _event_stream(request: Request, run: Callable[[EventSink], Awaitable[ChatResponse]]) -> StreamingResponse:
+def event_stream(request: Request, run: Callable[[EventSink], Awaitable[ChatResponse]]) -> StreamingResponse:
     """SSE response of a run executed in the background, so a closed stream does not cancel it."""
     background_tasks = cast(set[asyncio.Task[None]], request.app.state.background_tasks)
 

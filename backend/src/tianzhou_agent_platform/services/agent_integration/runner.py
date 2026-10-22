@@ -132,6 +132,8 @@ from tianzhou_agent_platform.services.run_stops import TurnStop
 logger = logging.getLogger(__name__)
 
 THREAD_PREFIX = "lc-v2:"
+# Checkpoint metadata key of the AINA whose scope a run started in.
+TURN_AINA_KEY = "aina_id"
 ABANDONED_CALL_RESULT = "Cancelled because the user started a new turn before granting approval."
 COMPLETED_REPLY = "The requested operation was completed."
 EMPTY_REPLY = OutputGuardMiddleware.EMPTY_REPLY
@@ -339,8 +341,8 @@ class AgentRunner:
     ) -> ChatResponse:
         """Continue a stopped turn from its last checkpointed step. The caller holds the conversation's run lease.
 
-        The turn's routing scope is not checkpointed, so, like an approval continuation, the continued run offers
-        every capability of the conversation. Raises CONFLICT when the checkpoint has nothing left to run.
+        Like an approval continuation, the continued run is in the scope the turn worked in (``_continued_scope``).
+        Raises CONFLICT when the checkpoint has nothing left to run.
         """
         run = self._new_run(conversation, trace_id, event_sink)
         archiver = TranscriptArchiver(
@@ -349,12 +351,13 @@ class AgentRunner:
             trace_id=trace_id,
             archived_ids=[message.id for message in conversation.messages],
         )
+        capabilities, system_prompt = await self._continued_scope(conversation, run)
         invocation = await self._prepare(
             conversation,
             run,
             archiver,
-            capabilities=await self.catalog.available(conversation),
-            system_prompt=await self.prompts.build(conversation),
+            capabilities=capabilities,
+            system_prompt=system_prompt,
             forced_capability=None,
         )
         state = await invocation.agent.aget_state(invocation.config)
@@ -381,6 +384,7 @@ class AgentRunner:
         *,
         approve: bool,
         edited_arguments: dict[str, dict[str, Any]] | None = None,
+        event_sink: EventSink | None = None,
     ) -> ApprovalContinuation:
         """Load the batch an approval paused, before the approval is resolved.
 
@@ -388,19 +392,20 @@ class AgentRunner:
         calls are never re-run, since they may already have had effects. A denied batch without its interrupt is
         still closed (in the archive only).
         """
-        run = self._new_run(conversation, approval.trace_id, None)
+        run = self._new_run(conversation, approval.trace_id, event_sink)
         archiver = TranscriptArchiver(
             self.conversations,
             conversation_id=conversation.id,
             trace_id=approval.trace_id,
             archived_ids=[message.id for message in conversation.messages],
         )
+        capabilities, system_prompt = await self._continued_scope(conversation, run)
         invocation = await self._prepare(
             conversation,
             run,
             archiver,
-            capabilities=await self.catalog.available(conversation),
-            system_prompt=await self.prompts.build(conversation),
+            capabilities=capabilities,
+            system_prompt=system_prompt,
             forced_capability=None,
             denied=not approve,
         )
@@ -505,6 +510,29 @@ class AgentRunner:
             return capabilities, prompt, f"aina:{selected.capability_id}" if remote else None
         prompt = await self.prompts.build(conversation, memory_context=run.memory_context)
         return {selected.function_name: selected}, prompt, requested
+
+    async def _continued_scope(self, conversation: Conversation, run: AgentRun) -> tuple[dict[str, Capability], str]:
+        """(visible capabilities, system prompt) of a turn continued after a stop or an approval.
+
+        A turn that worked in an AINA continues with that AINA's tools, instructions and canvas state; any other
+        offers every capability. The AINA is found from the turn's transcript (which also shows an AINA the turn
+        switched to), else from the scope its checkpoints recorded when the run started. Every capability stays
+        registered (``_prepare``), so a paused call always runs.
+        """
+        everything = await self.catalog.available(conversation)
+        selected = unfinished_turn_aina(conversation, everything)
+        if selected is None:
+            checkpoint = await self.checkpointer.aget_tuple(self._config(conversation, ""))
+            aina_id = checkpoint.metadata.get(TURN_AINA_KEY) if checkpoint is not None else None
+            selected = next(
+                (item for item in everything.values() if item.kind == "aina" and item.capability_id == aina_id), None
+            )
+        await run.scope_resolved(conversation, selected=selected, source="continued_turn")
+        if selected is None:
+            return everything, await self.prompts.build(conversation)
+        capabilities, aina = await self.catalog.aina_scope(conversation, selected)
+        run.active_aina_id = selected.capability_id
+        return capabilities, await self.prompts.build(conversation, aina)
 
     def _new_run(self, conversation: Conversation, trace_id: str, event_sink: EventSink | None) -> AgentRun:
         return AgentRun(
@@ -639,6 +667,8 @@ class AgentRunner:
             checkpointer=self.checkpointer,
         )
         config = self._config(conversation, run.trace_id)
+        # Kept in the run's checkpoints, so a continuation finds the scope of a turn that called no tool yet.
+        config["metadata"][TURN_AINA_KEY] = run.active_aina_id
         config["callbacks"] = [summary_calls]
         return _Invocation(
             agent=agent,
@@ -981,7 +1011,11 @@ def _text(message: BaseMessage) -> str:
 
 
 def unfinished_turn_aina(conversation: Conversation, capabilities: dict[str, Capability]) -> Capability | None:
-    """Entry of the scope-activating AINA the conversation's last turn activated, if it is still reachable."""
+    """Entry of the scope-activating AINA the conversation's last turn worked in, if it is still reachable.
+
+    The turn worked in it when it called the AINA's entry or one of the AINA's own tools: a turn routed to an AINA
+    directly (``preferred_aina_id``) never calls the entry.
+    """
     last_user = max((index for index, message in enumerate(conversation.messages) if message.role == "user"), default=-1)
     called = {
         str((call.get("function") or {}).get("name") or "")
@@ -989,13 +1023,14 @@ def unfinished_turn_aina(conversation: Conversation, capabilities: dict[str, Cap
         if message.role == "assistant"
         for call in message.tool_calls or []
     }
+    owners = {capabilities[name].owner_aina_id for name in called if name in capabilities}
     return next(
         (
             capability
             for capability in capabilities.values()
             if capability.kind == "aina"
             and capability.capability_id == conversation.last_aina_id
-            and capability.function_name in called
+            and (capability.function_name in called or capability.capability_id in owners)
             and capability.activates_scope
         ),
         None,

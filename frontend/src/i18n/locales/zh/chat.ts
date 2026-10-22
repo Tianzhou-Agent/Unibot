@@ -24,6 +24,12 @@ export default {
     },
     completed: "已完成",
     completedIn: "已完成，用时 {{duration}}",
+    stepAndTotal: "{{step}} · 共 {{total}}",
+    verb: {
+      responding: "回复中",
+      preparing: "准备调用",
+      running: "执行中",
+    },
     seconds: "{{s}} 秒",
     minutes: "{{m}} 分 {{s}} 秒",
     hours: "{{h}} 小时 {{m}} 分 {{s}} 秒",

@@ -1,5 +1,6 @@
 // Whiteboard canvas (AINA Protocol 2.0 reference, design §9.5). The scene lives in the browser; the agent edits it
-// through canvas tools, the user with the mouse, and Save stores it through the AINA's own MCP tool.
+// through canvas tools, the user with the mouse, and Save stores it through the AINA's own MCP tool (in the background
+// the agent's changes are saved as it makes them).
 import { host } from "./aina-ui.js";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -140,14 +141,33 @@ document.addEventListener("keydown", (event) => {
 
 // --- Persistence: the scene is saved through the AINA's own MCP tool (design §9.5) ------------------------------------
 
+async function save() {
+  await host.callTool("save_board", { scene });
+  status.textContent = "Saved";
+}
+
 document.getElementById("save").addEventListener("click", async () => {
   try {
-    await host.callTool("save_board", { scene });
-    status.textContent = "Saved";
+    await save();
   } catch (error) {
     status.textContent = error.message;
   }
 });
+
+// While the user is away the run goes on in Superbot's headless canvas host, where nobody presses Save: there each
+// change the agent makes is saved before its tool answers, so the tab the user opens later loads it.
+const { background } = await host.getContext();
+
+async function agentChanged(result) {
+  if (!background) return result;
+  try {
+    await save();
+  } catch (error) {
+    status.textContent = error.message;
+    return { structuredContent: { ...result.structuredContent, saved: false } };
+  }
+  return result;
+}
 
 // The saved board loads before the canvas tools are registered, so a drawing the agent makes is never replaced by it.
 try {
@@ -165,24 +185,24 @@ host.setModelContext(summary());
 host.registerTool("get_scene", async () => ({ structuredContent: { width: 1200, height: 800, elements: scene } }));
 host.registerTool("draw_circle", async ({ x, y, radius, color }) => {
   const element = add({ type: "ellipse", x: x - radius, y: y - radius, width: radius * 2, height: radius * 2, strokeColor: color });
-  return { structuredContent: { element_id: element.id } };
+  return agentChanged({ structuredContent: { element_id: element.id } });
 });
 host.registerTool("draw_rectangle", async ({ x, y, width, height, color, label }) => {
   const element = add({ type: "rectangle", x, y, width, height, strokeColor: color, text: label || "" });
-  return { structuredContent: { element_id: element.id } };
+  return agentChanged({ structuredContent: { element_id: element.id } });
 });
 host.registerTool("draw_arrow", async ({ from_x, from_y, to_x, to_y, color }) => {
   const element = add({ type: "arrow", x: from_x, y: from_y, width: to_x - from_x, height: to_y - from_y, strokeColor: color });
-  return { structuredContent: { element_id: element.id } };
+  return agentChanged({ structuredContent: { element_id: element.id } });
 });
 host.registerTool("add_text", async ({ x, y, text, color }) => {
   const element = add({ type: "text", x, y, width: text.length * 10, height: 24, text, strokeColor: color });
-  return { structuredContent: { element_id: element.id } };
+  return agentChanged({ structuredContent: { element_id: element.id } });
 });
 host.registerTool("clear_scene", async () => {
   const removed = scene.length;
   scene = [];
   selected = null;
   changed();
-  return { structuredContent: { removed } };
+  return agentChanged({ structuredContent: { removed } });
 });

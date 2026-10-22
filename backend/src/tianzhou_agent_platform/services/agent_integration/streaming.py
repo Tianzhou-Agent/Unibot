@@ -1,7 +1,9 @@
-"""Native agent streams → the public ``message.delta`` and ``reasoning.delta`` application events (plan §6.8).
+"""Native agent streams → the public ``message.delta``, ``reasoning.delta`` and ``tool.preparing`` application events
+(plan §6.8).
 
-Only the answering model's text and its thinking are public: tool output, middleware-internal generations (e.g.
-summaries) and other nodes are never streamed. The API layer formats the SSE envelope.
+Only the answering model's text, its thinking and the names of the calls it starts writing are public: tool output,
+middleware-internal generations (e.g. summaries) and other nodes are never streamed. The API layer formats the SSE
+envelope.
 """
 
 from __future__ import annotations
@@ -41,6 +43,11 @@ class StreamRelay:
             if text:
                 self.streamed += text
                 await self._event_sink({"type": "message.delta", "delta": text})
+            # A call's first chunk names it; its arguments can take the model long to write, and only once they are
+            # complete does the call run (``tool.requested``), so the user learns at once what is being prepared.
+            for call in chunk.tool_call_chunks:
+                if call.get("name"):
+                    await self._event_sink({"type": "tool.preparing", "name": call["name"]})
 
     async def finish(self, final_content: str) -> None:
         """One public text sequence: send what the model stream did not already deliver (direct replies,
