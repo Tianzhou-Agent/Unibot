@@ -98,15 +98,15 @@ styles of PPTist's schema before it is shown, and pictures must be `https://` or
 ## Saving
 
 The canvas saves the open deck on its own, 1.5 seconds after a change, with `save_deck`. Superbot asks the user once per
-opened canvas before the first save.
+opened canvas before the first save. If the user declines, the canvas stops saving and says so. A saved deck is one
+PPTist JSON file (the format of PPTist's own JSON export) of at most 9 MiB, including uploaded pictures.
 
 Each conversation has its own deck: the one last saved or opened in it (`conversations/<id>` in storage holds its id).
 When the user switches conversations with the canvas open, Superbot sends `context_changed`; the canvas saves the open
 deck and shows that conversation's deck, or a blank one if it has none yet. A deck started before the conversation
 existed (in a new chat) becomes that conversation's deck when the first message creates it. `list_decks` and
 `open_deck` still reach every saved deck, so a deck from another conversation can be opened here; it then becomes this
-conversation's deck too. If the user declines, the canvas stops saving and says so. A saved deck is one
-PPTist JSON file (the format of PPTist's own JSON export) of at most 9 MiB, including uploaded pictures.
+conversation's deck too.
 
 ## Upgrading PPTist
 
