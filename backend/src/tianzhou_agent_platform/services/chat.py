@@ -190,6 +190,7 @@ class ChatService:
         user_id: str,
         tenant_id: str,
         edited_arguments: dict[str, dict[str, Any]] | None = None,
+        event_sink: EventSink | None = None,
     ) -> ChatResponse:
         approval, conversation = await self._pending_approval(approval_id, user_id=user_id, tenant_id=tenant_id)
         await self.conversations.start_run(conversation.id, approval.trace_id)
@@ -197,7 +198,7 @@ class ChatService:
             with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
                 # Fails before the approval is resolved when the paused batch can no longer be resumed.
                 continuation = await self.runner.open_approval(
-                    conversation, approval, approve=True, edited_arguments=edited_arguments
+                    conversation, approval, approve=True, edited_arguments=edited_arguments, event_sink=event_sink
                 )
         except BaseException:
             # The approval stays pending (it can still be denied) and the conversation stays paused.

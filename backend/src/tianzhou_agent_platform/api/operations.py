@@ -3,6 +3,7 @@ import logging
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse
 
 from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
@@ -13,6 +14,7 @@ from tianzhou_agent_platform.api.dependencies import (
     require_actor_ownership,
     require_platform_admin,
 )
+from tianzhou_agent_platform.api.chat import EventSink, event_stream
 from tianzhou_agent_platform.auth.models import AdminUserSummary
 from tianzhou_agent_platform.conversations.schemas import ApprovalAction, ApprovalRecord, ChatResponse
 from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
@@ -257,6 +259,29 @@ def create_operations_router() -> APIRouter:
         )
         await _reconcile_schedule_approval(request, approval, response)
         return response
+
+    @router.post("/approvals/{approval_id}/confirm/stream")
+    async def stream_confirm_approval(
+        approval_id: str,
+        payload: ApprovalAction,
+        request: Request,
+    ) -> StreamingResponse:
+        """``confirm``, with the approved calls and the rest of the turn streamed like a chat turn."""
+        scoped = bind_actor(request, payload)
+        approval: ApprovalRecord = await conversation_service(request).get_approval(approval_id)
+
+        async def run(sink: EventSink) -> ChatResponse:
+            response: ChatResponse = await chat_service(request).confirm(
+                approval_id,
+                user_id=scoped.user_id,
+                tenant_id=scoped.tenant_id,
+                edited_arguments=scoped.edited_arguments,
+                event_sink=sink,
+            )
+            await _reconcile_schedule_approval(request, approval, response)
+            return response
+
+        return event_stream(request, run)
 
     @router.post("/approvals/{approval_id}/deny", response_model=ApprovalRecord)
     async def deny_approval(

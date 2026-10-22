@@ -384,6 +384,7 @@ class AgentRunner:
         *,
         approve: bool,
         edited_arguments: dict[str, dict[str, Any]] | None = None,
+        event_sink: EventSink | None = None,
     ) -> ApprovalContinuation:
         """Load the batch an approval paused, before the approval is resolved.
 
@@ -391,7 +392,7 @@ class AgentRunner:
         calls are never re-run, since they may already have had effects. A denied batch without its interrupt is
         still closed (in the archive only).
         """
-        run = self._new_run(conversation, approval.trace_id, None)
+        run = self._new_run(conversation, approval.trace_id, event_sink)
         archiver = TranscriptArchiver(
             self.conversations,
             conversation_id=conversation.id,
