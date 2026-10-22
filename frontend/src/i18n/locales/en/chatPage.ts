@@ -44,7 +44,7 @@ export default {
   removeAttachment: "Remove {{name}}",
   attachmentTooLarge: "{{name}} is larger than {{limit}} MB.",
   tooManyAttachments: "A message can carry at most {{limit}} files.",
-  attachmentUnsupported: "{{name}} can't be read. Attach text, Markdown, code, PDF, DOCX or XLSX files.",
+  attachmentUnsupported: "{{name}} can't be read. Attach text, Markdown, code, PDF, DOCX, XLSX or PPTX files.",
   attachmentFailed: "{{name}} could not be uploaded: {{error}}",
   attachmentUploading: "Uploading {{name}}",
   retryAttachment: "Retry uploading {{name}}",

@@ -108,6 +108,12 @@ existed (in a new chat) becomes that conversation's deck when the first message 
 `open_deck` still reach every saved deck, so a deck from another conversation can be opened here; it then becomes this
 conversation's deck too.
 
+`export_pptx` exports the open deck as .pptx and hands it to Superbot with the UI bridge's `saveFile`: Superbot asks the
+user once per opened canvas, keeps the file in `Uploads/` of their Files (the workspace's, beside a workspace
+conversation), and downloads it from its own page, which a sandboxed frame cannot always do. While the user is away (the
+headless canvas host), the file is only saved to Files. The bridge takes the file from PPTist's own export (pptxgenjs's
+`writeFile`), so PPTist is not changed. PPTist's own export menu still downloads in the frame and saves nothing.
+
 ## Upgrading PPTist
 
 Change `PPTIST_COMMIT` in `canvas/Dockerfile` and rebuild. The build type-checks the bridge against the new PPTist, so

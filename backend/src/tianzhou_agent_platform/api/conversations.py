@@ -75,7 +75,7 @@ def create_conversation_router() -> APIRouter:
         Only files Superbot can read are accepted (415 otherwise); one no message names within a day is deleted.
         """
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        payload = await _read_upload(file)
+        payload = await read_upload(file)
         return await chat_attachments(request).upload(
             file.filename, payload, tenant_id=actor.tenant_id, user_id=actor.user_id
         )
@@ -150,7 +150,7 @@ def create_conversation_router() -> APIRouter:
     return router
 
 
-async def _read_upload(file: UploadFile) -> bytes:
+async def read_upload(file: UploadFile) -> bytes:
     try:
         payload = await file.read(MAX_ATTACHMENT_BYTES + 1)
     finally:

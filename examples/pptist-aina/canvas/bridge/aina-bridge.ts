@@ -10,6 +10,7 @@ import { nanoid } from 'nanoid'
 import { debounce } from 'lodash'
 import { toJpeg } from 'html-to-image'
 import { useMainStore, useSlidesStore, useSnapshotStore } from '@/store'
+import pptxgen from 'pptxgenjs'
 import { db } from '@/utils/database'
 import message from '@/utils/message'
 import Directive from '@/directive'
@@ -301,6 +302,42 @@ const { addSlidesFromData } = useAddSlidesOrElements()
 const { AIPPT } = useAIPPT()
 const { exportPPTX, exporting } = useExport()
 
+// PPTist's export writes the .pptx itself, with pptxgenjs's writeFile, which would download it inside this frame. For
+// one export, writeFile hands the file to the bridge instead, which has Superbot keep it in the user's Files.
+const pptxFile = () => new Promise<Blob>((resolve, reject) => {
+  const prototype = pptxgen.prototype
+  const writeFile = prototype.writeFile
+  let written = false
+  prototype.writeFile = async function (this: pptxgen) {
+    prototype.writeFile = writeFile
+    written = true
+    try {
+      resolve(await this.write({ outputType: 'blob' }) as Blob)
+    }
+    catch (error) {
+      reject(error)
+      throw error
+    }
+    return ''
+  }
+  // PPTist shows its own message when an export fails, and then never writes the file.
+  const check = () => {
+    if (written) return
+    if (exporting.value) return void setTimeout(check, 200)
+    prototype.writeFile = writeFile
+    reject(new Error('PPTist could not export this deck'))
+  }
+  try {
+    exportPPTX(slidesStore.slides, true, false)
+  }
+  catch (error) {
+    prototype.writeFile = writeFile
+    reject(error)
+    return
+  }
+  setTimeout(check, 300)
+})
+
 const changed = () => {
   addHistorySnapshot()
   return slidesStore.slides.map((slide, index) => ({ index: index + 1, id: slide.id, title: slideTitle(slide) }))
@@ -415,12 +452,14 @@ const tools: Record<string, (args: Args) => Promise<ToolResult> | ToolResult> = 
   },
 
   export_pptx: async () => {
-    exportPPTX(slidesStore.slides, true, false)
-    await new Promise<void>(resolve => {
-      const check = () => (exporting.value ? setTimeout(check, 200) : resolve())
-      setTimeout(check, 300)
+    const name = `${slidesStore.title.trim() || 'Untitled'}.pptx`
+    const saved = await host.saveFile(name, await pptxFile())
+    return result({
+      file: saved.name,
+      note: saved.downloaded
+        ? "Saved to the user's Files and downloaded by their browser."
+        : "Saved to the user's Files; they can download it from there.",
     })
-    return result({ file_name: `${slidesStore.title}.pptx`, note: 'The browser downloads the file for the user.' })
   },
 }
 

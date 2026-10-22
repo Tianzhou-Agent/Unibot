@@ -128,7 +128,7 @@ export function DocumentWidget({ workspaceId, initialDocumentName, disabled = fa
   }
 
   const dirty = selectedName !== null && content !== savedContent;
-  // Markdown has sections and edit tasks; other text files are edited whole; PDF, DOCX and XLSX are read-only.
+  // Markdown has sections and edit tasks; other text files are edited whole; PDF, DOCX, XLSX and PPTX are read-only.
   const kind = selectedName ? documentKind(selectedName) : null;
   const selected = useMemo(
     () => items.find((item) => item.name === selectedName) ?? null,

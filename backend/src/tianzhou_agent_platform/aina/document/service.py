@@ -319,7 +319,7 @@ class DocumentService:
         workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         normalized = normalize_document_name(name)
-        _require(normalized, {"markdown", "text"}, "cannot be created: PDF, DOCX and XLSX files are only uploaded")
+        _require(normalized, {"markdown", "text"}, "cannot be created: PDF, DOCX, XLSX and PPTX files are only uploaded")
         encoded = _encode_content(content)
         await self._nas.write(
             self._path(
@@ -348,7 +348,7 @@ class DocumentService:
         workspace_storage_key: str | None = None,
     ) -> DocumentRecord:
         normalized = normalize_document_name(name)
-        _require(normalized, {"markdown", "text"}, "is read-only: PDF, DOCX and XLSX files cannot be edited")
+        _require(normalized, {"markdown", "text"}, "is read-only: PDF, DOCX, XLSX and PPTX files cannot be edited")
         path = self._path(
             normalized,
             user_id=user_id,
@@ -501,7 +501,7 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> DocumentSectionsUpdateResult:
-        _require(name, {"markdown", "text"}, "is read-only: PDF, DOCX and XLSX files cannot be edited")
+        _require(name, {"markdown", "text"}, "is read-only: PDF, DOCX, XLSX and PPTX files cannot be edited")
         current = await self.get_document(
             name,
             user_id=user_id,
@@ -649,7 +649,7 @@ class DocumentService:
     ) -> str:
         """Store a file the user uploaded in ``Uploads/`` under its own name; returns its name in the file tree.
 
-        ``content`` is a text file's UTF-8 text or a PDF, DOCX or XLSX file as uploaded. ``extracted`` is the text of
+        ``content`` is a text file's UTF-8 text or a PDF, DOCX, XLSX or PPTX file as uploaded. ``extracted`` is the text of
         the latter, kept hidden beside it for reading it; None for a text file, which is its own text.
         """
         stem, suffix = _upload_name(file_name)
@@ -676,7 +676,7 @@ class DocumentService:
         tenant_id: str,
         workspace_storage_key: str | None = None,
     ) -> bytes:
-        """The file's own bytes: a text file's UTF-8 text, or a PDF, DOCX or XLSX as uploaded."""
+        """The file's own bytes: a text file's UTF-8 text, or a PDF, DOCX, XLSX or PPTX as uploaded."""
         return await self._nas.read(
             self._path(
                 normalize_document_name(name),
@@ -730,7 +730,7 @@ def normalize_document_name(value: str) -> str:
         name = f"{name}.md"
         suffix = ".md"
     elif suffix not in READABLE_EXTENSIONS:
-        raise StorageValidationError("Only Markdown, text, code, PDF, DOCX and XLSX files are supported")
+        raise StorageValidationError("Only Markdown, text, code, PDF, DOCX, XLSX and PPTX files are supported")
     _validate_path_segment(name, label="Document name")
     stem = name[: -len(suffix)]
     if not stem or stem.casefold() in _WINDOWS_RESERVED_NAMES:
@@ -743,7 +743,7 @@ def normalize_document_name(value: str) -> str:
 
 
 def _extracted_name(name: str) -> str:
-    """Where the text extracted from a PDF, DOCX or XLSX file is kept: hidden beside it, never listed itself."""
+    """Where the text extracted from a PDF, DOCX, XLSX or PPTX file is kept: hidden beside it, never listed itself."""
     path = PurePosixPath(name)
     return str(path.with_name(f".{path.name}.md"))
 

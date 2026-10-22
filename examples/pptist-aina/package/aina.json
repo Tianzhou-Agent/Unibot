@@ -4,7 +4,7 @@
 
   "aina": {
     "id": "local.pptist",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "name": "PPTist Slides",
     "description": "Create, edit and export PowerPoint-style slide decks in the PPTist editor beside the conversation. Use it to draft a presentation from an outline, change slides the user has open, or export the deck as .pptx.",
     "publisher": { "id": "local", "name": "Local deployment" },
@@ -240,7 +240,7 @@
       },
       {
         "name": "export_pptx",
-        "description": "Export the open deck as an editable .pptx file, which the user's browser downloads.",
+        "description": "Export the open deck as an editable .pptx file, saved to the user's Files (the workspace's, in a workspace conversation) and downloaded by their browser when they are there. Returns the file's name in Files.",
         "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         "effect": "write",
         "timeout_seconds": 30

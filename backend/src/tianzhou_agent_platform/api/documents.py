@@ -210,7 +210,7 @@ def create_document_router() -> APIRouter:
         tenant_id: str = "default",
         workspace_id: str | None = None,
     ) -> Response:
-        """The file itself as a download: a text file's text, or a PDF, DOCX or XLSX file as uploaded."""
+        """The file itself as a download: a text file's text, or a PDF, DOCX, XLSX or PPTX file as uploaded."""
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         workspace_storage_key = await _workspace_storage_key(
             request,

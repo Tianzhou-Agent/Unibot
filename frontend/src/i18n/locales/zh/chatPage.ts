@@ -44,7 +44,7 @@ export default {
   removeAttachment: "移除 {{name}}",
   attachmentTooLarge: "{{name}} 超过 {{limit}} MB。",
   tooManyAttachments: "每条消息最多附带 {{limit}} 个文件。",
-  attachmentUnsupported: "无法读取 {{name}}。请添加文本、Markdown、代码、PDF、DOCX 或 XLSX 文件。",
+  attachmentUnsupported: "无法读取 {{name}}。请添加文本、Markdown、代码、PDF、DOCX、XLSX 或 PPTX 文件。",
   attachmentFailed: "{{name}} 上传失败：{{error}}",
   attachmentUploading: "正在上传 {{name}}",
   retryAttachment: "重新上传 {{name}}",

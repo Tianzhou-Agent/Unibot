@@ -138,7 +138,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
             name="Read document outline",
             description=(
                 "Read only the heading outline, line ranges and revision, without body text: the headings of a "
-                "Markdown document, or one section per page or sheet of a PDF, DOCX or XLSX file. Use it first to "
+                "Markdown document, or one section per page, sheet or slide of a PDF, DOCX, XLSX or PPTX file. Use it first to "
                 "locate a section before a partial edit."
             ),
             input_schema={
@@ -171,7 +171,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
             name="Read document",
             description=(
                 "Read the full content and metadata of one document: the text of a Markdown, text or code file, or "
-                "the text extracted from a PDF, DOCX or XLSX file. With offset and limit, read a range of its lines, "
+                "the text extracted from a PDF, DOCX, XLSX or PPTX file. With offset and limit, read a range of its lines, "
                 "to read a long document a part at a time. Use only when the task really needs the text."
             ),
             input_schema={
@@ -241,7 +241,7 @@ def document_tool_capabilities() -> list[AinaCapability]:
         AinaCapability(
             id=RENAME_DOCUMENT_TOOL_ID,
             name="Rename document",
-            description="Rename an existing document or file without changing its content; a PDF, DOCX or XLSX keeps its extension.",
+            description="Rename an existing document or file without changing its content; a PDF, DOCX, XLSX or PPTX keeps its extension.",
             input_schema={
                 "type": "object",
                 "properties": {"name": name_property, "new_name": name_property},
@@ -436,7 +436,7 @@ def unibot_documents_record() -> AinaRecord:
                             "browse chapters, or choose a section to read, use document.browse. It attaches an "
                             "interactive chapter widget, so keep the text response to one short sentence and never "
                             "transcribe the headings into Markdown. Text and code files, such as Uploads/data.csv, have no "
-                            "sections: read them with document.read. PDF, DOCX and XLSX files are read-only; "
+                            "sections: read them with document.read. PDF, DOCX, XLSX and PPTX files are read-only; "
                             "document.read, document.outline and document.read_section read their extracted text, "
                             "with one section per page or sheet."
                         ),
