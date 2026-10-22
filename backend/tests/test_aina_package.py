@@ -387,6 +387,7 @@ def test_registration_rejects_missing_tools_and_changed_content() -> None:
     assert "does not list a tool named 'list_expenses'" in missing.json()["error"]["message"]
     assert first.status_code == 201
     assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "VERSION_EXISTS"
     assert "publish a new version" in conflict.json()["error"]["message"]
 
 

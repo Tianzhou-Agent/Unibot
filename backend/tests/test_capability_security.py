@@ -156,6 +156,14 @@ def test_internal_destinations_require_explicit_approval() -> None:
         require_approved_destination("https://approved.invalid/invoke", "")
 
 
+def test_wildcard_approves_any_http_origin_but_still_rejects_bad_urls() -> None:
+    require_approved_destination("http://127.0.0.1:8781/mcp", "*")
+    require_approved_destination("https://slides.example.com/", "https://approved.invalid, *")
+    for url in ["ftp://approved.invalid/", "https://name:password@approved.invalid/", "not a url"]:
+        with pytest.raises(PlatformError, match="not an approved"):
+            require_approved_destination(url, "*")
+
+
 @pytest.mark.asyncio
 async def test_endpoint_and_health_are_validated_before_registration_probes() -> None:
     requests = []

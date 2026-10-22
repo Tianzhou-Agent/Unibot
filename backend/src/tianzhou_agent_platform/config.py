@@ -63,7 +63,10 @@ class AgentSettings(BaseSettings):
     capability_allowed_origins: str = Field(
         default="",
         validation_alias=AliasChoices("UNIBOT_CAPABILITY_ALLOWED_ORIGINS", "capability_allowed_origins"),
-        description="Comma-separated approved HTTP(S) origins for remote Tools and AINA; empty denies all.",
+        description=(
+            "Comma-separated approved HTTP(S) origins for remote Tools and AINA; empty denies all. "
+            "'*' approves any origin, internal ones included, so use it only where every signed-in user is trusted."
+        ),
     )
     aina_secret_key: SecretStr | None = Field(
         default=None,
@@ -95,7 +98,7 @@ class AgentSettings(BaseSettings):
         description=(
             "Comma-separated approved origins for AINA URL canvases (HTTPS, or HTTP on loopback for development). "
             "Kept apart from the capability allowlist "
-            "because a URL canvas can change after review; empty denies all."
+            "because a URL canvas can change after review; empty denies all, '*' approves any origin."
         ),
     )
     max_agent_iterations: int = Field(

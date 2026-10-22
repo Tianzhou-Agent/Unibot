@@ -117,6 +117,16 @@ export function nextVersion(version: string): string {
   return match ? `${match[1]}.${match[2]}.${Number(match[3]) + 1}` : version;
 }
 
+/** The version to save a package as when ``registered`` is taken: its own if newer, else the next patch. */
+export function releaseVersion(version: string, registered: string): string {
+  const parts = (value: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
+  const own = parts(version);
+  const taken = parts(registered);
+  if (!own || !taken) return version === registered ? nextVersion(registered) : version;
+  const newer = own[0] - taken[0] || own[1] - taken[1] || own[2] - taken[2];
+  return newer > 0 ? version : nextVersion(registered);
+}
+
 /** Fill the form from a package's manifest as the validator returned it. */
 export function draftFromManifest(manifest: Json, skills: { id: string; name: string; description: string }[]): AppDraft {
   const aina = (manifest.aina ?? {}) as Json;

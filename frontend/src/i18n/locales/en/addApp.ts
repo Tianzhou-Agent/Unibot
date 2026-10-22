@@ -41,6 +41,16 @@ export default {
     id: "Use a reverse-domain ID, such as com.example.notes",
     tools: "Load each server's tools and choose at least one, or remove the server.",
     duplicate: "Each tool can come from one server only. Uncheck {{names}} on all servers but one.",
+    versionTaken: "Version {{version}} is already registered with different content. Use a newer version.",
+    versionTakenNext: "Version {{version}} is already registered with different content. Use a newer version, such as {{next}}.",
+  },
+  failed: {
+    load: "Couldn't load the app's package",
+    upload: "Couldn't read the package",
+    check: "Couldn't check the app",
+    download: "Couldn't download the package",
+    register: "Couldn't register the app",
+    save: "Couldn't save the new version",
   },
   actions: {
     download: "Download package",

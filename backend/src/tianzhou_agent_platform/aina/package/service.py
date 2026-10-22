@@ -137,9 +137,14 @@ class AinaPackageService:
             if existing.manifest.aina.version == manifest.aina.version and not (bundled or replace):
                 if runtime.archive_sha256 == report.archive_sha256:
                     return existing
-                raise conflict(
-                    f"AINA {manifest.aina.id!r} version {manifest.aina.version!r} was already registered with "
-                    "different content; publish a new version"
+                # Its own code, so the Add app page can point at the version field.
+                raise PlatformError(
+                    code="VERSION_EXISTS",
+                    message=(
+                        f"AINA {manifest.aina.id!r} version {manifest.aina.version!r} was already registered with "
+                        "different content; publish a new version"
+                    ),
+                    status_code=409,
                 )
         try:
             listed = {

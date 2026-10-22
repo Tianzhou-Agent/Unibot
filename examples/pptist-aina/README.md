@@ -39,6 +39,9 @@ UNIBOT_AINA_CANVAS_ALLOWED_ORIGINS=http://127.0.0.1:8781 \
 uv run tianzhou-agent-platform
 ```
 
+On a development machine you can set both to `*` once in `backend/.env` to allow any origin, so a new app needs no
+change there.
+
 Then validate and publish the package:
 
 ```bash

@@ -17,14 +17,13 @@ def _origin(value: str, *, configured: bool = False) -> tuple[str, str, int]:
 
 
 def require_approved_destination(url: str, allowed_origins: str) -> None:
-    """Permit exact configured origins only; DNS and egress remain deployment controls."""
+    """Permit exact configured origins, or any HTTP(S) origin for ``*``; DNS and egress remain deployment controls."""
     try:
-        allowed = {
-            _origin(item.strip(), configured=True)
-            for item in allowed_origins.split(",")
-            if item.strip()
-        }
-        if _origin(url) in allowed:
+        items = {item.strip() for item in allowed_origins.split(",") if item.strip()}
+        origin = _origin(url)
+        if "*" in items:
+            return
+        if origin in {_origin(item, configured=True) for item in items}:
             return
     except (ValueError, httpx.InvalidURL):
         pass

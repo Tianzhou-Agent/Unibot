@@ -34,6 +34,14 @@ export default {
     information: "信息",
     version: "版本",
   },
+  failed: {
+    install: "无法安装应用",
+    uninstall: "无法卸载应用",
+    delete: "无法删除应用",
+    open: "无法打开应用",
+    connect: "无法开始登录",
+    disconnect: "无法断开账号",
+  },
   refreshAria: "刷新能力",
   tab: {
     apps: "应用",

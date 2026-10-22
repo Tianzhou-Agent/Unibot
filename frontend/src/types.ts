@@ -863,6 +863,14 @@ export function packageServers(pkg: AinaPackageManifest): PackageMcpServer[] {
   return pkg.tools ? ([] as PackageMcpServer[]).concat(pkg.tools.mcp) : [];
 }
 
+/** A tool the open canvas runs; to the agent it is like any MCP tool. */
+export interface PackageCanvasTool {
+  name: string;
+  title?: string | null;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
 export interface AinaPackageManifest {
   aina: { id: string; name: string; version: string; publisher: { id: string; name: string; url?: string | null } };
   /** Absent for an app of only skills or a canvas; ``mcp`` lists several servers when it is an array. */
@@ -870,7 +878,7 @@ export interface AinaPackageManifest {
     mcp: PackageMcpServer | PackageMcpServer[];
     expose?: Record<string, { effect: "read" | "write" | "destructive"; visibility: ("model" | "app")[]; long_running?: boolean; server?: string | null }>;
   } | null;
-  canvas?: { title: string; entry?: string | null; url?: string | null; tools?: { name: string }[] } | null;
+  canvas?: { title: string; entry?: string | null; url?: string | null; tools?: PackageCanvasTool[] } | null;
   config?: { schema: AinaConfigSchema } | null;
   permissions: { scope: string; reason?: string | null; optional: boolean }[];
 }

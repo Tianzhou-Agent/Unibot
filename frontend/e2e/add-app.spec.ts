@@ -12,7 +12,8 @@ const TOOLS = [
   { name: "clear_canvas", description: "Clear the board.", effect: "destructive", min_effect: "destructive" },
 ];
 
-async function installApi(page: Page) {
+// ``registerErrors`` answers the next register calls with these responses, in order.
+async function installApi(page: Page, registerErrors: { status: number; body: unknown }[] = []) {
   const calls: { path: string; body?: unknown; form?: string }[] = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -28,6 +29,8 @@ async function installApi(page: Page) {
     if (method === "POST" && path === "/ainas/packages/compose") {
       const mode = url.searchParams.get("mode");
       calls.push({ path: `${path}?mode=${mode}`, form: request.postDataBuffer()?.toString("utf8") });
+      const failure = mode === "register" ? registerErrors.shift() : undefined;
+      if (failure) return json(route, failure.body, failure.status);
       if (mode === "register") return json(route, { manifest: { aina: { id: "local.board", name: "Board", version: "0.1.0" } } }, 201);
       return json(route, { report: { manifest: {}, files: [], skills: [], errors: [], warnings: [] }, canvas_preview: null });
     }
@@ -105,6 +108,36 @@ test("FE-E2E-ADD-02 the name, description and a part are required before anythin
   await expect(page.getByText("请说明应用做什么、何时使用")).toBeVisible();
   await expect(page.getByText("至少添加一个部分。")).toHaveClass(/text-danger/);
   expect(calls).toHaveLength(0);
+});
+
+test("FE-E2E-ADD-05 a taken version is shown at the version field; other failures in a toast", async ({ page }) => {
+  const error = (code: string, message: string) => ({ error: { code, message, retryable: false, source: "platform", user_message: message, trace_id: "t" } });
+  await installApi(page, [
+    { status: 409, body: error("VERSION_EXISTS", "version '0.1.0' was already registered") },
+    { status: 503, body: error("UNAVAILABLE", "The MCP server is not reachable") },
+  ]);
+  await page.goto("/plugin/new");
+  await page.getByPlaceholder("Whiteboard").fill("Board");
+  await page.getByPlaceholder(/Draw and edit diagrams/).fill("Draw diagrams. Use when the user wants a flowchart.");
+  await page.getByRole("radio", { name: "网页地址" }).click();
+  await page.getByRole("textbox", { name: "画布网页地址" }).fill("http://canvas.example.test/board/");
+
+  await page.getByRole("button", { name: "注册应用" }).click();
+  const version = page.getByRole("textbox", { name: /^版本/ });
+  await expect(page.getByText("版本 0.1.0 已注册且内容不同，请使用更新的版本号，例如 0.1.1。")).toBeVisible();
+  await expect(version).toBeFocused();
+  await expect(version).toBeInViewport();
+  await expect(page.getByRole("alert").filter({ hasText: "无法注册应用" })).toHaveCount(0);
+
+  await version.fill("0.1.1");
+  await expect(page.getByText(/已注册且内容不同/)).toHaveCount(0);
+  await page.getByRole("button", { name: "注册应用" }).click();
+  const toast = page.getByRole("alert").filter({ hasText: "无法注册应用" });
+  await expect(toast).toContainText("The MCP server is not reachable");
+  await expect(toast).toBeInViewport();
+  await expect(page).toHaveURL(/\/plugin\/new$/);
+  await toast.getByRole("button", { name: "关闭" }).click();
+  await expect(toast).toHaveCount(0);
 });
 
 test("FE-E2E-ADD-03 several servers name each tool's server", async ({ page }) => {

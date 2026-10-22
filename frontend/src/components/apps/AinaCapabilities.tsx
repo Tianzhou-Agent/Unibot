@@ -10,7 +10,19 @@ import type {
 /** An AINA's declared skills, tools, UI and events, each as a list of expandable rows. */
 export function AinaCapabilitySections({ record }: { record: AinaRecord }) {
   const { t } = useTranslation("aina");
-  const { skills, tools, ui, events } = record.manifest.capabilities;
+  const { skills, ui, events } = record.manifest.capabilities;
+  // Canvas tools reach the agent like MCP tools, so they are listed with them.
+  const { runtime } = record.manifest;
+  const canvasTools = runtime.type === "package" ? (runtime.package?.canvas?.tools ?? []) : [];
+  const tools: AinaCapabilityDefinition[] = [
+    ...record.manifest.capabilities.tools,
+    ...canvasTools.map((tool) => ({
+      id: tool.name,
+      name: tool.title || tool.name,
+      description: tool.description ?? "",
+      input_schema: tool.inputSchema ?? {},
+    })),
+  ];
   return (
     <>
       <CapabilitySection title="Skills" count={skills.length} emptyText={t("skillsEmpty")}>
