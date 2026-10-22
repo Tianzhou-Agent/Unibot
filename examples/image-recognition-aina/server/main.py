@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -26,10 +25,7 @@ VISION_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 
 class VisionSettings(BaseSettings):
-    # Read from the environment or, bundled with Superbot, the backend's .env like the host's own settings.
-    model_config = SettingsConfigDict(
-        env_prefix="UNIBOT_VISION_", env_file=Path(__file__).resolve().parents[3] / ".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="UNIBOT_VISION_", extra="ignore")
 
     base_url: str = "http://127.0.0.1:18081"
     timeout_seconds: float = Field(default=60.0, gt=0)

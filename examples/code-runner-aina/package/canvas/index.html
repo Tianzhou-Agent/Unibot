@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Code Runner</title>
+    <style>
+      body { margin: 20px; font: 14px system-ui, sans-serif; color: var(--aina-text, #172033); }
+      form { display: grid; gap: 12px; }
+      label { display: grid; gap: 6px; }
+      textarea, pre { font: 14px ui-monospace, monospace; padding: 12px; border: 1px solid #ccd2dc; border-radius: 8px; }
+      textarea { min-height: 220px; resize: vertical; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+      button { justify-self: start; padding: 8px 20px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h1>Code Runner</h1>
+    <form id="runner">
+      <label>Language <select id="language"><option value="python">Python</option><option value="bash">Bash</option><option value="node">Node.js</option></select></label>
+      <label for="script">Script</label>
+      <textarea id="script" required maxlength="200000" spellcheck="false">print('Hello from the sandbox')</textarea>
+      <label>Timeout (seconds) <input id="timeout" type="number" min="1" max="110" value="60" required /></label>
+      <label>Working directory <input id="directory" value="." maxlength="500" required /></label>
+      <button id="run">Run</button>
+    </form>
+    <pre id="output" role="status">Ready</pre>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

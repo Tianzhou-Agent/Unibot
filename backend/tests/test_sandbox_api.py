@@ -14,7 +14,7 @@ from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.drivers import LocalProcessSandboxDriver
 from tianzhou_agent_platform.sandbox.models import SandboxEnsureRequest
 from tianzhou_agent_platform.sandbox.service import SandboxService
-from tests.support.fake_llm import ScriptedLLM, assistant, call_first_tool
+from tests.support.fake_llm import ScriptedLLM
 
 
 def test_sandbox_executes_python_and_preserves_workspace(tmp_path) -> None:
@@ -29,13 +29,7 @@ def test_sandbox_executes_python_and_preserves_workspace(tmp_path) -> None:
     )
 
     with TestClient(app) as client:
-        aina_response = client.get("/ainas/unibot-code-runner")
-        assert aina_response.status_code == 200
-        assert {item["id"] for item in aina_response.json()["manifest"]["capabilities"]["tools"]} == {
-            "sandbox.run_python",
-            "sandbox.run_bash",
-            "sandbox.run_node",
-        }
+        assert client.get("/ainas/unibot-code-runner").status_code == 404
 
         ensured = client.post("/sandboxes/ensure", json={})
         assert ensured.status_code == 200
@@ -283,73 +277,6 @@ def test_workspace_sandboxes_isolate_files_executions_and_reset(tmp_path: Path) 
     assert [item["id"] for item in standalone_history_after_reset] == [standalone_execution["id"]]
     assert (files_a / "scope.txt").read_text() == "A"
     assert (Path(current_standalone["workspace"]) / "scope.txt").read_text() == "standalone"
-
-
-def test_chat_code_runner_uses_conversation_workspace(tmp_path: Path) -> None:
-    repository = InMemoryRepository()
-    service = SandboxService(
-        repository,
-        LocalProcessSandboxDriver(
-            tmp_path / "runtime",
-            persistent_workspace_root=tmp_path / "nas" / "workspaces",
-        ),
-        default_image="unibot/sandboxd:test",
-    )
-    llm = ScriptedLLM(
-        [
-            call_first_tool(
-                prefix="builtin_sandbox_run_python_",
-                arguments=(
-                    '{"script":"from pathlib import Path; '
-                    "Path('chat.txt').write_text('workspace-chat'); print('done')\"}"
-                ),
-                call_id="call_run_python",
-            ),
-            assistant("The workspace code completed."),
-        ]
-    )
-    app = create_app(
-        settings=AgentSettings(sandbox_driver="local", sandbox_workspace_root=tmp_path / "runtime"),
-        repository=repository,
-        sandbox_service=service,
-        llm=llm,
-    )
-
-    with TestClient(app) as client:
-        workspace = client.post("/workspaces", json={"name": "Chat workspace"}).json()
-        pending = client.post(
-            "/chat",
-            json={
-                "message": "Run Python and save chat.txt",
-                "workspace_id": workspace["id"],
-                "capability": "aina:unibot-code-runner",
-            },
-        )
-        confirmed = client.post(
-            f"/approvals/{pending.json()['approval']['id']}/confirm",
-            json={},
-        )
-        workspace_history = client.get(
-            "/sandboxes/executions",
-            params={"workspace_id": workspace["id"]},
-        ).json()
-        standalone_history = client.get("/sandboxes/executions").json()
-
-    workspace_file = (
-        tmp_path
-        / "nas"
-        / "workspaces"
-        / workspace["storage_key"]
-        / "files"
-        / "chat.txt"
-    )
-    assert pending.json()["status"] == "approval_required"
-    assert confirmed.status_code == 200
-    assert confirmed.json()["status"] == "completed"
-    assert len(workspace_history) == 1
-    assert workspace_history[0]["workspace_id"] == workspace["id"]
-    assert standalone_history == []
-    assert workspace_file.read_text() == "workspace-chat"
 
 
 def test_sandbox_executes_bash_when_available(tmp_path) -> None:

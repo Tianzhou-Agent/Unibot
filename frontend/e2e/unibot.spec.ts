@@ -1412,13 +1412,6 @@ test("FE-E2E-001WA Mock 管理员工作区请求使用一致 actor", async ({ pa
     tenant_id: "default",
     workspace_id: "workspace-e2e-1",
   });
-
-  await page.goto("/workspaces/workspace-e2e-1/chat?aina=unibot-code-runner");
-  await expect.poll(() => state.lastSandboxEnsurePayload).toEqual({
-    user_id: "admin-zhou-ran",
-    tenant_id: "default",
-    workspace_id: "workspace-e2e-1",
-  });
 });
 
 test("FE-E2E-001WAA 创建工作区期间切换用户不会写入旧 actor 响应", async ({ page }) => {

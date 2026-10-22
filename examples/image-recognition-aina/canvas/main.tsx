@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "@/index.css";
-import { initCanvasI18n } from "../i18n";
+import "./style.css";
+import { initCanvasI18n } from "./i18n";
 import { ImageRecognitionCanvas } from "./ImageRecognitionCanvas";
 import en from "./locales/en";
 import zh from "./locales/zh";

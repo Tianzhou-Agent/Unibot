@@ -3,13 +3,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page, type Route } from "playwright/test";
 
-// Image Recognition is a bundled AINA 2.0 package (design §11): its built canvas, served with the host's sandbox
+// Image Recognition is an explicitly installed example AINA 2.0 package: its built canvas, served with the host's sandbox
 // headers, calls the plugin's app tools over the UI bridge. The API is mocked.
 const AINA = "unibot.image-recognition";
 const VERSION = "2.0.0";
 const PACKAGE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../backend/src/unibot_plugins/image_recognition/package",
+  "../../examples/image-recognition-aina/package",
 );
 const UI_HEADERS = {
   "Content-Security-Policy":
@@ -65,9 +65,9 @@ async function installApi(page: Page, { failDetect = false } = {}) {
       });
     }
     if (method === "GET" && apiPath === `/ainas/${AINA}`) {
-      return json(route, { manifest: { aina: { id: AINA, name: "Image Recognition", version: VERSION }, runtime: { type: "package", bundled: true, tools: TOOLS } } });
+      return json(route, { manifest: { aina: { id: AINA, name: "Image Recognition", version: VERSION }, runtime: { type: "package", bundled: false, tools: TOOLS } } });
     }
-    if (method === "GET" && apiPath === "/installations") return json(route, []);
+    if (method === "GET" && apiPath === "/installations") return json(route, [{ aina_id: AINA, status: "active", installed_version: VERSION, granted_permissions: [] }]);
     if (method === "POST" && apiPath === `/ainas/${AINA}/app-tools/vision_status`) {
       return json(route, {
         structuredContent: { status: "ready", model: "yolo26m", device: "cuda:0", requested_device: "auto", gpu_name: "NVIDIA GeForce RTX 3080 Ti" },

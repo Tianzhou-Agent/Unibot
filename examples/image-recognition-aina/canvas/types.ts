@@ -1,4 +1,4 @@
-// The results of the plugin's MCP tools (backend/src/unibot_plugins/image_recognition/server.py).
+// The results of this example's MCP tools (../server/main.py).
 export interface VisionHealth {
   status: string;
   model: string;

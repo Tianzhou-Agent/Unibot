@@ -74,7 +74,7 @@ flowchart TB
     subgraph Render["渲染层 · components/*"]
         Msg["MessageBubble / LiveTurn<br/>ToolCallCard / ApprovalCard"]
         Widgets["SessionWidgetRenderer / MainWidgetRenderer<br/>按 ainaId 或 widget.kind 分派"]
-        Specialized["Document / Memory / CodeRunner<br/>ImageRecognition / Schedule Widgets"]
+        Specialized["Document / Memory / Schedule Widgets<br/>Generic AINA Canvas"]
     end
     subgraph Transport["前端网络适配 · lib/*"]
         Obs["obsApi / operationsApi"]
@@ -96,7 +96,7 @@ flowchart TB
     API -->|"页面消费响应"| Chat
 ```
 
-`WidgetDefinition` 是前后端之间的声明式数据契约。实际组件由宿主前端提供，不是从 AINA 下载 React 代码。部分专用 Widget 直接调用领域 API，例如图片识别走 `/vision/detect`，不必经过 Agent。`MockSessionProvider` 的名字不代表所有请求都走 mock；MSW 仅在开发模式且显式开启 `VITE_ENABLE_MOCKS` 时启动。
+`WidgetDefinition` 是前后端之间的声明式数据契约。实际组件由宿主前端提供，不是从 AINA 下载 React 代码。图片识别与 Code Runner 位于 `examples/`，手动安装后通过通用 AINA Canvas 和独立 MCP 服务调用，不再由宿主提供专用组件。`MockSessionProvider` 的名字不代表所有请求都走 mock；MSW 仅在开发模式且显式开启 `VITE_ENABLE_MOCKS` 时启动。
 
 依据：[main.tsx](../frontend/src/main.tsx)、[App.tsx](../frontend/src/App.tsx)、[ChatModePage.tsx](../frontend/src/pages/ChatModePage.tsx)、[MainWidgetRenderer.tsx](../frontend/src/components/widgets/MainWidgetRenderer.tsx)、[api.ts](../frontend/src/lib/api.ts)、[widgets.py](../backend/src/tianzhou_agent_platform/aina/protocol/widgets.py)。
 
@@ -174,7 +174,7 @@ flowchart LR
         Exec["CapabilityExecutor.execute"]
         Scope["activate_scope<br/>收敛能力与提示词"]
         Platform["services/platform_tools.py<br/>应用发现 / 打开 / 澄清 / 任务工具"]
-        Builtin["aina/builtin.py · invoke_builtin<br/>Memory / Documents / Code Runner"]
+        Builtin["aina/builtin.py · invoke_builtin<br/>Memory / Documents"]
         Domain["Repository / DocumentService<br/>DocumentEditTaskService / TaskService"]
         Gateway["aina/gateway.py<br/>RemoteCapabilityGateway"]
         Managed["aina/managed.py<br/>ManagedAinaRuntime"]
@@ -188,7 +188,6 @@ flowchart LR
         Exec -->|"宿主 Tool"| Platform --> Domain
         Exec -->|"内置领域 Tool"| Builtin
         Builtin --> Domain
-        Builtin -->|"Code Runner"| Sandbox
         Exec -->|"远程 Tool / AINA"| Gateway
         Schedule -->|"定时 AINA 调用"| Gateway
         Gateway -->|"runtime=managed"| Managed
@@ -220,7 +219,7 @@ flowchart LR
 - Gateway 按 `runtime.type` 区分远程与托管。托管 AINA 将执行交给 SandboxService；定时调度也直接调用 Gateway。
 - 本地驱动只是子进程边界，不能当作容器或 gVisor 隔离。启用认证时，本地执行须显式允许；Kubernetes 驱动可指定 RuntimeClass，实际隔离由部署配置决定。
 - Operator 负责生命周期控制；执行请求由后端驱动直接发给 `sandboxd`，不经 Operator 转发。
-- 图片识别当前走独立 `/vision` API。虽然注册为内置 AINA，其推理调用不在 `invoke_builtin()` 的工具分派中。
+- 图片识别与 Code Runner 均为可选的 AINA 2.0 示例，通过独立 MCP 服务调用；宿主不自动注册或安装它们。
 
 依据：[executor.py](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py)、[gateway.py](../backend/src/tianzhou_agent_platform/aina/gateway.py)、[builtin.py](../backend/src/tianzhou_agent_platform/aina/builtin.py)、[managed.py](../backend/src/tianzhou_agent_platform/aina/managed.py)、[drivers.py](../backend/src/tianzhou_agent_platform/sandbox/drivers.py)、[factory.py](../backend/src/tianzhou_agent_platform/sandbox/factory.py)、[Operator](../sandbox/operator/main.py)、[Vision API](../backend/src/tianzhou_agent_platform/api/vision.py)。
 

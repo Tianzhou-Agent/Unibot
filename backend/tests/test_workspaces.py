@@ -193,14 +193,14 @@ def test_open_aina_accepts_workspace_context_and_rejects_conversation_mismatch()
         ).json()
 
         opened = client.post(
-            "/ainas/unibot-code-runner/open",
+            "/ainas/unibot-memory/open",
             json={
                 "conversation_id": conversation["id"],
                 "workspace_id": first_workspace["id"],
             },
         )
         mismatched = client.post(
-            "/ainas/unibot-code-runner/open",
+            "/ainas/unibot-memory/open",
             json={
                 "conversation_id": conversation["id"],
                 "workspace_id": second_workspace["id"],
