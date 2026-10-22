@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ShieldAlert } from "lucide-react";
@@ -11,6 +11,11 @@ import type { AinaInstallation, AinaRecord } from "@/types";
 // a sandboxed iframe and can only ask: the host answers messages from that iframe's own window alone, relays
 // app-visible tool calls only, and asks the user itself before any call that changes data.
 export const PROTOCOL = "aina-ui/2.0";
+/**
+ * True inside the platform's headless canvas host (pages/CanvasHostPage), where no user can answer a confirmation:
+ * the run the user started acts for them, so a canvas may save the work it does there.
+ */
+export const HeadlessCanvasHost = createContext(false);
 export const PACKAGE_SANDBOX = "allow-scripts allow-forms allow-downloads";
 export const URL_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads";
 const THEME: Record<string, string> = {
@@ -67,6 +72,7 @@ export function useAinaBridge({
   extra?: (method: string, params: Record<string, unknown>) => Promise<unknown> | undefined;
 }) {
   const { t } = useTranslation("canvas");
+  const headless = useContext(HeadlessCanvasHost);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const pending = useRef<Confirmation | null>(null);
   // Requests the host sends to the frame (canvas tool calls), by id.
@@ -104,7 +110,14 @@ export function useAinaBridge({
       if (specific !== undefined) return specific;
       switch (method) {
         case "initialize":
-          return { protocol: PROTOCOL, locale: i18n.language, theme: THEME, config: installation?.configuration ?? {}, ...latest.current.context };
+          return {
+            protocol: PROTOCOL,
+            locale: i18n.language,
+            theme: THEME,
+            config: installation?.configuration ?? {},
+            background: headless,
+            ...latest.current.context,
+          };
         case "callTool": {
           const name = String(params.name ?? "");
           const args = isRecord(params.arguments) ? params.arguments : {};
@@ -119,7 +132,11 @@ export function useAinaBridge({
               pending.current = { tool, args, resolve };
               setConfirmation(pending.current);
             });
-          if (ask && !(await confirm())) {
+          // Headless, writes go ahead without asking and a destructive call is refused, rather than waiting forever.
+          if (ask && headless && tool.effect === "destructive") {
+            throw new BridgeError("DENIED", t("ainaFrame.needsUser"));
+          }
+          if (ask && !headless && !(await confirm())) {
             throw new BridgeError("DENIED", t("ainaFrame.declined"));
           }
           if (tool.effect === "write") approvedWrites.current.add(name);
@@ -139,7 +156,7 @@ export function useAinaBridge({
           throw new BridgeError("METHOD_NOT_FOUND", t("ainaFrame.unsupported", { method }));
       }
     },
-    [ainaId, loaded, source, t],
+    [ainaId, headless, loaded, source, t],
   );
 
   useEffect(() => {

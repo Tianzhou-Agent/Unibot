@@ -12,7 +12,9 @@ circle around the login box" is drawn live on the whiteboard.
 | Skill | `package/skills/sketch/`: how to lay out and annotate a diagram |
 
 The scene lives in the browser. Save stores it with `save_board`, and the canvas loads it again with `load_board`
-before it registers its tools, so a drawing the agent makes is never replaced by the saved board.
+before it registers its tools, so a drawing the agent makes is never replaced by the saved board. While the user is
+away the canvas runs in Superbot's headless canvas host (`getContext().background`), where nobody presses Save, so
+there each change the agent makes is saved before its tool answers and the tab the user opens later loads it.
 
 ## Try it
 

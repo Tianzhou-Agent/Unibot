@@ -34,6 +34,7 @@ export default {
     allow: "Allow",
     deny: "Deny",
     declined: "You declined this action.",
+    needsUser: "This action deletes data, so it needs you; it cannot run while you are away.",
     notCallable: "Tool {{name}} cannot be called from this app.",
     urlOnly: "Only a web-app canvas can request an identity token.",
     unsupported: "{{method}} is not available here.",

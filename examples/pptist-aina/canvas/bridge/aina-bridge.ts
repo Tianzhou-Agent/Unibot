@@ -415,8 +415,6 @@ const start = async () => {
   // Wait for PPTist's own first load (public/mocks/slides.json), so it cannot replace the deck shown here.
   while (!slidesStore.slides.length || snapshotStore.snapshotLength === 0) await new Promise(resolve => setTimeout(resolve, 50))
 
-  for (const [name, handler] of Object.entries(tools)) await host.registerTool(name, handler)
-
   lastSaved = JSON.stringify(currentDeck()) // PPTist's blank first slide is not worth saving
   try {
     const loaded = await host.callTool<{ id: string | null; deck: Deck | null }>('load_deck', {})
@@ -424,6 +422,19 @@ const start = async () => {
   }
   catch (error) {
     message.warning(`Could not load your last deck: ${(error as Error).message}`, { duration: 6000 })
+  }
+  // The tools are registered once the saved deck is shown, so no agent call edits PPTist's demo deck that the saved
+  // one then replaces. In Superbot's headless canvas host, where the user may open a tab and load the saved deck at
+  // any moment, each call saves its changes before it answers.
+  const { background } = await host.getContext()
+  for (const [name, handler] of Object.entries(tools)) {
+    await host.registerTool(name, background
+      ? async (args) => {
+        const result = await handler(args)
+        await flushSave()
+        return result
+      }
+      : handler)
   }
   updateModelContext()
   slidesStore.$subscribe(() => {

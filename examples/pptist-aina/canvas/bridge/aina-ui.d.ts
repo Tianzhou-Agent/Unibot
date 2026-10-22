@@ -10,6 +10,11 @@ export interface AinaContext {
   /** The installation's non-secret settings (`config.schema` in aina.json). */
   config: Record<string, unknown>;
   mode: "canvas" | "widget";
+  /**
+   * The canvas runs in Superbot's headless canvas host while the user is away (design §9.5): nobody sees it, and the
+   * AINA's write tools run without asking. Save the agent's changes before its tool answers, or they are lost.
+   */
+  background: boolean;
   aina: { id: string; version: string };
   /** Widgets only. */
   purpose?: "confirmation" | "result" | "display";

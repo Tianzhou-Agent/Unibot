@@ -34,6 +34,7 @@ export default {
     allow: "允许",
     deny: "拒绝",
     declined: "你拒绝了这次操作。",
+    needsUser: "该操作会删除数据，需要你本人确认，你不在时无法执行。",
     notCallable: "该应用不能调用工具 {{name}}。",
     urlOnly: "只有网页应用画布可以申请身份令牌。",
     unsupported: "此处不支持 {{method}}。",
