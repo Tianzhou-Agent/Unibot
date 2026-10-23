@@ -10,7 +10,7 @@ import type { AinaInstallation, AinaRecord } from "@/types";
 
 // The UI bridge of AINA Protocol 2.0 (design §9.4), host side, shared by canvases and widgets. An AINA's UI runs in
 // a sandboxed iframe and can only ask: the host answers messages from that iframe's own window alone, relays
-// app-visible tool calls only, and asks the user itself before any call that changes data.
+// app-visible tool calls only, and asks the user itself before any call that deletes data.
 export const PROTOCOL = "aina-ui/2.0";
 /**
  * True inside the platform's headless canvas host (pages/CanvasHostPage), where no user can answer a confirmation:
@@ -42,7 +42,7 @@ export class BridgeError extends Error {
   }
 }
 
-// What the host asks the user before it acts for the frame: a tool call that changes data, or saving a file.
+// What the host asks the user before it acts for the frame: a destructive tool call, or saving a file.
 type Confirmation = (
   | { tool: PackageTool; args: Record<string, unknown> }
   | { file: { name: string; size: number } }
@@ -86,7 +86,6 @@ export function useAinaBridge({
   // Requests the host sends to the frame (canvas tool calls), by id.
   const hostRequests = useRef(new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>());
   const nextHostRequest = useRef(1);
-  const approvedWrites = useRef(new Set<string>());
   const approvedSaves = useRef(false);
   const latest = useRef({ context, conversationId, onPrompt, extra });
   latest.current = { context, conversationId, onPrompt, extra };
@@ -134,25 +133,21 @@ export function useAinaBridge({
           if (!tool || !tool.visibility.includes("app") || tool.status !== "active") {
             throw new BridgeError("PERMISSION_DENIED", t("ainaFrame.notCallable", { name }));
           }
-          // Design §6.1: destructive calls are confirmed every time, writes once per opened frame.
-          const ask = tool.effect === "destructive" || (tool.effect === "write" && !approvedWrites.current.has(name));
+          // Destructive calls are confirmed every time. Writes are not: the frame calls its own AINA's tools, often to
+          // autosave, and a prompt for each would only teach the user to click Allow.
+          const ask = tool.effect === "destructive";
           const confirm = () =>
             new Promise<boolean>((resolve) => {
               pending.current = { tool, args, resolve };
               setConfirmation(pending.current);
             });
-          // Headless, writes go ahead without asking and a destructive call is refused, rather than waiting forever.
-          if (ask && headless && tool.effect === "destructive") {
-            throw new BridgeError("DENIED", t("ainaFrame.needsUser"));
-          }
-          if (ask && !headless && !(await confirm())) {
-            throw new BridgeError("DENIED", t("ainaFrame.declined"));
-          }
-          if (tool.effect === "write") approvedWrites.current.add(name);
+          // Headless, a destructive call is refused rather than waiting forever.
+          if (ask && headless) throw new BridgeError("DENIED", t("ainaFrame.needsUser"));
+          if (ask && !(await confirm())) throw new BridgeError("DENIED", t("ainaFrame.declined"));
           return api.post(`/ainas/${encodeURIComponent(ainaId)}/app-tools/${encodeURIComponent(name)}`, {
             arguments: args,
             source,
-            confirmed: tool.effect !== "read",
+            confirmed: ask,
             ...(latest.current.conversationId ? { conversation_id: latest.current.conversationId } : {}),
           });
         }
@@ -160,7 +155,7 @@ export function useAinaBridge({
           const name = String(params.name ?? "").trim();
           const data = params.data;
           if (!name || !(data instanceof Blob)) throw new BridgeError("INVALID_REQUEST", "saveFile needs a name and a Blob");
-          // A saved file lands in the user's Files: asked once per opened frame, like writes, and not while they are away.
+          // A saved file lands in the user's Files: asked once per opened frame, and not while they are away.
           if (!headless && !approvedSaves.current) {
             const allowed = await new Promise<boolean>((resolve) => {
               pending.current = { file: { name, size: data.size }, resolve };
@@ -330,7 +325,7 @@ export function BridgeConfirmDialog({
 }) {
   const { t } = useTranslation("canvas");
   if (!confirmation) return null;
-  const destructive = "tool" in confirmation && confirmation.tool.effect === "destructive";
+  const destructive = "tool" in confirmation;
   const title = t("file" in confirmation ? "ainaFrame.confirmSaveTitle" : "ainaFrame.confirmTitle");
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-4" role="presentation">
@@ -344,7 +339,7 @@ export function BridgeConfirmDialog({
             <p className="mt-0.5 text-[12px] text-ink-muted">
               {"file" in confirmation
                 ? t("ainaFrame.confirmSave", { app: appName, name: confirmation.file.name, size: formatFileSize(confirmation.file.size) })
-                : t(destructive ? "ainaFrame.confirmDestructive" : "ainaFrame.confirmWrite", { app: appName, tool: confirmation.tool.title || confirmation.tool.name })}
+                : t("ainaFrame.confirmDestructive", { app: appName, tool: confirmation.tool.title || confirmation.tool.name })}
             </p>
           </div>
         </div>

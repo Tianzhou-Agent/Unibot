@@ -111,9 +111,9 @@ const save = ({ bind = true, force = false } = {}) => {
     }
     catch (error) {
       saveError = (error as Error).message
-      // In the background nobody declines a save: the next change tries again, and the agent hears of the failure.
+      // In the background nobody sees the warning: the next change tries again, and the agent hears of the failure.
       if (background) return
-      // The user declined the save, or the server refused it: stop saving until the canvas is opened again.
+      // The server refused the save: stop saving until the canvas is opened again.
       autosave = false
       message.warning(`Changes are no longer saved to Superbot: ${saveError}`, { duration: 6000 })
     }

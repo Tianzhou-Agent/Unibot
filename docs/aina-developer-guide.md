@@ -159,7 +159,7 @@ hours (6 by default).
 | `effect` | Asks the user | Retried automatically |
 |---|---|---|
 | `read` | never | yes, on transient errors |
-| `write` | before the first call of the tool (in a conversation, or while a canvas stays open) | no |
+| `write` | before the first call of the tool in a conversation; never when your own canvas or widgets call it | no |
 | `destructive` | before every call | no |
 
 - **Default:** without an `effect`, Superbot uses the MCP annotations. `destructiveHint` means `destructive`,
@@ -343,8 +343,8 @@ host.on("tool_result", refresh);                  // the agent changed data in c
 host.sendPrompt("Summarize my notes");            // speaks in the conversation as the user
 ```
 
-`callTool` reaches only `app`-visible tools. Superbot asks the user itself before writes and destructive calls, and your
-UI can never approve on the user's behalf. Use the `--aina-*` CSS variables (or `aina-ui.css`) to match Superbot's look.
+`callTool` reaches only `app`-visible tools. Superbot asks the user itself before destructive calls, and your UI can
+never approve on the user's behalf. Writes go ahead without asking, so a canvas can save as the user works. Use the `--aina-*` CSS variables (or `aina-ui.css`) to match Superbot's look.
 
 ### Canvas
 
@@ -371,10 +371,11 @@ How the calls behave:
 - **Routing:** the call goes to the user's most recently active tab. If no tab has the conversation open, Superbot
   opens your canvas in a headless browser on the server and the call runs there, so the agent keeps working after the
   user leaves. Save the canvas's state through your own tools or backend: the tab the user opens later loads it from
-  there, not from the headless page.
+  there, not from the headless page. The bridge's README (`spec/aina/2.0/ui/README.md`) lists what to get right.
 - **Timeout:** the default is 10 seconds; set `timeout_seconds`, at most 30.
 - **Result limits:** `structuredContent` at most 64 KiB, and at most one image of at most 1 MiB.
-- **Registration:** call `registerTool` before you load data that the agent's drawings would overwrite.
+- **Registration:** load your saved state first, then call `registerTool`, so the saved state never replaces what
+  the agent's first call drew.
 
 ### Widgets
 

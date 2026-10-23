@@ -88,7 +88,7 @@ async function installApi(page: Page) {
   return calls;
 }
 
-test("FE-E2E-AINA-01 a package canvas calls tools through the host, which confirms every change", async ({ page }) => {
+test("FE-E2E-AINA-01 a package canvas calls tools through the host, which confirms every deletion", async ({ page }) => {
   const calls = await installApi(page);
   await page.goto(`/chat?aina=${AINA}`);
   const frame = page.frameLocator("iframe[sandbox]");
@@ -98,12 +98,10 @@ test("FE-E2E-AINA-01 a package canvas calls tools through the host, which confir
   await frame.locator("select").selectOption("transport");
   await frame.getByPlaceholder("Note (optional)").fill("taxi");
   await frame.getByRole("button", { name: "Add" }).click();
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("add_expense");
-  await dialog.getByRole("button", { name: "允许" }).click();
   await expect(frame.getByRole("cell", { name: "taxi" })).toBeVisible();
 
-  // The same write tool is not asked again while the canvas stays open.
+  // Writes from the app's own UI are not asked.
+  const dialog = page.getByRole("alertdialog");
   await frame.getByPlaceholder("Amount").fill("30");
   await frame.getByRole("button", { name: "Add" }).click();
   await expect(frame.locator("tbody tr")).toHaveCount(2);
@@ -111,14 +109,15 @@ test("FE-E2E-AINA-01 a package canvas calls tools through the host, which confir
 
   // Destructive calls are asked every time; a declined call never reaches the API and the canvas is told.
   await frame.getByRole("button", { name: "Delete" }).first().click();
+  await expect(dialog).toContainText("delete_expense");
   await dialog.getByRole("button", { name: "拒绝" }).click();
   await expect(frame.getByText("你拒绝了这次操作。")).toBeVisible();
 
   expect(calls.map((call) => [call.tool, call.confirmed, call.source])).toEqual([
     ["list_expenses", false, "canvas"],
-    ["add_expense", true, "canvas"],
+    ["add_expense", false, "canvas"],
     ["list_expenses", false, "canvas"],
-    ["add_expense", true, "canvas"],
+    ["add_expense", false, "canvas"],
     ["list_expenses", false, "canvas"],
   ]);
 });

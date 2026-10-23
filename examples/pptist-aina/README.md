@@ -97,8 +97,8 @@ styles of PPTist's schema before it is shown, and pictures must be `https://` or
 
 ## Saving
 
-The canvas saves the open deck on its own, 1.5 seconds after a change, with `save_deck`. Superbot asks the user once per
-opened canvas before the first save. If the user declines, the canvas stops saving and says so. A saved deck is one
+The canvas saves the open deck on its own, 1.5 seconds after a change, with `save_deck`; Superbot does not ask, since
+the canvas calls its own tool. If a save fails, the canvas stops saving and says so. A saved deck is one
 PPTist JSON file (the format of PPTist's own JSON export) of at most 9 MiB, including uploaded pictures.
 
 Each conversation has its own deck: the one last saved or opened in it (`conversations/<id>` in storage holds its id).

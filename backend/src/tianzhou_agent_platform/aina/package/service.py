@@ -441,8 +441,9 @@ class AinaPackageService:
     ) -> dict[str, Any]:
         """A tool call from the AINA's own canvas or widget, made by the host shell for the signed-in user.
 
-        Only ``app``-visible tools are callable (design §6.1). Anything but a ``read`` tool needs the host's own
-        confirmation, which the shell asks for outside the iframe; the AINA's UI can never confirm for the user.
+        Only ``app``-visible tools are callable (design §6.1). A ``destructive`` tool needs the host's own
+        confirmation, which the shell asks for outside the iframe; the AINA's UI can never confirm for the user. Writes
+        need none: the UI calls its own AINA's tools, often to autosave.
         """
         record, installation = await self._usable_installation(aina_id, tenant_id=tenant_id, user_id=user_id)
         runtime = package_runtime(record)
@@ -462,10 +463,10 @@ class AinaPackageService:
                 status_code=409,
                 source="aina_package",
             )
-        if snapshot.effect != "read" and not confirmed:
+        if snapshot.effect == "destructive" and not confirmed:
             raise PlatformError(
                 "CONFIRMATION_REQUIRED",
-                f"Tool {name!r} changes data and needs the user's confirmation",
+                f"Tool {name!r} deletes data and needs the user's confirmation",
                 status_code=428,
                 source="aina_package",
             )

@@ -46,7 +46,7 @@ export interface CanvasToolResult {
 export interface Host {
   /** Locale, theme, non-secret configuration and, for widgets, the tool call it shows. */
   getContext(): Promise<AinaContext>;
-  /** Call one of this AINA's app-visible tools; Superbot asks the user before calls that change data. */
+  /** Call one of this AINA's app-visible tools; Superbot asks the user before destructive calls. */
   callTool<T = unknown>(name: string, args?: Record<string, unknown>): Promise<ToolResult<T>>;
   /** Send a message into the conversation as the user. */
   sendPrompt(text: string): Promise<void>;

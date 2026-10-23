@@ -47,10 +47,9 @@ test("FE-E2E-009 explicitly installed Code Runner uses the package canvas and MC
   await expect(canvas.getByRole("heading", { name: "Code Runner" })).toBeVisible();
   await canvas.getByRole("textbox", { name: "Script", exact: true }).fill("print(42)");
   await canvas.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(page.getByRole("alertdialog")).toBeVisible();
-  expect(calls).toEqual([]);
-  await page.getByRole("button", { name: "允许", exact: true }).click();
+  // The run tools are writes, and writes from the app's own UI are not asked.
   await expect(canvas.getByRole("status")).toContainText("succeeded · exit 0");
   await expect(canvas.getByRole("status")).toContainText("42");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
   expect(calls).toEqual([{ script: "print(42)", timeout_seconds: 60, working_directory: "." }]);
 });
