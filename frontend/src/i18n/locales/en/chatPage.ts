@@ -37,10 +37,12 @@ export default {
   dismissError: "Dismiss error",
   sendFailed: "Sending did not complete. Your draft was kept; try again.",
   composerPlaceholder: "Add constraints, or plan the next step…",
+  composerPlaceholderNew: "Ask Superbot anything, or attach a file…",
   messageAria: "Message",
   stopAria: "Stop generating",
   sendAria: "Send message",
   attachAria: "Attach files",
+  dropFiles: "Drop files to attach",
   removeAttachment: "Remove {{name}}",
   attachmentTooLarge: "{{name}} is larger than {{limit}} MB.",
   tooManyAttachments: "A message can carry at most {{limit}} files.",
@@ -60,18 +62,19 @@ export default {
   welcome: {
     title: "Start a new conversation",
     body: "Superbot keeps multi-turn context, combines the right capabilities for your goal, and waits for your confirmation before high-risk actions.",
-    f1: {
-      title: "Multi-turn context",
-      body: "Conversation history restores automatically",
+    startersLabel: "Start with one of your apps",
+    starter: {
+      documents: "Draft a one-page project brief as a new document",
+      scheduler: "Every weekday at 9:00, send me a short plan for the day",
+      memory: "Remember that I prefer short answers with bullet points",
+      useApp: "Use {{name}} to ",
     },
-    f2: {
-      title: "Capability orchestration",
-      body: "Combined automatically per task",
-    },
-    f3: {
-      title: "Safety confirmation",
-      body: "High-risk actions stay under control",
-    },
+  },
+  loadFailed: {
+    title: "Couldn't open this conversation",
+    body: "The server didn't respond as expected. Try again in a moment.",
+    notFound: "It may have been deleted, or the link is out of date.",
+    retry: "Try again",
   },
   deleted: {
     title: "“{{title}}” was deleted",

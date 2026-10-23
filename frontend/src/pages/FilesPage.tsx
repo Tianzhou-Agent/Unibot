@@ -139,7 +139,7 @@ function FileScopeCard({ scope }: { scope: FileScope }) {
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[12.5px] font-semibold text-ink">{scope.label}</h3>
-          <p className="text-[10px] text-ink-subtle">{t("summary", { kind: scope.workspaceId ? "Workspace" : "User", files: total, folders: scope.tree.folders.length })}</p>
+          <p className="text-[10px] text-ink-subtle">{t("summary", { files: t("fileCount", { count: total }), folders: t("folderCount", { count: scope.tree.folders.length }) })}</p>
         </div>
         <span className="flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium text-ink-muted group-hover:text-ink">
           {t("open")}<ArrowRight className="h-3.5 w-3.5" />

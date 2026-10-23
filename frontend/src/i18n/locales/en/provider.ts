@@ -28,6 +28,8 @@ export default {
   },
   next: "Next",
   modelCount: "{{count}} model(s)",
+  modelCount_one: "{{count}} model",
+  modelCount_other: "{{count}} models",
   keyNote: "Current key {{masked}}. Leave blank to keep it.",
   replaceKey: "Enter a new key to replace it",
   modelsCaption: "Models · {{count}}",

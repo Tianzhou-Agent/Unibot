@@ -11,6 +11,7 @@ import {
   TerminalSquare,
   Wrench,
 } from "lucide-react";
+import { describeCapability, useCapabilityNames } from "@/lib/capabilityNames";
 import { classNames } from "@/lib/utils";
 import type { BackendMessage } from "@/types";
 
@@ -89,10 +90,11 @@ export function ToolCallCard({
   duration?: ReactNode;
 }) {
   const { t } = useTranslation("chat");
+  useCapabilityNames();
   const label = toolLabel(name);
   const summary = state === "error"
     ? summarizeResult(resultText) || statusLabel(state)
-    : summarizeArguments(argumentsText) || summarizeResult(resultText);
+    : summarizeArguments(argumentsText) || describeCapability(name)?.app || summarizeResult(resultText);
   const Icon = toolIcon(name);
   const hasDetails = Boolean(argumentsText || resultText);
   const running = state === "running" || state === "queued";
@@ -179,6 +181,10 @@ function ToolPayload({ label, value, compact, separated = false }: { label: stri
 }
 
 export function toolLabel(name: string): string {
+  const capability = describeCapability(name);
+  if (capability?.kind === "load_skill") return i18n.t("chat:tool.label.loadSkill");
+  // An app's own tools are named by the app; the guesses below are for the host's capabilities.
+  if ((capability?.kind === "mcp" || capability?.kind === "canvas") && capability.action) return capability.action;
   const value = name.toLowerCase();
   if (value.startsWith("aina_") || value.includes("open_app") || value.includes("open_aina")) return i18n.t("chat:tool.label.openApp");
   if (value.includes("list_app")) return i18n.t("chat:tool.label.listApps");
@@ -194,7 +200,7 @@ export function toolLabel(name: string): string {
   }
   if (value.includes("memory")) return i18n.t("chat:tool.label.memory");
   if (value.includes("schedule")) return i18n.t("chat:tool.label.schedule");
-  return i18n.t("chat:tool.label.generic");
+  return capability?.action || i18n.t("chat:tool.label.generic");
 }
 
 function toolIcon(name: string) {
@@ -214,9 +220,7 @@ function summarizeArguments(value?: string | null): string {
     const payload = JSON.parse(value) as Record<string, unknown>;
     const keys = ["query", "url", "document_name", "path", "command", "recipient", "name", "id"];
     const parts = keys.flatMap((key) => typeof payload[key] === "string" && payload[key] ? [String(payload[key])] : []);
-    if (parts.length) return parts.slice(0, 2).join(" · ");
-    const count = Object.keys(payload).length;
-    return count ? i18n.t("chat:tool.argCount", { count }) : i18n.t("chat:tool.noArgs");
+    return parts.slice(0, 2).join(" · ");
   } catch {
     return truncate(value, 80);
   }
@@ -233,7 +237,7 @@ function summarizeResult(value?: string | null): string {
     for (const key of ["message", "status", "document_name", "name"]) {
       if (typeof payload[key] === "string" && payload[key]) return String(payload[key]);
     }
-    return i18n.t("chat:tool.resultFields", { count: Object.keys(payload).length });
+    return "";
   } catch {
     return truncate(value, 80);
   }

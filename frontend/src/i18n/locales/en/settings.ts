@@ -15,6 +15,8 @@ export default {
   contextLabel: "Context {{size}}",
   providerCaption: "Providers · {{count}}",
   modelCount: "{{count}} model(s)",
+  modelCount_one: "{{count}} model",
+  modelCount_other: "{{count}} models",
   defaultIs: "Default {{name}}",
   status: {
     healthy: "Healthy",

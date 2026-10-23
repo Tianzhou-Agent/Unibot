@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
-import { Check, ChevronRight, Download, Minus } from "lucide-react";
+import { Check, Download, Minus } from "lucide-react";
 import { Topbar } from "@/components/layout/Topbar";
 import { apiUrl } from "@/lib/api";
 
@@ -54,17 +53,13 @@ export default function CanvasBridgeHelpPage() {
   const needs = ["context", "callTool", "refresh", "canvasTools", "modelContext", "prompt"] as const;
   return (
     <div className="flex h-full flex-col bg-app-bg">
-      <Topbar title={t("title")} />
+      <Topbar
+        title={t("title")}
+        trail={{ label: t("breadcrumb"), links: [{ label: t("plugins"), to: "/plugin" }, { label: t("addApp"), to: "/plugin/new" }] }}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <article className="mx-auto max-w-3xl px-5 py-7 text-[14px] leading-relaxed text-ink md:px-8 md:py-9">
-          <nav className="flex items-center gap-1 text-[12.5px] text-ink-muted" aria-label={t("breadcrumb")}>
-            <Link to="/plugin" className="hover:text-ink">{t("plugins")}</Link>
-            <ChevronRight className="h-3.5 w-3.5" />
-            <Link to="/plugin/new" className="hover:text-ink">{t("addApp")}</Link>
-            <ChevronRight className="h-3.5 w-3.5" />
-            <span className="text-ink">{t("title")}</span>
-          </nav>
-          <h2 className="mt-2 text-[26px] font-semibold">{t("title")}</h2>
+          <h2 className="text-[26px] font-semibold">{t("title")}</h2>
           <p className="mt-2 text-ink-muted">{t("intro")}</p>
 
           <Section title={t("need.title")}>

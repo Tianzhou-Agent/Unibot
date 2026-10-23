@@ -9,7 +9,9 @@ export default {
   noWorkspaces: "还没有 Workspace。",
   scopeAria: "{{label}}文件层级",
   openAria: "打开{{label}}文件",
-  summary: "{{kind}} · {{files}} 个文件 · {{folders}} 个文件夹",
+  summary: "{{files}} · {{folders}}",
+  fileCount: "{{count}} 个文件",
+  folderCount: "{{count}} 个文件夹",
   open: "打开",
   empty: "暂无文件",
 };
