@@ -17,7 +17,7 @@ import tianzhou_agent_platform.main as main_module
 from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.main import create_app
-from tianzhou_agent_platform.services.agent_integration.runner import STOPPED_TOOL_RESULT
+from unibot_agent.agent import STOPPED_TOOL_RESULT
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tests.support.fake_llm import LLMResult, ScriptedLLM, assistant
 

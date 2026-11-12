@@ -8,17 +8,17 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from tianzhou_agent_platform.core.agent_runtime import build_agent
-from tianzhou_agent_platform.core.agent_runtime.middleware.approval_policy import TerminalDenialMiddleware
-from tianzhou_agent_platform.core.agent_runtime.middleware.provider_policy import (
+from unibot_agent.runtime import build_agent
+from unibot_agent.runtime.middleware.approval_policy import TerminalDenialMiddleware
+from unibot_agent.runtime.middleware.provider_policy import (
     ForcedToolChoiceMiddleware,
     ProviderErrorMiddleware,
 )
-from tianzhou_agent_platform.core.agent_runtime.middleware.summarization import (
+from unibot_agent.runtime.middleware.summarization import (
     TurnSummarizationMiddleware,
     is_summary_message,
 )
-from tianzhou_agent_platform.core.agent_runtime.middleware.transcript import TranscriptHookMiddleware
+from unibot_agent.runtime.middleware.transcript import TranscriptHookMiddleware
 from tests.support.fake_chat_model import ScriptedChatModel, assistant, tool_calling
 
 

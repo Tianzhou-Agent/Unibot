@@ -25,7 +25,7 @@ from tests.test_aina_package import (
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.aina.package.service import MAX_TOOL_IMAGE_BYTES, tool_images
 from tianzhou_agent_platform.main import create_app
-from tianzhou_agent_platform.services.agent_integration.scope import with_tool_images
+from unibot_agent.scope import with_tool_images
 
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nchart").decode()
 

@@ -43,8 +43,8 @@ from tianzhou_agent_platform.api.router import create_router
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.model_providers.factory import create_model_from_runtime, describe_model
-from tianzhou_agent_platform.services.agent_integration.history import native_to_wire
-from tianzhou_agent_platform.services.agent_integration.model_calls import StandaloneCallRecorder
+from unibot_agent.history import native_to_wire
+from unibot_agent.model_calls import StandaloneCallRecorder
 from tianzhou_agent_platform.model_providers.tokens import output_token_reserve
 from tianzhou_agent_platform.observability.service import ObservabilityAspect
 from tianzhou_agent_platform.observability.query import ObsQueryService
@@ -214,7 +214,7 @@ def create_app(
         aina_project_service,
         resolved_sandbox_service,
     )
-    # Configured model; an actor's selected provider model replaces it per request (see AgentRunner).
+    # Configured model; an actor's selected provider model replaces it per request (see ModelRuntimes).
     resolved_llm: BaseChatModel | None = llm
     if resolved_llm is None and resolved_settings.llm_model and resolved_settings.llm_base_url:
         from tianzhou_agent_platform.model_providers.factory import create_native_chat_model
@@ -425,10 +425,17 @@ def create_app(
     app.state.agent_checkpointer = agent_checkpointer
     app.state.operations_analytics = OperationsAnalyticsService(obs_store)
     from tianzhou_agent_platform.core.run_events import RunEventPublisher
+    from tianzhou_agent_platform.services.agent_integration.adapters import (
+        ConversationSessions,
+        Memories,
+        ModelRuntimes,
+        agent_config,
+    )
     from tianzhou_agent_platform.services.agent_integration.capabilities import CapabilityCatalog
     from tianzhou_agent_platform.services.agent_integration.executor import CapabilityExecutor
     from tianzhou_agent_platform.services.agent_integration.prompts import SystemPrompts
-    from tianzhou_agent_platform.services.agent_integration.runner import AgentRunner
+    from tianzhou_agent_platform.services.agent_integration.provider import AinaCapabilities
+    from unibot_agent.agent import Agent
 
     run_events = RunEventPublisher(observability)
     catalog = CapabilityCatalog(
@@ -438,42 +445,53 @@ def create_app(
         auth_enforced=enforce_auth,
     )
     prompts = SystemPrompts(settings=resolved_settings, registry=resolved_repository, auth_enforced=enforce_auth)
+    sessions = ConversationSessions(conversation_service, aina_tasks)
+    model_runtimes = ModelRuntimes(
+        settings=resolved_settings,
+        model=resolved_llm,
+        # Models the app builds itself follow the actor's model settings per request; an injected model is fixed.
+        model_factory=(lambda runtime, **options: create_model_from_runtime(runtime, **options)) if llm is None else None,
+    )
+    app.state.model_runtimes = model_runtimes
     app.state.chat_service = ChatService(
         conversations=conversation_service,
         attachments=app.state.chat_attachments,
         model_providers=model_provider_service,
         events=run_events,
-        runner=AgentRunner(
-            settings=resolved_settings,
-            conversations=conversation_service,
-            registry=resolved_repository,
-            memories=resolved_repository,
-            catalog=catalog,
-            prompts=prompts,
-            executor=CapabilityExecutor(
-                repository=resolved_repository,
+        runner=Agent(
+            config=agent_config(resolved_settings),
+            sessions=sessions,
+            approvals=sessions,
+            models=model_runtimes,
+            capabilities=AinaCapabilities(
+                registry=resolved_repository,
                 conversations=conversation_service,
-                gateway=gateway,
                 catalog=catalog,
                 prompts=prompts,
-                document_service=resolved_document_service,
-                document_edit_task_service=document_edit_task_service,
-                task_service=task_service,
-                packages=aina_packages,
-                aina_tasks=aina_tasks,
-                canvas_calls=canvas_calls,
+                executor=CapabilityExecutor(
+                    repository=resolved_repository,
+                    conversations=conversation_service,
+                    gateway=gateway,
+                    catalog=catalog,
+                    prompts=prompts,
+                    document_service=resolved_document_service,
+                    document_edit_task_service=document_edit_task_service,
+                    task_service=task_service,
+                    packages=aina_packages,
+                    aina_tasks=aina_tasks,
+                    canvas_calls=canvas_calls,
+                ),
             ),
+            memory=Memories(resolved_repository),
             checkpointer=agent_checkpointer,
             events=run_events,
-            llm_call_sink=observability.record_llm_call,
-            model=resolved_llm,
-            # Models the app builds itself follow the actor's model settings per request; an injected model is fixed.
-            model_factory=(lambda runtime, **options: create_model_from_runtime(runtime, **options)) if llm is None else None,
+            model_call_log=observability.record_llm_call,
         ),
         stops=RunStops(storage_stores.redis if storage_stores is not None else None),
         aina_tasks=aina_tasks,
     )
     scheduler.chat_service = app.state.chat_service
+    scheduler.catalog = catalog
     app.state.background_tasks = set()
     app.state.aina_scheduler = scheduler
     app.state.sandbox_service = resolved_sandbox_service

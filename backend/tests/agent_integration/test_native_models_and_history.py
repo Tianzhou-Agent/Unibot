@@ -20,13 +20,13 @@ from tianzhou_agent_platform.model_providers.factory import (
     create_native_chat_model,
 )
 from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig, use_model_runtime
-from tianzhou_agent_platform.services.agent_integration.history import (
+from unibot_agent.history import (
     archive_to_native,
     dangling_tool_closures,
     native_to_wire,
     project_scope_history,
 )
-from tianzhou_agent_platform.services.agent_integration.runner import thread_id_for
+from unibot_agent.agent import thread_id_for
 
 
 def test_native_model_factory_rejects_unconfigured_provider() -> None:
@@ -372,7 +372,7 @@ async def test_a_rejected_request_or_a_failure_after_streaming_is_not_sent_again
 
 
 def test_tool_results_still_follow_their_call_when_a_sibling_call_left_the_scope() -> None:
-    from tianzhou_agent_platform.services.agent_integration.capabilities import provider_messages_for_scope
+    from unibot_agent.history import provider_messages_for_scope
 
     messages = [
         {"role": "user", "content": "Draw and save"},

@@ -62,7 +62,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 # unibot_aina is the standalone AINA server helper; examples are not shipped with the host.
-packages = ["src/tianzhou_agent_platform", "src/unibot_aina"]
+# unibot_agent is the agent core, which the host depends on and which never imports the host.
+packages = ["src/tianzhou_agent_platform", "src/unibot_aina", "src/unibot_agent"]
 
 [tool.ruff]
 line-length = 120

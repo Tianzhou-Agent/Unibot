@@ -20,9 +20,8 @@ from pydantic import SecretStr
 
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig
+from unibot_agent.types import REASONING_KEY
 
-
-REASONING_KEY = "reasoning_content"
 # Some providers (MiniMax M2/M3, models served by vLLM or Ollama) put the reasoning at the start of the reply text.
 THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
 # Wall-clock limit of one model call. ``timeout`` only bounds the gap between bytes, so a stream that keeps

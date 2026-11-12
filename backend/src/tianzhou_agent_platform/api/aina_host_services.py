@@ -28,7 +28,7 @@ from tianzhou_agent_platform.aina.package.notifications import (
     rate_limited,
 )
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, HostCaller, host_caller, require_scope
-from tianzhou_agent_platform.api.dependencies import chat_service, documents, model_provider_service, repository
+from tianzhou_agent_platform.api.dependencies import documents, model_provider_service, repository
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
@@ -310,7 +310,7 @@ def create_aina_host_services_router() -> APIRouter:
             )
         runtime = await model_provider_service(request).default_runtime(**actor(caller))
         with use_model_runtime(runtime):
-            model = chat_service(request).runner.chat_model()
+            model = request.app.state.model_runtimes.chat_model()
         if payload.max_tokens is not None:
             model = model.bind(max_tokens=payload.max_tokens)  # type: ignore[assignment]
         kinds: dict[str, type[BaseMessage]] = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}

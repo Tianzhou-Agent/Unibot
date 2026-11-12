@@ -26,13 +26,14 @@ from tests.test_aina_package import (
 )
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.api import conversations as conversation_routes
-from tianzhou_agent_platform.conversations import attachments as attachments_module
+from unibot_agent import attachments as attachments_module
 from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY, MessageAttachment, passed_refs
-from tianzhou_agent_platform.conversations.models import Message
+from tianzhou_agent_platform.conversations.models import Conversation, Message
+from tianzhou_agent_platform.services.agent_integration.adapters import ConversationSessions, session_of
 from tianzhou_agent_platform.aina.package.mcp_client import McpToolClient
 from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.main import create_app
-from tianzhou_agent_platform.services.agent_integration.history import archive_to_native
+from unibot_agent.history import archive_to_native
 from tianzhou_agent_platform.store.errors import StorageNotFoundError
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
 from unibot_aina import HostApi, set_default_transport
@@ -333,11 +334,13 @@ def test_refs_are_found_anywhere_in_the_arguments() -> None:
     assert passed_refs(arguments) == {"file_a", "file_b"}
 
 
-def test_working_memory_rebuilt_from_the_archive_keeps_the_attachments() -> None:
+async def test_working_memory_rebuilt_from_the_archive_keeps_the_attachments() -> None:
     attachment = MessageAttachment(file_ref="file_" + "0" * 32, name="a.txt", content_type="text/plain", size_bytes=1)
     message = Message(id="msg_1", role="user", content="Read it", attachments=[attachment])
+    conversation = Conversation(id="conv_1", user_id="u", tenant_id="t", title="Files", messages=[message])
 
-    native = archive_to_native(message)
+    [archived] = await ConversationSessions(None).history(session_of(conversation))  # type: ignore[arg-type]
+    native = archive_to_native(archived)
 
     assert native.additional_kwargs[ATTACHMENTS_KEY] == [attachment.model_dump()]
     assert "attachments" not in Message(id="msg_2", role="user", content="hi").model_dump(mode="json")

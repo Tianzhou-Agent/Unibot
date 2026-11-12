@@ -59,13 +59,13 @@ async def aina_graph(
         owned_scope = {
             capability.capability_id: capability
             for capability in model_capabilities.values()
-            if capability.owner_aina_id == aina_id
+            if capability.owner_id == aina_id
         }
         entrypoint = next(
             (
                 capability
                 for capability in model_capabilities.values()
-                if capability.owner_aina_id == aina_id
+                if capability.owner_id == aina_id
                 and capability.kind == "aina"
                 and capability.capability_id == aina_id
             ),
@@ -126,7 +126,7 @@ def capability_details(capability: Capability) -> dict[str, Any]:
         "function_name": capability.function_name,
         "display_name": capability.display_name,
         "requires_confirmation": capability.requires_confirmation,
-        "owner_aina_id": capability.owner_aina_id,
+        "owner_aina_id": capability.owner_id,
     }
 
 
@@ -143,10 +143,10 @@ def model_scope_details(
         key=lambda item: (item.kind, item.capability_id),
     ):
         details = capability_details(capability)
-        if capability.owner_aina_id is None:
+        if capability.owner_id is None:
             standalone.append(details)
         else:
-            grouped.setdefault(capability.owner_aina_id, []).append(details)
+            grouped.setdefault(capability.owner_id, []).append(details)
     return {
         "counts": {
             "remote_tool": sum(item.kind == "tool" for item in capabilities.values()),

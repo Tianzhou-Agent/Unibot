@@ -2,29 +2,26 @@
 
 ``HumanInTheLoopMiddleware`` pauses the whole model response (no sibling call runs) with a checkpointed interrupt
 and resumes it with ``Command(resume=...)``. This module configures it, maps the interrupt to the public
-``ApprovalRecord`` and supplies the texts of the runtime's ``TerminalDenialMiddleware``: a denied batch closes every
+``ApprovalRequest`` and supplies the texts of the runtime's ``TerminalDenialMiddleware``: a denied batch closes every
 pending call and ends the run without another model answer.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from dataclasses import replace
+from typing import Any
 from uuid import uuid4
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Interrupt
 
-from tianzhou_agent_platform.aina.package.models import ToolSnapshot
-from tianzhou_agent_platform.aina.package.service import package_runtime, validate_arguments
-from tianzhou_agent_platform.aina.package.widgets import confirmation_widget
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
-from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
-from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
-from tianzhou_agent_platform.services.agent_integration.capability_tools import validate_capability_args
-from tianzhou_agent_platform.services.agent_integration.history import native_to_wire
+from unibot_agent.errors import AgentError
+from unibot_agent.capabilities import Capability
+from unibot_agent.capability_tools import validate_capability_args
+from unibot_agent.history import native_to_wire
+from unibot_agent.types import ApprovalRequest
 
 DENIED_TOOL_RESULT = "The user denied this operation."
 CANCELLED_REPLY = "The requested operation was cancelled."
@@ -38,9 +35,9 @@ def build_approval_middleware(registry: dict[str, Capability]) -> HumanInTheLoop
     return HumanInTheLoopMiddleware(
         interrupt_on={
             name: InterruptOnConfig(
-                # ``edit`` carries arguments a confirmation widget proposed, validated by ``validated_edits``.
+                # ``edit`` carries arguments the user changed when approving, validated by ``validated_edits``.
                 allowed_decisions=(
-                    ["approve", "reject", "edit"] if _has_confirmation_widget(capability) else ["approve", "reject"]
+                    ["approve", "reject", "edit"] if capability.editable else ["approve", "reject"]
                 ),
                 description=capability.display_name,
                 when=_has_valid_arguments(capability),
@@ -51,14 +48,6 @@ def build_approval_middleware(registry: dict[str, Capability]) -> HumanInTheLoop
     )
 
 
-def _has_confirmation_widget(capability: Capability) -> bool:
-    if capability.kind != "mcp":
-        return False
-    aina, _installation, tool = cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], capability.value)
-    exposed = package_runtime(aina).package.exposed().get(tool.name)
-    return exposed is not None and exposed.confirm_widget is not None
-
-
 def _has_valid_arguments(capability: Capability) -> Any:
     def when(request: Any) -> bool:
         try:
@@ -67,7 +56,7 @@ def _has_valid_arguments(capability: Capability) -> Any:
                 args=request.tool_call.get("args"),
                 function_name=capability.function_name,
             )
-        except PlatformError:
+        except AgentError:
             return False
         if capability.confirm_once and _completed_before(request.state, capability.function_name):
             return False
@@ -88,7 +77,7 @@ def _completed_before(state: Any, function_name: str) -> bool:
     )
 
 
-def approval_record(
+def approval_request(
     *,
     interrupt: Interrupt,
     messages: list[Any],
@@ -97,12 +86,12 @@ def approval_record(
     tenant_id: str,
     trace_id: str,
     thread_id: str,
-) -> ApprovalRecord:
+) -> ApprovalRequest:
     """Public approval for a paused batch; the native interrupt is kept as an opaque execution reference."""
     batch = next((message for message in reversed(messages) if isinstance(message, AIMessage)), None)
     wire = native_to_wire(batch) if batch is not None else None
     actions = interrupt.value.get("action_requests") or []
-    return ApprovalRecord(
+    return ApprovalRequest(
         id=f"approval_{uuid4().hex}",
         conversation_id=conversation_id,
         user_id=user_id,
@@ -123,7 +112,7 @@ def resume_decisions(
     interrupt: Interrupt,
     *,
     approve: bool,
-    approval: ApprovalRecord | None = None,
+    approval: ApprovalRequest | None = None,
     edits: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """``Command(resume=...)`` payload deciding every action of the paused batch the same way.
@@ -162,49 +151,46 @@ def interrupted_calls(interrupt: Interrupt, tool_calls: list[dict[str, Any]]) ->
     return matched
 
 
-def confirmation_widgets(
-    approval: ApprovalRecord, interrupt: Interrupt, registry: dict[str, Capability]
-) -> ApprovalRecord:
-    """The approval with the AINA confirmation widget of each paused call that declares one (design §9.2)."""
-    widgets = []
+def with_confirmations(
+    approval: ApprovalRequest, interrupt: Interrupt, registry: dict[str, Capability]
+) -> ApprovalRequest:
+    """The approval with what each paused call shows the user when asking (``Capability.confirmation``)."""
+    confirmations = []
+    editable = set()
     for call in interrupted_calls(interrupt, approval.tool_calls):
         if call is None:
             continue
         capability = registry.get(str((call.get("function") or {}).get("name") or ""))
-        if capability is None or capability.kind != "mcp":
+        if capability is None:
             continue
-        aina, _installation, tool = cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], capability.value)
-        widget = confirmation_widget(aina, tool.name, call_id=str(call.get("id")), arguments=_arguments(call))
-        if widget is not None:
-            widgets.append(widget)
-    return approval.model_copy(update={"widgets": widgets})
+        shown = capability.confirmation(str(call.get("id")), _arguments(call))
+        if shown is not None:
+            confirmations.append(shown)
+            editable.add(str(call.get("id")))
+    return replace(approval, confirmations=confirmations, editable_call_ids=frozenset(editable))
 
 
 def validated_edits(
-    approval: ApprovalRecord,
+    approval: ApprovalRequest,
     edits: dict[str, dict[str, Any]],
     registry: dict[str, Capability],
 ) -> dict[str, dict[str, Any]]:
-    """Proposed arguments, admitted only for calls that show a confirmation widget and only when they validate."""
-    editable = {widget.call_id: widget for widget in approval.widgets if widget.purpose == "confirmation"}
+    """Proposed arguments, admitted only for calls that showed a confirmation and only when they validate."""
     calls = {str(call.get("id")): call for call in approval.tool_calls}
     for call_id, arguments in edits.items():
         call = calls.get(call_id)
-        if call_id not in editable or call is None:
-            raise PlatformError(
+        if call_id not in approval.editable_call_ids or call is None:
+            raise AgentError(
                 "INVALID_REQUEST",
                 f"Tool call {call_id!r} cannot be edited",
                 status_code=422,
             )
         name = str((call.get("function") or {}).get("name") or "")
         capability = registry.get(name)
-        if capability is None or capability.kind != "mcp":
-            raise PlatformError("INVALID_REQUEST", f"Tool call {call_id!r} cannot be edited", status_code=422)
+        if capability is None:
+            raise AgentError("INVALID_REQUEST", f"Tool call {call_id!r} cannot be edited", status_code=422)
         validate_capability_args(input_schema=capability.input_schema, args=arguments, function_name=name)
-        aina, _installation, tool = cast(tuple[AinaRecord, AinaInstallation, ToolSnapshot], capability.value)
-        snapshot = package_runtime(aina).tool(tool.name)
-        if snapshot is not None:
-            validate_arguments(snapshot, arguments)
+        capability.check_edit(arguments)
     return edits
 
 

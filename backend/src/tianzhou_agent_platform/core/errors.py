@@ -1,24 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
-
 from tianzhou_agent_platform.core.base import StrictModel
 
-
-@dataclass(slots=True)
-class PlatformError(Exception):
-    code: str
-    message: str
-    status_code: int = 400
-    retryable: bool = False
-    source: str = "platform"
-    user_message: str | None = None
-    debug: dict[str, Any] | None = None
-
-    def __str__(self) -> str:
-        return self.message
+# One error type for the platform and the agent core, which owns it.
+from unibot_agent.errors import AgentError as PlatformError
 
 
 class StandardError(StrictModel):

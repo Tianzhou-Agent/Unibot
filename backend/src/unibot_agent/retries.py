@@ -8,18 +8,17 @@ retries are never nested. Side-effecting tools and AINA operations are never ret
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Sequence, cast
+from typing import Sequence
 
 from langchain.agents.middleware import ToolRetryMiddleware
 
-from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
+from unibot_agent.errors import AgentError
+from unibot_agent.capabilities import Capability
 
 
 def is_transient_error(exc: BaseException) -> bool:
     """Timeouts, unreachable hosts and remote 5xx responses; never rate limits or invalid payloads."""
-    if isinstance(exc, PlatformError):
+    if isinstance(exc, AgentError):
         return exc.retryable and (exc.debug or {}).get("remote_status") != 429
     return isinstance(exc, (TimeoutError, ConnectionError))
 
@@ -53,10 +52,6 @@ def tool_retry_middleware(registry: dict[str, Capability]) -> list[ToolRetryMidd
     """
     groups: dict[int, list[str]] = defaultdict(list)
     for name, capability in registry.items():
-        if not capability.retries_transiently:
-            continue
-        # A read tool of an AINA package gets one automatic retry; remote tools declare their own budget.
-        retries = cast(ToolRecord, capability.value).retries if capability.kind == "tool" else 1
-        if retries > 0:
-            groups[retries].append(name)
+        if capability.retry_safe and capability.retries > 0:
+            groups[capability.retries].append(name)
     return [_ToolRetryGroup(max_retries=retries, tools=names) for retries, names in sorted(groups.items())]

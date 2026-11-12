@@ -5,15 +5,16 @@ failure invariants; DeepEval owns real-model decisions and answer quality; Playw
 navigation. A row is complete only when every applicable layer is automated.
 
 > **LangChain runtime (2026-09-29):** the only agent loop is `langchain.agents.create_agent`, assembled by
-> `services/agent_integration/runner.py`. Working memory is the conversation's LangGraph checkpoint, approvals use
+> `unibot_agent/agent.py`. Working memory is the conversation's LangGraph checkpoint, approvals use
 > `HumanInTheLoopMiddleware`, compaction uses `SummarizationMiddleware` and automatic retries use
-> `ToolRetryMiddleware`. Reusable policies live in `core/agent_runtime/middleware` and are tested without the app in
+> `ToolRetryMiddleware`. Reusable policies live in `unibot_agent/runtime/middleware` and are tested without the app in
 > `tests/agent_runtime/`; the Superbot integration is tested in `tests/agent_integration/` and through the HTTP suites;
 > `tests/store/test_agent_runtime_e2e.py` covers approval restore on the production saver. See
 > `docs/langchain-migration-status.md`.
 
 | Area | Deterministic contract coverage | Real-model DeepEval | Browser E2E | Required invariant |
 | --- | --- | --- | --- | --- |
+| Standalone agent core | `agent_core/test_standalone.py`, `test_service_boundaries.py` | Host-integrated flows below | Host-integrated flows below | `unibot_agent` imports no platform modules; injected ports support a complete tool turn, approval continuation, and stop/resume. |
 | User authentication and isolation | `test_auth.py` covers password sessions, logout, impersonation rejection, OAuth state and PKCE | Not applicable: identity flows are deterministic | `auth.spec.ts` | Password hashes never leave storage, session cookies are HttpOnly, GitHub tokens are not persisted, and authenticated callers cannot select another actor. |
 | Registry and execution boundaries | `test_capability_security.py` | Not applicable: authorization is deterministic | FE-E2E-REGISTRY-001 | Admin IDs are provisioned; ownership is server-bound; private capabilities are excluded from other actors' model context; destinations and local execution require operator configuration. |
 | Interrupted run recovery | `store/test_persistent_repository_observability_unit.py`, `store/test_redis_store.py` | Live worker/Redis failure injection remains outstanding | Existing running-state polling cases | Leases renew, dead owners become interrupted, and old workers cannot release a replacement run. |
@@ -39,6 +40,17 @@ navigation. A row is complete only when every applicable layer is automated.
 | Per-user script sandbox | `test_sandbox_api.py`, `test_sandboxd.py`, `test_kubernetes_sandbox_driver.py` | Not applicable: execution is deterministic | FE-E2E-009 | Workspace persists across runs, actor history is isolated, timeout/output contracts hold, and stop/reset have distinct lifecycle semantics. |
 | Optional Image Recognition AINA | `test_image_recognition_plugin.py` covers explicit installation, migration, revocation and image validation; `vision-service/tests/test_app.py` covers inference | Not applicable: inference output is model-dependent | FE-E2E-010, FE-E2E-011 | No automatic registration or installation; the packaged canvas supports selection, paste, boxes and localized errors. |
 | Optional Code Runner AINA | `test_code_runner_example.py` covers installation, approval, language forwarding and revocation | Scripted agent calls use the normal package scope | FE-E2E-009 | No built-in code execution tools; the example canvas calls an independent MCP/sandboxd service after approval. |
+
+## Agent-core extraction verification (2026-11-12)
+
+- `uv run --extra dev pytest -q`: **1059 passed, 60 skipped**. Skips include opt-in live evaluations,
+  unavailable MySQL/Redis integration tests, Windows-only behavior, and provider-specific cases.
+- Ruff passed for all changed Python files; `git diff --check` and the frontend production build passed.
+- Manual browser checks against the running preview verified real-model chat, multi-turn recall, and recovery
+  after reload. Live HTTP checks verified Memory AINA save/recall, a remote tool paused for approval and resumed
+  with one archived result, approval denial followed by a new turn, SSE deltas/completion, and stop/resume.
+- The preview used in-memory storage with observability disabled. These live checks do not verify persistence
+  across a backend restart or the MySQL/Redis observability pipeline. Temporary HTTP-test data was cleaned up.
 
 ## Commands
 

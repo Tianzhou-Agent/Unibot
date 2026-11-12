@@ -1,17 +1,13 @@
-"""Native tools for Superbot capabilities and the domain operations behind them.
+"""The domain operations behind Superbot capabilities.
 
-Each capability becomes a ``StructuredTool`` whose coroutine performs exactly one domain call and returns the
-JSON result. Failures raise; retries, error envelopes and observation are middleware concerns.
+The agent core makes each capability a native tool that calls ``execute``, which performs exactly one domain call and
+returns its result as the model reads it. Failures raise; retries, error envelopes and observation are the core's.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any, cast
-from uuid import uuid4
-
-from langchain_core.tools import StructuredTool
-from pydantic import ValidationError
 
 from tianzhou_agent_platform.model_providers.models import current_model_runtime
 from tianzhou_agent_platform.aina.builtin import invoke_builtin
@@ -34,10 +30,13 @@ from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.conversations.service import ConversationService
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.capability_discovery import model_scope_details
-from tianzhou_agent_platform.services.agent_integration.capabilities import Capability, CapabilityCatalog
-from tianzhou_agent_platform.services.agent_integration.capability_tools import current_tool_call_id
+from tianzhou_agent_platform.services.agent_integration.capabilities import (
+    Capability,
+    CapabilityCatalog,
+    scope_resolved,
+)
 from tianzhou_agent_platform.services.agent_integration.prompts import SystemPrompts
-from tianzhou_agent_platform.services.agent_integration.run import AgentRun
+from unibot_agent.run import AgentRun
 from tianzhou_agent_platform.services.platform_tools import (
     DESCRIBE_AINA_TOOL_ID,
     LIST_APP_TOOL_ID,
@@ -78,37 +77,13 @@ class CapabilityExecutor:
         self.aina_tasks = aina_tasks
         self.canvas_calls = canvas_calls
 
-    def tools(self, run: AgentRun) -> list[StructuredTool]:
-        """One native tool per registered capability; the run scope decides which are advertised."""
-        return [self._tool(run, capability) for capability in run.registry.values()]
+    async def execute(self, run: AgentRun, capability: Capability, call_id: str, arguments: dict[str, Any]) -> str:
+        result = await self._execute(run, capability, call_id, arguments)
+        if capability.kind == "skill":
+            return cast(str, result)  # delimited skill text is read by the model as written
+        return json.dumps(result, ensure_ascii=False, default=str)
 
-    def _tool(self, run: AgentRun, capability: Capability) -> StructuredTool:
-        name = capability.function_name
-
-        async def invoke(**arguments: Any) -> str:
-            call_id = current_tool_call_id.get() or f"call_{uuid4().hex}"
-            try:
-                # The registry entry can be refined during the run (e.g. an AINA scope assigns tool ownership).
-                result = await self.execute(run, run.registry.get(name, capability), call_id, arguments)
-            except ValidationError as exc:
-                # ToolNode reads a pydantic ValidationError raised by a tool as invalid call arguments. The
-                # arguments were already validated against the capability schema, so this is invalid data
-                # produced by the domain call.
-                raise ValueError(str(exc)) from exc
-            if capability.kind == "skill":
-                return cast(str, result)  # delimited skill text is read by the model as written
-            return json.dumps(result, ensure_ascii=False, default=str)
-
-        # The capability's own JSON Schema is advertised verbatim and arguments reach ``execute`` exactly as the
-        # model sent them; a generated pydantic model would inject None for omitted optional fields.
-        return StructuredTool.from_function(
-            coroutine=invoke,
-            name=name,
-            description=capability.description,
-            args_schema=capability.input_schema or {"type": "object", "properties": {}},
-        )
-
-    async def execute(
+    async def _execute(
         self,
         run: AgentRun,
         capability: Capability,
@@ -134,7 +109,7 @@ class CapabilityExecutor:
             self._keep_images(run, call_id, tool.name, outcome.images)
             if outcome.widget is not None:
                 # Design §9.2: the AINA's result widget, shown with the turn's answer and kept with it.
-                run.scope.widgets.append(aina_widget_definition(outcome.widget))
+                run.artifacts.append(aina_widget_definition(outcome.widget))
             if outcome.task is not None:
                 if self.aina_tasks is None:
                     raise PlatformError("DEPENDENCY_FAILED", "AINA tasks are not available", status_code=503)
@@ -147,7 +122,7 @@ class CapabilityExecutor:
                     workspace_id=run.workspace_id,
                 )
                 # Design §7.3: the acknowledgement completes the turn; the result is posted when the task ends.
-                run.scope.direct_reply = _aina_task_reply(task)
+                run.reply_directly(_aina_task_reply(task))
             return outcome.visible
         if capability.kind == "canvas":
             return await self._call_canvas(run, capability, call_id, arguments)
@@ -155,10 +130,10 @@ class CapabilityExecutor:
             aina, _installation = cast(tuple[AinaRecord, AinaInstallation], capability.value)
             return load_skill(aina, arguments["id"], arguments.get("file"))
         if capability.capability_id in {DESCRIBE_AINA_TOOL_ID, OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
-            run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "app_list"]
+            run.artifacts = [widget for widget in run.artifacts if widget.kind != "app_list"]
         if capability.capability_id in {LIST_APP_TOOL_ID, OPEN_APP_TOOL_ID, SUGGEST_AINAS_TOOL_ID}:
             # Keep one app selection row; opening an app replaces the suggestions.
-            run.scope.widgets = [widget for widget in run.scope.widgets if widget.kind != "aina_chooser"]
+            run.artifacts = [widget for widget in run.artifacts if widget.kind != "aina_chooser"]
         if capability.kind == "tool":
             result, _duration_ms = await self.gateway.invoke_tool(
                 cast(ToolRecord, capability.value),
@@ -187,7 +162,7 @@ class CapabilityExecutor:
                 if output.type != "widget":
                     continue
                 try:
-                    run.scope.widgets.append(WidgetDefinition.model_validate(output.content))
+                    run.artifacts.append(WidgetDefinition.model_validate(output.content))
                 except ValueError as exc:
                     raise PlatformError(
                         "DEPENDENCY_FAILED",
@@ -219,11 +194,11 @@ class CapabilityExecutor:
                 document_service=self.document_service,
                 document_edit_task_service=self.document_edit_task_service,
             )
-        run.scope.widgets.extend(widgets)
+        run.artifacts.extend(widgets)
         if capability.capability_id == OPEN_APP_TOOL_ID:
-            run.opened_app_id = result["aina_id"]
+            run.values["opened_app_id"] = result["aina_id"]
         if capability.capability_id == CREATE_EDIT_TASK_TOOL_ID:
-            run.scope.direct_reply = _edit_task_reply(result)
+            run.reply_directly(_edit_task_reply(result))
         return result
 
     async def activate_scope(
@@ -237,11 +212,12 @@ class CapabilityExecutor:
         await run.emit({"type": "routing.started", "candidate_count": 1})
         conversation = await self.conversations.bind_aina(run.conversation_id, capability.capability_id)
         scoped, aina = await self.catalog.aina_scope(conversation, capability)
-        run.scope.visible = dict(scoped)
-        run.scope.system_prompt = await self.prompts.build(conversation, aina, memory_context=run.memory_context)
-        run.scope.activated_entries.add(capability.function_name)
-        run.active_aina_id = capability.capability_id
-        run.registry.update(scoped)
+        run.activate(
+            capability.capability_id,
+            scoped,
+            await self.prompts.build(conversation, aina, memory_context=run.memories),
+            entry=capability.function_name,
+        )
         await run.emit({"type": "routing.completed", "kind": "aina", "id": capability.capability_id})
         await run.push(
             "routing.scope.activated",
@@ -255,7 +231,7 @@ class CapabilityExecutor:
                 "model_scope": model_scope_details(scoped, forced_capability=None, forced_function=None),
             },
         )
-        await run.scope_resolved(conversation, selected=capability, source="model_selection")
+        await scope_resolved(run, conversation, selected=capability, source="model_selection")
         await self._offer_aina_ui(run, capability.capability_id)
         return {
             "activated": True,
@@ -305,11 +281,11 @@ class CapabilityExecutor:
             return
         runtime = current_model_runtime()
         if runtime.accepts_images if runtime is not None else self.packages.settings.llm_accepts_images:
-            run.scope.tool_images[call_id] = (name, images)
+            run.show_images(call_id, name, images)
 
     async def _offer_aina_ui(self, run: AgentRun, aina_id: str) -> None:
         """Suggest the routed AINA's application UI; the host lets the user choose whether to open it."""
-        if any(widget.kind == "aina_chooser" for widget in run.scope.widgets):
+        if any(widget.kind == "aina_chooser" for widget in run.artifacts):
             return
         try:
             widget = await suggest_ainas_widget(
@@ -322,7 +298,7 @@ class CapabilityExecutor:
         except PlatformError:
             return
         if widget.apps[0].has_main_widget:
-            run.scope.widgets.append(widget)
+            run.artifacts.append(widget)
 
 
 DEFAULT_CANVAS_TIMEOUT_SECONDS = 10.0

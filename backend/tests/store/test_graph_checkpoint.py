@@ -106,9 +106,9 @@ async def test_native_approval_interrupt_resumes_after_saver_recreation() -> Non
     from langchain_core.tools import tool
     from langgraph.types import Command
 
-    from tianzhou_agent_platform.core.agent_runtime import build_agent
-    from tianzhou_agent_platform.core.agent_runtime.middleware.approval_policy import TerminalDenialMiddleware
-    from tianzhou_agent_platform.services.agent_integration.approvals import (
+    from unibot_agent.runtime import build_agent
+    from unibot_agent.runtime.middleware.approval_policy import TerminalDenialMiddleware
+    from unibot_agent.approvals import (
         CANCELLED_REPLY,
         DENIED_TOOL_RESULT,
         build_approval_middleware,

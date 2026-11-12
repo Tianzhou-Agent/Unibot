@@ -13,7 +13,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.errors import GraphBubbleUp
 
-from tianzhou_agent_platform.core.agent_runtime.middleware.model_policy import reject_truncated_call
+from unibot_agent.runtime.middleware.model_policy import reject_truncated_call
 
 _TOOL_CHOICE_MODES = frozenset({"auto", "any", "none", "required"})
 

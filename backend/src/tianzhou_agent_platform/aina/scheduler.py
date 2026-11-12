@@ -209,6 +209,8 @@ class AinaScheduler:
         self.repository = repository
         self.gateway = gateway
         self.chat_service = chat_service
+        # The agent's capability catalog; set with ``chat_service`` once the app is composed.
+        self.catalog: Any = None
         self.node_id = node_id or socket.gethostname()
         self.poll_seconds = poll_seconds
         self._stop = asyncio.Event()
@@ -372,7 +374,7 @@ class AinaScheduler:
                 raise PlatformError("PERMISSION_DENIED", "AINA permissions have not been granted", status_code=403)
         else:
             self._agent_message(arguments)
-            if self.chat_service is None:
+            if self.chat_service is None or self.catalog is None:
                 raise PlatformError("INVALID_REQUEST", "The Agent runtime is unavailable", status_code=422)
             conversation = Conversation(
                 id="schedule-validation",
@@ -380,7 +382,7 @@ class AinaScheduler:
                 tenant_id=task.tenant_id,
                 title=task.name,
             )
-            capabilities = await self.chat_service.runner.catalog.available(conversation)
+            capabilities = await self.catalog.available(conversation)
             if not any(item.kind == "aina" and item.capability_id == task.aina_id for item in capabilities.values()):
                 raise PlatformError("PERMISSION_DENIED", "The selected AINA is unavailable", status_code=403)
         return record
