@@ -212,6 +212,7 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.auth.repository:UserRepository",
         "tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",
         "tianzhou_agent_platform.auth.service:AuthStore",
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -280,7 +281,6 @@ PENDING_AGGREGATE_IMPORTERS = {
     "api/schedules.py",
     "observability/service.py",
     "services/platform_tools.py",
-    "tasks/service.py",
 }
 
 # Behaviour-sensitive (plan step 14): these reach Redis or scheduler claims through the repository object.
@@ -333,6 +333,9 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "auth/service.py": ("tianzhou_agent_platform.auth.service:AuthStore",),
     "auth/oidc.py": ("tianzhou_agent_platform.auth.repository:UserRepository",),
     "api/developer_tokens.py": ("tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",),
+    "tasks/service.py": (
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
@@ -358,7 +361,6 @@ PENDING_PROTOCOL_CONSUMERS = {
     "observability/service.py",
     "services/agent_integration/adapters.py",
     "services/platform_tools.py",
-    "tasks/service.py",
 }
 
 # Feature modules store/ may import: data models, errors and the few helpers it persists with. Adding a service,
