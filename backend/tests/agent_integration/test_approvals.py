@@ -7,12 +7,12 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from tianzhou_agent_platform.core.agent_runtime import build_agent
-from tianzhou_agent_platform.core.agent_runtime.middleware.approval_policy import TerminalDenialMiddleware
-from tianzhou_agent_platform.services.agent_integration.approvals import (
+from unibot_agent.runtime import build_agent
+from unibot_agent.runtime.middleware.approval_policy import TerminalDenialMiddleware
+from unibot_agent.approvals import (
     CANCELLED_REPLY,
     DENIED_TOOL_RESULT,
-    approval_record,
+    approval_request,
     build_approval_middleware,
     resume_decisions,
 )
@@ -90,7 +90,7 @@ async def test_mixed_risky_batch_pauses_before_any_sibling_and_maps_to_an_approv
 
     assert EXECUTED == []
     [interrupt] = state.interrupts
-    record = approval_record(
+    record = approval_request(
         interrupt=interrupt,
         messages=state.values["messages"],
         conversation_id="c1",
@@ -99,7 +99,6 @@ async def test_mixed_risky_batch_pauses_before_any_sibling_and_maps_to_an_approv
         trace_id="trace_1",
         thread_id="lc-v2:c1",
     )
-    assert record.status == "pending"
     assert record.capability_names == ["Risky Tool"]
     assert [call["function"]["name"] for call in record.tool_calls] == ["safe_tool", "risky_tool"]
     assert record.runtime_ref == {

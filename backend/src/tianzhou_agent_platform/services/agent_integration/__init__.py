@@ -1,5 +1,5 @@
-"""Adapters that bind Superbot domains to native LangChain inputs, tools and middleware.
+"""Superbot's side of the agent core's ports (``unibot_agent.ports``).
 
-This package is the intentional place that knows both Superbot and LangChain.
-It contains no custom model/tool loop or summary engine.
+The core knows how an agent turn works; this package tells it what Superbot offers: its capabilities (AINAs, tools,
+built-ins) and their instructions, its conversation archive and approvals, its models and memories.
 """

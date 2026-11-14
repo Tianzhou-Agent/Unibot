@@ -18,10 +18,10 @@ def validate_capability_args(
     function_name: str,
 ) -> None:
     """Validate args against the capability JSON Schema before approval/execution."""
-    from tianzhou_agent_platform.core.errors import PlatformError
+    from unibot_agent.errors import AgentError
 
     if not isinstance(args, dict):
-        raise PlatformError(
+        raise AgentError(
             code="INVALID_REQUEST",
             message=f"Capability {function_name} arguments must be an object",
             status_code=400,
@@ -29,13 +29,13 @@ def validate_capability_args(
             user_message="Invalid arguments; fix them and retry.",
         )
     try:
-        from tianzhou_agent_platform.core.schema import validate_value
+        from unibot_agent.schema import validate_value
 
         validate_value(args, input_schema, label=f"Capability {function_name} arguments")
     except Exception as exc:  # noqa: BLE001
-        if isinstance(exc, PlatformError):
+        if isinstance(exc, AgentError):
             raise
-        raise PlatformError(
+        raise AgentError(
             code="INVALID_REQUEST",
             message=f"Capability {function_name} arguments failed schema validation",
             status_code=400,
@@ -53,11 +53,11 @@ class CapabilityToolError(Exception):
 
 
 def format_error_envelope(exc: Exception) -> str:
-    from tianzhou_agent_platform.core.errors import PlatformError
+    from unibot_agent.errors import AgentError
 
     if isinstance(exc, CapabilityToolError):
         return json.dumps(exc.payload, ensure_ascii=False)
-    if isinstance(exc, PlatformError):
+    if isinstance(exc, AgentError):
         return json.dumps(
             {
                 "error": {

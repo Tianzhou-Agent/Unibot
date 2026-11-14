@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
-from tianzhou_agent_platform.services.agent_integration.streaming import StreamRelay
+from unibot_agent.streaming import StreamRelay
 
 
 async def _stream(*items: tuple[Any, dict[str, Any]]) -> AsyncIterator[tuple[Any, dict[str, Any]]]:

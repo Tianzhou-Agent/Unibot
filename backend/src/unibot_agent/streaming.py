@@ -13,7 +13,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk
 
-from tianzhou_agent_platform.model_providers.factory import REASONING_KEY
+from unibot_agent.types import REASONING_KEY
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 

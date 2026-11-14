@@ -20,9 +20,8 @@ from pydantic import SecretStr
 
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig
+from unibot_agent.types import REASONING_KEY
 
-
-REASONING_KEY = "reasoning_content"
 # Some providers (MiniMax M2/M3, models served by vLLM or Ollama) put the reasoning at the start of the reply text.
 THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
 # Wall-clock limit of one model call. ``timeout`` only bounds the gap between bytes, so a stream that keeps
@@ -103,6 +102,10 @@ class UnibotChatOpenAI(ChatOpenAI):
                 except StopAsyncIteration:
                     return
                 except TimeoutError as exc:
+                    raise self._deadline_error() from exc
+                except httpx.TimeoutException as exc:
+                    # The SDK wraps a timeout of the request, not one raised while the stream's body is read (the
+                    # gap between two chunks): it is the same provider timeout, retried and reported like one.
                     raise self._deadline_error() from exc
                 yield chunk
         finally:

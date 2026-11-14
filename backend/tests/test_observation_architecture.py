@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_agent_runtime_has_no_observability_dependency() -> None:
-    runtime = Path(__file__).parents[1] / "src" / "tianzhou_agent_platform" / "core" / "agent_runtime"
+    runtime = Path(__file__).parents[1] / "src" / "unibot_agent" / "runtime"
 
     offenders: list[str] = []
     for path in runtime.rglob("*.py"):

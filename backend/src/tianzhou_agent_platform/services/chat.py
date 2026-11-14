@@ -1,7 +1,7 @@
 """Application workflow of a chat turn, its approval continuation, and stopping and resuming it.
 
 ChatService resolves the actor's conversation, holds the conversation's run lease, opens and closes the run's
-trace, selects the actor's model and delegates execution to the native ``AgentRunner``. It translates failures and
+trace, selects the actor's model and delegates execution to the agent core (``unibot_agent``). It translates failures and
 cancellation into the conversation's run status.
 """
 
@@ -22,8 +22,14 @@ from tianzhou_agent_platform.conversations.service import ConversationService
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
 from tianzhou_agent_platform.model_providers.service import ModelProviderService
-from tianzhou_agent_platform.services.agent_integration.runner import AgentRunner
+from tianzhou_agent_platform.services.agent_integration.adapters import (
+    approval_request,
+    chat_response,
+    session_of,
+    turn_request,
+)
 from tianzhou_agent_platform.services.run_stops import RunStops
+from unibot_agent.agent import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +48,7 @@ class ChatService:
         conversations: ConversationService,
         attachments: AttachmentService,
         model_providers: ModelProviderService,
-        runner: AgentRunner,
+        runner: Agent,
         events: Any,
         stops: RunStops | None = None,
         aina_tasks: AinaTaskService | None = None,
@@ -93,15 +99,17 @@ class ChatService:
             conversation = await self.conversations.get(conversation.id)
             async with self.stops.watch(conversation.id, trace_id) as stop:
                 with use_model_runtime(await self._model_runtime(request.user_id, request.tenant_id)):
-                    response = await self.runner.run_turn(
-                        conversation,
-                        request,
-                        trace_id=trace_id,
-                        event_sink=event_sink,
-                        stop=stop,
-                        attachments=attachments,
-                        attachment_texts=texts,
-                        after_failed_turn=after_failed_turn,
+                    response = chat_response(
+                        await self.runner.run_turn(
+                            session_of(conversation),
+                            turn_request(request),
+                            trace_id=trace_id,
+                            event_sink=event_sink,
+                            stop=stop,
+                            attachments=attachments,
+                            attachment_texts=texts,
+                            after_failed_turn=after_failed_turn,
+                        )
                     )
         except BaseException as exc:
             await self._fail_run(conversation.id, trace_id, exc)
@@ -174,8 +182,10 @@ class ChatService:
             conversation = await self.conversations.start_run(conversation.id, trace_id)
             async with self.stops.watch(conversation.id, trace_id) as stop:
                 with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
-                    response = await self.runner.resume_turn(
-                        conversation, trace_id=trace_id, event_sink=event_sink, stop=stop
+                    response = chat_response(
+                        await self.runner.resume_turn(
+                            session_of(conversation), trace_id=trace_id, event_sink=event_sink, stop=stop
+                        )
                     )
         except BaseException as exc:
             await self._fail_run(conversation.id, trace_id, exc)
@@ -198,7 +208,11 @@ class ChatService:
             with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
                 # Fails before the approval is resolved when the paused batch can no longer be resumed.
                 continuation = await self.runner.open_approval(
-                    conversation, approval, approve=True, edited_arguments=edited_arguments, event_sink=event_sink
+                    session_of(conversation),
+                    approval_request(approval),
+                    approve=True,
+                    edited_arguments=edited_arguments,
+                    event_sink=event_sink,
                 )
         except BaseException:
             # The approval stays pending (it can still be denied) and the conversation stays paused.
@@ -221,7 +235,7 @@ class ChatService:
         try:
             async with self.stops.watch(conversation.id, approval.trace_id) as stop:
                 with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
-                    response = await continuation.run(stop)
+                    response = chat_response(await continuation.run(stop))
         except BaseException as exc:
             await self._fail_run(conversation.id, approval.trace_id, exc)
             raise
@@ -234,7 +248,9 @@ class ChatService:
         await self.conversations.start_run(conversation.id, approval.trace_id)
         try:
             with use_model_runtime(await self._model_runtime(user_id, tenant_id)):
-                continuation = await self.runner.open_approval(conversation, approval, approve=False)
+                continuation = await self.runner.open_approval(
+                    session_of(conversation), approval_request(approval), approve=False
+                )
                 denied = await self.conversations.set_approval_status(approval_id, "denied")
                 await self.events.push(
                     approval.trace_id,

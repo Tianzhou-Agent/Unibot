@@ -2,7 +2,7 @@
 
 基于 2026-09-30 当前工作区源码。本文描述已实现的结构，而非目标架构；省略数据模型和辅助函数的逐项依赖。
 
-读图约定：实线表示调用、依赖或数据传递，边上的文字说明具体语义；虚线表示组装、接口实现或控制关系。只有明确标注的进程、HTTP、存储边界代表运行时隔离，其余 subgraph 是同一进程内的代码模块边界。后端路径均相对于 `backend/src/tianzhou_agent_platform/`。
+读图约定：实线表示调用、依赖或数据传递，边上的文字说明具体语义；虚线表示组装、接口实现或控制关系。只有明确标注的进程、HTTP、存储边界代表运行时隔离，其余 subgraph 是同一进程内的代码模块边界。后端路径均相对于 `backend/src/tianzhou_agent_platform/`；Agent 内核是同一发行包里的独立顶层包 `backend/src/unibot_agent/`（第 3 节，2026-11-12 更新）。
 
 ## 1. 系统与进程边界
 
@@ -19,7 +19,7 @@ flowchart LR
     subgraph Backend["后端进程 · FastAPI"]
         Root["main.py · create_app<br/>依赖组装与 lifespan"]
         API["api/router.py + api/*<br/>认证上下文 / 路由 / DTO"]
-        Chat["ChatService + AgentRunner<br/>聊天工作流与 Agent 适配"]
+        Chat["ChatService + Agent 内核<br/>聊天工作流与 Agent 执行"]
         Domains["领域服务<br/>会话 / 模型配置 / 任务 / 文档 / AINA"]
         Background["同进程后台任务<br/>AinaScheduler / DocumentEditWorker<br/>OBS ingest / 流式聊天 producer"]
         IO["Gateway / VisionClient<br/>SandboxDriver / store/*"]
@@ -100,7 +100,7 @@ flowchart TB
 
 依据：[main.tsx](../frontend/src/main.tsx)、[App.tsx](../frontend/src/App.tsx)、[ChatModePage.tsx](../frontend/src/pages/ChatModePage.tsx)、[MainWidgetRenderer.tsx](../frontend/src/components/widgets/MainWidgetRenderer.tsx)、[api.ts](../frontend/src/lib/api.ts)、[widgets.py](../backend/src/tianzhou_agent_platform/aina/protocol/widgets.py)。
 
-## 3. 后端聊天：应用工作流、业务适配与原生运行时
+## 3. 后端聊天：应用工作流、业务适配与 Agent 内核
 
 ```mermaid
 flowchart TB
@@ -120,51 +120,53 @@ flowchart TB
         Chat --> Stops
     end
 
-    subgraph Integration["Superbot 业务适配 · services/agent_integration/*"]
-        Runner["AgentRunner<br/>业务输入 → 原生消息 / 执行 / 业务输出"]
-        Catalog["CapabilityCatalog + SystemPrompts<br/>发现可用能力与提示词"]
-        Policies["scope / approvals / observation / model_calls<br/>能力域、审批规则、事件记录"]
-        Exec["CapabilityExecutor<br/>能力 → StructuredTool → 领域调用"]
-        History["TranscriptArchiver / StreamRelay<br/>归档与流式事件转换"]
-        Runner --> Catalog
-        Runner --> Policies
-        Runner --> Exec
-        Runner --> History
+    subgraph Core["Agent 内核 · backend/src/unibot_agent/*（不导入宿主）"]
+        Agent["agent.py · Agent<br/>一轮对话 / 续跑 / 审批续跑"]
+        Ports["ports.py<br/>SessionStore / ModelProvider / CapabilityProvider<br/>ApprovalStore / MemoryProvider / RunEvents / ModelCallLog"]
+        Mech["scope / approvals / observation / model_calls<br/>history / streaming / context / retries"]
+        Runtime["runtime/*<br/>build_agent + middleware（预算 / 摘要 / 顺序去重 / 输出与 Provider 策略）"]
+        Graph["LangChain / LangGraph Agent<br/>模型 ↔ 工具循环 / interrupt / checkpoint"]
+        Agent --> Mech
+        Agent --> Runtime --> Graph
+        Agent -.->|"只依赖接口"| Ports
     end
 
-    subgraph Runtime["原生运行时封装 · core/agent_runtime/*"]
-        Factory["factory.build_agent<br/>封装 langchain.agents.create_agent"]
-        MW["middleware/*<br/>预算 / 摘要 / 顺序去重 / 输出与 Provider 策略"]
-        Graph["LangChain / LangGraph Agent<br/>模型 ↔ 工具循环 / interrupt / checkpoint"]
-        Factory --> Graph
-        MW -.->|"由 Runner 组装"| Graph
+    subgraph Adapters["Superbot 适配层 · services/agent_integration/*"]
+        Sessions["adapters.py<br/>ConversationSessions / ModelRuntimes / Memories<br/>内核数据 ↔ 平台记录"]
+        Provider["provider.py · AinaCapabilities<br/>路由到能力域 / 提示词 / 执行"]
+        Catalog["CapabilityCatalog + SystemPrompts<br/>发现可用能力与提示词"]
+        Exec["CapabilityExecutor<br/>能力 → 领域调用"]
+        Provider --> Catalog
+        Provider --> Exec
     end
 
     Checkpoint["MySqlCheckpointSaver<br/>store/checkpoint.py"]
-    Provider["BaseChatModel<br/>model_providers/factory.py"]
+    ChatModel["BaseChatModel<br/>model_providers/factory.py"]
     Domains["宿主 Tool / 内置 AINA / Gateway"]
     Events["RunEventPublisher → ObservabilityAspect"]
 
-    Route --> Chat --> Runner
-    Runner --> Factory
-    Policies -.->|"注入 middleware"| Graph
-    Exec -.->|"注入 StructuredTool"| Graph
-    Graph -->|"执行工具 coroutine"| Exec
+    Route --> Chat --> Agent
+    Sessions -.->|"实现"| Ports
+    Provider -.->|"实现"| Ports
+    Events -.->|"实现"| Ports
+    Sessions --> Conv
+    Sessions --> ChatModel
+    Graph -->|"执行工具 coroutine"| Provider
     Exec --> Domains
-    Graph --> Provider
+    Graph --> ChatModel
     Graph --> Checkpoint
-    History --> Conv
-    History -->|"事件 sink"| Route
+    Mech -->|"事件 sink"| Route
     Chat --> Events
-    Runner --> Events
 ```
 
-- `ChatService` 负责一次业务运行的生命周期；`AgentRunner` 将业务语义适配到原生 Agent。
-- `core/agent_runtime/factory.py` 接收原生模型、工具、middleware、checkpointer，不接收 `ChatRequest`，不读取会话，也不处理 HTTP SSE。
-- 图中是职责边界，并非严格依赖倒置架构：部分 `api/*` 和 AINA 代码直接依赖 repository；`CapabilityExecutor` 也直接持有 repository、gateway 和领域服务。
+- `ChatService` 负责一次业务运行的生命周期（归属校验、run lease、Trace 起止、模型选择），把 `Conversation` / `ChatRequest` 转成内核的 `Session` / `TurnRequest`，再把 `TurnResult` 转回 `ChatResponse`。
+- `unibot_agent` 只知道“一轮 Agent 怎么跑”：工作记忆、能力域切换、审批中断与续跑、停止与续跑、摘要、归档、预算。它只导入标准库、pydantic 和 LangChain / LangGraph，其余一切经 `ports.py` 的接口取得；`tests/test_service_boundaries.py` 强制这一点，`tests/agent_core/test_standalone.py` 用内存替身跑完整的一轮。
+- 接口使用内核自有类型（`unibot_agent/types.py`、`capabilities.py`）；只有聊天模型（`BaseChatModel`）和工作记忆（`BaseCheckpointSaver`）保留 LangChain / LangGraph 类型。
+- AINA 位于 `CapabilityProvider` 之后：内核只认识中性的 `Capability` 和“能力域”（`CapabilityScope`）。执行调用时，适配层通过 `AgentRun`（`activate` / `reply_directly` / `artifacts` / `show_images`）改变本次运行。Widget 对内核是不透明的 `artifacts`。
+- 适配层之外仍不是严格的依赖倒置：部分 `api/*` 和 AINA 代码直接依赖 repository；`CapabilityExecutor` 也直接持有 repository、gateway 和领域服务。
 - `ConversationService` 通过 `ConversationRepository` 等 Protocol 访问存储；生产组装注入 `PersistentRepository`。这种接口边界没有覆盖全项目。
 
-依据：[ChatService](../backend/src/tianzhou_agent_platform/services/chat.py)、[AgentRunner](../backend/src/tianzhou_agent_platform/services/agent_integration/runner.py)、[运行时工厂](../backend/src/tianzhou_agent_platform/core/agent_runtime/factory.py)、[CapabilityExecutor](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py)、[会话存储协议](../backend/src/tianzhou_agent_platform/conversations/repository.py)。
+依据：[ChatService](../backend/src/tianzhou_agent_platform/services/chat.py)、[Agent](../backend/src/unibot_agent/agent.py)、[接口](../backend/src/unibot_agent/ports.py)、[运行时工厂](../backend/src/unibot_agent/runtime/factory.py)、[适配器](../backend/src/tianzhou_agent_platform/services/agent_integration/adapters.py)、[AinaCapabilities](../backend/src/tianzhou_agent_platform/services/agent_integration/provider.py)、[CapabilityExecutor](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py)、[会话存储协议](../backend/src/tianzhou_agent_platform/conversations/repository.py)。
 
 ## 4. 能力执行边界：内置、远程、托管与沙箱
 
@@ -278,7 +280,7 @@ flowchart TB
     Query -->|"详情读取"| RawFS
 ```
 
-- 会话消息归档、Agent checkpoint、观测数据是三份不同职责的数据。checkpoint 是工作状态，不能等同于完整历史归档；Runner 在调用后裁剪旧 checkpoint。
+- 会话消息归档、Agent checkpoint、观测数据是三份不同职责的数据。checkpoint 是工作状态，不能等同于完整历史归档；Agent 内核在调用后裁剪旧 checkpoint。
 - OBS 启用时走 Redis Streams → ingest worker → MySQL。
 - OBS 原始输入输出写入 `obs_raw_root`，不经过 `NasStore`，不应默认画成同一块业务 NAS。
 - 不提供持久化配置时，`create_app()` 可组装 InMemoryRepository / InMemorySaver / InMemorySessionTaskStore；正式模块入口传入 StorageSettings。
@@ -293,9 +295,9 @@ sequenceDiagram
     participant API as api/chat.py
     participant Chat as ChatService
     participant Conv as ConversationService
-    participant Runner as AgentRunner
+    participant Runner as Agent 内核
     participant Graph as 原生 Agent + checkpoint
-    participant Tool as CapabilityExecutor
+    participant Tool as AinaCapabilities
 
     UI->>API: POST /chat/stream + Cookie
     Note over API: 中间件识别用户，bind_actor 绑定可信身份
@@ -337,4 +339,4 @@ sequenceDiagram
 
 连接恢复、审批续跑、停止后续跑是三种不同机制。后台 producer 仍在 FastAPI 进程中，SSE 断开不取消执行不等于进程崩溃后任务自动继续。
 
-依据：[api/chat.py](../backend/src/tianzhou_agent_platform/api/chat.py)、[services/chat.py](../backend/src/tianzhou_agent_platform/services/chat.py)、[runner.py](../backend/src/tianzhou_agent_platform/services/agent_integration/runner.py)、[run_stops.py](../backend/src/tianzhou_agent_platform/services/run_stops.py)、[ChatModePage.tsx](../frontend/src/pages/ChatModePage.tsx)。
+依据：[api/chat.py](../backend/src/tianzhou_agent_platform/api/chat.py)、[services/chat.py](../backend/src/tianzhou_agent_platform/services/chat.py)、[agent.py](../backend/src/unibot_agent/agent.py)、[run_stops.py](../backend/src/tianzhou_agent_platform/services/run_stops.py)、[ChatModePage.tsx](../frontend/src/pages/ChatModePage.tsx)。

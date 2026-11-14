@@ -15,7 +15,7 @@ from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, Mod
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from tianzhou_agent_platform.conversations.attachments import ATTACHMENTS_KEY, attachments_block
+from unibot_agent.attachments import ATTACHMENTS_KEY, attachments_block
 
 
 @dataclass
@@ -23,13 +23,14 @@ class RunScope:
     """Mutable capability scope of one agent run.
 
     Every reachable capability is registered with the agent up front; this object decides which of them the
-    next model request advertises and which system prompt it carries. Tool executors update it when an AINA
-    scope is activated, so the switch takes effect on the following model request.
+    next model request advertises and which system prompt it carries. The capability provider changes it through
+    ``AgentRun.activate``, so the switch takes effect on the following model request.
     """
 
     visible: dict[str, Any]
     system_prompt: str
-    widgets: list[Any] = field(default_factory=list)
+    # What capability calls produced for the user to see with the turn's answer; opaque to the core.
+    artifacts: list[Any] = field(default_factory=list)
     activated_in_batch: bool = False
     # Set when a tool completes the turn itself (e.g. a document edit task was created); the next model
     # request returns this text instead of calling the model.
@@ -37,19 +38,19 @@ class RunScope:
     # Capability the caller forced (API ``capability``); applied as tool_choice on the first model request only.
     forced_function: str | None = None
     # Builds the model-visible error for a call to a name no registered tool has (e.g. a capability id or a
-    # tool owned by an inactive AINA scope): ``(name, call_id) -> tool message content``.
+    # tool owned by an inactive scope): ``(name, call_id) -> tool message content``.
     on_unknown_tool: Callable[[str, str], Awaitable[str]] | None = None
     # Rewrites the transcript for the model request given the visible names (historical calls outside the
     # scope become non-executable context); ``(messages, visible_names) -> messages``.
     project_messages: Callable[[list[Any], set[str]], list[Any]] | None = None
-    # AINA entry functions activated during this run: their calls stay ordinary context for the rest of the
+    # Scope entry functions activated during this run: their calls stay ordinary context for the rest of the
     # run instead of being projected as out-of-scope history (the model otherwise echoes the history note).
     activated_entries: set[str] = field(default_factory=set)
     # Records a failed tool result the executor never saw (e.g. a call blocked by the run's attempt budget):
     # ``(name, call_id, error_payload)``. Executors add the call ids they already recorded to
     # ``recorded_failures`` so no failure is recorded twice.
     on_tool_error: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None
-    # Images of AINA tool results for a model that reads them: ``call_id -> (tool name, [{data, mimeType}])``.
+    # Images of tool results for a model that reads them: ``call_id -> (tool name, [{data, mimeType}])``.
     # They are added to model requests of this run only, never stored in the conversation.
     tool_images: dict[str, tuple[str, list[dict[str, str]]]] = field(default_factory=dict)
     recorded_failures: set[str] = field(default_factory=set)
@@ -114,7 +115,7 @@ class CapabilityScopeMiddleware(AgentMiddleware):
         return handler(self._scoped(request))
 
     async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
-        from tianzhou_agent_platform.services.agent_integration.capability_tools import current_tool_call_id
+        from unibot_agent.capability_tools import current_tool_call_id
 
         call_id = str(request.tool_call.get("id") or "")
         if request.tool is None and self.scope.on_unknown_tool is not None:

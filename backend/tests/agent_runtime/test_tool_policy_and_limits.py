@@ -9,26 +9,26 @@ from langgraph.prebuilt import ToolRuntime
 from langchain.agents.middleware import ToolErrorMiddleware
 
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
-from tianzhou_agent_platform.core.agent_runtime import build_agent
-from tianzhou_agent_platform.core.agent_runtime.middleware.model_policy import (
+from unibot_agent.runtime import build_agent
+from unibot_agent.runtime.middleware.model_policy import (
     InvalidToolCallMiddleware,
     ModelCallBudgetMiddleware,
     OutputGuardMiddleware,
     RequestBudgetGuard,
     reject_truncated_call,
 )
-from tianzhou_agent_platform.core.agent_runtime.middleware.tool_policy import (
+from unibot_agent.runtime.middleware.tool_policy import (
     BatchDeduper,
     OrderedBatchMiddleware,
     tool_signature,
 )
 from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
-from tianzhou_agent_platform.services.agent_integration.capability_tools import format_error_envelope
-from tianzhou_agent_platform.services.agent_integration.retries import (
+from unibot_agent.capability_tools import format_error_envelope
+from unibot_agent.retries import (
     is_transient_error,
     tool_retry_middleware,
 )
-from tianzhou_agent_platform.services.agent_integration.scope import filter_advertised_tools
+from unibot_agent.scope import filter_advertised_tools
 from tests.support.fake_chat_model import ScriptedChatModel, assistant, multi_tool_calling, tool_calling
 
 _LOG: list[str] = []

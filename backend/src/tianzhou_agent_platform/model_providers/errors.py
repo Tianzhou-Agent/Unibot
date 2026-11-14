@@ -5,17 +5,7 @@ from __future__ import annotations
 import openai
 
 from tianzhou_agent_platform.core.errors import PlatformError
-
-
-def exception_detail(exc: BaseException) -> str:
-    detail = str(exc).strip() or type(exc).__name__
-    cause = exc.__cause__ or exc.__context__
-    if cause is None:
-        return detail
-    cause_text = f"{type(cause).__name__}: {cause}"
-    if cause_text in detail:
-        return detail
-    return f"{detail} ({cause_text})"
+from unibot_agent.errors import exception_detail as exception_detail
 
 
 def map_provider_error(exc: openai.OpenAIError) -> PlatformError:

@@ -21,10 +21,10 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.model_providers.errors import exception_detail
-from tianzhou_agent_platform.observability.models import LLMCallRecord
-from tianzhou_agent_platform.observability.trace_details import redact_trace_data
+from unibot_agent.errors import AgentError
+from unibot_agent.errors import exception_detail
+from unibot_agent.types import ModelCallRecord
+from unibot_agent.redaction import redact_trace_data
 
 
 @dataclass
@@ -47,7 +47,7 @@ class ModelCallRecorder(AgentMiddleware):
         endpoint: str,
         to_wire: Callable[[Any], dict[str, Any] | None],
         visible_capabilities: Callable[[], dict[str, Any]],
-        call_sink: Callable[[LLMCallRecord], Awaitable[None]] | None = None,
+        call_sink: Callable[[ModelCallRecord], Awaitable[None]] | None = None,
         streaming: bool = False,
     ) -> None:
         super().__init__()
@@ -104,7 +104,7 @@ class ModelCallRecorder(AgentMiddleware):
             },
             attributes={"streaming": self._streaming, "context_type": "conversation"},
         )
-        call = LLMCallRecord(
+        call = ModelCallRecord(
             call_id=f"llm_{uuid4().hex}",
             trace_id=self._trace_id,
             span_id=span_id,
@@ -232,7 +232,7 @@ class ModelCallRecorder(AgentMiddleware):
                 messages.append(record)
         return messages
 
-    async def _record(self, call: LLMCallRecord) -> None:
+    async def _record(self, call: ModelCallRecord) -> None:
         if self._call_sink is None:
             return
         try:
@@ -257,7 +257,7 @@ class StandaloneCallRecorder(AsyncCallbackHandler):
     def __init__(
         self,
         *,
-        call_sink: Callable[[LLMCallRecord], Awaitable[None]] | None,
+        call_sink: Callable[[ModelCallRecord], Awaitable[None]] | None,
         context_type: str,
         context_id: str,
         model: str,
@@ -333,7 +333,7 @@ class StandaloneCallRecorder(AsyncCallbackHandler):
 
 
 async def record_standalone_call(
-    call_sink: Callable[[LLMCallRecord], Awaitable[None]] | None,
+    call_sink: Callable[[ModelCallRecord], Awaitable[None]] | None,
     *,
     trace_id: str | None,
     span_id: str | None,
@@ -362,7 +362,7 @@ async def record_standalone_call(
     }
     if estimated:
         usage.update({"estimated": True, "source": "estimated"})
-    record = LLMCallRecord(
+    record = ModelCallRecord(
         call_id=f"llm_{uuid4().hex}",
         trace_id=trace_id,
         span_id=span_id,
@@ -454,7 +454,7 @@ def _tool_call_details(call: dict[str, Any], capabilities: dict[str, Any]) -> di
 
 
 def _error_details(exc: Exception) -> dict[str, Any]:
-    if isinstance(exc, PlatformError):
+    if isinstance(exc, AgentError):
         return {"code": exc.code, "message": exc.message, "retryable": exc.retryable}
     return {"type": type(exc).__name__, "message": exception_detail(exc)}
 

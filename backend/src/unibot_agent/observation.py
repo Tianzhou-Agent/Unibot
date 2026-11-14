@@ -17,18 +17,13 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from langgraph.errors import GraphBubbleUp
 
-from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.services.agent_integration.capabilities import (
-    Capability,
-    capability_version,
-    scope_recovery,
-    tool_error_payload,
-)
-from tianzhou_agent_platform.services.agent_integration.capability_tools import (
+from unibot_agent.errors import AgentError
+from unibot_agent.capabilities import Capability, Recovery, tool_error_payload
+from unibot_agent.capability_tools import (
     CapabilityToolError,
     validate_capability_args,
 )
-from tianzhou_agent_platform.services.agent_integration.run import AgentRun
+from unibot_agent.run import AgentRun, artifact_refs
 
 # Larger results are left off live tool events; the UI shows them after the turn reloads.
 _LIVE_TOOL_RESULT_MAX_BYTES = 16_000
@@ -37,9 +32,9 @@ _LIVE_TOOL_RESULT_MAX_BYTES = 16_000
 class CapabilityFailures:
     """Records failed capability calls once, as ``<kind>.failed`` trace events and live error events."""
 
-    def __init__(self, run: AgentRun, recovery_capabilities: dict[str, Capability]) -> None:
+    def __init__(self, run: AgentRun, recover: Callable[[str], Recovery | None] | None = None) -> None:
         self.run = run
-        self.recovery_capabilities = recovery_capabilities
+        self.recover = recover
 
     async def record(
         self,
@@ -83,20 +78,15 @@ class CapabilityFailures:
         raise CapabilityToolError(payload)
 
     async def scope_miss(self, name: str, call_id: str) -> dict[str, Any]:
-        """Error payload for a call outside the visible scope, pointing at the owning AINA when there is one."""
-        recovery = scope_recovery(name, self.recovery_capabilities)
+        """Error payload for a call outside the visible scope, pointing at the owning scope when there is one."""
+        recovery = self.recover(name) if self.recover is not None else None
         payload = tool_error_payload(
             "CAPABILITY_SCOPE_REQUIRED" if recovery else "RESOURCE_NOT_FOUND",
-            (
-                f"Capability {name!r} belongs to AINA {recovery['owner_aina_id']!r}, which is not "
-                "active in the current scope."
-                if recovery
-                else f"Capability {name!r} is unavailable."
-            ),
+            recovery.message if recovery else f"Capability {name!r} is unavailable.",
             recovery=recovery,
         )
         await self.record(
-            recovery["capability"] if recovery else None,
+            recovery.capability if recovery else None,
             call_id=call_id,
             function_name=name,
             payload=payload,
@@ -148,16 +138,16 @@ class CapabilityCallMiddleware(AgentMiddleware):
             raise CapabilityToolError(await self.failures.scope_miss(name, call_id))
         try:
             validate_capability_args(input_schema=capability.input_schema, args=arguments, function_name=name)
-        except PlatformError as exc:
+        except AgentError as exc:
             await self.failures.fail(capability, call_id=call_id, function_name=name, code=exc.code, message=exc.message)
-        if capability.kind == "aina":
+        if capability.scope_entry:
             if run.scope.activated_in_batch:
                 await self.failures.fail(
                     capability,
                     call_id=call_id,
                     function_name=name,
                     code="CONFLICT",
-                    message="Only one AINA scope can be activated per model response.",
+                    message=f"Only one {capability.kind.upper()} scope can be activated per model response.",
                 )
             run.scope.activated_in_batch = True
 
@@ -177,10 +167,10 @@ class CapabilityCallMiddleware(AgentMiddleware):
         await run.events.start_span(
             run.trace_id,
             span_id=span_id,
-            kind="aina" if capability.kind == "aina" else "tool",
+            kind=capability.kind if capability.scope_entry else "tool",
             name=name,
             target_id=capability.capability_id,
-            target_version=capability_version(capability),
+            target_version=capability.version,
             logical_call_id=call_id,
             input_data=arguments,
         )
@@ -188,7 +178,7 @@ class CapabilityCallMiddleware(AgentMiddleware):
         await run.emit(
             {"type": "tool.requested", **live, "arguments": json.dumps(arguments, ensure_ascii=False, default=str)}
         )
-        widgets_before = len(run.scope.widgets)
+        artifacts_before = len(run.artifacts)
         started = perf_counter()
         try:
             message = await handler(request)
@@ -222,7 +212,7 @@ class CapabilityCallMiddleware(AgentMiddleware):
         except ValueError:
             result = content
         result_size_bytes = len(content.encode("utf-8"))
-        widgets = [{"id": widget.id, "kind": widget.kind} for widget in run.scope.widgets[widgets_before:]]
+        widgets = artifact_refs(run.artifacts[artifacts_before:])
         await run.events.finish_span(
             run.trace_id,
             span_id,
@@ -264,11 +254,11 @@ class CapabilityCallMiddleware(AgentMiddleware):
 
 def _failure(capability: Capability, exc: Exception) -> tuple[str, str, bool]:
     """(code, message, model may retry) of a failed capability call."""
-    if isinstance(exc, PlatformError):
+    if isinstance(exc, AgentError):
         # Only transient failures of side-effect-free remote tools may be retried by the model.
-        return exc.code, exc.message, exc.retryable and capability.retries_transiently
+        return exc.code, exc.message, exc.retryable and capability.retry_safe
     if isinstance(exc, (TypeError, ValueError)):
-        if capability.kind == "aina":
-            return "DEPENDENCY_FAILED", f"The AINA returned invalid data: {exc}", False
+        if capability.scope_entry:
+            return "DEPENDENCY_FAILED", f"The {capability.kind.upper()} returned invalid data: {exc}", False
         return "INVALID_REQUEST", f"Capability arguments produced invalid data: {exc}", False
     return "DEPENDENCY_FAILED", str(exc) or type(exc).__name__, False

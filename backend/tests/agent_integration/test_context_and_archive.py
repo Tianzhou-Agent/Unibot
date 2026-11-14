@@ -7,11 +7,12 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
-from tianzhou_agent_platform.core.agent_runtime import build_agent
-from tianzhou_agent_platform.core.agent_runtime.middleware.summarization import TurnSummarizationMiddleware
-from tianzhou_agent_platform.core.agent_runtime.middleware.transcript import TranscriptHookMiddleware
-from tianzhou_agent_platform.services.agent_integration.context import count_message_tokens
-from tianzhou_agent_platform.services.agent_integration.history import TranscriptArchiver
+from tianzhou_agent_platform.services.agent_integration.adapters import ConversationSessions
+from unibot_agent.runtime import build_agent
+from unibot_agent.runtime.middleware.summarization import TurnSummarizationMiddleware
+from unibot_agent.runtime.middleware.transcript import TranscriptHookMiddleware
+from unibot_agent.context import count_message_tokens
+from unibot_agent.history import TranscriptArchiver
 from tests.support.fake_chat_model import ScriptedChatModel, assistant
 
 
@@ -42,7 +43,12 @@ class RecordingObserver:
 
 
 def _archiver(conversations: RecordingConversations, archived_ids: list[str] = []) -> TranscriptArchiver:  # noqa: B006
-    return TranscriptArchiver(conversations, conversation_id="conv1", trace_id="trace_1", archived_ids=archived_ids)
+    return TranscriptArchiver(
+        ConversationSessions(conversations),  # type: ignore[arg-type]
+        conversation_id="conv1",
+        trace_id="trace_1",
+        archived_ids=archived_ids,
+    )
 
 
 async def test_archiver_appends_each_message_once_in_the_archive_format() -> None:
@@ -57,7 +63,7 @@ async def test_archiver_appends_each_message_once_in_the_archive_format() -> Non
         AIMessage(content="done", id="a2"),
     ]
 
-    await archiver.archive(messages, widgets={"a2": [widget]})
+    await archiver.archive(messages, artifacts={"a2": [widget]})
     await archiver.archive(messages)
 
     assert [record.id for record in conversations.archived] == ["a1", "t1", "a2"]

@@ -8,10 +8,10 @@ import pytest
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
-from tianzhou_agent_platform.services.agent_integration.history import native_to_wire as _native_to_wire
+from unibot_agent.history import native_to_wire as _native_to_wire
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.core.run_events import RunEventPublisher
-from tianzhou_agent_platform.services.agent_integration.model_calls import (
+from unibot_agent.model_calls import (
     ModelCallRecorder,
     record_standalone_call,
 )

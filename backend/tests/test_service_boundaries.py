@@ -8,22 +8,18 @@ from __future__ import annotations
 
 import ast
 import inspect
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "tianzhou_agent_platform"
 
-# Packages core/agent_runtime must not import (directly or relatively).
-RUNTIME_FORBIDDEN = (
-    "tianzhou_agent_platform.services",
-    "tianzhou_agent_platform.conversations",
-    "tianzhou_agent_platform.model_providers",
-    "tianzhou_agent_platform.observability",
-    "tianzhou_agent_platform.aina",
-    "tianzhou_agent_platform.store",
-    "tianzhou_agent_platform.api",
-)
+AGENT_CORE = SRC.parent / "unibot_agent"
+
+# Everything the agent core may import besides the standard library and itself.
+AGENT_CORE_ALLOWED = ("pydantic", "langchain", "langchain_core", "langgraph", "unibot_agent")
 
 # Retired by the LangChain migration (plan §7.3): the legacy loop, completion port, summary engine and the
 # compatibility re-exports of moved feature modules.
@@ -69,17 +65,40 @@ def _imported_names(path: Path) -> set[str]:
     return names
 
 
-def test_agent_runtime_has_no_domain_or_persistence_imports() -> None:
-    runtime_dir = SRC / "core" / "agent_runtime"
-    assert runtime_dir.is_dir()
+def test_agent_core_imports_only_the_standard_library_pydantic_and_langchain() -> None:
+    assert AGENT_CORE.is_dir()
     offenders: list[str] = []
-    for path in runtime_dir.rglob("*.py"):
-        names = _imported_names(path)
-        for name in names:
-            for forbidden in RUNTIME_FORBIDDEN:
-                if name == forbidden or name.startswith(forbidden + "."):
-                    offenders.append(f"{path.name}: {name}")
-    assert not offenders, f"core/agent_runtime must not import: {offenders}"
+    for path in AGENT_CORE.rglob("*.py"):
+        for name in _imported_names(path):
+            root = name.split(".")[0]
+            if name.startswith("relative:") or root in sys.stdlib_module_names or root in AGENT_CORE_ALLOWED:
+                continue
+            offenders.append(f"{path.relative_to(AGENT_CORE)}: {name}")
+    assert not offenders, f"unibot_agent must not import: {offenders}"
+
+
+def test_agent_core_loads_without_the_platform() -> None:
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, unibot_agent.agent, unibot_agent.ports; "
+            "print([name for name in sys.modules if name.split('.')[0] == 'tianzhou_agent_platform'])",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert loaded.stdout.strip() == "[]"
+
+
+def test_only_the_chat_workflow_and_the_composition_root_drive_the_agent() -> None:
+    importers = sorted(
+        str(path.relative_to(SRC))
+        for path in SRC.rglob("*.py")
+        if "unibot_agent.agent" in _imported_names(path)
+    )
+    assert importers == ["main.py", "services/chat.py"]
 
 
 def test_legacy_runtime_modules_are_removed() -> None:
@@ -118,7 +137,7 @@ def test_conversations_does_not_import_chat_service_or_langgraph_execution() -> 
 def test_runtime_factory_composes_with_scripted_native_model() -> None:
     from langchain_core.tools import tool
 
-    from tianzhou_agent_platform.core.agent_runtime import build_agent
+    from unibot_agent.runtime import build_agent
     from tests.support.fake_chat_model import ScriptedChatModel, assistant
 
     @tool

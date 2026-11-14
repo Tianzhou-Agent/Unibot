@@ -381,7 +381,7 @@ def test_automatic_retries_do_not_repeat_operations_with_side_effects(side_effec
 
 def test_high_risk_tools_are_never_retried_automatically() -> None:
     from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
-    from tianzhou_agent_platform.services.agent_integration.retries import tool_retry_middleware
+    from unibot_agent.retries import tool_retry_middleware
 
     def capability(name: str, side_effect_level: str) -> Capability:
         tool = ToolRecord(**_tool_definition(tool_id=name, side_effect_level=side_effect_level, retries=3))
