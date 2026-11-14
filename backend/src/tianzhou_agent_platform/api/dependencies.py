@@ -7,7 +7,9 @@ from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
 from tianzhou_agent_platform.aina.memory.repository import MemoryRepository
-from tianzhou_agent_platform.aina.package.files import FileBlobs
+from tianzhou_agent_platform.aina.package.files import AinaFileRepository, FileBlobs
+from tianzhou_agent_platform.aina.package.notifications import AinaNotificationRepository
+from tianzhou_agent_platform.aina.package.storage import AinaStorageRepository
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
@@ -103,6 +105,18 @@ def memories(request: Request) -> MemoryRepository:
 
 def workspaces(request: Request) -> WorkspaceRepository:
     return cast(WorkspaceRepository, request.app.state.repository)
+
+
+def aina_files(request: Request) -> AinaFileRepository:
+    return cast(AinaFileRepository, request.app.state.repository)
+
+
+def aina_storage(request: Request) -> AinaStorageRepository:
+    return cast(AinaStorageRepository, request.app.state.repository)
+
+
+def aina_notifications(request: Request) -> AinaNotificationRepository:
+    return cast(AinaNotificationRepository, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.aina.package.notifications import NotificationInbox, NotificationView
-from tianzhou_agent_platform.api.dependencies import repository, request_actor
+from tianzhou_agent_platform.api.dependencies import aina_notifications, repository, request_actor
 from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 
@@ -16,12 +16,12 @@ def create_notification_router() -> APIRouter:
     @router.get("", response_model=NotificationInbox)
     async def list_notifications(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> NotificationInbox:
         actor = request_actor(request)
-        repo = repository(request)
+        repo = aina_notifications(request)
         stored = await repo.list_aina_notifications(tenant_id=actor.tenant_id, user_id=actor.user_id, limit=limit)
         names: dict[str, str] = {}
         for aina_id in {item.aina_id for item in stored}:
             try:
-                names[aina_id] = (await repo.get_aina(aina_id)).manifest.aina.name
+                names[aina_id] = (await repository(request).get_aina(aina_id)).manifest.aina.name
             except PlatformError:
                 names[aina_id] = aina_id
         return NotificationInbox(
@@ -45,7 +45,7 @@ def create_notification_router() -> APIRouter:
     @router.post("/{notification_id}/read", status_code=status.HTTP_204_NO_CONTENT)
     async def mark_read(notification_id: str, request: Request) -> Response:
         actor = request_actor(request)
-        repo = repository(request)
+        repo = aina_notifications(request)
         marked = await repo.mark_aina_notifications_read(
             tenant_id=actor.tenant_id, user_id=actor.user_id, at=utc_now(), notification_id=notification_id
         )
@@ -58,7 +58,7 @@ def create_notification_router() -> APIRouter:
     @router.post("/read-all", status_code=status.HTTP_204_NO_CONTENT)
     async def mark_all_read(request: Request) -> Response:
         actor = request_actor(request)
-        await repository(request).mark_aina_notifications_read(tenant_id=actor.tenant_id, user_id=actor.user_id, at=utc_now())
+        await aina_notifications(request).mark_aina_notifications_read(tenant_id=actor.tenant_id, user_id=actor.user_id, at=utc_now())
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

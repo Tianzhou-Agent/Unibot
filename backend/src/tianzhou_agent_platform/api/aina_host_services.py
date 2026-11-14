@@ -28,7 +28,7 @@ from tianzhou_agent_platform.aina.package.notifications import (
     rate_limited,
 )
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, HostCaller, host_caller, require_scope
-from tianzhou_agent_platform.api.dependencies import documents, memories, model_provider_service, repository, workspaces
+from tianzhou_agent_platform.api.dependencies import aina_notifications, documents, memories, model_provider_service, workspaces
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
@@ -272,7 +272,7 @@ def create_aina_host_services_router() -> APIRouter:
                 status_code=422,
                 source="aina_host",
             )
-        repo = repository(request)
+        repo = aina_notifications(request)
         installation = caller.installation
         recent = await repo.count_aina_notifications(
             tenant_id=installation.tenant_id,
