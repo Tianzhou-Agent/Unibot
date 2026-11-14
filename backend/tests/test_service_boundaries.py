@@ -217,6 +217,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
         "tianzhou_agent_platform.aina.scheduler:ScheduledAinaTaskRepository",
         "tianzhou_agent_platform.aina.scheduler:ScheduledAinaStore",
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+        "tianzhou_agent_platform.services.agent_integration.adapters:MemorySearch",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -266,7 +268,6 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
     "capabilities.py",
     "documents.py",
     "feedback.py",
-    "memories.py",
     "notifications.py",
     "operations.py",
     "workspaces.py",
@@ -274,7 +275,6 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
 
 PENDING_AGGREGATE_IMPORTERS = {
     "aina/builtin.py",
-    "aina/memory/builtin.py",
     "aina/package/tasks.py",
     "api/aina_host.py",
     "api/capabilities.py",
@@ -305,6 +305,7 @@ REPOSITORY_RECEIVERS = frozenset(
         "self.aina_tasks.repository",
         "developer_tokens(request)",
         "schedules(request)",
+        "memories(request)",
     }
 )
 
@@ -346,11 +347,20 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "api/schedules.py": (
         "tianzhou_agent_platform.aina.scheduler:ScheduledAinaTaskRepository",
     ),
+    "aina/memory/builtin.py": (
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+    ),
+    "api/memories.py": (
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+    ),
+    "services/agent_integration/adapters.py": (
+        "tianzhou_agent_platform.services.agent_integration.adapters:MemorySearch",
+        "tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
     "aina/builtin.py",
-    "aina/memory/builtin.py",
     "aina/package/bundled.py",
     "aina/package/devhost.py",
     "api/aina_add_app.py",
@@ -360,13 +370,11 @@ PENDING_PROTOCOL_CONSUMERS = {
     "api/capabilities.py",
     "api/documents.py",
     "api/feedback.py",
-    "api/memories.py",
     "api/notifications.py",
     "api/operations.py",
     "api/workspaces.py",
     "core/capability_discovery.py",
     "observability/service.py",
-    "services/agent_integration/adapters.py",
     "services/platform_tools.py",
 }
 

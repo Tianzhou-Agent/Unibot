@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
+from tianzhou_agent_platform.aina.memory.repository import MemoryRepository
 from tianzhou_agent_platform.aina.package.files import FileBlobs
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
@@ -93,6 +94,10 @@ def developer_tokens(request: Request) -> DeveloperTokenRepository:
 
 def schedules(request: Request) -> ScheduledAinaTaskRepository:
     return cast(ScheduledAinaTaskRepository, request.app.state.repository)
+
+
+def memories(request: Request) -> MemoryRepository:
+    return cast(MemoryRepository, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:
