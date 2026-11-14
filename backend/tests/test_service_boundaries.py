@@ -209,6 +209,9 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.sandbox.service:SandboxStore",
         "tianzhou_agent_platform.aina.project_service:AinaProjectRepository",
         "tianzhou_agent_platform.aina.managed:ManagedAinaStore",
+        "tianzhou_agent_platform.auth.repository:UserRepository",
+        "tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",
+        "tianzhou_agent_platform.auth.service:AuthStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -256,7 +259,6 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
     "aina_host_services.py",
     "aina_ui.py",
     "capabilities.py",
-    "developer_tokens.py",
     "documents.py",
     "feedback.py",
     "memories.py",
@@ -276,8 +278,6 @@ PENDING_AGGREGATE_IMPORTERS = {
     "api/capabilities.py",
     "api/dependencies.py",
     "api/schedules.py",
-    "auth/oidc.py",
-    "auth/service.py",
     "observability/service.py",
     "services/platform_tools.py",
     "tasks/service.py",
@@ -303,6 +303,7 @@ REPOSITORY_RECEIVERS = frozenset(
         "self.registry",
         "self.service.repository",
         "self.aina_tasks.repository",
+        "developer_tokens(request)",
     }
 )
 
@@ -329,6 +330,9 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "sandbox/service.py": ("tianzhou_agent_platform.sandbox.service:SandboxStore",),
     "aina/project_service.py": ("tianzhou_agent_platform.aina.project_service:AinaProjectRepository",),
     "aina/managed.py": ("tianzhou_agent_platform.aina.managed:ManagedAinaStore",),
+    "auth/service.py": ("tianzhou_agent_platform.auth.service:AuthStore",),
+    "auth/oidc.py": ("tianzhou_agent_platform.auth.repository:UserRepository",),
+    "api/developer_tokens.py": ("tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
@@ -343,7 +347,6 @@ PENDING_PROTOCOL_CONSUMERS = {
     "api/aina_host_services.py",
     "api/aina_ui.py",
     "api/capabilities.py",
-    "api/developer_tokens.py",
     "api/documents.py",
     "api/feedback.py",
     "api/memories.py",
@@ -351,8 +354,6 @@ PENDING_PROTOCOL_CONSUMERS = {
     "api/operations.py",
     "api/schedules.py",
     "api/workspaces.py",
-    "auth/oidc.py",
-    "auth/service.py",
     "core/capability_discovery.py",
     "observability/service.py",
     "services/agent_integration/adapters.py",

@@ -16,6 +16,7 @@ from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.repository import DeveloperTokenRepository
 from tianzhou_agent_platform.auth.service import AuthService
 from tianzhou_agent_platform.tasks.service import TaskService
 
@@ -83,6 +84,10 @@ def require_actor_ownership(request: Request, *, user_id: str, tenant_id: str) -
 
 def repository(request: Request) -> InMemoryRepository:
     return cast(InMemoryRepository, request.app.state.repository)
+
+
+def developer_tokens(request: Request) -> DeveloperTokenRepository:
+    return cast(DeveloperTokenRepository, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:

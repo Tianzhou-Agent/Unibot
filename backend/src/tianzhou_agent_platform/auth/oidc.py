@@ -14,9 +14,9 @@ from jose import JWTError, jwt
 from pydantic import EmailStr, TypeAdapter
 
 from tianzhou_agent_platform.auth.models import OidcProvider, UserRecord
+from tianzhou_agent_platform.auth.repository import UserRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 DISPLAY_NAMES = {"google": "Google", "microsoft": "Microsoft", "apple": "Apple"}
 _CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
@@ -24,7 +24,7 @@ _CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
 
 class OidcAuthService:
     def __init__(
-        self, *, settings: AgentSettings, repository: InMemoryRepository, http_client: httpx.AsyncClient | None = None
+        self, *, settings: AgentSettings, repository: UserRepository, http_client: httpx.AsyncClient | None = None
     ) -> None:
         self.settings = settings
         self.repository = repository
