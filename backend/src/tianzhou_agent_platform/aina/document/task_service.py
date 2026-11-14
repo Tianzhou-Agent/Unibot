@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Protocol
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -17,10 +18,13 @@ from tianzhou_agent_platform.aina.document.task_models import (
     DocumentDraftSection,
     DocumentEditTask,
     DocumentEditTaskCreate,
+    DocumentEditTaskRepository,
     DocumentEditTaskStatus,
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.core.leases import LeaseStore
+from tianzhou_agent_platform.core.workspace import Workspace
+from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig
 from tianzhou_agent_platform.store.errors import StorageValidationError
 
 _SUBMIT_DRAFT_TOOL = {
@@ -43,17 +47,27 @@ _SUBMIT_DRAFT_TOOL = {
 }
 
 
+class DocumentEditTaskStore(DocumentEditTaskRepository, Protocol):
+    """Edit tasks plus the workspace check and the actor's model the drafting step uses."""
+
+    async def require_workspace_actor(self, workspace_id: str, *, user_id: str, tenant_id: str) -> Workspace: ...
+
+    async def get_default_model_runtime(self, *, user_id: str, tenant_id: str) -> ModelRuntimeConfig | None: ...
+
+
 class DocumentEditTaskService:
     def __init__(
         self,
         documents: DocumentService,
-        repository: InMemoryRepository,
+        repository: DocumentEditTaskStore,
         llm: BaseChatModel | None,
         *,
         model_callbacks: Callable[[BaseChatModel, str], list[BaseCallbackHandler]] | None = None,
+        leases: LeaseStore | None = None,
     ) -> None:
         self.documents = documents
         self.repository = repository
+        self.leases = leases
         self.llm = llm
         # Native callbacks attached to each draft request of a task (e.g. ``/llm-calls`` recording).
         self.model_callbacks = model_callbacks
@@ -553,9 +567,9 @@ class DocumentEditTaskService:
         )
 
     async def _acquire_merge_lock(self, key: str) -> bool:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None:
-            result = await stores.redis.set_if_absent(
+        leases = self.leases
+        if leases is not None:
+            result = await leases.set_if_absent(
                 "document-merge",
                 key,
                 {"acquired_at": datetime.now(UTC).isoformat()},
@@ -569,9 +583,9 @@ class DocumentEditTaskService:
         return True
 
     async def _release_merge_lock(self, key: str) -> None:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None:
-            await stores.redis.delete("document-merge", key)
+        leases = self.leases
+        if leases is not None:
+            await leases.delete("document-merge", key)
             return
         lock = self._merge_locks.get(key)
         if lock is not None and lock.locked():
@@ -840,9 +854,9 @@ class DocumentEditWorker:
         return content
 
     async def _claim(self, task_id: str) -> bool:
-        stores = getattr(self.service.repository, "stores", None)
-        if stores is not None:
-            result = await stores.redis.set_if_absent(
+        leases = self.service.leases
+        if leases is not None:
+            result = await leases.set_if_absent(
                 "document-edit-worker",
                 task_id,
                 {"claimed_at": datetime.now(UTC).isoformat()},
@@ -855,15 +869,15 @@ class DocumentEditWorker:
         return True
 
     async def _release(self, task_id: str) -> None:
-        stores = getattr(self.service.repository, "stores", None)
-        if stores is not None:
-            await stores.redis.delete("document-edit-worker", task_id)
+        leases = self.service.leases
+        if leases is not None:
+            await leases.delete("document-edit-worker", task_id)
         self._local_claims.discard(task_id)
 
     async def _claim_exists(self, task_id: str) -> bool:
-        stores = getattr(self.service.repository, "stores", None)
-        if stores is not None:
-            return bool(await stores.redis.exists("document-edit-worker", task_id))
+        leases = self.service.leases
+        if leases is not None:
+            return bool(await leases.exists("document-edit-worker", task_id))
         return task_id in self._local_claims
 
 

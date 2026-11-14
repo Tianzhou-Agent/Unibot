@@ -5,7 +5,7 @@ import hashlib
 import secrets
 import ssl
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -21,9 +21,9 @@ from tianzhou_agent_platform.auth.models import (
     UserRecord,
 )
 from tianzhou_agent_platform.auth.oidc import OidcAuthService
+from tianzhou_agent_platform.auth.repository import DeveloperTokenRepository, UserRepository
 from tianzhou_agent_platform.config import DEV_USER_EMAIL, DEV_USER_ID, AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 _SESSION_TOKEN_TYPE = "session"
 _OAUTH_TOKEN_TYPE = "github-oauth"
@@ -36,12 +36,16 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+class AuthStore(UserRepository, DeveloperTokenRepository, Protocol):
+    """Users and developer tokens, the records AuthService signs in with."""
+
+
 class AuthService:
     def __init__(
         self,
         *,
         settings: AgentSettings,
-        repository: InMemoryRepository,
+        repository: AuthStore,
         github_http_client: httpx.AsyncClient | None = None,
         huawei_http_client: httpx.AsyncClient | None = None,
         oidc_http_client: httpx.AsyncClient | None = None,

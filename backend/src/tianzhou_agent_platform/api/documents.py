@@ -19,7 +19,7 @@ from tianzhou_agent_platform.aina.document.models import (
     DocumentSectionUpdateResult,
     DocumentTreeResponse,
 )
-from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, documents, repository
+from tianzhou_agent_platform.api.dependencies import actor_scope, bind_actor, documents, workspaces
 from tianzhou_agent_platform.conversations.attachments import content_disposition
 
 
@@ -351,7 +351,7 @@ async def _workspace_storage_key(
 ) -> str | None:
     if workspace_id is None:
         return None
-    workspace = await repository(request).require_workspace_actor(
+    workspace = await workspaces(request).require_workspace_actor(
         workspace_id,
         user_id=user_id,
         tenant_id=tenant_id,

@@ -2,20 +2,21 @@
 
 import hashlib
 import re
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
-from tianzhou_agent_platform.aina.package.bundled import effective_installation, with_bundled
+from tianzhou_agent_platform.aina.package.bundled import AinaListing, InstallationLookup, effective_installation, with_bundled
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
-from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaCanvasResponse, AinaInstallation, AinaRecord
 from tianzhou_agent_platform.aina.protocol.widgets import (
     WidgetAction,
     WidgetApp,
     WidgetDefinition,
     WidgetField,
 )
+from tianzhou_agent_platform.conversations.models import Conversation
+from tianzhou_agent_platform.conversations.repository import ConversationAccess
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.tasks.operation import TASK_TOOL_IDS, invoke_task_operation
 from tianzhou_agent_platform.tasks.service import TaskService
 
@@ -33,8 +34,22 @@ PLATFORM_TOOL_IDS = {
 } | TASK_TOOL_IDS
 
 
+class PlatformToolStore(InstallationLookup, AinaListing, ConversationAccess, Protocol):
+    """The registry reads and the conversation binding the platform tools (app list, open, describe) use."""
+
+    async def get_aina(self, aina_id: str) -> AinaRecord: ...
+
+    async def list_installations(
+        self, *, tenant_id: str | None = None, user_id: str | None = None
+    ) -> list[AinaInstallation]: ...
+
+    async def bind_conversation_aina(
+        self, conversation_id: str, aina_id: str, *, make_primary: bool = False, mark_used: bool = False
+    ) -> Conversation: ...
+
+
 async def list_app_widget(
-    repository: InMemoryRepository,
+    repository: PlatformToolStore,
     *,
     user_id: str,
     tenant_id: str,
@@ -50,7 +65,7 @@ async def list_app_widget(
 
 
 async def _available_apps(
-    repository: InMemoryRepository,
+    repository: PlatformToolStore,
     *,
     user_id: str,
     tenant_id: str,
@@ -102,7 +117,7 @@ async def _available_apps(
 
 
 async def suggest_ainas_widget(
-    repository: InMemoryRepository,
+    repository: PlatformToolStore,
     aina_ids: list[str],
     reason: str,
     *,
@@ -141,7 +156,7 @@ async def suggest_ainas_widget(
 
 
 async def open_aina(
-    repository: InMemoryRepository,
+    repository: PlatformToolStore,
     aina_id: str,
     *,
     user_id: str,
@@ -195,7 +210,7 @@ async def open_aina(
 
 
 async def describe_aina(
-    repository: InMemoryRepository,
+    repository: PlatformToolStore,
     aina_id: str,
     *,
     user_id: str,
@@ -236,7 +251,7 @@ async def describe_aina(
 
 
 async def invoke_platform_tool(
-    repository: InMemoryRepository,
+    repository: PlatformToolStore,
     tool_id: str,
     arguments: dict[str, Any],
     *,

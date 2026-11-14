@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Protocol, runtime_checkable
 
 from pydantic import Field, field_validator
 
@@ -44,3 +45,21 @@ class Workspace(StrictModel):
     storage_key: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+@runtime_checkable
+class WorkspaceRepository(Protocol):
+    async def create_workspace(self, data: WorkspaceCreate) -> Workspace: ...
+
+    async def get_workspace(self, workspace_id: str) -> Workspace: ...
+
+    async def require_workspace_actor(self, workspace_id: str, *, user_id: str, tenant_id: str) -> Workspace: ...
+
+    async def list_workspaces(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[Workspace]: ...
+
+    async def update_workspace(self, workspace_id: str, data: WorkspaceUpdate) -> Workspace: ...

@@ -178,6 +178,8 @@ def create_app(
         else InMemoryAinaProjectArtifactStore()
     )
     aina_project_service = AinaProjectService(resolved_repository, resolved_aina_project_artifact_store)
+    # The shared Redis gives scheduled runs, sandbox operations and document edits cross-node exclusion.
+    leases = storage_stores.redis if storage_stores is not None else None
     resolved_sandbox_service = sandbox_service or create_sandbox_service(
         resolved_settings,
         resolved_repository,
@@ -187,6 +189,7 @@ def create_app(
             if storage_settings is not None
             else None
         ),
+        leases=leases,
     )
     tracer_provider = (
         setup_tracer_provider(
@@ -250,6 +253,7 @@ def create_app(
             resolved_repository,
             resolved_llm,
             model_callbacks=document_model_callbacks,
+            leases=leases,
         )
         if resolved_document_service is not None
         else None
@@ -262,7 +266,7 @@ def create_app(
         enforce_destination_policy=enforce_auth,
     )
     health_client = model_health_http_client or httpx.AsyncClient()
-    scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id)
+    scheduler = AinaScheduler(resolved_repository, gateway, node_id=resolved_settings.node_id, leases=leases)
     aina_packages = AinaPackageService(
         repository=resolved_repository,
         settings=resolved_settings,

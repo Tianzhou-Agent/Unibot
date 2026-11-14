@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import Field, field_validator, model_validator
@@ -142,3 +142,32 @@ class DocumentEditTaskActor(StrictModel):
     user_id: str = "anonymous"
     tenant_id: str = "default"
     workspace_id: str | None = None
+
+
+@runtime_checkable
+class DocumentEditTaskRepository(Protocol):
+    async def create_document_edit_task(self, task: DocumentEditTask) -> DocumentEditTask: ...
+
+    async def get_document_edit_task(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> DocumentEditTask: ...
+
+    async def list_document_edit_tasks(
+        self,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        document_name: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[DocumentEditTask]: ...
+
+    async def put_document_edit_task(
+        self,
+        task: DocumentEditTask,
+        *,
+        expected_version: int,
+    ) -> DocumentEditTask: ...

@@ -256,7 +256,7 @@ def create_dev_app(folder: Path, *, host: str = "127.0.0.1", port: int = 8790) -
             raise PlatformError("CONFLICT", "The package is not registered: " + "; ".join(package.errors), status_code=409)
         installation = await package.installation()
         if package.conversation_id is None:
-            conversation = await app.state.repository.create_conversation(
+            conversation = await app.state.conversation_service.create(
                 ConversationCreate(user_id=USER_ID, tenant_id=TENANT_ID, title="aina dev")
             )
             package.conversation_id = conversation.id

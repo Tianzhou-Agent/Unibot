@@ -22,7 +22,7 @@ from tianzhou_agent_platform.aina.package.service import package_runtime, resolv
 from tianzhou_agent_platform.aina.package.validation import PackageValidationReport, validate_package_archive
 from tianzhou_agent_platform.aina.project import MAX_PROJECT_ARCHIVE_BYTES, build_project_archive
 from tianzhou_agent_platform.aina.protocol.models import AinaRecord
-from tianzhou_agent_platform.api.dependencies import aina_packages, repository, require_platform_admin
+from tianzhou_agent_platform.api.dependencies import aina_packages, aina_registry, require_platform_admin
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 
@@ -108,7 +108,7 @@ def create_aina_add_app_router() -> APIRouter:
     async def download_aina_package(aina_id: str, request: Request) -> Response:
         """The registered archive of an uploaded package, for the Add app page to edit as its next version."""
         require_platform_admin(request)
-        record = await repository(request).get_aina(aina_id)
+        record = await aina_registry(request).get_aina(aina_id)
         packages = aina_packages(request)
         if record.manifest.runtime.type != "package" or is_bundled(record) or packages.ui is None:
             raise not_found("AINA package", aina_id)

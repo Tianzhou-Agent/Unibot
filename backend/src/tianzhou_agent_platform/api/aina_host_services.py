@@ -28,7 +28,7 @@ from tianzhou_agent_platform.aina.package.notifications import (
     rate_limited,
 )
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, HostCaller, host_caller, require_scope
-from tianzhou_agent_platform.api.dependencies import documents, model_provider_service, repository
+from tianzhou_agent_platform.api.dependencies import aina_notifications, documents, memories, model_provider_service, workspaces
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
@@ -118,7 +118,7 @@ def create_aina_host_services_router() -> APIRouter:
         workspace_id = caller.token.reference.workspace_id
         if workspace_id is None:
             return None
-        workspace = await repository(request).require_workspace_actor(
+        workspace = await workspaces(request).require_workspace_actor(
             workspace_id, user_id=caller.installation.user_id, tenant_id=caller.installation.tenant_id
         )
         return workspace.storage_key
@@ -203,7 +203,7 @@ def create_aina_host_services_router() -> APIRouter:
     async def own_memory(request: Request, caller: HostCaller, memory_id: str) -> None:
         """Only the user's own memories can be named; another user's id is simply not found."""
         try:
-            await repository(request).get_memory(memory_id, **actor(caller))
+            await memories(request).get_memory(memory_id, **actor(caller))
         except PlatformError as exc:
             if exc.code in {"PERMISSION_DENIED", "RESOURCE_NOT_FOUND"}:
                 raise not_found("Memory", memory_id) from exc
@@ -217,7 +217,7 @@ def create_aina_host_services_router() -> APIRouter:
         caller: HostCaller = Depends(host_caller),
     ) -> HostMemoryList:
         require_scope(caller, "memory.read", "memory.search")
-        found = await repository(request).search_memories(query, **actor(caller), limit=limit)
+        found = await memories(request).search_memories(query, **actor(caller), limit=limit)
         return HostMemoryList(items=[host_memory(item) for item in found])
 
     @router.post(f"{HOST_API_PREFIX}/memory", response_model=HostMemory, status_code=status.HTTP_201_CREATED)
@@ -225,7 +225,7 @@ def create_aina_host_services_router() -> APIRouter:
         payload: MemoryInput, request: Request, caller: HostCaller = Depends(host_caller)
     ) -> HostMemory:
         require_scope(caller, "memory.write", "memory.create")
-        record = await repository(request).create_memory(
+        record = await memories(request).create_memory(
             MemoryCreate(
                 content=payload.content,
                 category=payload.category,
@@ -242,7 +242,7 @@ def create_aina_host_services_router() -> APIRouter:
     ) -> HostMemory:
         require_scope(caller, "memory.write", "memory.update")
         await own_memory(request, caller, memory_id)
-        record = await repository(request).update_memory(
+        record = await memories(request).update_memory(
             memory_id, MemoryUpdate(content=payload.content, category=payload.category, **actor(caller))
         )
         return host_memory(record)
@@ -251,7 +251,7 @@ def create_aina_host_services_router() -> APIRouter:
     async def delete_memory(memory_id: str, request: Request, caller: HostCaller = Depends(host_caller)) -> Response:
         require_scope(caller, "memory.write", "memory.delete")
         await own_memory(request, caller, memory_id)
-        await repository(request).remove_memory(memory_id, **actor(caller))
+        await memories(request).remove_memory(memory_id, **actor(caller))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # --- notify -------------------------------------------------------------------------------------------------
@@ -272,7 +272,7 @@ def create_aina_host_services_router() -> APIRouter:
                 status_code=422,
                 source="aina_host",
             )
-        repo = repository(request)
+        repo = aina_notifications(request)
         installation = caller.installation
         recent = await repo.count_aina_notifications(
             tenant_id=installation.tenant_id,

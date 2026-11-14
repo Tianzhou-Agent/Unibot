@@ -134,6 +134,32 @@ def test_conversations_does_not_import_chat_service_or_langgraph_execution() -> 
     assert not offenders, f"conversations must not import: {offenders}"
 
 
+def test_lease_users_get_the_shared_redis_store_from_the_composition_root(tmp_path: Path) -> None:
+    # Cross-node exclusion of scheduled runs, sandbox operations and document edits depends on these services
+    # sharing the app's Redis; without it each silently falls back to process-local locks. Building the app does
+    # not connect, so unreachable addresses are enough.
+    from pydantic import SecretStr
+
+    from tianzhou_agent_platform.config import AgentSettings
+    from tianzhou_agent_platform.main import create_app
+    from tianzhou_agent_platform.store.settings import StorageSettings
+
+    storage = StorageSettings(
+        mysql_dsn=SecretStr("mysql+aiomysql://unibot:unibot@127.0.0.1:1/unibot"),
+        redis_dsn=SecretStr("redis://127.0.0.1:1/0"),
+        nas_root_path=tmp_path,
+    )
+    state = create_app(settings=AgentSettings(obs_enabled=False), storage_settings=storage).state
+    redis = state.storage_stores.redis
+    assert state.aina_scheduler.leases is redis
+    assert state.sandbox_service.leases is redis
+    assert state.document_edit_task_service.leases is redis
+
+    local = create_app(settings=AgentSettings(obs_enabled=False)).state
+    assert local.aina_scheduler.leases is None
+    assert local.sandbox_service.leases is None
+
+
 def test_runtime_factory_composes_with_scripted_native_model() -> None:
     from langchain_core.tools import tool
 
@@ -189,7 +215,11 @@ def test_conversation_service_accepts_protocol_repository() -> None:
 
 
 def _protocol_methods(protocol: type) -> list[str]:
-    return [name for name, value in vars(protocol).items() if inspect.iscoroutinefunction(value)]
+    # Composed protocols inherit methods from the feature protocols they combine.
+    names: dict[str, None] = {}
+    for cls in protocol.__mro__:
+        names.update((name, None) for name, value in vars(cls).items() if inspect.iscoroutinefunction(value))
+    return list(names)
 
 
 @pytest.mark.parametrize(
@@ -199,6 +229,36 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.conversations.repository:ApprovalRepository",
         "tianzhou_agent_platform.conversations.repository:ConversationRunRepository",
         "tianzhou_agent_platform.model_providers.repository:ModelProviderRepository",
+        "tianzhou_agent_platform.aina.package.service:PackageRegistry",
+        "tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",
+        "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
+        "tianzhou_agent_platform.sandbox.service:SandboxStore",
+        "tianzhou_agent_platform.aina.project_service:AinaProjectRepository",
+        "tianzhou_agent_platform.aina.managed:ManagedAinaStore",
+        "tianzhou_agent_platform.auth.repository:UserRepository",
+        "tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",
+        "tianzhou_agent_platform.auth.service:AuthStore",
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+        "tianzhou_agent_platform.aina.document.task_models:DocumentEditTaskRepository",
+        "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaTaskRepository",
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaStore",
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+        "tianzhou_agent_platform.services.agent_integration.adapters:MemorySearch",
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+        "tianzhou_agent_platform.core.feedback:FeedbackRepository",
+        "tianzhou_agent_platform.aina.package.files:AinaFileRepository",
+        "tianzhou_agent_platform.aina.package.storage:AinaStorageRepository",
+        "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+        "tianzhou_agent_platform.observability.repository:TraceRepository",
+        "tianzhou_agent_platform.observability.service:ObservedStore",
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.builtin:BuiltinToolStore",
+        "tianzhou_agent_platform.aina.package.bundled:InstallationLookup",
+        "tianzhou_agent_platform.aina.package.bundled:AinaListing",
+        "tianzhou_agent_platform.core.capability_discovery:AinaGraphSource",
+        "tianzhou_agent_platform.services.platform_tools:PlatformToolStore",
+        "tianzhou_agent_platform.services.agent_integration.executor:ExecutorStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -228,13 +288,295 @@ def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -
 
 
 def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> None:
+    # Every route reaches storage through a feature service or a typed accessor of api/dependencies.py.
     offenders: list[str] = []
-    for route in ("conversations.py", "model_settings.py"):
-        tree = ast.parse((SRC / "api" / route).read_text(encoding="utf-8"))
+    for path in sorted((SRC / "api").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "tianzhou_agent_platform.api.dependencies":
-                offenders.extend(f"{route}: {alias.name}" for alias in node.names if alias.name == "repository")
+                offenders.extend(path.name for alias in node.names if alias.name == "repository")
     assert not offenders, offenders
+    from tianzhou_agent_platform.api import dependencies
+
+    assert not hasattr(dependencies, "repository"), "routes get storage through typed feature accessors"
+
+
+# Names under which callers hold the aggregate repository (or a protocol-typed view of it).
+REPOSITORY_RECEIVERS = frozenset(
+    {
+        "repository",
+        "repo",
+        "data_repository",
+        "repository(request)",
+        "self.repository",
+        "self._repository",
+        "self._repo",
+        "self.registry",
+        "self.service.repository",
+        "self.aina_tasks.repository",
+        "developer_tokens(request)",
+        "schedules(request)",
+        "memories(request)",
+        "workspaces(request)",
+        "aina_files(request)",
+        "aina_storage(request)",
+        "aina_notifications(request)",
+        "conversation_access(request)",
+        "conversation_records(request)",
+        "feedback_records(request)",
+        "trace_records(request)",
+        "aina_registry(request)",
+        "platform_tool_store(request)",
+        "user_records(request)",
+        "memory_records(request)",
+        "document_edit_task_records(request)",
+        "aina_files(request)",
+    }
+)
+
+# Every module that calls the repository, and the protocols its repository receivers are typed with.
+PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
+    "conversations/service.py": (
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.conversations.repository:ApprovalRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRunRepository",
+    ),
+    "conversations/attachment_service.py": ("tianzhou_agent_platform.conversations.repository:ConversationRepository",),
+    "model_providers/service.py": ("tianzhou_agent_platform.model_providers.repository:ModelProviderRepository",),
+    "aina/package/service.py": ("tianzhou_agent_platform.aina.package.service:PackageRegistry",),
+    "aina/package/tasks.py": ("tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",),
+    "services/agent_integration/capabilities.py": (
+        "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
+    ),
+    "services/agent_integration/prompts.py": (
+        "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
+    ),
+    "services/agent_integration/provider.py": (
+        "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
+    ),
+    "sandbox/service.py": ("tianzhou_agent_platform.sandbox.service:SandboxStore",),
+    "aina/project_service.py": ("tianzhou_agent_platform.aina.project_service:AinaProjectRepository",),
+    "aina/managed.py": ("tianzhou_agent_platform.aina.managed:ManagedAinaStore",),
+    "auth/service.py": ("tianzhou_agent_platform.auth.service:AuthStore",),
+    "auth/oidc.py": ("tianzhou_agent_platform.auth.repository:UserRepository",),
+    "api/developer_tokens.py": ("tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",),
+    "tasks/service.py": (
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+    ),
+    "aina/document/task_service.py": (
+        "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
+    ),
+    "aina/scheduler.py": (
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaStore",
+    ),
+    "api/schedules.py": (
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaTaskRepository",
+    ),
+    "aina/memory/builtin.py": (
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+    ),
+    "api/memories.py": (
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+    ),
+    "services/agent_integration/adapters.py": (
+        "tianzhou_agent_platform.services.agent_integration.adapters:MemorySearch",
+        "tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",
+    ),
+    "api/workspaces.py": (
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+    ),
+    "api/documents.py": (
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+    ),
+    "api/aina_host_services.py": (
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+        "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+    ),
+    "observability/service.py": (
+        "tianzhou_agent_platform.observability.service:ObservedStore",
+    ),
+    "api/feedback.py": (
+        "tianzhou_agent_platform.core.feedback:FeedbackRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.observability.repository:TraceRepository",
+    ),
+    "aina/builtin.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.builtin:BuiltinToolStore",
+    ),
+    "aina/package/bundled.py": (
+        "tianzhou_agent_platform.aina.package.bundled:InstallationLookup",
+        "tianzhou_agent_platform.aina.package.bundled:AinaListing",
+    ),
+    "aina/package/devhost.py": (
+        "tianzhou_agent_platform.aina.package.service:PackageRegistry",
+    ),
+    "core/capability_discovery.py": (
+        "tianzhou_agent_platform.core.capability_discovery:AinaGraphSource",
+    ),
+    "api/aina_add_app.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+    ),
+    "api/aina_ui.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+    ),
+    "api/aina_host.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.package.files:AinaFileRepository",
+        "tianzhou_agent_platform.aina.package.storage:AinaStorageRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+    ),
+    "api/notifications.py": (
+        "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+    ),
+    "services/platform_tools.py": (
+        "tianzhou_agent_platform.services.platform_tools:PlatformToolStore",
+    ),
+    "api/capabilities.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.package.files:AinaFileRepository",
+        "tianzhou_agent_platform.aina.package.storage:AinaStorageRepository",
+        "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+    ),
+    "api/operations.py": (
+        "tianzhou_agent_platform.auth.repository:UserRepository",
+        "tianzhou_agent_platform.core.feedback:FeedbackRepository",
+        "tianzhou_agent_platform.observability.repository:TraceRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+        "tianzhou_agent_platform.aina.document.task_models:DocumentEditTaskRepository",
+    ),
+}
+
+# Feature modules store/ may import: data models, errors and the few helpers it persists with. Adding a service,
+# route or composition import to store/ fails; removing one only needs this set shrunk.
+STORE_ALLOWED_FEATURE_IMPORTS = {
+    "tianzhou_agent_platform.aina.document.task_models",
+    "tianzhou_agent_platform.aina.memory.models",
+    "tianzhou_agent_platform.aina.package.files",
+    "tianzhou_agent_platform.aina.package.notifications",
+    "tianzhou_agent_platform.aina.package.storage",
+    "tianzhou_agent_platform.aina.package.tasks",
+    "tianzhou_agent_platform.aina.project",
+    "tianzhou_agent_platform.aina.protocol.models",
+    "tianzhou_agent_platform.aina.scheduler",
+    "tianzhou_agent_platform.aina.skill.models",
+    "tianzhou_agent_platform.aina.tool.models",
+    "tianzhou_agent_platform.auth.models",
+    "tianzhou_agent_platform.conversations.attachments",
+    "tianzhou_agent_platform.conversations.models",
+    "tianzhou_agent_platform.conversations.schemas",
+    "tianzhou_agent_platform.core.errors",
+    "tianzhou_agent_platform.core.feedback",
+    "tianzhou_agent_platform.core.workspace",
+    "tianzhou_agent_platform.model_providers.models",
+    "tianzhou_agent_platform.observability.context",
+    "tianzhou_agent_platform.observability.models",
+    "tianzhou_agent_platform.observability.trace_details",
+    "tianzhou_agent_platform.sandbox.models",
+    "tianzhou_agent_platform.tasks.store",
+}
+
+_AGGREGATE_MODULES = ("tianzhou_agent_platform.store.memory_repository", "tianzhou_agent_platform.store.repository")
+
+
+def _source_modules() -> list[tuple[str, ast.Module]]:
+    return [
+        (str(path.relative_to(SRC)), ast.parse(path.read_text(encoding="utf-8")))
+        for path in sorted(SRC.rglob("*.py"))
+        if not str(path.relative_to(SRC)).startswith("store/")
+    ]
+
+
+def _aggregate_methods() -> set[str]:
+    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+
+    return {
+        name
+        for name, value in vars(InMemoryRepository).items()
+        if not name.startswith("_") and inspect.iscoroutinefunction(value)
+    }
+
+
+def _repository_reads(tree: ast.Module) -> set[str]:
+    return {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and ast.unparse(node.value) in REPOSITORY_RECEIVERS
+    }
+
+
+def test_only_the_composition_root_imports_the_aggregate_repository() -> None:
+    importers: set[str] = set()
+    for module, tree in _source_modules():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in _AGGREGATE_MODULES:
+                importers.add(module)
+            elif isinstance(node, ast.ImportFrom) and node.module == "tianzhou_agent_platform.store":
+                if any(alias.name == "PersistentRepository" for alias in node.names):
+                    importers.add(module)
+            elif isinstance(node, ast.Import) and any(alias.name in _AGGREGATE_MODULES for alias in node.names):
+                importers.add(module)
+    assert sorted(importers) == ["main.py"]
+
+
+def test_callers_use_only_their_protocol_methods() -> None:
+    import importlib
+
+    aggregate = _aggregate_methods()
+    unmapped: list[str] = []
+    widened: list[str] = []
+    for module, tree in _source_modules():
+        if module == "main.py":
+            continue
+        reads = _repository_reads(tree)
+        if module in PROTOCOL_CONSUMERS:
+            allowed: set[str] = set()
+            for protocol_path in PROTOCOL_CONSUMERS[module]:
+                module_name, _, class_name = protocol_path.partition(":")
+                allowed.update(_protocol_methods(getattr(importlib.import_module(module_name), class_name)))
+            widened.extend(f"{module}: {name}" for name in sorted((reads & aggregate) - allowed))
+        elif reads & aggregate:
+            unmapped.append(f"{module}: {sorted(reads & aggregate)}")
+    assert not widened, f"methods outside the declared protocols: {widened}"
+    assert not unmapped, f"modules using the repository without a declared protocol: {unmapped}"
+
+
+def test_no_caller_reads_repository_private_state() -> None:
+    readers: set[str] = set()
+    for module, tree in _source_modules():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr.startswith("_")
+                and not node.attr.startswith("__")
+                and ast.unparse(node.value) in REPOSITORY_RECEIVERS
+            ):
+                readers.add(module)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"getattr", "hasattr"}
+                and node.args
+                and ast.unparse(node.args[0]) in REPOSITORY_RECEIVERS
+            ):
+                readers.add(module)
+    assert not readers, f"reach Redis through a LeaseStore, not the repository object: {sorted(readers)}"
+
+
+def test_store_imports_only_feature_models() -> None:
+    imported: set[str] = set()
+    for path in (SRC / "store").rglob("*.py"):
+        for name in _imported_names(path):
+            if name.startswith("tianzhou_agent_platform.") and not name.startswith("tianzhou_agent_platform.store"):
+                imported.add(name)
+    assert imported <= STORE_ALLOWED_FEATURE_IMPORTS, sorted(imported - STORE_ALLOWED_FEATURE_IMPORTS)
 
 
 def test_native_messages_are_execution_representation() -> None:
@@ -273,3 +615,49 @@ def test_default_approval_record_serializes_like_the_previous_release() -> None:
     native = approval.model_copy(update={"runtime_ref": {"thread_id": "lc-v2:conv_1"}, "run_generation": 2})
     assert native.model_dump()["runtime_ref"] == {"thread_id": "lc-v2:conv_1"}
     assert ApprovalRecord.model_validate(native.model_dump(mode="json")).run_generation == 2
+
+
+def test_moved_schedule_update_keeps_its_result() -> None:
+    # Plan step 6 moves this helper out of store/; its result is persisted, so pin it across the move.
+    from datetime import UTC, datetime, timedelta
+
+    from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTask, ScheduledAinaTaskUpdate
+    from tianzhou_agent_platform.store.memory_repository import updated_scheduled_aina_task
+
+    created = datetime(2026, 1, 1, tzinfo=UTC)
+    task = ScheduledAinaTask(
+        id="schedule_1", aina_id="app", user_id="u", tenant_id="t", name="n", input={"message": "old"},
+        interval_seconds=60, next_run_at=created, created_at=created, updated_at=created, enabled=False,
+    )
+    updated = updated_scheduled_aina_task(
+        task, ScheduledAinaTaskUpdate(prompt="new", interval_seconds=120, enabled=True, aina_id=None)
+    )
+    assert updated.model_dump(exclude={"updated_at", "next_run_at"}) == {
+        **task.model_dump(exclude={"updated_at", "next_run_at"}),
+        "aina_id": "",
+        "prompt": "new",
+        "input": {"message": "new"},
+        "interval_seconds": 120,
+        "enabled": True,
+    }
+    assert updated.next_run_at - updated.updated_at == timedelta(seconds=120)
+    unchanged = updated_scheduled_aina_task(task, ScheduledAinaTaskUpdate(name="renamed"))
+    assert unchanged.next_run_at == created and unchanged.name == "renamed" and unchanged.prompt is None
+    from tianzhou_agent_platform.aina import scheduler
+
+    assert scheduler.updated_scheduled_aina_task is updated_scheduled_aina_task
+
+
+def test_moved_installation_key_keeps_its_value() -> None:
+    # Plan step 11 moves this helper out of store/; it builds stored row keys, so pin its output across the move.
+    from tianzhou_agent_platform.store.memory_repository import installation_record_id
+
+    assert installation_record_id("t1", "alice", "app.one") == (
+        "25a16b6bc5ed296f8c534aa06271a9bead8ce1b8c3b8972cb6e83648ad12c229"
+    )
+    assert installation_record_id("租户", "用户", "应用") == (
+        "090e7c7ebf2b5449f0cb0bf1b95d4c6f2ebf5a8a77fbe0482db11c41944dc0d3"
+    )
+    from tianzhou_agent_platform.aina.protocol import models
+
+    assert models.installation_record_id is installation_record_id

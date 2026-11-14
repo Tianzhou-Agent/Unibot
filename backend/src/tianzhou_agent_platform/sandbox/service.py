@@ -6,10 +6,12 @@ import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import uuid4
 
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.core.leases import LeaseStore
+from tianzhou_agent_platform.core.workspace import Workspace
 from tianzhou_agent_platform.sandbox.drivers import SandboxDriver
 from tianzhou_agent_platform.sandbox.models import (
     SandboxEnsureRequest,
@@ -17,17 +19,26 @@ from tianzhou_agent_platform.sandbox.models import (
     SandboxExecutionRequest,
     SandboxRecord,
 )
+from tianzhou_agent_platform.sandbox.repository import SandboxRepository
+
+
+class SandboxStore(SandboxRepository, Protocol):
+    """Sandboxes plus the workspace actor check SandboxService authorizes with."""
+
+    async def require_workspace_actor(self, workspace_id: str, *, user_id: str, tenant_id: str) -> Workspace: ...
 
 
 class SandboxService:
     def __init__(
         self,
-        repository: InMemoryRepository,
+        repository: SandboxStore,
         driver: SandboxDriver,
         *,
         default_image: str,
+        leases: LeaseStore | None = None,
     ) -> None:
         self.repository = repository
+        self.leases = leases
         self.driver = driver
         self.default_image = default_image
         self._actor_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
@@ -332,13 +343,13 @@ class SandboxService:
         key = _actor_digest(tenant_id, user_id, workspace_id, length=None)
         local_lock = self._actor_locks.setdefault(key, asyncio.Lock())
         async with local_lock:
-            stores = getattr(self.repository, "stores", None)
-            if stores is None or not hasattr(stores.redis, "lease"):
+            leases = self.leases
+            if leases is None or not hasattr(leases, "lease"):
                 yield
                 return
             deadline = asyncio.get_running_loop().time() + 10
             while asyncio.get_running_loop().time() < deadline:
-                async with stores.redis.lease(
+                async with leases.lease(
                     "sandbox-actor-operation",
                     key,
                     ttl_seconds=60,
