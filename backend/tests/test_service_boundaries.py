@@ -269,18 +269,14 @@ def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> 
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "tianzhou_agent_platform.api.dependencies":
                 offenders.extend(path.name for alias in node.names if alias.name == "repository")
-    assert sorted(set(offenders)) == sorted(ROUTES_PENDING_FEATURE_ACCESSORS)
+    assert not offenders, offenders
+    from tianzhou_agent_platform.api import dependencies
+
+    assert not hasattr(dependencies, "repository"), "routes get storage through typed feature accessors"
 
 
-# Phase 2 ratchets: modules not yet moved onto feature protocols. Each migration step removes its modules from
-# these sets; a module that starts using the aggregate repository again fails the tests below.
-ROUTES_PENDING_FEATURE_ACCESSORS: set[str] = set()
-
-PENDING_AGGREGATE_IMPORTERS = {
-    "api/dependencies.py",
-}
-
-# Behaviour-sensitive (plan step 14): these reach Redis or scheduler claims through the repository object.
+# Remaining exception (plan step 14, behaviour-sensitive): these reach Redis or scheduler claims through the
+# repository object. A module that starts doing so fails the test below.
 PENDING_PRIVATE_STATE_READERS = {
     "aina/document/task_service.py",
     "aina/scheduler.py",
@@ -320,7 +316,7 @@ REPOSITORY_RECEIVERS = frozenset(
     }
 )
 
-# Migrated modules and the protocols their repository receivers are typed with.
+# Every module that calls the repository, and the protocols its repository receivers are typed with.
 PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "conversations/service.py": (
         "tianzhou_agent_platform.conversations.repository:ConversationRepository",
@@ -440,8 +436,6 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-PENDING_PROTOCOL_CONSUMERS: set[str] = set()
-
 # Feature modules store/ may import: data models, errors and the few helpers it persists with. Adding a service,
 # route or composition import to store/ fails; removing one only needs this set shrunk.
 STORE_ALLOWED_FEATURE_IMPORTS = {
@@ -511,7 +505,7 @@ def test_only_the_composition_root_imports_the_aggregate_repository() -> None:
                     importers.add(module)
             elif isinstance(node, ast.Import) and any(alias.name in _AGGREGATE_MODULES for alias in node.names):
                 importers.add(module)
-    assert sorted(importers - {"main.py"}) == sorted(PENDING_AGGREGATE_IMPORTERS)
+    assert sorted(importers) == ["main.py"]
 
 
 def test_callers_use_only_their_protocol_methods() -> None:
@@ -530,13 +524,10 @@ def test_callers_use_only_their_protocol_methods() -> None:
                 module_name, _, class_name = protocol_path.partition(":")
                 allowed.update(_protocol_methods(getattr(importlib.import_module(module_name), class_name)))
             widened.extend(f"{module}: {name}" for name in sorted((reads & aggregate) - allowed))
-        elif reads & aggregate and module not in PENDING_PROTOCOL_CONSUMERS:
+        elif reads & aggregate:
             unmapped.append(f"{module}: {sorted(reads & aggregate)}")
     assert not widened, f"methods outside the declared protocols: {widened}"
     assert not unmapped, f"modules using the repository without a declared protocol: {unmapped}"
-    assert not PENDING_PROTOCOL_CONSUMERS & set(PROTOCOL_CONSUMERS)
-    still_pending = {module for module, tree in _source_modules() if _repository_reads(tree) & aggregate}
-    assert PENDING_PROTOCOL_CONSUMERS <= still_pending, sorted(PENDING_PROTOCOL_CONSUMERS - still_pending)
 
 
 def test_no_caller_reads_repository_private_state() -> None:

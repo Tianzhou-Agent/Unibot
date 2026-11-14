@@ -21,7 +21,6 @@ from tianzhou_agent_platform.conversations.repository import ConversationAccess,
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.feedback import FeedbackRepository
 from tianzhou_agent_platform.core.workspace import WorkspaceRepository
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.observability.repository import TraceRepository
 from tianzhou_agent_platform.sandbox.service import SandboxService
@@ -91,10 +90,6 @@ def require_actor_ownership(request: Request, *, user_id: str, tenant_id: str) -
             source="auth",
             user_message="无权访问该资源。",
         )
-
-
-def repository(request: Request) -> InMemoryRepository:
-    return cast(InMemoryRepository, request.app.state.repository)
 
 
 def developer_tokens(request: Request) -> DeveloperTokenRepository:
