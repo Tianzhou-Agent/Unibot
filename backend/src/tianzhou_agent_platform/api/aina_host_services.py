@@ -28,7 +28,7 @@ from tianzhou_agent_platform.aina.package.notifications import (
     rate_limited,
 )
 from tianzhou_agent_platform.api.aina_host import HOST_API_PREFIX, HostCaller, host_caller, require_scope
-from tianzhou_agent_platform.api.dependencies import documents, memories, model_provider_service, repository
+from tianzhou_agent_platform.api.dependencies import documents, memories, model_provider_service, repository, workspaces
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 from tianzhou_agent_platform.model_providers.models import use_model_runtime
@@ -118,7 +118,7 @@ def create_aina_host_services_router() -> APIRouter:
         workspace_id = caller.token.reference.workspace_id
         if workspace_id is None:
             return None
-        workspace = await repository(request).require_workspace_actor(
+        workspace = await workspaces(request).require_workspace_actor(
             workspace_id, user_id=caller.installation.user_id, tenant_id=caller.installation.tenant_id
         )
         return workspace.storage_key

@@ -219,6 +219,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.scheduler:ScheduledAinaStore",
         "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
         "tianzhou_agent_platform.services.agent_integration.adapters:MemorySearch",
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+        "tianzhou_agent_platform.core.feedback:FeedbackRepository",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -266,11 +268,9 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
     "aina_host_services.py",
     "aina_ui.py",
     "capabilities.py",
-    "documents.py",
     "feedback.py",
     "notifications.py",
     "operations.py",
-    "workspaces.py",
 }
 
 PENDING_AGGREGATE_IMPORTERS = {
@@ -306,6 +306,7 @@ REPOSITORY_RECEIVERS = frozenset(
         "developer_tokens(request)",
         "schedules(request)",
         "memories(request)",
+        "workspaces(request)",
     }
 )
 
@@ -357,6 +358,12 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
         "tianzhou_agent_platform.services.agent_integration.adapters:MemorySearch",
         "tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",
     ),
+    "api/workspaces.py": (
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+    ),
+    "api/documents.py": (
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
@@ -368,11 +375,9 @@ PENDING_PROTOCOL_CONSUMERS = {
     "api/aina_host_services.py",
     "api/aina_ui.py",
     "api/capabilities.py",
-    "api/documents.py",
     "api/feedback.py",
     "api/notifications.py",
     "api/operations.py",
-    "api/workspaces.py",
     "core/capability_discovery.py",
     "observability/service.py",
     "services/platform_tools.py",
