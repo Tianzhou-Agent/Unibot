@@ -12,10 +12,49 @@ from tianzhou_agent_platform.aina.project import (
     validate_project_archive,
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.errors import StorageNotFoundError, StorageValidationError
 from tianzhou_agent_platform.store.models import StoragePath
 from tianzhou_agent_platform.store.nas.filesystem import NasStore
+
+
+class AinaProjectRepository(Protocol):
+    async def create_aina_project(self, project: AinaProjectRecord) -> AinaProjectRecord: ...
+
+    async def mark_aina_project_validated(
+        self,
+        project_id: str,
+        *,
+        archive_sha256: str,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord: ...
+
+    async def set_aina_project_deployed(
+        self,
+        project_id: str,
+        *,
+        deployed: bool,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord: ...
+
+    async def get_aina_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord: ...
+
+    async def list_aina_projects(self, *, user_id: str, tenant_id: str) -> list[AinaProjectRecord]: ...
+
+    async def remove_aina_project(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> None: ...
 
 
 class AinaProjectArtifactStore(Protocol):
@@ -92,7 +131,7 @@ class InMemoryAinaProjectArtifactStore:
 
 
 class AinaProjectService:
-    def __init__(self, repository: InMemoryRepository, artifacts: AinaProjectArtifactStore) -> None:
+    def __init__(self, repository: AinaProjectRepository, artifacts: AinaProjectArtifactStore) -> None:
         self._repository = repository
         self._artifacts = artifacts
 

@@ -207,6 +207,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",
         "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
         "tianzhou_agent_platform.sandbox.service:SandboxStore",
+        "tianzhou_agent_platform.aina.project_service:AinaProjectRepository",
+        "tianzhou_agent_platform.aina.managed:ManagedAinaStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -267,10 +269,8 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
 PENDING_AGGREGATE_IMPORTERS = {
     "aina/builtin.py",
     "aina/document/task_service.py",
-    "aina/managed.py",
     "aina/memory/builtin.py",
     "aina/package/tasks.py",
-    "aina/project_service.py",
     "aina/scheduler.py",
     "api/aina_host.py",
     "api/capabilities.py",
@@ -327,16 +327,16 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
         "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
     ),
     "sandbox/service.py": ("tianzhou_agent_platform.sandbox.service:SandboxStore",),
+    "aina/project_service.py": ("tianzhou_agent_platform.aina.project_service:AinaProjectRepository",),
+    "aina/managed.py": ("tianzhou_agent_platform.aina.managed:ManagedAinaStore",),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
     "aina/builtin.py",
     "aina/document/task_service.py",
-    "aina/managed.py",
     "aina/memory/builtin.py",
     "aina/package/bundled.py",
     "aina/package/devhost.py",
-    "aina/project_service.py",
     "aina/scheduler.py",
     "api/aina_add_app.py",
     "api/aina_host.py",
