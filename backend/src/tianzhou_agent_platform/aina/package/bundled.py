@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
@@ -11,6 +11,14 @@ from tianzhou_agent_platform.core.errors import PlatformError
 
 # Reserved for legacy in-process packages; external packages cannot claim this host.
 BUNDLED_HOST = "bundled.unibot.invalid"
+
+
+class InstallationLookup(Protocol):
+    async def get_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> AinaInstallation: ...
+
+
+class AinaListing(Protocol):
+    async def list_ainas(self) -> list[AinaRecord]: ...
 
 
 def is_bundled_url(url: str) -> bool:
@@ -36,7 +44,7 @@ def bundled_installation(record: AinaRecord, *, tenant_id: str, user_id: str) ->
 
 
 async def effective_installation(
-    repository: Any, record: AinaRecord, *, tenant_id: str, user_id: str
+    repository: InstallationLookup, record: AinaRecord, *, tenant_id: str, user_id: str
 ) -> AinaInstallation | None:
     """The user's installation of an AINA, or a bundled package's implicit one."""
     if is_bundled(record):
@@ -53,7 +61,7 @@ async def effective_installation(
 
 
 async def with_bundled(
-    repository: Any, installations: list[AinaInstallation], *, tenant_id: str, user_id: str
+    repository: AinaListing, installations: list[AinaInstallation], *, tenant_id: str, user_id: str
 ) -> list[AinaInstallation]:
     """A user's installations plus the implicit ones of every registered bundled package."""
     bundled = {

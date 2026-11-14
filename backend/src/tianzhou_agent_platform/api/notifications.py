@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request, Response, status
 
 from tianzhou_agent_platform.aina.package.notifications import NotificationInbox, NotificationView
-from tianzhou_agent_platform.api.dependencies import aina_notifications, repository, request_actor
+from tianzhou_agent_platform.api.dependencies import aina_notifications, aina_registry, request_actor
 from tianzhou_agent_platform.core.base import utc_now
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
 
@@ -21,7 +21,7 @@ def create_notification_router() -> APIRouter:
         names: dict[str, str] = {}
         for aina_id in {item.aina_id for item in stored}:
             try:
-                names[aina_id] = (await repository(request).get_aina(aina_id)).manifest.aina.name
+                names[aina_id] = (await aina_registry(request).get_aina(aina_id)).manifest.aina.name
             except PlatformError:
                 names[aina_id] = aina_id
         return NotificationInbox(

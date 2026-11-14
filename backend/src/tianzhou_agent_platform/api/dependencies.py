@@ -13,6 +13,7 @@ from tianzhou_agent_platform.aina.package.storage import AinaStorageRepository
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
+from tianzhou_agent_platform.aina.registry import AinaRegistry
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTaskRepository
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.conversations.repository import ConversationAccess, ConversationRepository
@@ -136,6 +137,10 @@ def feedback_records(request: Request) -> FeedbackRepository:
 
 def trace_records(request: Request) -> TraceRepository:
     return cast(TraceRepository, request.app.state.repository)
+
+
+def aina_registry(request: Request) -> AinaRegistry:
+    return cast(AinaRegistry, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:

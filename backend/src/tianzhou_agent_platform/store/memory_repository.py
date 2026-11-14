@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import re
 from datetime import UTC, datetime, timedelta
 from collections.abc import Callable
@@ -18,7 +16,7 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.package.files import AinaFile, file_record_id
 from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.aina.package.notifications import KEEP_PER_USER, AinaNotification
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord, installation_record_id
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.aina.scheduler import (
@@ -2346,11 +2344,6 @@ def message_from_provider(raw: dict[str, Any], *, trace_id: str) -> Message:
         content_type="tool" if raw["role"] == "tool" else "widget" if raw.get("widgets") else "text",
         trace_id=trace_id,
     )
-
-
-def installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
-    raw = json.dumps([tenant_id, user_id, aina_id], ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _memory_terms(value: str) -> set[str]:

@@ -42,20 +42,20 @@ from tianzhou_agent_platform.aina.package.service import content_text
 from tianzhou_agent_platform.aina.package.storage import MAX_LIST_ITEMS, storage_item
 from tianzhou_agent_platform.aina.package.tasks import MAX_MESSAGE_CHARS, AinaTask
 from tianzhou_agent_platform.aina.package.tokens import MAX_TOKEN_SECONDS, VerifiedToken, invalid_token
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, installation_record_id
 from tianzhou_agent_platform.api.dependencies import (
     aina_file_blobs,
     aina_packages,
     aina_tasks,
     aina_files,
+    aina_registry,
     aina_storage,
     chat_attachments,
-    repository,
+    conversation_records,
 )
 from tianzhou_agent_platform.conversations.attachments import content_disposition
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
-from tianzhou_agent_platform.store.memory_repository import installation_record_id
 
 HOST_API_PREFIX = "/aina-host/v1"
 JWKS_PATH = "/.well-known/aina-host-jwks.json"
@@ -144,13 +144,13 @@ async def _caller(request: Request, *, allow_expired: bool) -> HostCaller:
         raise invalid_token()  # an identity token only proves who the user is to the AINA's own backend
     reference = verified.reference
     try:
-        record = await repository(request).get_aina(reference.aina_id)
+        record = await aina_registry(request).get_aina(reference.aina_id)
     except PlatformError as exc:
         if exc.code == "RESOURCE_NOT_FOUND":
             raise invalid_token() from exc
         raise
     installation = await effective_installation(
-        repository(request), record, tenant_id=reference.tenant_id, user_id=reference.user_id
+        aina_registry(request), record, tenant_id=reference.tenant_id, user_id=reference.user_id
     )
     # Uninstalled or paused: every token of the installation is revoked.
     if installation is None or installation.status != "active":
@@ -325,7 +325,7 @@ def create_aina_host_router() -> APIRouter:
         """
         passed = file_ref in (caller.token.claims.get("files") or [])
         _audit(caller, "files.get", scope="files", allowed=passed)
-        attachment = await repository(request).get_chat_attachment(file_ref) if passed else None
+        attachment = await conversation_records(request).get_chat_attachment(file_ref) if passed else None
         reference = caller.token.reference
         if attachment is None or (attachment.conversation_id, attachment.tenant_id, attachment.user_id) != (
             reference.conversation_id,

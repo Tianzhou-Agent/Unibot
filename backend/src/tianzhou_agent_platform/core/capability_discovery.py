@@ -6,9 +6,9 @@ runtime can describe the AINA graph and the model-facing scope through its run-e
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from tianzhou_agent_platform.aina.package.bundled import with_bundled
+from tianzhou_agent_platform.aina.package.bundled import AinaListing, with_bundled
 from tianzhou_agent_platform.aina.protocol.models import AinaCapability, AinaInstallation, AinaRecord
 from tianzhou_agent_platform.conversations.models import Conversation
 
@@ -16,8 +16,14 @@ if TYPE_CHECKING:
     from tianzhou_agent_platform.services.agent_integration.capabilities import Capability
 
 
+class AinaGraphSource(AinaListing, Protocol):
+    async def list_installations(
+        self, *, tenant_id: str | None = None, user_id: str | None = None
+    ) -> list[AinaInstallation]: ...
+
+
 async def aina_graph(
-    repository: Any,
+    repository: AinaGraphSource,
     conversation: Conversation,
     model_capabilities: dict[str, Capability],
 ) -> dict[str, Any]:

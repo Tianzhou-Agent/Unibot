@@ -13,6 +13,7 @@ from tianzhou_agent_platform.aina.protocol.models import (
     InstallationRequest,
     OpenAinaRequest,
     PermissionUpdate,
+    installation_record_id,
 )
 from tianzhou_agent_platform.aina.skill.models import SkillCreate, SkillRecord
 from tianzhou_agent_platform.aina.security.access import capability_visible
@@ -24,7 +25,6 @@ from tianzhou_agent_platform.api.dependencies import (
 )
 from tianzhou_agent_platform.aina.package.files import blob_key
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import installation_record_id
 from tianzhou_agent_platform.services.platform_tools import open_aina
 from tianzhou_agent_platform.core.schema import validate_schema
 

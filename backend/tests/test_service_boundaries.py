@@ -226,6 +226,11 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
         "tianzhou_agent_platform.observability.repository:TraceRepository",
         "tianzhou_agent_platform.observability.service:ObservedStore",
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.builtin:BuiltinToolStore",
+        "tianzhou_agent_platform.aina.package.bundled:InstallationLookup",
+        "tianzhou_agent_platform.aina.package.bundled:AinaListing",
+        "tianzhou_agent_platform.core.capability_discovery:AinaGraphSource",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -268,19 +273,11 @@ def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> 
 # Phase 2 ratchets: modules not yet moved onto feature protocols. Each migration step removes its modules from
 # these sets; a module that starts using the aggregate repository again fails the tests below.
 ROUTES_PENDING_FEATURE_ACCESSORS = {
-    "aina_add_app.py",
-    "aina_host.py",
-    "aina_ui.py",
     "capabilities.py",
-    "notifications.py",
     "operations.py",
 }
 
 PENDING_AGGREGATE_IMPORTERS = {
-    "aina/builtin.py",
-    "aina/package/tasks.py",
-    "api/aina_host.py",
-    "api/capabilities.py",
     "api/dependencies.py",
     "services/platform_tools.py",
 }
@@ -316,6 +313,7 @@ REPOSITORY_RECEIVERS = frozenset(
         "conversation_records(request)",
         "feedback_records(request)",
         "trace_records(request)",
+        "aina_registry(request)",
     }
 )
 
@@ -387,19 +385,41 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
         "tianzhou_agent_platform.conversations.repository:ConversationRepository",
         "tianzhou_agent_platform.observability.repository:TraceRepository",
     ),
+    "aina/builtin.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.builtin:BuiltinToolStore",
+    ),
+    "aina/package/bundled.py": (
+        "tianzhou_agent_platform.aina.package.bundled:InstallationLookup",
+        "tianzhou_agent_platform.aina.package.bundled:AinaListing",
+    ),
+    "aina/package/devhost.py": (
+        "tianzhou_agent_platform.aina.package.service:PackageRegistry",
+    ),
+    "core/capability_discovery.py": (
+        "tianzhou_agent_platform.core.capability_discovery:AinaGraphSource",
+    ),
+    "api/aina_add_app.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+    ),
+    "api/aina_ui.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+    ),
+    "api/aina_host.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.package.files:AinaFileRepository",
+        "tianzhou_agent_platform.aina.package.storage:AinaStorageRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+    ),
+    "api/notifications.py": (
+        "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
-    "aina/builtin.py",
-    "aina/package/bundled.py",
-    "aina/package/devhost.py",
-    "api/aina_add_app.py",
-    "api/aina_host.py",
-    "api/aina_ui.py",
     "api/capabilities.py",
-    "api/notifications.py",
     "api/operations.py",
-    "core/capability_discovery.py",
     "services/platform_tools.py",
 }
 
@@ -598,3 +618,18 @@ def test_moved_schedule_update_keeps_its_result() -> None:
     from tianzhou_agent_platform.aina import scheduler
 
     assert scheduler.updated_scheduled_aina_task is updated_scheduled_aina_task
+
+
+def test_moved_installation_key_keeps_its_value() -> None:
+    # Plan step 11 moves this helper out of store/; it builds stored row keys, so pin its output across the move.
+    from tianzhou_agent_platform.store.memory_repository import installation_record_id
+
+    assert installation_record_id("t1", "alice", "app.one") == (
+        "25a16b6bc5ed296f8c534aa06271a9bead8ce1b8c3b8972cb6e83648ad12c229"
+    )
+    assert installation_record_id("租户", "用户", "应用") == (
+        "090e7c7ebf2b5449f0cb0bf1b95d4c6f2ebf5a8a77fbe0482db11c41944dc0d3"
+    )
+    from tianzhou_agent_platform.aina.protocol import models
+
+    assert models.installation_record_id is installation_record_id

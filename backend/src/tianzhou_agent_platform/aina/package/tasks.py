@@ -23,7 +23,7 @@ from pydantic import Field, ValidationError
 
 from tianzhou_agent_platform.aina.package.models import PackageRuntimeDefinition
 from tianzhou_agent_platform.aina.package.widgets import aina_widget, aina_widget_definition
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord, installation_record_id
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.conversations.models import Message
 from tianzhou_agent_platform.core.base import StrictModel, utc_now
@@ -139,9 +139,6 @@ class AinaTaskService:
         workspace_id: str | None,
     ) -> AinaTask:
         """Record the task a long-running tool started; a host retry of the same invocation gets the same task."""
-        # The repository stores these records, so its module cannot be imported at load time.
-        from tianzhou_agent_platform.store.memory_repository import installation_record_id
-
         key = installation_record_id(installation.tenant_id, installation.user_id, installation.aina_id)
         task_id = task_record_id(key, start.id)
         existing = await self.repository.get_aina_task(task_id)
