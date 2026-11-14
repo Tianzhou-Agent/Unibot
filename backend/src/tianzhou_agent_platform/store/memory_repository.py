@@ -27,6 +27,7 @@ from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
+    updated_scheduled_aina_task,
 )
 from tianzhou_agent_platform.conversations.models import (
     CANVAS_TABS_KEY,
@@ -2151,26 +2152,6 @@ def new_scheduled_aina_task(data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
         values["input"] = {"message": data.prompt}
     task = ScheduledAinaTask(**values, created_at=now, updated_at=now)
     return task.model_copy(update={"next_run_at": next_scheduled_run(task, after=now)})
-
-
-def updated_scheduled_aina_task(task: ScheduledAinaTask, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
-    changes = data.model_dump(exclude_none=True)
-    if "aina_id" in data.model_fields_set:
-        changes["aina_id"] = data.aina_id or ""
-    if "prompt" in data.model_fields_set:
-        changes["prompt"] = data.prompt
-    if data.prompt is not None:
-        changes["input"] = {"message": data.prompt}
-    elif data.input is not None:
-        changes["prompt"] = None
-    now = datetime.now(UTC)
-    changes["updated_at"] = now
-    updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
-    schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
-    reenabled = data.enabled is True and not task.enabled
-    if schedule_fields.intersection(changes) or reenabled:
-        updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
-    return updated
 
 
 def normalized_email(email: str) -> str:

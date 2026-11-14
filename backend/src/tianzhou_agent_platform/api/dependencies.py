@@ -10,6 +10,7 @@ from tianzhou_agent_platform.aina.package.files import FileBlobs
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
+from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTaskRepository
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
 from tianzhou_agent_platform.core.base import StrictModel
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
@@ -88,6 +89,10 @@ def repository(request: Request) -> InMemoryRepository:
 
 def developer_tokens(request: Request) -> DeveloperTokenRepository:
     return cast(DeveloperTokenRepository, request.app.state.repository)
+
+
+def schedules(request: Request) -> ScheduledAinaTaskRepository:
+    return cast(ScheduledAinaTaskRepository, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:

@@ -215,6 +215,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.conversations.repository:ConversationAccess",
         "tianzhou_agent_platform.aina.document.task_models:DocumentEditTaskRepository",
         "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaTaskRepository",
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -267,7 +269,6 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
     "memories.py",
     "notifications.py",
     "operations.py",
-    "schedules.py",
     "workspaces.py",
 }
 
@@ -275,11 +276,9 @@ PENDING_AGGREGATE_IMPORTERS = {
     "aina/builtin.py",
     "aina/memory/builtin.py",
     "aina/package/tasks.py",
-    "aina/scheduler.py",
     "api/aina_host.py",
     "api/capabilities.py",
     "api/dependencies.py",
-    "api/schedules.py",
     "observability/service.py",
     "services/platform_tools.py",
 }
@@ -305,6 +304,7 @@ REPOSITORY_RECEIVERS = frozenset(
         "self.service.repository",
         "self.aina_tasks.repository",
         "developer_tokens(request)",
+        "schedules(request)",
     }
 )
 
@@ -340,6 +340,12 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "aina/document/task_service.py": (
         "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
     ),
+    "aina/scheduler.py": (
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaStore",
+    ),
+    "api/schedules.py": (
+        "tianzhou_agent_platform.aina.scheduler:ScheduledAinaTaskRepository",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
@@ -347,7 +353,6 @@ PENDING_PROTOCOL_CONSUMERS = {
     "aina/memory/builtin.py",
     "aina/package/bundled.py",
     "aina/package/devhost.py",
-    "aina/scheduler.py",
     "api/aina_add_app.py",
     "api/aina_host.py",
     "api/aina_host_services.py",
@@ -358,7 +363,6 @@ PENDING_PROTOCOL_CONSUMERS = {
     "api/memories.py",
     "api/notifications.py",
     "api/operations.py",
-    "api/schedules.py",
     "api/workspaces.py",
     "core/capability_discovery.py",
     "observability/service.py",
@@ -530,3 +534,34 @@ def test_default_approval_record_serializes_like_the_previous_release() -> None:
     native = approval.model_copy(update={"runtime_ref": {"thread_id": "lc-v2:conv_1"}, "run_generation": 2})
     assert native.model_dump()["runtime_ref"] == {"thread_id": "lc-v2:conv_1"}
     assert ApprovalRecord.model_validate(native.model_dump(mode="json")).run_generation == 2
+
+
+def test_moved_schedule_update_keeps_its_result() -> None:
+    # Plan step 6 moves this helper out of store/; its result is persisted, so pin it across the move.
+    from datetime import UTC, datetime, timedelta
+
+    from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTask, ScheduledAinaTaskUpdate
+    from tianzhou_agent_platform.store.memory_repository import updated_scheduled_aina_task
+
+    created = datetime(2026, 1, 1, tzinfo=UTC)
+    task = ScheduledAinaTask(
+        id="schedule_1", aina_id="app", user_id="u", tenant_id="t", name="n", input={"message": "old"},
+        interval_seconds=60, next_run_at=created, created_at=created, updated_at=created, enabled=False,
+    )
+    updated = updated_scheduled_aina_task(
+        task, ScheduledAinaTaskUpdate(prompt="new", interval_seconds=120, enabled=True, aina_id=None)
+    )
+    assert updated.model_dump(exclude={"updated_at", "next_run_at"}) == {
+        **task.model_dump(exclude={"updated_at", "next_run_at"}),
+        "aina_id": "",
+        "prompt": "new",
+        "input": {"message": "new"},
+        "interval_seconds": 120,
+        "enabled": True,
+    }
+    assert updated.next_run_at - updated.updated_at == timedelta(seconds=120)
+    unchanged = updated_scheduled_aina_task(task, ScheduledAinaTaskUpdate(name="renamed"))
+    assert unchanged.next_run_at == created and unchanged.name == "renamed" and unchanged.prompt is None
+    from tianzhou_agent_platform.aina import scheduler
+
+    assert scheduler.updated_scheduled_aina_task is updated_scheduled_aina_task

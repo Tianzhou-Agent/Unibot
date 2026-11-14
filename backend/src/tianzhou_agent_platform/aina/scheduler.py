@@ -5,7 +5,7 @@ import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -21,9 +21,8 @@ from tianzhou_agent_platform.conversations.schemas import ChatRequest
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
 
 if TYPE_CHECKING:
-    from tianzhou_agent_platform.aina.protocol.models import AinaRecord
+    from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
     from tianzhou_agent_platform.services.chat import ChatService
-    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 ScheduleType = Literal["interval", "cron"]
 
@@ -196,10 +195,78 @@ def _validate_cron(expression: str) -> None:
         raise ValueError("Cron expression must be a valid five-field crontab expression")
 
 
+def updated_scheduled_aina_task(task: ScheduledAinaTask, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
+    changes = data.model_dump(exclude_none=True)
+    if "aina_id" in data.model_fields_set:
+        changes["aina_id"] = data.aina_id or ""
+    if "prompt" in data.model_fields_set:
+        changes["prompt"] = data.prompt
+    if data.prompt is not None:
+        changes["input"] = {"message": data.prompt}
+    elif data.input is not None:
+        changes["prompt"] = None
+    now = datetime.now(UTC)
+    changes["updated_at"] = now
+    updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
+    schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
+    reenabled = data.enabled is True and not task.enabled
+    if schedule_fields.intersection(changes) or reenabled:
+        updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
+    return updated
+
+
+@runtime_checkable
+class ScheduledAinaTaskRepository(Protocol):
+    async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask: ...
+
+    async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask: ...
+
+    async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask: ...
+
+    async def update_scheduled_aina_task(self, task_id: str, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask: ...
+
+    async def remove_scheduled_aina_task(self, task_id: str) -> None: ...
+
+    async def list_scheduled_aina_tasks(
+        self, *, user_id: str | None = None, tenant_id: str | None = None
+    ) -> list[ScheduledAinaTask]: ...
+
+    async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]: ...
+
+    async def start_scheduled_aina_run(
+        self, task_id: str, *, node_id: str, started_at: datetime, scheduled_for: datetime | None = None
+    ) -> ScheduledAinaTask | None: ...
+
+    async def finish_scheduled_aina_run(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        error: str | None,
+        result: dict[str, Any] | None,
+        finished_at: datetime,
+        advance_schedule: bool,
+    ) -> ScheduledAinaTask | None: ...
+
+    async def put_scheduled_aina_execution(self, execution: ScheduledAinaExecution) -> ScheduledAinaExecution: ...
+
+    async def list_scheduled_aina_executions(
+        self, task_id: str, *, limit: int = 50
+    ) -> list[ScheduledAinaExecution]: ...
+
+
+class ScheduledAinaStore(ScheduledAinaTaskRepository, Protocol):
+    """Schedules plus the app record and installation a run is executed against."""
+
+    async def get_aina(self, aina_id: str) -> AinaRecord: ...
+
+    async def get_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> AinaInstallation: ...
+
+
 class AinaScheduler:
     def __init__(
         self,
-        repository: InMemoryRepository,
+        repository: ScheduledAinaStore,
         gateway: RemoteCapabilityGateway,
         *,
         chat_service: ChatService | None = None,
