@@ -15,10 +15,13 @@ from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
 from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTaskRepository
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
+from tianzhou_agent_platform.conversations.repository import ConversationAccess, ConversationRepository
 from tianzhou_agent_platform.core.base import StrictModel
+from tianzhou_agent_platform.core.feedback import FeedbackRepository
 from tianzhou_agent_platform.core.workspace import WorkspaceRepository
 from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.observability.repository import TraceRepository
 from tianzhou_agent_platform.sandbox.service import SandboxService
 from tianzhou_agent_platform.auth.models import UserRecord
 from tianzhou_agent_platform.auth.repository import DeveloperTokenRepository
@@ -117,6 +120,22 @@ def aina_storage(request: Request) -> AinaStorageRepository:
 
 def aina_notifications(request: Request) -> AinaNotificationRepository:
     return cast(AinaNotificationRepository, request.app.state.repository)
+
+
+def conversation_access(request: Request) -> ConversationAccess:
+    return cast(ConversationAccess, request.app.state.repository)
+
+
+def conversation_records(request: Request) -> ConversationRepository:
+    return cast(ConversationRepository, request.app.state.repository)
+
+
+def feedback_records(request: Request) -> FeedbackRepository:
+    return cast(FeedbackRepository, request.app.state.repository)
+
+
+def trace_records(request: Request) -> TraceRepository:
+    return cast(TraceRepository, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:

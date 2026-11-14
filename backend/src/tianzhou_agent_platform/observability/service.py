@@ -28,14 +28,15 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, Literal, ParamSpec, TypeVar, cast
+from typing import Any, Literal, ParamSpec, Protocol, TypeVar, cast
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Span
 
+from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import ApprovalRecord
 from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceEvent, TraceRecord, TraceSpan
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.observability.repository import TraceRepository
 from tianzhou_agent_platform.observability.telemetry import (
     ATTR_CONVERSATION_ID,
     ATTR_ERROR_JSON,
@@ -155,12 +156,18 @@ def _preview_json(value: Any) -> str | None:
     return json.dumps(preview, ensure_ascii=False, default=str)
 
 
+class ObservedStore(TraceRepository, Protocol):
+    """Traces plus the conversation lookup that attributes a trace to its owner."""
+
+    async def get_conversation(self, conversation_id: str, *, include_deleted: bool = False) -> Conversation: ...
+
+
 class ObservabilityAspect:
     """Non-blocking Trace/Span/Event persistence boundary."""
 
     def __init__(
         self,
-        repository: InMemoryRepository,
+        repository: ObservedStore,
         *,
         buffer: DurableObsBuffer | None = None,
         tracer: Any | None = None,

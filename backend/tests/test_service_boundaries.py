@@ -224,6 +224,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.package.files:AinaFileRepository",
         "tianzhou_agent_platform.aina.package.storage:AinaStorageRepository",
         "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+        "tianzhou_agent_platform.observability.repository:TraceRepository",
+        "tianzhou_agent_platform.observability.service:ObservedStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -270,7 +272,6 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
     "aina_host.py",
     "aina_ui.py",
     "capabilities.py",
-    "feedback.py",
     "notifications.py",
     "operations.py",
 }
@@ -281,7 +282,6 @@ PENDING_AGGREGATE_IMPORTERS = {
     "api/aina_host.py",
     "api/capabilities.py",
     "api/dependencies.py",
-    "observability/service.py",
     "services/platform_tools.py",
 }
 
@@ -312,6 +312,10 @@ REPOSITORY_RECEIVERS = frozenset(
         "aina_files(request)",
         "aina_storage(request)",
         "aina_notifications(request)",
+        "conversation_access(request)",
+        "conversation_records(request)",
+        "feedback_records(request)",
+        "trace_records(request)",
     }
 )
 
@@ -374,6 +378,15 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
         "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
         "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
     ),
+    "observability/service.py": (
+        "tianzhou_agent_platform.observability.service:ObservedStore",
+    ),
+    "api/feedback.py": (
+        "tianzhou_agent_platform.core.feedback:FeedbackRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.observability.repository:TraceRepository",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
@@ -384,11 +397,9 @@ PENDING_PROTOCOL_CONSUMERS = {
     "api/aina_host.py",
     "api/aina_ui.py",
     "api/capabilities.py",
-    "api/feedback.py",
     "api/notifications.py",
     "api/operations.py",
     "core/capability_discovery.py",
-    "observability/service.py",
     "services/platform_tools.py",
 }
 

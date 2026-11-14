@@ -9,9 +9,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Query, Request, Response
 
 from tianzhou_agent_platform.api.dependencies import (
-    repository,
+    conversation_access,
+    conversation_records,
+    feedback_records,
     request_actor,
     require_platform_admin,
+    trace_records,
 )
 from tianzhou_agent_platform.conversations.models import Conversation, Message
 from tianzhou_agent_platform.core.errors import PlatformError, not_found
@@ -26,6 +29,7 @@ from tianzhou_agent_platform.core.feedback import (
     FeedbackUpsert,
 )
 from tianzhou_agent_platform.observability.models import TraceRecord
+from tianzhou_agent_platform.observability.repository import TraceRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ def create_feedback_router() -> APIRouter:
     @router.get("/feedback/messages/{message_id}", response_model=FeedbackRecord | None)
     async def get_message_feedback(message_id: str, request: Request) -> FeedbackRecord | None:
         actor = request_actor(request)
-        return await repository(request).get_feedback_for_message(
+        return await feedback_records(request).get_feedback_for_message(
             message_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
@@ -49,19 +53,18 @@ def create_feedback_router() -> APIRouter:
         request: Request,
     ) -> FeedbackRecord:
         actor = request_actor(request)
-        data_repository = repository(request)
-        conversation = await data_repository.require_conversation_actor(
+        conversation = await conversation_access(request).require_conversation_actor(
             payload.conversation_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
         )
         message = _assistant_message(conversation, message_id)
-        trace = await _optional_trace(data_repository, message.trace_id)
+        trace = await _optional_trace(trace_records(request), message.trace_id)
         user = getattr(request.state, "user", None)
         user_name = getattr(user, "name", None) or actor.user_id
         user_email = str(getattr(user, "email", ""))
         agent_name, agent_version = _agent_identity(trace)
-        existing = await data_repository.get_feedback_for_message(
+        existing = await feedback_records(request).get_feedback_for_message(
             message_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
@@ -90,13 +93,13 @@ def create_feedback_router() -> APIRouter:
                 )
             ],
         )
-        return await data_repository.upsert_feedback(record)
+        return await feedback_records(request).upsert_feedback(record)
 
     @router.delete("/feedback/messages/{message_id}", status_code=204)
     async def delete_message_feedback(message_id: str, request: Request) -> Response:
         actor = request_actor(request)
         user = getattr(request.state, "user", None)
-        await repository(request).cancel_feedback(
+        await feedback_records(request).cancel_feedback(
             message_id,
             user_id=actor.user_id,
             tenant_id=actor.tenant_id,
@@ -113,7 +116,7 @@ def create_feedback_router() -> APIRouter:
         user_query: str | None = Query(default=None, max_length=100),
     ) -> list[FeedbackRecord]:
         require_platform_admin(request)
-        return await repository(request).list_feedbacks(
+        return await feedback_records(request).list_feedbacks(
             from_at=_aware(from_at),
             to_at=_aware(to_at),
             rating=rating,
@@ -128,12 +131,11 @@ def create_feedback_router() -> APIRouter:
     ) -> FeedbackMetrics:
         require_platform_admin(request)
         start, end = _validated_range(from_at, to_at)
-        data_repository = repository(request)
-        conversations = await data_repository.list_conversations()
-        feedbacks = await data_repository.list_feedbacks(from_at=start, to_at=end)
+        conversations = await conversation_records(request).list_conversations()
+        feedbacks = await feedback_records(request).list_feedbacks(from_at=start, to_at=end)
         duration = end - start
         previous_start = start - duration
-        previous_feedbacks = await data_repository.list_feedbacks(from_at=previous_start, to_at=start)
+        previous_feedbacks = await feedback_records(request).list_feedbacks(from_at=previous_start, to_at=start)
         current_answers = _answer_messages(conversations, start, end)
         previous_answers = _answer_messages(conversations, previous_start, start)
         current = _metric_values(feedbacks, len(current_answers))
@@ -163,8 +165,7 @@ def create_feedback_router() -> APIRouter:
     @router.get("/admin/feedback/{feedback_id}", response_model=FeedbackDetail)
     async def admin_feedback_detail(feedback_id: str, request: Request) -> FeedbackDetail:
         require_platform_admin(request)
-        data_repository = repository(request)
-        feedback = await data_repository.get_feedback(feedback_id)
+        feedback = await feedback_records(request).get_feedback(feedback_id)
         # New OBS query path first (design 12.4); legacy repository fallback
         # keeps pre-migration traces readable during the cut-over phase.
         context: list[Any] = []
@@ -181,7 +182,7 @@ def create_feedback_router() -> APIRouter:
                 logger.exception("OBS feedback context query failed; falling back to legacy traces")
                 context = []
         if not context:
-            traces = await data_repository.list_traces()
+            traces = await trace_records(request).list_traces()
             legacy = sorted(
                 (
                     trace
@@ -215,7 +216,7 @@ def create_feedback_router() -> APIRouter:
         request: Request,
     ) -> FeedbackRecord:
         admin = require_platform_admin(request)
-        return await repository(request).update_feedback_case(
+        return await feedback_records(request).update_feedback_case(
             feedback_id,
             status=payload.status,
             assignee=payload.assignee.strip(),
@@ -241,11 +242,11 @@ def _assistant_message(conversation: Conversation, message_id: str) -> Message:
     return message
 
 
-async def _optional_trace(data_repository, trace_id: str | None):  # type: ignore[no-untyped-def]
+async def _optional_trace(records: TraceRepository, trace_id: str | None) -> TraceRecord | None:
     if not trace_id:
         return None
     try:
-        return await data_repository.get_trace(trace_id)
+        return await records.get_trace(trace_id)
     except PlatformError as exc:
         if exc.code == "RESOURCE_NOT_FOUND":
             return None
