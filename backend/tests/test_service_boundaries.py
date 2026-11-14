@@ -189,7 +189,11 @@ def test_conversation_service_accepts_protocol_repository() -> None:
 
 
 def _protocol_methods(protocol: type) -> list[str]:
-    return [name for name, value in vars(protocol).items() if inspect.iscoroutinefunction(value)]
+    # Composed protocols inherit methods from the feature protocols they combine.
+    names: dict[str, None] = {}
+    for cls in protocol.__mro__:
+        names.update((name, None) for name, value in vars(cls).items() if inspect.iscoroutinefunction(value))
+    return list(names)
 
 
 @pytest.mark.parametrize(
@@ -202,6 +206,7 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.package.service:PackageRegistry",
         "tianzhou_agent_platform.aina.package.tasks:AinaTaskRepository",
         "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
+        "tianzhou_agent_platform.sandbox.service:SandboxStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -274,8 +279,6 @@ PENDING_AGGREGATE_IMPORTERS = {
     "auth/oidc.py",
     "auth/service.py",
     "observability/service.py",
-    "sandbox/factory.py",
-    "sandbox/service.py",
     "services/platform_tools.py",
     "tasks/service.py",
 }
@@ -323,6 +326,7 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "services/agent_integration/provider.py": (
         "tianzhou_agent_platform.services.agent_integration.capabilities:CapabilityRegistry",
     ),
+    "sandbox/service.py": ("tianzhou_agent_platform.sandbox.service:SandboxStore",),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
@@ -351,7 +355,6 @@ PENDING_PROTOCOL_CONSUMERS = {
     "auth/service.py",
     "core/capability_discovery.py",
     "observability/service.py",
-    "sandbox/service.py",
     "services/agent_integration/adapters.py",
     "services/platform_tools.py",
     "tasks/service.py",

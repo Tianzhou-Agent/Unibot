@@ -4,17 +4,16 @@ from pathlib import Path
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.drivers import (
     KubernetesSandboxDriver,
     LocalProcessSandboxDriver,
 )
-from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.sandbox.service import SandboxService, SandboxStore
 
 
 def create_sandbox_service(
     settings: AgentSettings,
-    repository: InMemoryRepository,
+    repository: SandboxStore,
     *,
     persistent_workspace_root: Path | None = None,
     enforce_isolation: bool = True,
