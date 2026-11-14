@@ -20,8 +20,21 @@ from tianzhou_agent_platform.aina.security.access import capability_visible
 from tianzhou_agent_platform.aina.tool.models import ToolCreate, ToolRecord
 from tianzhou_agent_platform.api.aina_projects import read_archive_upload
 from tianzhou_agent_platform.api.dependencies import (
-    actor_scope, aina_file_blobs, aina_packages, bind_actor, gateway, repository, request_actor, require_platform_admin,
+    actor_scope,
+    aina_file_blobs,
+    aina_files,
+    aina_notifications,
+    aina_packages,
+    aina_registry,
+    aina_storage,
+    bind_actor,
+    conversation_access,
+    gateway,
+    platform_tool_store,
+    request_actor,
+    require_platform_admin,
     settings,
+    workspaces,
 )
 from tianzhou_agent_platform.aina.package.files import blob_key
 from tianzhou_agent_platform.core.errors import PlatformError
@@ -41,24 +54,24 @@ def create_capability_router() -> APIRouter:
             validate_schema(payload.output_schema, label="output_schema")
         values = {name: getattr(payload, name) for name in ToolCreate.model_fields}
         actor = request_actor(request)
-        return await repository(request).register_tool(
+        return await aina_registry(request).register_tool(
             ToolRecord(**values, owner_user_id=actor.user_id, tenant_id=actor.tenant_id)
         )
 
     @router.get("/tools", response_model=list[ToolRecord])
     async def list_tools(request: Request) -> list[ToolRecord]:
-        return [record for record in await repository(request).list_tools() if _visible(request, record)]
+        return [record for record in await aina_registry(request).list_tools() if _visible(request, record)]
 
     @router.get("/tools/{tool_id}", response_model=ToolRecord)
     async def get_tool(tool_id: str, request: Request) -> ToolRecord:
-        record = await repository(request).get_tool(tool_id)
+        record = await aina_registry(request).get_tool(tool_id)
         _require_visible(request, record)
         return record
 
     @router.delete("/tools/{tool_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_tool(tool_id: str, request: Request) -> Response:
         require_platform_admin(request)
-        await repository(request).remove_tool(tool_id)
+        await aina_registry(request).remove_tool(tool_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/skills", response_model=SkillRecord, status_code=status.HTTP_201_CREATED)
@@ -66,28 +79,27 @@ def create_capability_router() -> APIRouter:
         require_platform_admin(request)
         validate_schema(payload.input_schema, label="input_schema")
         validate_schema(payload.output_schema, label="output_schema")
-        data_repository = repository(request)
         for tool_id in payload.tools:
-            await data_repository.get_tool(tool_id)
+            await aina_registry(request).get_tool(tool_id)
         actor = request_actor(request)
-        return await data_repository.register_skill(
+        return await aina_registry(request).register_skill(
             SkillRecord(**payload.model_dump(), owner_user_id=actor.user_id, tenant_id=actor.tenant_id)
         )
 
     @router.get("/skills", response_model=list[SkillRecord])
     async def list_skills(request: Request) -> list[SkillRecord]:
-        return [record for record in await repository(request).list_skills() if _visible(request, record)]
+        return [record for record in await aina_registry(request).list_skills() if _visible(request, record)]
 
     @router.get("/skills/{skill_id}", response_model=SkillRecord)
     async def get_skill(skill_id: str, request: Request) -> SkillRecord:
-        record = await repository(request).get_skill(skill_id)
+        record = await aina_registry(request).get_skill(skill_id)
         _require_visible(request, record)
         return record
 
     @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_skill(skill_id: str, request: Request) -> Response:
         require_platform_admin(request)
-        await repository(request).remove_skill(skill_id)
+        await aina_registry(request).remove_skill(skill_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/ainas", response_model=AinaRecord, status_code=status.HTTP_201_CREATED)
@@ -102,7 +114,7 @@ def create_capability_router() -> APIRouter:
         for capability in [*payload.capabilities.skills, *payload.capabilities.tools]:
             validate_schema(capability.input_schema, label=f"capability {capability.id} input_schema")
         health = await gateway(request).probe_aina(payload)
-        return await repository(request).register_aina(AinaRecord(manifest=payload, last_health=health))
+        return await aina_registry(request).register_aina(AinaRecord(manifest=payload, last_health=health))
 
     @router.post("/ainas/packages/scaffold")
     async def scaffold_aina_package(payload: PackageScaffoldRequest) -> Response:
@@ -146,11 +158,11 @@ def create_capability_router() -> APIRouter:
 
     @router.get("/ainas", response_model=list[AinaRecord])
     async def list_ainas(request: Request) -> list[AinaRecord]:
-        return await repository(request).list_ainas()
+        return await aina_registry(request).list_ainas()
 
     @router.get("/ainas/{aina_id}", response_model=AinaRecord)
     async def get_aina(aina_id: str, request: Request) -> AinaRecord:
-        return await repository(request).get_aina(aina_id)
+        return await aina_registry(request).get_aina(aina_id)
 
     @router.post("/ainas/{aina_id}/open", response_model=AinaCanvasResponse)
     async def open_aina_canvas(
@@ -159,9 +171,8 @@ def create_capability_router() -> APIRouter:
         request: Request,
     ) -> AinaCanvasResponse:
         scoped = bind_actor(request, payload)
-        data_repository = repository(request)
         if scoped.conversation_id is not None:
-            conversation = await data_repository.require_conversation_actor(
+            conversation = await conversation_access(request).require_conversation_actor(
                 scoped.conversation_id,
                 user_id=scoped.user_id,
                 tenant_id=scoped.tenant_id,
@@ -173,13 +184,13 @@ def create_capability_router() -> APIRouter:
                     status_code=409,
                 )
         elif scoped.workspace_id is not None:
-            await data_repository.require_workspace_actor(
+            await workspaces(request).require_workspace_actor(
                 scoped.workspace_id,
                 user_id=scoped.user_id,
                 tenant_id=scoped.tenant_id,
             )
         return await open_aina(
-            data_repository,
+            platform_tool_store(request),
             aina_id,
             user_id=scoped.user_id,
             tenant_id=scoped.tenant_id,
@@ -189,8 +200,7 @@ def create_capability_router() -> APIRouter:
     @router.delete("/ainas/{aina_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_aina(aina_id: str, request: Request) -> Response:
         require_platform_admin(request)
-        data_repository = repository(request)
-        record = await data_repository.get_aina(aina_id)
+        record = await aina_registry(request).get_aina(aina_id)
         if aina_id in BUILTIN_AINA_IDS or is_bundled(record):
             raise PlatformError("PERMISSION_DENIED", "The system AINA cannot be deleted", status_code=403)
         if record.manifest.runtime.type == "managed":
@@ -199,9 +209,9 @@ def create_capability_router() -> APIRouter:
                 "Undeploy managed AINA from its project before deleting it",
                 status_code=409,
             )
-        await data_repository.remove_aina(aina_id)
-        await data_repository.delete_aina_storage(aina_id=aina_id)
-        await data_repository.delete_aina_notifications(aina_id=aina_id)
+        await aina_registry(request).remove_aina(aina_id)
+        await aina_storage(request).delete_aina_storage(aina_id=aina_id)
+        await aina_notifications(request).delete_aina_notifications(aina_id=aina_id)
         await _delete_files(request, aina_id=aina_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -212,8 +222,7 @@ def create_capability_router() -> APIRouter:
         request: Request,
     ) -> AinaInstallation:
         scoped = bind_actor(request, payload)
-        data_repository = repository(request)
-        record = await data_repository.get_aina(aina_id)
+        record = await aina_registry(request).get_aina(aina_id)
         if aina_id in BUILTIN_AINA_IDS or is_bundled(record):
             raise PlatformError("CONFLICT", "The system AINA is always available", status_code=409)
         if record.manifest.runtime.type == "package":
@@ -224,7 +233,7 @@ def create_capability_router() -> APIRouter:
             aina_id=aina_id,
             installed_version=record.manifest.aina.version,
         )
-        return await data_repository.put_installation(installation)
+        return await aina_registry(request).put_installation(installation)
 
     @router.patch("/ainas/{aina_id}/installation", response_model=AinaInstallation)
     async def update_aina_permissions(
@@ -233,16 +242,15 @@ def create_capability_router() -> APIRouter:
         request: Request,
     ) -> AinaInstallation:
         scoped = bind_actor(request, payload)
-        data_repository = repository(request)
-        record = await data_repository.get_aina(aina_id)
+        record = await aina_registry(request).get_aina(aina_id)
         _validate_permission_subset(record, scoped.granted_permissions)
-        installation = await data_repository.get_installation(
+        installation = await aina_registry(request).get_installation(
             tenant_id=scoped.tenant_id,
             user_id=scoped.user_id,
             aina_id=aina_id,
         )
         updated = installation.model_copy(update={"granted_permissions": scoped.granted_permissions}, deep=True)
-        return await data_repository.put_installation(updated)
+        return await aina_registry(request).put_installation(updated)
 
     @router.delete("/ainas/{aina_id}/install", status_code=status.HTTP_204_NO_CONTENT)
     async def uninstall_aina(
@@ -253,18 +261,17 @@ def create_capability_router() -> APIRouter:
         keep_data: bool = Query(default=False, description="Keep the AINA's private storage for a reinstall."),
     ) -> Response:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        data_repository = repository(request)
-        await data_repository.remove_installation(
+        await aina_registry(request).remove_installation(
             tenant_id=actor.tenant_id,
             user_id=actor.user_id,
             aina_id=aina_id,
         )
-        await data_repository.delete_aina_notifications(
+        await aina_notifications(request).delete_aina_notifications(
             aina_id=aina_id, tenant_id=actor.tenant_id, user_id=actor.user_id
         )
         if not keep_data:
             installation_key = installation_record_id(actor.tenant_id, actor.user_id, aina_id)
-            await data_repository.delete_aina_storage(installation_key=installation_key)
+            await aina_storage(request).delete_aina_storage(installation_key=installation_key)
             await _delete_files(request, installation_key=installation_key)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -275,7 +282,7 @@ def create_capability_router() -> APIRouter:
         tenant_id: str | None = None,
     ) -> list[AinaInstallation]:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        return await repository(request).list_installations(user_id=actor.user_id, tenant_id=actor.tenant_id)
+        return await aina_registry(request).list_installations(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     return router
 
@@ -283,7 +290,7 @@ def create_capability_router() -> APIRouter:
 async def _delete_files(request: Request, *, installation_key: str | None = None, aina_id: str | None = None) -> None:
     """An AINA's private files: their metadata, then their bytes."""
     blobs = aina_file_blobs(request)
-    for removed in await repository(request).delete_aina_files(installation_key=installation_key, aina_id=aina_id):
+    for removed in await aina_files(request).delete_aina_files(installation_key=installation_key, aina_id=aina_id):
         await blobs.delete(blob_key(removed))
 
 

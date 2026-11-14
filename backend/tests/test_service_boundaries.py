@@ -231,6 +231,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.aina.package.bundled:InstallationLookup",
         "tianzhou_agent_platform.aina.package.bundled:AinaListing",
         "tianzhou_agent_platform.core.capability_discovery:AinaGraphSource",
+        "tianzhou_agent_platform.services.platform_tools:PlatformToolStore",
+        "tianzhou_agent_platform.services.agent_integration.executor:ExecutorStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -272,14 +274,10 @@ def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> 
 
 # Phase 2 ratchets: modules not yet moved onto feature protocols. Each migration step removes its modules from
 # these sets; a module that starts using the aggregate repository again fails the tests below.
-ROUTES_PENDING_FEATURE_ACCESSORS = {
-    "capabilities.py",
-    "operations.py",
-}
+ROUTES_PENDING_FEATURE_ACCESSORS: set[str] = set()
 
 PENDING_AGGREGATE_IMPORTERS = {
     "api/dependencies.py",
-    "services/platform_tools.py",
 }
 
 # Behaviour-sensitive (plan step 14): these reach Redis or scheduler claims through the repository object.
@@ -314,6 +312,11 @@ REPOSITORY_RECEIVERS = frozenset(
         "feedback_records(request)",
         "trace_records(request)",
         "aina_registry(request)",
+        "platform_tool_store(request)",
+        "user_records(request)",
+        "memory_records(request)",
+        "document_edit_task_records(request)",
+        "aina_files(request)",
     }
 )
 
@@ -415,13 +418,29 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
         "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
         "tianzhou_agent_platform.aina.registry:AinaRegistry",
     ),
+    "services/platform_tools.py": (
+        "tianzhou_agent_platform.services.platform_tools:PlatformToolStore",
+    ),
+    "api/capabilities.py": (
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.package.files:AinaFileRepository",
+        "tianzhou_agent_platform.aina.package.storage:AinaStorageRepository",
+        "tianzhou_agent_platform.aina.package.notifications:AinaNotificationRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+        "tianzhou_agent_platform.core.workspace:WorkspaceRepository",
+    ),
+    "api/operations.py": (
+        "tianzhou_agent_platform.auth.repository:UserRepository",
+        "tianzhou_agent_platform.core.feedback:FeedbackRepository",
+        "tianzhou_agent_platform.observability.repository:TraceRepository",
+        "tianzhou_agent_platform.conversations.repository:ConversationRepository",
+        "tianzhou_agent_platform.aina.registry:AinaRegistry",
+        "tianzhou_agent_platform.aina.memory.repository:MemoryRepository",
+        "tianzhou_agent_platform.aina.document.task_models:DocumentEditTaskRepository",
+    ),
 }
 
-PENDING_PROTOCOL_CONSUMERS = {
-    "api/capabilities.py",
-    "api/operations.py",
-    "services/platform_tools.py",
-}
+PENDING_PROTOCOL_CONSUMERS: set[str] = set()
 
 # Feature modules store/ may import: data models, errors and the few helpers it persists with. Adding a service,
 # route or composition import to store/ fails; removing one only needs this set shrunk.
