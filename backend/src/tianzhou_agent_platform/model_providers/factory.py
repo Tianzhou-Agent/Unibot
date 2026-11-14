@@ -103,6 +103,10 @@ class UnibotChatOpenAI(ChatOpenAI):
                     return
                 except TimeoutError as exc:
                     raise self._deadline_error() from exc
+                except httpx.TimeoutException as exc:
+                    # The SDK wraps a timeout of the request, not one raised while the stream's body is read (the
+                    # gap between two chunks): it is the same provider timeout, retried and reported like one.
+                    raise self._deadline_error() from exc
                 yield chunk
         finally:
             await stream.aclose()

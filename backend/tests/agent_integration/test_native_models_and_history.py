@@ -19,6 +19,7 @@ from tianzhou_agent_platform.model_providers.factory import (
     create_model_from_settings,
     create_native_chat_model,
 )
+from tianzhou_agent_platform.model_providers.errors import map_model_error
 from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig, use_model_runtime
 from unibot_agent.history import (
     archive_to_native,
@@ -286,6 +287,45 @@ async def test_a_call_that_stalls_after_streaming_is_not_sent_again(monkeypatch:
         async for _chunk in _reasoning_model()._astream([HumanMessage(content="hi")]):
             pass
     assert len(attempts) == 1
+
+
+def _read_timeout() -> httpx.ReadTimeout:
+    # The provider SDK wraps a timeout of the request, but not one raised while the stream's body is read.
+    return httpx.ReadTimeout("", request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"))
+
+
+async def test_a_read_timeout_of_the_stream_body_is_a_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+
+    async def stall_midway(self: Any, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        attempts.append(1)
+        yield ChatGenerationChunk(message=AIMessageChunk(content="Part"))
+        raise _read_timeout()
+
+    monkeypatch.setattr(ChatOpenAI, "_astream", stall_midway)
+
+    with pytest.raises(openai.APITimeoutError) as raised:
+        async for _chunk in _reasoning_model()._astream([HumanMessage(content="hi")]):
+            pass
+    assert len(attempts) == 1
+    mapped = map_model_error(raised.value)
+    assert mapped is not None and (mapped.code, mapped.status_code, mapped.retryable) == ("TIMEOUT", 504, True)
+
+
+async def test_a_read_timeout_before_any_chunk_is_sent_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+
+    async def stall_once(self: Any, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise _read_timeout()
+        yield ChatGenerationChunk(message=AIMessageChunk(content="Answer"))
+
+    monkeypatch.setattr(ChatOpenAI, "_astream", stall_once)
+
+    chunks = [chunk.message.content async for chunk in _reasoning_model()._astream([HumanMessage(content="hi")])]
+
+    assert chunks == ["Answer"] and len(attempts) == 2
 
 
 async def test_silent_timeouts_are_retried_a_bounded_number_of_times(monkeypatch: pytest.MonkeyPatch) -> None:
