@@ -107,7 +107,6 @@ class InMemoryRepository:
         self._model_providers: dict[str, ModelProviderRecord] = {}
         self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
         self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
-        self._scheduled_aina_claims: set[str] = set()
         self._document_edit_tasks: dict[str, DocumentEditTask] = {}
         self._sandboxes: dict[str, SandboxRecord] = {}
         self._sandbox_executions: dict[str, SandboxExecution] = {}

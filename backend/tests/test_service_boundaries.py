@@ -134,6 +134,32 @@ def test_conversations_does_not_import_chat_service_or_langgraph_execution() -> 
     assert not offenders, f"conversations must not import: {offenders}"
 
 
+def test_lease_users_get_the_shared_redis_store_from_the_composition_root(tmp_path: Path) -> None:
+    # Cross-node exclusion of scheduled runs, sandbox operations and document edits depends on these services
+    # sharing the app's Redis; without it each silently falls back to process-local locks. Building the app does
+    # not connect, so unreachable addresses are enough.
+    from pydantic import SecretStr
+
+    from tianzhou_agent_platform.config import AgentSettings
+    from tianzhou_agent_platform.main import create_app
+    from tianzhou_agent_platform.store.settings import StorageSettings
+
+    storage = StorageSettings(
+        mysql_dsn=SecretStr("mysql+aiomysql://unibot:unibot@127.0.0.1:1/unibot"),
+        redis_dsn=SecretStr("redis://127.0.0.1:1/0"),
+        nas_root_path=tmp_path,
+    )
+    state = create_app(settings=AgentSettings(obs_enabled=False), storage_settings=storage).state
+    redis = state.storage_stores.redis
+    assert state.aina_scheduler.leases is redis
+    assert state.sandbox_service.leases is redis
+    assert state.document_edit_task_service.leases is redis
+
+    local = create_app(settings=AgentSettings(obs_enabled=False)).state
+    assert local.aina_scheduler.leases is None
+    assert local.sandbox_service.leases is None
+
+
 def test_runtime_factory_composes_with_scripted_native_model() -> None:
     from langchain_core.tools import tool
 
@@ -274,14 +300,6 @@ def test_migrated_routes_use_feature_services_not_the_aggregate_repository() -> 
 
     assert not hasattr(dependencies, "repository"), "routes get storage through typed feature accessors"
 
-
-# Remaining exception (plan step 14, behaviour-sensitive): these reach Redis or scheduler claims through the
-# repository object. A module that starts doing so fails the test below.
-PENDING_PRIVATE_STATE_READERS = {
-    "aina/document/task_service.py",
-    "aina/scheduler.py",
-    "sandbox/service.py",
-}
 
 # Names under which callers hold the aggregate repository (or a protocol-typed view of it).
 REPOSITORY_RECEIVERS = frozenset(
@@ -549,7 +567,7 @@ def test_no_caller_reads_repository_private_state() -> None:
                 and ast.unparse(node.args[0]) in REPOSITORY_RECEIVERS
             ):
                 readers.add(module)
-    assert sorted(readers) == sorted(PENDING_PRIVATE_STATE_READERS)
+    assert not readers, f"reach Redis through a LeaseStore, not the repository object: {sorted(readers)}"
 
 
 def test_store_imports_only_feature_models() -> None:

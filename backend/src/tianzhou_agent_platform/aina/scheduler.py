@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -19,12 +20,17 @@ from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import ChatRequest
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
+from tianzhou_agent_platform.core.leases import LeaseStore
 
 if TYPE_CHECKING:
     from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
     from tianzhou_agent_platform.services.chat import ChatService
 
 ScheduleType = Literal["interval", "cron"]
+
+# Without a shared lease store, schedulers on the same repository (one process) exclude each other through one
+# claim set per repository.
+_LOCAL_CLAIMS: weakref.WeakKeyDictionary[object, set[str]] = weakref.WeakKeyDictionary()
 
 
 class ScheduledAinaTaskCreate(StrictModel):
@@ -272,8 +278,10 @@ class AinaScheduler:
         chat_service: ChatService | None = None,
         node_id: str | None = None,
         poll_seconds: float = 1.0,
+        leases: LeaseStore | None = None,
     ) -> None:
         self.repository = repository
+        self.leases = leases
         self.gateway = gateway
         self.chat_service = chat_service
         # The agent's capability catalog; set with ``chat_service`` once the app is composed.
@@ -281,7 +289,7 @@ class AinaScheduler:
         self.node_id = node_id or socket.gethostname()
         self.poll_seconds = poll_seconds
         self._stop = asyncio.Event()
-        self._local_claims = repository._scheduled_aina_claims
+        self._local_claims = _LOCAL_CLAIMS.setdefault(repository, set())
         self._driver: AsyncIOScheduler | None = None
 
     def stop(self) -> None:
@@ -469,15 +477,15 @@ class AinaScheduler:
         *,
         ttl_seconds: int,
     ) -> AsyncIterator[bool]:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None and hasattr(stores.redis, "lease"):
-            async with stores.redis.lease(namespace, key, ttl_seconds=ttl_seconds) as acquired:
+        leases = self.leases
+        if leases is not None and hasattr(leases, "lease"):
+            async with leases.lease(namespace, key, ttl_seconds=ttl_seconds) as acquired:
                 yield acquired
             return
 
         local_key = f"{namespace}:{key}"
-        if stores is not None:
-            result = await stores.redis.set_if_absent(
+        if leases is not None:
+            result = await leases.set_if_absent(
                 namespace, key, {"node_id": self.node_id}, ttl_seconds=ttl_seconds
             )
             acquired = bool(result.written)
@@ -488,7 +496,7 @@ class AinaScheduler:
         try:
             yield acquired
         finally:
-            if acquired and stores is None:
+            if acquired and leases is None:
                 self._local_claims.discard(local_key)
 
     async def _execute(

@@ -10,6 +10,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.leases import LeaseStore
 from tianzhou_agent_platform.core.workspace import Workspace
 from tianzhou_agent_platform.sandbox.drivers import SandboxDriver
 from tianzhou_agent_platform.sandbox.models import (
@@ -34,8 +35,10 @@ class SandboxService:
         driver: SandboxDriver,
         *,
         default_image: str,
+        leases: LeaseStore | None = None,
     ) -> None:
         self.repository = repository
+        self.leases = leases
         self.driver = driver
         self.default_image = default_image
         self._actor_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
@@ -340,13 +343,13 @@ class SandboxService:
         key = _actor_digest(tenant_id, user_id, workspace_id, length=None)
         local_lock = self._actor_locks.setdefault(key, asyncio.Lock())
         async with local_lock:
-            stores = getattr(self.repository, "stores", None)
-            if stores is None or not hasattr(stores.redis, "lease"):
+            leases = self.leases
+            if leases is None or not hasattr(leases, "lease"):
                 yield
                 return
             deadline = asyncio.get_running_loop().time() + 10
             while asyncio.get_running_loop().time() < deadline:
-                async with stores.redis.lease(
+                async with leases.lease(
                     "sandbox-actor-operation",
                     key,
                     ttl_seconds=60,

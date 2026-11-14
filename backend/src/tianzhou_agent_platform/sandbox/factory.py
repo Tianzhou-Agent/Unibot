@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError
+from tianzhou_agent_platform.core.leases import LeaseStore
 from tianzhou_agent_platform.sandbox.drivers import (
     KubernetesSandboxDriver,
     LocalProcessSandboxDriver,
@@ -17,6 +18,7 @@ def create_sandbox_service(
     *,
     persistent_workspace_root: Path | None = None,
     enforce_isolation: bool = True,
+    leases: LeaseStore | None = None,
 ) -> SandboxService:
     if settings.sandbox_driver == "local":
         driver = LocalProcessSandboxDriver(
@@ -46,4 +48,4 @@ def create_sandbox_service(
             runtime_class=settings.sandbox_runtime_class,
             workspace_pvc=settings.sandbox_kubernetes_workspace_pvc,
         )
-    return SandboxService(repository, driver, default_image=settings.sandbox_default_image)
+    return SandboxService(repository, driver, default_image=settings.sandbox_default_image, leases=leases)
