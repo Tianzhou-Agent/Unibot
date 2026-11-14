@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Protocol
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -17,10 +18,12 @@ from tianzhou_agent_platform.aina.document.task_models import (
     DocumentDraftSection,
     DocumentEditTask,
     DocumentEditTaskCreate,
+    DocumentEditTaskRepository,
     DocumentEditTaskStatus,
 )
 from tianzhou_agent_platform.core.errors import PlatformError, conflict, not_found
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.core.workspace import Workspace
+from tianzhou_agent_platform.model_providers.models import ModelRuntimeConfig
 from tianzhou_agent_platform.store.errors import StorageValidationError
 
 _SUBMIT_DRAFT_TOOL = {
@@ -43,11 +46,19 @@ _SUBMIT_DRAFT_TOOL = {
 }
 
 
+class DocumentEditTaskStore(DocumentEditTaskRepository, Protocol):
+    """Edit tasks plus the workspace check and the actor's model the drafting step uses."""
+
+    async def require_workspace_actor(self, workspace_id: str, *, user_id: str, tenant_id: str) -> Workspace: ...
+
+    async def get_default_model_runtime(self, *, user_id: str, tenant_id: str) -> ModelRuntimeConfig | None: ...
+
+
 class DocumentEditTaskService:
     def __init__(
         self,
         documents: DocumentService,
-        repository: InMemoryRepository,
+        repository: DocumentEditTaskStore,
         llm: BaseChatModel | None,
         *,
         model_callbacks: Callable[[BaseChatModel, str], list[BaseCallbackHandler]] | None = None,

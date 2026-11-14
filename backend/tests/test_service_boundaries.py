@@ -213,6 +213,8 @@ def _protocol_methods(protocol: type) -> list[str]:
         "tianzhou_agent_platform.auth.repository:DeveloperTokenRepository",
         "tianzhou_agent_platform.auth.service:AuthStore",
         "tianzhou_agent_platform.conversations.repository:ConversationAccess",
+        "tianzhou_agent_platform.aina.document.task_models:DocumentEditTaskRepository",
+        "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
     ],
 )
 def test_concrete_repositories_implement_feature_protocols(protocol_path: str) -> None:
@@ -271,7 +273,6 @@ ROUTES_PENDING_FEATURE_ACCESSORS = {
 
 PENDING_AGGREGATE_IMPORTERS = {
     "aina/builtin.py",
-    "aina/document/task_service.py",
     "aina/memory/builtin.py",
     "aina/package/tasks.py",
     "aina/scheduler.py",
@@ -336,11 +337,13 @@ PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
     "tasks/service.py": (
         "tianzhou_agent_platform.conversations.repository:ConversationAccess",
     ),
+    "aina/document/task_service.py": (
+        "tianzhou_agent_platform.aina.document.task_service:DocumentEditTaskStore",
+    ),
 }
 
 PENDING_PROTOCOL_CONSUMERS = {
     "aina/builtin.py",
-    "aina/document/task_service.py",
     "aina/memory/builtin.py",
     "aina/package/bundled.py",
     "aina/package/devhost.py",
