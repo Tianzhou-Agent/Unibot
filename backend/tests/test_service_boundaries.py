@@ -652,8 +652,11 @@ def test_moved_schedule_update_keeps_its_result() -> None:
     # Plan step 6 moves this helper out of store/; its result is persisted, so pin it across the move.
     from datetime import UTC, datetime, timedelta
 
-    from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTask, ScheduledAinaTaskUpdate
-    from tianzhou_agent_platform.store.memory_repository import updated_scheduled_aina_task
+    from tianzhou_agent_platform.aina.scheduler import (
+        ScheduledAinaTask,
+        ScheduledAinaTaskUpdate,
+        updated_scheduled_aina_task,
+    )
 
     created = datetime(2026, 1, 1, tzinfo=UTC)
     task = ScheduledAinaTask(
@@ -674,9 +677,6 @@ def test_moved_schedule_update_keeps_its_result() -> None:
     assert updated.next_run_at - updated.updated_at == timedelta(seconds=120)
     unchanged = updated_scheduled_aina_task(task, ScheduledAinaTaskUpdate(name="renamed"))
     assert unchanged.next_run_at == created and unchanged.name == "renamed" and unchanged.prompt is None
-    from tianzhou_agent_platform.aina import scheduler
-
-    assert scheduler.updated_scheduled_aina_task is updated_scheduled_aina_task
 
 
 def test_moved_installation_key_keeps_its_value() -> None:

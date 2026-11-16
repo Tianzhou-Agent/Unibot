@@ -7,9 +7,13 @@ from datetime import datetime
 
 from sqlalchemy import insert, select
 
-from tianzhou_agent_platform.aina.scheduler import ScheduledAinaExecution, ScheduledAinaTask, ScheduledAinaTaskUpdate
+from tianzhou_agent_platform.aina.scheduler import (
+    ScheduledAinaExecution,
+    ScheduledAinaTask,
+    ScheduledAinaTaskUpdate,
+    updated_scheduled_aina_task,
+)
 from tianzhou_agent_platform.core.errors import not_found
-from tianzhou_agent_platform.store.memory_repository import updated_scheduled_aina_task
 from tianzhou_agent_platform.store.repository_schema import (
     scheduled_aina_executions_table,
     scheduled_aina_tasks_table,
