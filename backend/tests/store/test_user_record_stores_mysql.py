@@ -81,8 +81,13 @@ async def test_only_one_save_wins_from_the_same_document_task_version(replicas) 
             base_revision="rev1",
             user_id=_actor(),
             tenant_id="t1",
+            # Already drafted: a queued task left in the shared database is picked up by the document edit worker of
+            # the next app started on it, which spends that app's model on it.
+            status="reviewing",
             sections=[
-                DocumentDraftSection(heading="Intro", occurrence=0, level=1, base_content="a", draft_content="b")
+                DocumentDraftSection(
+                    heading="Intro", occurrence=0, level=1, base_content="a", draft_content="b", ai_status="ready"
+                )
             ],
         )
     )
