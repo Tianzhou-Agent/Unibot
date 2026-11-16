@@ -7,10 +7,10 @@ returns its result as the model reads it. Failures raise; retries, error envelop
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from tianzhou_agent_platform.model_providers.models import current_model_runtime
-from tianzhou_agent_platform.aina.builtin import invoke_builtin
+from tianzhou_agent_platform.aina.builtin import BuiltinToolStore, invoke_builtin
 from tianzhou_agent_platform.aina.document.builtin import CREATE_EDIT_TASK_TOOL_ID
 from tianzhou_agent_platform.aina.package.models import ToolSnapshot
 from tianzhou_agent_platform.aina.package.canvas_calls import CanvasCallBroker, canvas_result
@@ -43,16 +43,21 @@ from tianzhou_agent_platform.services.platform_tools import (
     OPEN_APP_TOOL_ID,
     PLATFORM_TOOL_IDS,
     SUGGEST_AINAS_TOOL_ID,
+    PlatformToolStore,
     invoke_platform_tool,
     suggest_ainas_widget,
 )
+
+
+class ExecutorStore(PlatformToolStore, BuiltinToolStore, Protocol):
+    """What the platform tools and built-in AINAs the executor dispatches to read and write."""
 
 
 class CapabilityExecutor:
     def __init__(
         self,
         *,
-        repository: Any,
+        repository: ExecutorStore,
         conversations: ConversationService,
         gateway: Any,
         catalog: CapabilityCatalog,

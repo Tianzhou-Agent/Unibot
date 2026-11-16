@@ -1,6 +1,6 @@
 """Registration and dispatcher for platform-owned AINAs."""
 
-from typing import Any
+from typing import Any, Protocol
 
 from tianzhou_agent_platform.aina.document.builtin import (
     DOCUMENT_EDIT_TASK_TOOL_IDS,
@@ -28,8 +28,11 @@ from tianzhou_agent_platform.aina.schedule.builtin import (
     UNIBOT_SCHEDULER_ID,
     unibot_scheduler_record,
 )
+from tianzhou_agent_platform.aina.memory.repository import MemoryRepository
+from tianzhou_agent_platform.aina.registry import AinaRegistry
+from tianzhou_agent_platform.conversations.repository import ConversationAccess
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.core.workspace import Workspace
 from tianzhou_agent_platform.store.errors import StorageError, StorageErrorCode
 
 BUILTIN_AINA_IDS = {
@@ -42,8 +45,14 @@ BUILTIN_AINA_IDS = {
 _LEGACY_AINA_IDS = ("unibot-assistant", "unibot-image-recognition")
 
 
+class BuiltinToolStore(MemoryRepository, ConversationAccess, Protocol):
+    """What the built-in tools read: memories, and the conversation and workspace a document tool runs in."""
+
+    async def require_workspace_actor(self, workspace_id: str, *, user_id: str, tenant_id: str) -> Workspace: ...
+
+
 async def ensure_builtin_ainas(
-    repository: InMemoryRepository,
+    repository: AinaRegistry,
     *,
     document_enabled: bool = False,
 ) -> None:
@@ -91,7 +100,7 @@ async def ensure_builtin_ainas(
 
 
 async def invoke_builtin(
-    repository: InMemoryRepository,
+    repository: BuiltinToolStore,
     tool_id: str,
     arguments: dict[str, Any],
     *,

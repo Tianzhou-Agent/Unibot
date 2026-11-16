@@ -80,6 +80,15 @@ class ApprovalRepository(Protocol):
 
 
 @runtime_checkable
+class ConversationAccess(Protocol):
+    """The actor check of callers that only need to know a conversation is the actor's."""
+
+    async def require_conversation_actor(
+        self, conversation_id: str, *, user_id: str, tenant_id: str, include_deleted: bool = False
+    ) -> Conversation: ...
+
+
+@runtime_checkable
 class ConversationRunRepository(Protocol):
     """Actor checks, run leases and routing state of a conversation, consumed by the chat workflow."""
 

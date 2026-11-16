@@ -7,12 +7,18 @@ from fastapi.responses import StreamingResponse
 
 from tianzhou_agent_platform.api.dependencies import (
     actor_scope,
+    aina_registry,
     bind_actor,
     chat_service,
+    conversation_records,
     conversation_service,
-    repository,
+    document_edit_task_records,
+    feedback_records,
+    memories as memory_records,
     require_actor_ownership,
     require_platform_admin,
+    trace_records,
+    user_records,
 )
 from tianzhou_agent_platform.api.chat import EventSink, event_stream
 from tianzhou_agent_platform.auth.models import AdminUserSummary
@@ -167,7 +173,7 @@ def create_operations_router() -> APIRouter:
     ) -> dict[str, Any]:
         require_platform_admin(request)
         page_size = max(1, min(limit, 200))
-        users = await repository(request).list_users(
+        users = await user_records(request).list_users(
             query=query,
             limit=page_size + 1,
             offset=offset,
@@ -234,7 +240,7 @@ def create_operations_router() -> APIRouter:
     ) -> dict[str, Any]:
         require_platform_admin(request)
         start, end, _, _ = operations_bounds(range)
-        feedbacks = await repository(request).list_feedbacks(from_at=start, to_at=end)
+        feedbacks = await feedback_records(request).list_feedbacks(from_at=start, to_at=end)
         if tenant_id is not None:
             feedbacks = [feedback for feedback in feedbacks if feedback.tenant_id == tenant_id]
         return await _operations_analytics(request).overview(
@@ -328,11 +334,11 @@ def create_operations_router() -> APIRouter:
         tenant_id: str | None = None,
     ) -> list[TraceRecord]:
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
-        return await repository(request).list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id)
+        return await trace_records(request).list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id)
 
     @router.get("/traces/{trace_id}", response_model=TraceRecord)
     async def get_trace(trace_id: str, request: Request) -> TraceRecord:
-        trace = await repository(request).get_trace(trace_id)
+        trace = await trace_records(request).get_trace(trace_id)
         require_actor_ownership(request, user_id=trace.user_id, tenant_id=trace.tenant_id)
         return trace
 
@@ -344,18 +350,17 @@ def create_operations_router() -> APIRouter:
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> list[LLMCallRecord]:
-        data_repository = repository(request)
         if getattr(request.state, "actor", None) is None and user_id is None and tenant_id is None:
-            return await data_repository.list_llm_calls(
+            return await trace_records(request).list_llm_calls(
                 limit=max(1, min(limit, 500)),
                 offset=max(0, offset),
             )
         actor = actor_scope(request, user_id=user_id, tenant_id=tenant_id)
         conversations, traces = await asyncio.gather(
-            data_repository.list_conversations(user_id=actor.user_id, tenant_id=actor.tenant_id),
-            data_repository.list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            conversation_records(request).list_conversations(user_id=actor.user_id, tenant_id=actor.tenant_id),
+            trace_records(request).list_traces(user_id=actor.user_id, tenant_id=actor.tenant_id),
         )
-        return await data_repository.list_llm_calls(
+        return await trace_records(request).list_llm_calls(
             limit=max(1, min(limit, 500)),
             offset=max(0, offset),
             trace_ids={trace.trace_id for trace in traces},
@@ -374,28 +379,27 @@ def create_operations_router() -> APIRouter:
             if getattr(request.state, "actor", None) is None
             else None
         )
-        data_repository = repository(request)
         conversations, tools, skills, ainas, installations, traces, memories, document_tasks = await asyncio.gather(
-            data_repository.list_conversations(
+            conversation_records(request).list_conversations(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,
             ),
-            data_repository.list_tools(),
-            data_repository.list_skills(),
-            data_repository.list_ainas(),
-            data_repository.list_installations(
+            aina_registry(request).list_tools(),
+            aina_registry(request).list_skills(),
+            aina_registry(request).list_ainas(),
+            aina_registry(request).list_installations(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,
             ),
-            data_repository.list_traces(
+            trace_records(request).list_traces(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,
             ),
-            data_repository.list_memories(
+            memory_records(request).list_memories(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,
             ),
-            data_repository.list_document_edit_tasks(
+            document_edit_task_records(request).list_document_edit_tasks(
                 user_id=legacy_actor.user_id if legacy_actor else None,
                 tenant_id=legacy_actor.tenant_id if legacy_actor else None,
             ),
@@ -403,12 +407,12 @@ def create_operations_router() -> APIRouter:
         if legacy_actor:
             trace_ids = {trace.trace_id for trace in traces}
             context_ids = {conversation.id for conversation in conversations} | {task.id for task in document_tasks}
-            llm_call_count = await data_repository.count_llm_calls(
+            llm_call_count = await trace_records(request).count_llm_calls(
                 trace_ids=trace_ids,
                 context_ids=context_ids,
             )
         else:
-            llm_call_count = await data_repository.count_llm_calls()
+            llm_call_count = await trace_records(request).count_llm_calls()
         tool_ids = {tool.tool_id for tool in tools}
         skill_ids = {skill.skill_id for skill in skills}
         for aina in ainas:
@@ -428,12 +432,12 @@ def create_operations_router() -> APIRouter:
     @router.get("/admin/conversations", response_model=list[Conversation])
     async def admin_conversations(request: Request) -> list[Conversation]:
         require_platform_admin(request)
-        return await repository(request).list_conversations()
+        return await conversation_records(request).list_conversations()
 
     @router.get("/admin/traces", response_model=list[TraceRecord])
     async def admin_traces(request: Request) -> list[TraceRecord]:
         require_platform_admin(request)
-        return await repository(request).list_traces()
+        return await trace_records(request).list_traces()
 
     @router.get("/admin/llm-calls", response_model=list[LLMCallRecord])
     async def admin_llm_calls(
@@ -442,7 +446,7 @@ def create_operations_router() -> APIRouter:
         offset: int = 0,
     ) -> list[LLMCallRecord]:
         require_platform_admin(request)
-        return await repository(request).list_llm_calls(
+        return await trace_records(request).list_llm_calls(
             limit=max(1, min(limit, 500)),
             offset=max(0, offset),
         )

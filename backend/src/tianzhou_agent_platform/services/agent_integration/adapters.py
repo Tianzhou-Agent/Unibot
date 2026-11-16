@@ -4,10 +4,11 @@ core's data and the platform's records."""
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from tianzhou_agent_platform.aina.memory.models import MemoryRecord
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService, model_result_text, result_message_id
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.conversations.models import Conversation
@@ -178,10 +179,21 @@ class ConversationSessions:
         await self.conversations.create_approval(approval_record(approval))
 
 
+class MemorySearch(Protocol):
+    async def search_memories(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        limit: int = 8,
+    ) -> list[MemoryRecord]: ...
+
+
 class Memories:
     """The user's stored memories (``MemoryProvider``)."""
 
-    def __init__(self, repository: Any) -> None:
+    def __init__(self, repository: MemorySearch) -> None:
         self.repository = repository
 
     async def recall(self, query: str, *, user_id: str, tenant_id: str, limit: int) -> list[Any]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -71,3 +71,18 @@ def check_quota(*, used_bytes: int, used_items: int, replaced: AinaStorageItem |
             status_code=507,
             source="aina_host",
         )
+
+
+@runtime_checkable
+class AinaStorageRepository(Protocol):
+    async def get_aina_storage_item(self, installation_key: str, key: str) -> AinaStorageItem | None: ...
+
+    async def put_aina_storage_item(self, item: AinaStorageItem) -> AinaStorageItem: ...
+
+    async def delete_aina_storage_item(self, installation_key: str, key: str) -> bool: ...
+
+    async def list_aina_storage_items(
+        self, installation_key: str, *, prefix: str, limit: int
+    ) -> list[AinaStorageItem]: ...
+
+    async def delete_aina_storage(self, *, installation_key: str | None = None, aina_id: str | None = None) -> int: ...

@@ -5,17 +5,28 @@ from pydantic import BaseModel, Field
 
 from tianzhou_agent_platform.aina.gateway import RemoteCapabilityGateway
 from tianzhou_agent_platform.aina.document.service import DocumentService
+from tianzhou_agent_platform.aina.document.task_models import DocumentEditTaskRepository
 from tianzhou_agent_platform.aina.document.task_service import DocumentEditTaskService
-from tianzhou_agent_platform.aina.package.files import FileBlobs
+from tianzhou_agent_platform.aina.memory.repository import MemoryRepository
+from tianzhou_agent_platform.aina.package.files import AinaFileRepository, FileBlobs
+from tianzhou_agent_platform.aina.package.notifications import AinaNotificationRepository
+from tianzhou_agent_platform.aina.package.storage import AinaStorageRepository
 from tianzhou_agent_platform.aina.package.service import AinaPackageService
 from tianzhou_agent_platform.aina.package.tasks import AinaTaskService
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
+from tianzhou_agent_platform.aina.registry import AinaRegistry
+from tianzhou_agent_platform.aina.scheduler import ScheduledAinaTaskRepository
 from tianzhou_agent_platform.aina.managed import ManagedAinaRuntime
+from tianzhou_agent_platform.conversations.repository import ConversationAccess, ConversationRepository
 from tianzhou_agent_platform.core.base import StrictModel
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
+from tianzhou_agent_platform.core.feedback import FeedbackRepository
+from tianzhou_agent_platform.core.workspace import WorkspaceRepository
 from tianzhou_agent_platform.config import AgentSettings
+from tianzhou_agent_platform.observability.repository import TraceRepository
 from tianzhou_agent_platform.sandbox.service import SandboxService
+from tianzhou_agent_platform.services.platform_tools import PlatformToolStore
 from tianzhou_agent_platform.auth.models import UserRecord
+from tianzhou_agent_platform.auth.repository import DeveloperTokenRepository, UserRepository
 from tianzhou_agent_platform.auth.service import AuthService
 from tianzhou_agent_platform.tasks.service import TaskService
 
@@ -81,8 +92,64 @@ def require_actor_ownership(request: Request, *, user_id: str, tenant_id: str) -
         )
 
 
-def repository(request: Request) -> InMemoryRepository:
-    return cast(InMemoryRepository, request.app.state.repository)
+def developer_tokens(request: Request) -> DeveloperTokenRepository:
+    return cast(DeveloperTokenRepository, request.app.state.repository)
+
+
+def schedules(request: Request) -> ScheduledAinaTaskRepository:
+    return cast(ScheduledAinaTaskRepository, request.app.state.repository)
+
+
+def memories(request: Request) -> MemoryRepository:
+    return cast(MemoryRepository, request.app.state.repository)
+
+
+def workspaces(request: Request) -> WorkspaceRepository:
+    return cast(WorkspaceRepository, request.app.state.repository)
+
+
+def aina_files(request: Request) -> AinaFileRepository:
+    return cast(AinaFileRepository, request.app.state.repository)
+
+
+def aina_storage(request: Request) -> AinaStorageRepository:
+    return cast(AinaStorageRepository, request.app.state.repository)
+
+
+def aina_notifications(request: Request) -> AinaNotificationRepository:
+    return cast(AinaNotificationRepository, request.app.state.repository)
+
+
+def conversation_access(request: Request) -> ConversationAccess:
+    return cast(ConversationAccess, request.app.state.repository)
+
+
+def conversation_records(request: Request) -> ConversationRepository:
+    return cast(ConversationRepository, request.app.state.repository)
+
+
+def feedback_records(request: Request) -> FeedbackRepository:
+    return cast(FeedbackRepository, request.app.state.repository)
+
+
+def trace_records(request: Request) -> TraceRepository:
+    return cast(TraceRepository, request.app.state.repository)
+
+
+def aina_registry(request: Request) -> AinaRegistry:
+    return cast(AinaRegistry, request.app.state.repository)
+
+
+def platform_tool_store(request: Request) -> PlatformToolStore:
+    return cast(PlatformToolStore, request.app.state.repository)
+
+
+def user_records(request: Request) -> UserRepository:
+    return cast(UserRepository, request.app.state.repository)
+
+
+def document_edit_task_records(request: Request) -> DocumentEditTaskRepository:
+    return cast(DocumentEditTaskRepository, request.app.state.repository)
 
 
 def settings(request: Request) -> AgentSettings:

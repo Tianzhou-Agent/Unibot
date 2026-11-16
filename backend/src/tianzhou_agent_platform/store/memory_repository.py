@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import re
 from datetime import UTC, datetime, timedelta
 from collections.abc import Callable
@@ -18,7 +16,7 @@ from tianzhou_agent_platform.aina.document.task_models import DocumentEditTask
 from tianzhou_agent_platform.aina.package.files import AinaFile, file_record_id
 from tianzhou_agent_platform.conversations.attachments import Attachment
 from tianzhou_agent_platform.aina.package.notifications import KEEP_PER_USER, AinaNotification
-from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
+from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord, installation_record_id
 from tianzhou_agent_platform.aina.skill.models import SkillRecord
 from tianzhou_agent_platform.aina.tool.models import ToolRecord
 from tianzhou_agent_platform.aina.scheduler import (
@@ -27,6 +25,7 @@ from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
+    updated_scheduled_aina_task,
 )
 from tianzhou_agent_platform.conversations.models import (
     CANVAS_TABS_KEY,
@@ -108,7 +107,6 @@ class InMemoryRepository:
         self._model_providers: dict[str, ModelProviderRecord] = {}
         self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
         self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
-        self._scheduled_aina_claims: set[str] = set()
         self._document_edit_tasks: dict[str, DocumentEditTask] = {}
         self._sandboxes: dict[str, SandboxRecord] = {}
         self._sandbox_executions: dict[str, SandboxExecution] = {}
@@ -2153,26 +2151,6 @@ def new_scheduled_aina_task(data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
     return task.model_copy(update={"next_run_at": next_scheduled_run(task, after=now)})
 
 
-def updated_scheduled_aina_task(task: ScheduledAinaTask, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
-    changes = data.model_dump(exclude_none=True)
-    if "aina_id" in data.model_fields_set:
-        changes["aina_id"] = data.aina_id or ""
-    if "prompt" in data.model_fields_set:
-        changes["prompt"] = data.prompt
-    if data.prompt is not None:
-        changes["input"] = {"message": data.prompt}
-    elif data.input is not None:
-        changes["prompt"] = None
-    now = datetime.now(UTC)
-    changes["updated_at"] = now
-    updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
-    schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
-    reenabled = data.enabled is True and not task.enabled
-    if schedule_fields.intersection(changes) or reenabled:
-        updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
-    return updated
-
-
 def normalized_email(email: str) -> str:
     """Account emails compare case-insensitively; this is the form stored and indexed for uniqueness."""
     return email.strip().lower()
@@ -2365,11 +2343,6 @@ def message_from_provider(raw: dict[str, Any], *, trace_id: str) -> Message:
         content_type="tool" if raw["role"] == "tool" else "widget" if raw.get("widgets") else "text",
         trace_id=trace_id,
     )
-
-
-def installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
-    raw = json.dumps([tenant_id, user_id, aina_id], ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _memory_terms(value: str) -> set[str]:

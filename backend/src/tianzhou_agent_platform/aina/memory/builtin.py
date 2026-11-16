@@ -1,6 +1,7 @@
 from typing import Any, cast
 
 from tianzhou_agent_platform.aina.memory.models import MemoryCategory, MemoryCreate, MemoryUpdate
+from tianzhou_agent_platform.aina.memory.repository import MemoryRepository
 from tianzhou_agent_platform.aina.protocol.models import (
     AinaCapabilities,
     AinaCapability,
@@ -13,7 +14,6 @@ from tianzhou_agent_platform.aina.protocol.models import (
 from tianzhou_agent_platform.aina.protocol.widgets import WidgetDefinition
 from tianzhou_agent_platform.aina.security.models import Authentication
 from tianzhou_agent_platform.core.errors import PlatformError
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 UNIBOT_MEMORY_ID = "unibot-memory"
 REMEMBER_TOOL_ID = "memory.remember"
@@ -146,7 +146,7 @@ def unibot_memory_record() -> AinaRecord:
 
 
 async def invoke_memory_tool(
-    repository: InMemoryRepository,
+    repository: MemoryRepository,
     tool_id: str,
     arguments: dict[str, Any],
     *,

@@ -17,9 +17,9 @@ from tianzhou_agent_platform.aina.package.ui import origin_of, ui_headers
 from tianzhou_agent_platform.api.conversations import read_upload
 from tianzhou_agent_platform.api.dependencies import (
     aina_packages,
+    aina_registry,
     chat_attachments,
     conversation_service,
-    repository,
     request_actor,
     require_actor_ownership,
     settings,
@@ -83,7 +83,7 @@ def create_aina_ui_router() -> APIRouter:
     @router.get(f"{AINA_UI_PREFIX}/{{aina_id}}/{{version}}/{{path:path}}")
     async def aina_ui_file(aina_id: str, version: str, path: str, request: Request) -> Response:
         """One UI file of the registered version of a package, served for a sandboxed frame."""
-        record = await repository(request).get_aina(aina_id)
+        record = await aina_registry(request).get_aina(aina_id)
         if record.manifest.runtime.type != "package" or record.manifest.aina.version != version:
             raise not_found("AINA UI file", path)
         packages = aina_packages(request)

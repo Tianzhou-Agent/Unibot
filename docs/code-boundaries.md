@@ -163,10 +163,10 @@ flowchart TB
 - `unibot_agent` 只知道“一轮 Agent 怎么跑”：工作记忆、能力域切换、审批中断与续跑、停止与续跑、摘要、归档、预算。它只导入标准库、pydantic 和 LangChain / LangGraph，其余一切经 `ports.py` 的接口取得；`tests/test_service_boundaries.py` 强制这一点，`tests/agent_core/test_standalone.py` 用内存替身跑完整的一轮。
 - 接口使用内核自有类型（`unibot_agent/types.py`、`capabilities.py`）；只有聊天模型（`BaseChatModel`）和工作记忆（`BaseCheckpointSaver`）保留 LangChain / LangGraph 类型。
 - AINA 位于 `CapabilityProvider` 之后：内核只认识中性的 `Capability` 和“能力域”（`CapabilityScope`）。执行调用时，适配层通过 `AgentRun`（`activate` / `reply_directly` / `artifacts` / `show_images`）改变本次运行。Widget 对内核是不透明的 `artifacts`。
-- 适配层之外仍不是严格的依赖倒置：部分 `api/*` 和 AINA 代码直接依赖 repository；`CapabilityExecutor` 也直接持有 repository、gateway 和领域服务。
-- `ConversationService` 通过 `ConversationRepository` 等 Protocol 访问存储；生产组装注入 `PersistentRepository`。这种接口边界没有覆盖全项目。
+- 存储经各功能自有的 Protocol 访问（如 `ConversationRepository`、`MemoryRepository`、`AinaRegistry`、`TraceRepository`）。服务按自己用到的方法声明依赖；路由经 `api/dependencies.py` 中返回对应 Protocol 的访问函数取得存储。`CapabilityExecutor` 持有的是 `ExecutorStore`（平台工具与内置 AINA 所需方法的组合），gateway 和领域服务仍直接注入。
+- 只有 `main.py` 和 `store/*` 引用 `InMemoryRepository` / `PersistentRepository`；`main.py` 把同一个 repository 对象注入所有服务。`tests/test_service_boundaries.py` 检查两个具体类实现每个 Protocol、每个调用方只用其 Protocol 声明的方法。调度器、沙箱服务和文档编辑任务的跨节点互斥经 `core/leases.py` 的 `LeaseStore` 由 `main.py` 注入同一个 Redis；未配置存储时退回进程内互斥。
 
-依据：[ChatService](../backend/src/tianzhou_agent_platform/services/chat.py)、[Agent](../backend/src/unibot_agent/agent.py)、[接口](../backend/src/unibot_agent/ports.py)、[运行时工厂](../backend/src/unibot_agent/runtime/factory.py)、[适配器](../backend/src/tianzhou_agent_platform/services/agent_integration/adapters.py)、[AinaCapabilities](../backend/src/tianzhou_agent_platform/services/agent_integration/provider.py)、[CapabilityExecutor](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py)、[会话存储协议](../backend/src/tianzhou_agent_platform/conversations/repository.py)。
+依据：[ChatService](../backend/src/tianzhou_agent_platform/services/chat.py)、[Agent](../backend/src/unibot_agent/agent.py)、[接口](../backend/src/unibot_agent/ports.py)、[运行时工厂](../backend/src/unibot_agent/runtime/factory.py)、[适配器](../backend/src/tianzhou_agent_platform/services/agent_integration/adapters.py)、[AinaCapabilities](../backend/src/tianzhou_agent_platform/services/agent_integration/provider.py)、[CapabilityExecutor](../backend/src/tianzhou_agent_platform/services/agent_integration/executor.py)、[会话存储协议](../backend/src/tianzhou_agent_platform/conversations/repository.py)、[路由访问函数](../backend/src/tianzhou_agent_platform/api/dependencies.py)、[边界测试](../backend/tests/test_service_boundaries.py)。
 
 ## 4. 能力执行边界：内置、远程、托管与沙箱
 
@@ -284,6 +284,7 @@ flowchart TB
 - OBS 启用时走 Redis Streams → ingest worker → MySQL。
 - OBS 原始输入输出写入 `obs_raw_root`，不经过 `NasStore`，不应默认画成同一块业务 NAS。
 - 不提供持久化配置时，`create_app()` 可组装 InMemoryRepository / InMemorySaver / InMemorySessionTaskStore；正式模块入口传入 StorageSettings。
+- `PersistentRepository` 是一个对象，同时实现所有功能的存储 Protocol；各功能的 SQL 读写由 `store/*_store.py` 完成。调用方只依赖 Protocol，因此日后拆分该对象只影响 `store/` 和 `main.py`。
 
 依据：[main.py](../backend/src/tianzhou_agent_platform/main.py)、[repository.py](../backend/src/tianzhou_agent_platform/store/repository.py)、[checkpoint.py](../backend/src/tianzhou_agent_platform/store/checkpoint.py)、[tasks/store.py](../backend/src/tianzhou_agent_platform/tasks/store.py)、[observability/service.py](../backend/src/tianzhou_agent_platform/observability/service.py)、[observability/stream.py](../backend/src/tianzhou_agent_platform/observability/stream.py)。
 

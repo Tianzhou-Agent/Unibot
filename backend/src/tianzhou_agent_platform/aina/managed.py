@@ -5,7 +5,7 @@ import json
 import math
 import uuid
 from time import perf_counter
-from typing import Any
+from typing import Any, Protocol
 
 from tianzhou_agent_platform.aina.project import AinaProjectRecord, validate_project_archive
 from tianzhou_agent_platform.aina.project_service import AinaProjectService
@@ -18,7 +18,6 @@ from tianzhou_agent_platform.aina.protocol.models import (
 )
 from tianzhou_agent_platform.config import AgentSettings
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
-from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxExecutionRequest
 from tianzhou_agent_platform.sandbox.service import SandboxService
 
@@ -144,11 +143,30 @@ if deployment.exists():
 '''
 
 
+class ManagedAinaStore(Protocol):
+    """The registry entries and project deploy flag a managed deployment maintains."""
+
+    async def register_aina(self, aina: AinaRecord) -> AinaRecord: ...
+
+    async def get_aina(self, aina_id: str) -> AinaRecord: ...
+
+    async def remove_aina(self, aina_id: str) -> None: ...
+
+    async def set_aina_project_deployed(
+        self,
+        project_id: str,
+        *,
+        deployed: bool,
+        user_id: str,
+        tenant_id: str,
+    ) -> AinaProjectRecord: ...
+
+
 class ManagedAinaRuntime:
     def __init__(
         self,
         settings: AgentSettings,
-        repository: InMemoryRepository,
+        repository: ManagedAinaStore,
         projects: AinaProjectService,
         sandboxes: SandboxService,
     ) -> None:

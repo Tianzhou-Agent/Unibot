@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -106,3 +106,22 @@ class FileBlobs(Protocol):
     async def read(self, key: str) -> bytes: ...
 
     async def delete(self, key: str) -> None: ...
+
+
+@runtime_checkable
+class AinaFileRepository(Protocol):
+    """File metadata of AINA installations; the bytes live in ``FileBlobs``."""
+
+    async def get_aina_file(self, installation_key: str, path: str) -> AinaFile | None: ...
+
+    async def put_aina_file(self, file: AinaFile) -> AinaFile: ...
+
+    async def delete_aina_file(self, installation_key: str, path: str) -> AinaFile | None: ...
+
+    async def list_aina_files(self, installation_key: str, *, prefix: str, limit: int) -> list[AinaFile]: ...
+
+    async def aina_file_usage(self, installation_key: str) -> tuple[int, int]: ...
+
+    async def delete_aina_files(
+        self, *, installation_key: str | None = None, aina_id: str | None = None
+    ) -> list[AinaFile]: ...

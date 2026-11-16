@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, Literal
@@ -222,3 +224,8 @@ class AinaInvokeResponse(StrictModel):
         if self.status == "completed" and not self.outputs:
             raise ValueError("A completed AINA response must include an output")
         return self
+
+
+def installation_record_id(tenant_id: str, user_id: str, aina_id: str) -> str:
+    raw = json.dumps([tenant_id, user_id, aina_id], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()

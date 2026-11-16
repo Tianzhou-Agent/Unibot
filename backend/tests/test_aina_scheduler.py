@@ -53,10 +53,8 @@ def test_distributed_scheduler_lease_has_a_single_winner() -> None:
     shared_redis = SharedRedis()
     first_repository = InMemoryRepository()
     second_repository = InMemoryRepository()
-    first_repository.stores = SimpleNamespace(redis=shared_redis)  # type: ignore[attr-defined]
-    second_repository.stores = SimpleNamespace(redis=shared_redis)  # type: ignore[attr-defined]
-    first = AinaScheduler(first_repository, SimpleNamespace(), node_id="node-a")  # type: ignore[arg-type]
-    second = AinaScheduler(second_repository, SimpleNamespace(), node_id="node-b")  # type: ignore[arg-type]
+    first = AinaScheduler(first_repository, SimpleNamespace(), node_id="node-a", leases=shared_redis)  # type: ignore[arg-type]
+    second = AinaScheduler(second_repository, SimpleNamespace(), node_id="node-b", leases=shared_redis)  # type: ignore[arg-type]
 
     async def claim_once(scheduler: AinaScheduler) -> bool:
         async with scheduler._lease("aina-schedule-lease", "task:run", ttl_seconds=60) as acquired:
@@ -251,7 +249,7 @@ def test_a_released_occurrence_lease_does_not_run_a_stale_snapshot_twice() -> No
             return self.snapshot
 
     repository = StaleSnapshotRepository()
-    repository.stores = SimpleNamespace(redis=SharedRedis())  # type: ignore[attr-defined]
+    leases = SharedRedis()
     calls: list[str] = []
 
     async def agent(request):  # type: ignore[no-untyped-def]
@@ -260,8 +258,8 @@ def test_a_released_occurrence_lease_does_not_run_a_stale_snapshot_twice() -> No
             conversation_id="conversation-test", content="Done", status="completed", trace_id="trace-test", iterations=1
         )
 
-    first = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
-    second = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+    first = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent), leases=leases)  # type: ignore[arg-type]
+    second = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent), leases=leases)  # type: ignore[arg-type]
 
     async def run() -> None:
         task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Summarize"))
@@ -281,8 +279,7 @@ def test_a_released_occurrence_lease_does_not_run_a_stale_snapshot_twice() -> No
 @pytest.mark.parametrize("distributed", [False, True])
 def test_manual_and_scheduled_runs_share_a_task_lease(first_trigger: str, distributed: bool) -> None:
     repository = InMemoryRepository()
-    if distributed:
-        repository.stores = SimpleNamespace(redis=SharedRedis())  # type: ignore[attr-defined]
+    leases = SharedRedis() if distributed else None
 
     async def run() -> None:
         started = asyncio.Event()
@@ -297,8 +294,8 @@ def test_manual_and_scheduled_runs_share_a_task_lease(first_trigger: str, distri
                 conversation_id="conversation-test", content="Done", status="completed", trace_id="trace-test", iterations=1
             )
 
-        first = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
-        second = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent))  # type: ignore[arg-type]
+        first = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent), leases=leases)  # type: ignore[arg-type]
+        second = AinaScheduler(repository, SimpleNamespace(), chat_service=SimpleNamespace(run_turn=agent), leases=leases)  # type: ignore[arg-type]
         task = await repository.create_scheduled_aina_task(ScheduledAinaTaskCreate(name="Agent task", prompt="Summarize"))
         active = asyncio.create_task(
             first.run_now(task.id) if first_trigger == "manual" else first.tick(now=task.next_run_at)

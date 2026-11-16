@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import Field, model_validator
 
@@ -102,3 +102,47 @@ class FeedbackMetrics(StrictModel):
     pending_negative_change: float
     trend: list[FeedbackTrendPoint]
     reasons: list[FeedbackReasonCount]
+
+
+@runtime_checkable
+class FeedbackRepository(Protocol):
+    async def upsert_feedback(self, feedback: FeedbackRecord) -> FeedbackRecord: ...
+
+    async def get_feedback_for_message(
+        self,
+        message_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> FeedbackRecord | None: ...
+
+    async def get_feedback(self, feedback_id: str) -> FeedbackRecord: ...
+
+    async def list_feedbacks(
+        self,
+        *,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+        rating: str | None = None,
+        user_query: str | None = None,
+    ) -> list[FeedbackRecord]: ...
+
+    async def cancel_feedback(
+        self,
+        message_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        actor_name: str,
+    ) -> None: ...
+
+    async def update_feedback_case(
+        self,
+        feedback_id: str,
+        *,
+        status: str,
+        assignee: str,
+        conclusion: str,
+        actor_id: str,
+        actor_name: str,
+    ) -> FeedbackRecord: ...

@@ -7,7 +7,7 @@ notification opens the AINA's own app, or the conversation of the tool call that
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -75,3 +75,28 @@ def rate_limited() -> PlatformError:
         retryable=True,
         source="aina_host",
     )
+
+
+@runtime_checkable
+class AinaNotificationRepository(Protocol):
+    async def create_aina_notification(self, notification: AinaNotification) -> AinaNotification: ...
+
+    async def list_aina_notifications(self, *, tenant_id: str, user_id: str, limit: int) -> list[AinaNotification]: ...
+
+    async def count_aina_notifications(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        unread: bool = False,
+        aina_id: str | None = None,
+        since: datetime | None = None,
+    ) -> int: ...
+
+    async def mark_aina_notifications_read(
+        self, *, tenant_id: str, user_id: str, at: datetime, notification_id: str | None = None
+    ) -> int: ...
+
+    async def delete_aina_notifications(
+        self, *, aina_id: str, tenant_id: str | None = None, user_id: str | None = None
+    ) -> int: ...

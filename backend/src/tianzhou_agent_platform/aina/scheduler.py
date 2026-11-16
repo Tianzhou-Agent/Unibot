@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,13 +20,17 @@ from tianzhou_agent_platform.core.base import StrictModel, utc_now
 from tianzhou_agent_platform.conversations.models import Conversation
 from tianzhou_agent_platform.conversations.schemas import ChatRequest
 from tianzhou_agent_platform.core.errors import PlatformError, conflict
+from tianzhou_agent_platform.core.leases import LeaseStore
 
 if TYPE_CHECKING:
-    from tianzhou_agent_platform.aina.protocol.models import AinaRecord
+    from tianzhou_agent_platform.aina.protocol.models import AinaInstallation, AinaRecord
     from tianzhou_agent_platform.services.chat import ChatService
-    from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 
 ScheduleType = Literal["interval", "cron"]
+
+# Without a shared lease store, schedulers on the same repository (one process) exclude each other through one
+# claim set per repository.
+_LOCAL_CLAIMS: weakref.WeakKeyDictionary[object, set[str]] = weakref.WeakKeyDictionary()
 
 
 class ScheduledAinaTaskCreate(StrictModel):
@@ -196,17 +201,87 @@ def _validate_cron(expression: str) -> None:
         raise ValueError("Cron expression must be a valid five-field crontab expression")
 
 
+def updated_scheduled_aina_task(task: ScheduledAinaTask, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
+    changes = data.model_dump(exclude_none=True)
+    if "aina_id" in data.model_fields_set:
+        changes["aina_id"] = data.aina_id or ""
+    if "prompt" in data.model_fields_set:
+        changes["prompt"] = data.prompt
+    if data.prompt is not None:
+        changes["input"] = {"message": data.prompt}
+    elif data.input is not None:
+        changes["prompt"] = None
+    now = datetime.now(UTC)
+    changes["updated_at"] = now
+    updated = ScheduledAinaTask.model_validate({**task.model_dump(), **changes})
+    schedule_fields = {"schedule_type", "interval_seconds", "cron_expression", "timezone"}
+    reenabled = data.enabled is True and not task.enabled
+    if schedule_fields.intersection(changes) or reenabled:
+        updated = updated.model_copy(update={"next_run_at": next_scheduled_run(updated, after=now)})
+    return updated
+
+
+@runtime_checkable
+class ScheduledAinaTaskRepository(Protocol):
+    async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask: ...
+
+    async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask: ...
+
+    async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask: ...
+
+    async def update_scheduled_aina_task(self, task_id: str, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask: ...
+
+    async def remove_scheduled_aina_task(self, task_id: str) -> None: ...
+
+    async def list_scheduled_aina_tasks(
+        self, *, user_id: str | None = None, tenant_id: str | None = None
+    ) -> list[ScheduledAinaTask]: ...
+
+    async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]: ...
+
+    async def start_scheduled_aina_run(
+        self, task_id: str, *, node_id: str, started_at: datetime, scheduled_for: datetime | None = None
+    ) -> ScheduledAinaTask | None: ...
+
+    async def finish_scheduled_aina_run(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        error: str | None,
+        result: dict[str, Any] | None,
+        finished_at: datetime,
+        advance_schedule: bool,
+    ) -> ScheduledAinaTask | None: ...
+
+    async def put_scheduled_aina_execution(self, execution: ScheduledAinaExecution) -> ScheduledAinaExecution: ...
+
+    async def list_scheduled_aina_executions(
+        self, task_id: str, *, limit: int = 50
+    ) -> list[ScheduledAinaExecution]: ...
+
+
+class ScheduledAinaStore(ScheduledAinaTaskRepository, Protocol):
+    """Schedules plus the app record and installation a run is executed against."""
+
+    async def get_aina(self, aina_id: str) -> AinaRecord: ...
+
+    async def get_installation(self, *, tenant_id: str, user_id: str, aina_id: str) -> AinaInstallation: ...
+
+
 class AinaScheduler:
     def __init__(
         self,
-        repository: InMemoryRepository,
+        repository: ScheduledAinaStore,
         gateway: RemoteCapabilityGateway,
         *,
         chat_service: ChatService | None = None,
         node_id: str | None = None,
         poll_seconds: float = 1.0,
+        leases: LeaseStore | None = None,
     ) -> None:
         self.repository = repository
+        self.leases = leases
         self.gateway = gateway
         self.chat_service = chat_service
         # The agent's capability catalog; set with ``chat_service`` once the app is composed.
@@ -214,7 +289,7 @@ class AinaScheduler:
         self.node_id = node_id or socket.gethostname()
         self.poll_seconds = poll_seconds
         self._stop = asyncio.Event()
-        self._local_claims = repository._scheduled_aina_claims
+        self._local_claims = _LOCAL_CLAIMS.setdefault(repository, set())
         self._driver: AsyncIOScheduler | None = None
 
     def stop(self) -> None:
@@ -402,15 +477,15 @@ class AinaScheduler:
         *,
         ttl_seconds: int,
     ) -> AsyncIterator[bool]:
-        stores = getattr(self.repository, "stores", None)
-        if stores is not None and hasattr(stores.redis, "lease"):
-            async with stores.redis.lease(namespace, key, ttl_seconds=ttl_seconds) as acquired:
+        leases = self.leases
+        if leases is not None and hasattr(leases, "lease"):
+            async with leases.lease(namespace, key, ttl_seconds=ttl_seconds) as acquired:
                 yield acquired
             return
 
         local_key = f"{namespace}:{key}"
-        if stores is not None:
-            result = await stores.redis.set_if_absent(
+        if leases is not None:
+            result = await leases.set_if_absent(
                 namespace, key, {"node_id": self.node_id}, ttl_seconds=ttl_seconds
             )
             acquired = bool(result.written)
@@ -421,7 +496,7 @@ class AinaScheduler:
         try:
             yield acquired
         finally:
-            if acquired and stores is None:
+            if acquired and leases is None:
                 self._local_claims.discard(local_key)
 
     async def _execute(
