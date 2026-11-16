@@ -160,6 +160,37 @@ def test_lease_users_get_the_shared_redis_store_from_the_composition_root(tmp_pa
     assert local.sandbox_service.leases is None
 
 
+def test_lease_users_get_the_redis_of_an_injected_persistent_repository(tmp_path: Path) -> None:
+    # A caller that builds the stores itself and passes the repository in must keep cross-node exclusion.
+    from types import SimpleNamespace
+    from typing import cast
+
+    from tianzhou_agent_platform.config import AgentSettings
+    from tianzhou_agent_platform.main import create_app
+    from tianzhou_agent_platform.store.lifecycle import StorageStores
+    from tianzhou_agent_platform.store.repository import PersistentRepository
+    from tests.test_aina_projects import FakeRepositoryMySqlStore, FakeRepositoryRedisStore
+    from tianzhou_agent_platform.aina.document.service import DocumentService
+    from tianzhou_agent_platform.store.nas.filesystem import NasStore
+
+    redis = FakeRepositoryRedisStore()
+    stores = cast(StorageStores, SimpleNamespace(mysql=FakeRepositoryMySqlStore(), redis=redis, nas=None))
+    documents = DocumentService(NasStore(tmp_path))  # document edit tasks exist only with a document service
+    state = create_app(
+        settings=AgentSettings(obs_enabled=False),
+        repository=PersistentRepository(stores),
+        document_service=documents,
+    ).state
+    assert state.aina_scheduler.leases is redis
+    assert state.sandbox_service.leases is redis
+    assert state.document_edit_task_service.leases is redis
+
+    no_redis = cast(StorageStores, SimpleNamespace(mysql=FakeRepositoryMySqlStore(), redis=None, nas=None))
+    state = create_app(settings=AgentSettings(obs_enabled=False), repository=PersistentRepository(no_redis)).state
+    assert state.aina_scheduler.leases is None
+    assert state.sandbox_service.leases is None
+
+
 def test_runtime_factory_composes_with_scripted_native_model() -> None:
     from langchain_core.tools import tool
 

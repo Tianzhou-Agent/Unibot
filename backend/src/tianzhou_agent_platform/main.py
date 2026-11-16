@@ -179,7 +179,11 @@ def create_app(
     )
     aina_project_service = AinaProjectService(resolved_repository, resolved_aina_project_artifact_store)
     # The shared Redis gives scheduled runs, sandbox operations and document edits cross-node exclusion.
-    leases = storage_stores.redis if storage_stores is not None else None
+    # A persistent repository passed in brings its own stores; its Redis (if any) is the one to share.
+    lease_stores = storage_stores or (
+        resolved_repository.stores if isinstance(resolved_repository, PersistentRepository) else None
+    )
+    leases = lease_stores.redis if lease_stores is not None else None
     resolved_sandbox_service = sandbox_service or create_sandbox_service(
         resolved_settings,
         resolved_repository,
