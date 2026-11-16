@@ -6,9 +6,11 @@ Callers that are given no ``LeaseStore`` fall back to process-local exclusion, w
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from tianzhou_agent_platform.store.models import DeleteResult, WriteResult
+if TYPE_CHECKING:
+    # Importing ``store`` at runtime would loop back here through the concrete repository and the scheduler.
+    from tianzhou_agent_platform.store.models import DeleteResult, WriteResult
 
 
 class LeaseStore(Protocol):
