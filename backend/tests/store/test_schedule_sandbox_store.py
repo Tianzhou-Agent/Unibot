@@ -1,6 +1,7 @@
 """Scheduled tasks, sandboxes and their execution history in SQL, shared by several repository instances (replicas).
 
-Runs on SQLite; concurrent writes are covered by ``test_schedule_sandbox_store_mysql.py``.
+Runs on SQLite; concurrent writes are covered by ``test_schedule_sandbox_store_mysql.py``. The schedule tests also
+run on the in-memory repository, so both storages keep the same behaviour.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from tianzhou_agent_platform.aina.scheduler import (
 from tianzhou_agent_platform.core.errors import PlatformError
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
 from tianzhou_agent_platform.store.lifecycle import StorageStores
+from tianzhou_agent_platform.store.memory_repository import InMemoryRepository
 from tianzhou_agent_platform.store.repository import PersistentRepository
 from tests.support.sqlite_store import sqlite_session_factory
 
@@ -31,14 +33,24 @@ def _replicas() -> tuple[PersistentRepository, PersistentRepository]:
     return PersistentRepository(stores), PersistentRepository(stores)
 
 
+@pytest.fixture(params=["sql", "memory"])
+def schedule_replicas(request: pytest.FixtureRequest) -> tuple[InMemoryRepository, InMemoryRepository]:
+    if request.param == "memory":
+        repository = InMemoryRepository()
+        return repository, repository
+    return _replicas()
+
+
 def _schedule(user_id: str = "u1", **fields: object) -> ScheduledAinaTaskCreate:
     return ScheduledAinaTaskCreate.model_validate(
         {"aina_id": "aina.remote", "user_id": user_id, "tenant_id": "t1", "name": "digest", **fields}
     )
 
 
-async def test_schedules_are_shared_and_filtered_by_owner() -> None:
-    first, second = _replicas()
+async def test_schedules_are_shared_and_filtered_by_owner(
+    schedule_replicas: tuple[InMemoryRepository, InMemoryRepository],
+) -> None:
+    first, second = schedule_replicas
     mine = await first.create_scheduled_aina_task(_schedule(prompt="summarize"))
     theirs = await first.create_scheduled_aina_task(_schedule("u2"))
 
@@ -49,8 +61,10 @@ async def test_schedules_are_shared_and_filtered_by_owner() -> None:
         await second.get_scheduled_aina_task("schedule_missing")
 
 
-async def test_only_enabled_due_tasks_are_listed_for_the_scheduler() -> None:
-    first, second = _replicas()
+async def test_only_enabled_due_tasks_are_listed_for_the_scheduler(
+    schedule_replicas: tuple[InMemoryRepository, InMemoryRepository],
+) -> None:
+    first, second = schedule_replicas
     now = datetime.now(UTC)
     due = await first.create_scheduled_aina_task(_schedule())
     later = await first.create_scheduled_aina_task(_schedule())
@@ -64,8 +78,10 @@ async def test_only_enabled_due_tasks_are_listed_for_the_scheduler() -> None:
     assert [task.id for task in await second.list_due_scheduled_aina_tasks(now)] == [due.id]
 
 
-async def test_an_update_on_one_replica_recomputes_the_schedule_for_all() -> None:
-    first, second = _replicas()
+async def test_an_update_on_one_replica_recomputes_the_schedule_for_all(
+    schedule_replicas: tuple[InMemoryRepository, InMemoryRepository],
+) -> None:
+    first, second = schedule_replicas
     task = await first.create_scheduled_aina_task(_schedule(interval_seconds=3600))
 
     updated = await second.update_scheduled_aina_task(
@@ -79,8 +95,10 @@ async def test_an_update_on_one_replica_recomputes_the_schedule_for_all() -> Non
         await first.update_scheduled_aina_task("schedule_missing", ScheduledAinaTaskUpdate(name="x"))
 
 
-async def test_execution_history_is_newest_first_and_removed_with_its_task() -> None:
-    first, second = _replicas()
+async def test_execution_history_is_newest_first_and_removed_with_its_task(
+    schedule_replicas: tuple[InMemoryRepository, InMemoryRepository],
+) -> None:
+    first, second = schedule_replicas
     task = await first.create_scheduled_aina_task(_schedule())
     other = await first.create_scheduled_aina_task(_schedule())
     start = datetime(2026, 10, 1, tzinfo=UTC)
@@ -116,8 +134,10 @@ async def test_execution_history_is_newest_first_and_removed_with_its_task() -> 
         await first.remove_scheduled_aina_task(task.id)
 
 
-async def test_agent_schedules_and_approval_results_roundtrip_without_new_columns() -> None:
-    first, second = _replicas()
+async def test_agent_schedules_and_approval_results_roundtrip_without_new_columns(
+    schedule_replicas: tuple[InMemoryRepository, InMemoryRepository],
+) -> None:
+    first, second = schedule_replicas
     task = await first.create_scheduled_aina_task(
         ScheduledAinaTaskCreate(name="Agent digest", prompt="Summarize the news", user_id="u1", tenant_id="t1")
     )
