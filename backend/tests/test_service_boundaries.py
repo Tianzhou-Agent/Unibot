@@ -94,7 +94,7 @@ def test_agent_core_loads_without_the_platform() -> None:
 
 def test_only_the_chat_workflow_and_the_composition_root_drive_the_agent() -> None:
     importers = sorted(
-        str(path.relative_to(SRC))
+        path.relative_to(SRC).as_posix()
         for path in SRC.rglob("*.py")
         if "unibot_agent.agent" in _imported_names(path)
     )
@@ -488,9 +488,9 @@ _AGGREGATE_MODULES = ("tianzhou_agent_platform.store.memory_repository", "tianzh
 
 def _source_modules() -> list[tuple[str, ast.Module]]:
     return [
-        (str(path.relative_to(SRC)), ast.parse(path.read_text(encoding="utf-8")))
+        (path.relative_to(SRC).as_posix(), ast.parse(path.read_text(encoding="utf-8")))
         for path in sorted(SRC.rglob("*.py"))
-        if not str(path.relative_to(SRC)).startswith("store/")
+        if not path.relative_to(SRC).as_posix().startswith("store/")
     ]
 
 
