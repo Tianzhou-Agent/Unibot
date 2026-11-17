@@ -4,7 +4,7 @@ import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from collections.abc import Callable
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 from uuid import uuid4
 
 from tianzhou_agent_platform.auth.models import DeveloperToken, OidcProvider, UserRecord
@@ -25,7 +25,6 @@ from tianzhou_agent_platform.aina.scheduler import (
     ScheduledAinaTaskCreate,
     ScheduledAinaTaskUpdate,
     next_scheduled_run,
-    updated_scheduled_aina_task,
 )
 from tianzhou_agent_platform.conversations.models import (
     CANVAS_TABS_KEY,
@@ -53,6 +52,10 @@ from tianzhou_agent_platform.observability.models import (
 )
 from tianzhou_agent_platform.core.workspace import Workspace, WorkspaceCreate, WorkspaceUpdate
 from tianzhou_agent_platform.sandbox.models import SandboxExecution, SandboxRecord
+from tianzhou_agent_platform.store.in_memory_schedule_store import InMemoryScheduleStore
+
+if TYPE_CHECKING:
+    from tianzhou_agent_platform.store.schedule_store import ScheduleStore
 
 WORKSPACES_RESOURCE = "workspaces"
 CONVERSATIONS_RESOURCE = "conversations"
@@ -105,8 +108,7 @@ class InMemoryRepository:
         self._approvals: dict[str, ApprovalRecord] = {}
         self._memories: dict[str, MemoryRecord] = {}
         self._model_providers: dict[str, ModelProviderRecord] = {}
-        self._scheduled_aina_tasks: dict[str, ScheduledAinaTask] = {}
-        self._scheduled_aina_executions: dict[str, ScheduledAinaExecution] = {}
+        self._schedule_store: InMemoryScheduleStore | ScheduleStore = InMemoryScheduleStore()
         self._document_edit_tasks: dict[str, DocumentEditTask] = {}
         self._sandboxes: dict[str, SandboxRecord] = {}
         self._sandbox_executions: dict[str, SandboxExecution] = {}
@@ -454,9 +456,7 @@ class InMemoryRepository:
 
     async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
         task = new_scheduled_aina_task(data)
-        async with self._lock:
-            self._scheduled_aina_tasks[task.id] = task
-            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
+        await self._schedule_store.create_task(task)
         return self._copy(task)
 
     async def put_sandbox(self, sandbox: SandboxRecord) -> SandboxRecord:
@@ -594,36 +594,23 @@ class InMemoryRepository:
         return self._copy(updated)
 
     async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask:
-        async with self._lock:
-            self._scheduled_aina_tasks[task.id] = task
-            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task.id, task)
+        await self._schedule_store.put_task(task)
         return self._copy(task)
 
     async def list_scheduled_aina_tasks(
         self, *, user_id: str | None = None, tenant_id: str | None = None
     ) -> list[ScheduledAinaTask]:
-        async with self._lock:
-            return [
-                self._copy(item)
-                for item in self._scheduled_aina_tasks.values()
-                if (user_id is None or item.user_id == user_id) and (tenant_id is None or item.tenant_id == tenant_id)
-            ]
+        return await self._schedule_store.list_tasks(user_id=user_id, tenant_id=tenant_id)
 
     async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]:
         """Enabled tasks whose next run is at or before ``now``."""
-        async with self._lock:
-            return [
-                self._copy(item)
-                for item in self._scheduled_aina_tasks.values()
-                if item.enabled and item.next_run_at <= now
-            ]
+        return await self._schedule_store.list_due_tasks(now)
 
     async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask:
-        async with self._lock:
-            task = self._scheduled_aina_tasks.get(task_id)
-            if task is None:
-                raise not_found("Scheduled AINA task", task_id)
-            return self._copy(task)
+        task = await self._schedule_store.get_task(task_id)
+        if task is None:
+            raise not_found("Scheduled AINA task", task_id)
+        return task
 
     async def start_scheduled_aina_run(
         self, task_id: str, *, node_id: str, started_at: datetime, scheduled_for: datetime | None = None
@@ -662,65 +649,36 @@ class InMemoryRepository:
     async def _record_scheduled_aina_run(
         self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask | None]
     ) -> ScheduledAinaTask | None:
-        async with self._lock:
-            task = self._scheduled_aina_tasks.get(task_id)
-            if task is None:
-                return None
+        applied = False
+
+        def apply(task: ScheduledAinaTask) -> ScheduledAinaTask | None:
+            nonlocal applied
             updated = change(task)
-            if updated is None:
-                return None
-            self._scheduled_aina_tasks[task_id] = updated
-            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
-            return self._copy(updated)
+            applied = updated is not None
+            return updated
+
+        updated = await self._schedule_store.change_task(task_id, apply)
+        return updated if applied else None
 
     async def put_scheduled_aina_execution(
         self, execution: ScheduledAinaExecution
     ) -> ScheduledAinaExecution:
-        async with self._lock:
-            self._scheduled_aina_executions[execution.id] = execution
-            await self._save_record(
-                SCHEDULED_AINA_EXECUTIONS_RESOURCE,
-                execution.id,
-                execution,
-            )
+        await self._schedule_store.put_execution(execution)
         return self._copy(execution)
 
     async def list_scheduled_aina_executions(
         self, task_id: str, *, limit: int = 50
     ) -> list[ScheduledAinaExecution]:
-        async with self._lock:
-            values = [
-                self._copy(item)
-                for item in self._scheduled_aina_executions.values()
-                if item.task_id == task_id
-            ]
-        return sorted(values, key=lambda item: item.started_at, reverse=True)[:limit]
+        return await self._schedule_store.list_executions(task_id, limit=limit)
 
     async def update_scheduled_aina_task(
         self, task_id: str, data: ScheduledAinaTaskUpdate
     ) -> ScheduledAinaTask:
-        async with self._lock:
-            task = self._scheduled_aina_tasks.get(task_id)
-            if task is None:
-                raise not_found("Scheduled AINA task", task_id)
-            updated = updated_scheduled_aina_task(task, data)
-            self._scheduled_aina_tasks[task_id] = updated
-            await self._save_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id, updated)
-            return self._copy(updated)
+        return await self._schedule_store.update_task(task_id, data)
 
     async def remove_scheduled_aina_task(self, task_id: str) -> None:
-        async with self._lock:
-            if self._scheduled_aina_tasks.pop(task_id, None) is None:
-                raise not_found("Scheduled AINA task", task_id)
-            await self._delete_record(SCHEDULED_AINA_TASKS_RESOURCE, task_id)
-            execution_ids = [
-                item.id
-                for item in self._scheduled_aina_executions.values()
-                if item.task_id == task_id
-            ]
-            for execution_id in execution_ids:
-                del self._scheduled_aina_executions[execution_id]
-                await self._delete_record(SCHEDULED_AINA_EXECUTIONS_RESOURCE, execution_id)
+        if not await self._schedule_store.remove_task(task_id):
+            raise not_found("Scheduled AINA task", task_id)
 
     async def create_workspace(self, data: WorkspaceCreate) -> Workspace:
         workspace = new_workspace(data)

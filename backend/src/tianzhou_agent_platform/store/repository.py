@@ -35,12 +35,6 @@ from tianzhou_agent_platform.model_providers.models import (
     ModelRuntimeConfig,
 )
 from tianzhou_agent_platform.observability.models import LLMCallRecord, TraceRecord
-from tianzhou_agent_platform.aina.scheduler import (
-    ScheduledAinaExecution,
-    ScheduledAinaTask,
-    ScheduledAinaTaskCreate,
-    ScheduledAinaTaskUpdate,
-)
 from tianzhou_agent_platform.store.memory_repository import (
     LLM_CALLS_RESOURCE,
     TRACES_RESOURCE,
@@ -51,7 +45,6 @@ from tianzhou_agent_platform.store.memory_repository import (
     deployed_aina_project,
     finished_run,
     message_from_provider,
-    new_scheduled_aina_task,
     new_conversation,
     new_workspace,
     require_owner,
@@ -713,57 +706,6 @@ class PersistentRepository(InMemoryRepository):
         expected_version: int,
     ) -> DocumentEditTask:
         return await self._document_task_store.put(task, expected_version=expected_version)
-
-    async def create_scheduled_aina_task(self, data: ScheduledAinaTaskCreate) -> ScheduledAinaTask:
-        task = new_scheduled_aina_task(data)
-        await self._schedule_store.create_task(task)
-        return task
-
-    async def put_scheduled_aina_task(self, task: ScheduledAinaTask) -> ScheduledAinaTask:
-        await self._schedule_store.put_task(task)
-        return self._copy(task)
-
-    async def list_scheduled_aina_tasks(
-        self, *, user_id: str | None = None, tenant_id: str | None = None
-    ) -> list[ScheduledAinaTask]:
-        return await self._schedule_store.list_tasks(user_id=user_id, tenant_id=tenant_id)
-
-    async def list_due_scheduled_aina_tasks(self, now: datetime) -> list[ScheduledAinaTask]:
-        return await self._schedule_store.list_due_tasks(now)
-
-    async def get_scheduled_aina_task(self, task_id: str) -> ScheduledAinaTask:
-        task = await self._schedule_store.get_task(task_id)
-        if task is None:
-            raise not_found("Scheduled AINA task", task_id)
-        return task
-
-    async def update_scheduled_aina_task(self, task_id: str, data: ScheduledAinaTaskUpdate) -> ScheduledAinaTask:
-        return await self._schedule_store.update_task(task_id, data)
-
-    async def remove_scheduled_aina_task(self, task_id: str) -> None:
-        if not await self._schedule_store.remove_task(task_id):
-            raise not_found("Scheduled AINA task", task_id)
-
-    async def _record_scheduled_aina_run(
-        self, task_id: str, change: Callable[[ScheduledAinaTask], ScheduledAinaTask | None]
-    ) -> ScheduledAinaTask | None:
-        applied = False
-
-        def apply(task: ScheduledAinaTask) -> ScheduledAinaTask | None:
-            nonlocal applied
-            updated = change(task)
-            applied = updated is not None
-            return updated
-
-        updated = await self._schedule_store.change_task(task_id, apply)
-        return updated if applied else None
-
-    async def put_scheduled_aina_execution(self, execution: ScheduledAinaExecution) -> ScheduledAinaExecution:
-        await self._schedule_store.put_execution(execution)
-        return self._copy(execution)
-
-    async def list_scheduled_aina_executions(self, task_id: str, *, limit: int = 50) -> list[ScheduledAinaExecution]:
-        return await self._schedule_store.list_executions(task_id, limit=limit)
 
     async def start_conversation_run(self, conversation_id: str, trace_id: str) -> Conversation:
         async with self.stores.redis.lease(
